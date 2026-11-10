@@ -491,6 +491,65 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, items: &[(&str, &str)], ctx: &Dra
     );
 }
 
+/// Issue #704 rule 5: the full-screen step key bar, shared by every
+/// screen -- the only keys that actually work while it is open (the
+/// key handler checked first intercepts everything else).
+fn fullscreen_step_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+    let mut items = vec![
+        ("[ ]", "Step"),
+        ("↑↓", "Scroll"),
+        // Issue #704 rule 4: `enter` on a pass opens it, in a loop's
+        // own Loop section -- a no-op, falling through to `esc`'s
+        // own close, everywhere else.
+        ("enter", "Open pass"),
+        ("m", "Meta"),
+    ];
+    if wide {
+        items.push(("0-3", "Screens"));
+    }
+    items.push(("?", "Help"));
+    items.push(("esc", "Close"));
+    items.push(("q", "Quit"));
+    items
+}
+
+/// Issue #704 rule 5: the full-screen step's own Help, the same
+/// fixed overlay every screen's own uses, listing exactly its own
+/// keys (never whichever screen opened it, whose own keys don't
+/// work while it's open).
+fn fullscreen_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        ("[ ]", "previous / next effect", "↑ ↓", "scroll"),
+        (
+            "PgUp PgDn",
+            "scroll a page",
+            "Home End",
+            "scroll to the ends",
+        ),
+        ("enter", "open a pass (Loop section)", "m", "unfold Meta"),
+        ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
+        ("esc", "close · back", "q", "quit · confirms if running"),
+    ];
+    let mut lines: Vec<Line<'static>> = ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .collect();
+    for _ in 0..7 {
+        lines.push(Line::from(""));
+    }
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    lines.push(Line::from(vec![
+        Span::styled("esc ", key_style),
+        Span::styled(format!("{:<7}", "Close"), desc_style),
+        Span::styled("? ", key_style),
+        Span::styled(format!("{:<56}", "Close"), desc_style),
+    ]));
+    lines
+}
+
 fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
     let mut items = vec![("↑↓", "Select"), ("enter", "Open")];
     if wide {
@@ -667,6 +726,7 @@ mod tape_token_bar_tests {
         let flat = oscilloscope_core::model::flatten_state(&state);
         let tape = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -683,7 +743,8 @@ mod tape_token_bar_tests {
             zone: &test_zone(),
             no_animation: false,
         };
-        let lines = tape_normal_detail_lines(&tape, 60, 40, None, "2026-10-08T11:46:51Z", &ctx);
+        let lines =
+            tape_normal_detail_lines(&tape, 60, 40, None, "2026-10-08T11:46:51Z", false, &ctx);
         let text: String = lines
             .iter()
             .map(|l| {
@@ -2034,15 +2095,356 @@ fn tape_status_glyph_word_style(kind: StatusKind, theme: &Theme) -> (char, &'sta
     }
 }
 
+/// Issue #704 rule 4's own Attempts section, shared by every screen:
+/// one line per `meta.fallback_attempts` entry, oldest first --
+/// empty for a step the run never retried at all.
+fn focused_attempts_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    // A node's own `fallback_attempts` always carries at least the
+    // one pass that decided the outcome, even with no retry at all
+    // -- never shown as an "Attempts" section on its own merits
+    // unless it actually names more than one attempt, or
+    // `retries_used` says an earlier, now-overwritten pass happened.
+    if step.attempts.len() <= 1 && step.retries_used.is_none() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let title = match step.retries_used {
+        Some(n) => format!("Attempts · {n} retried"),
+        None => "Attempts".to_string(),
+    };
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled(title, title_bold)], width),
+    ];
+    for (i, attempt) in step.attempts.iter().enumerate() {
+        let mut text = format!("{}. ", i + 1);
+        let mut parts = Vec::new();
+        if let Some(adapter) = &attempt.adapter {
+            parts.push(adapter.clone());
+        }
+        if let Some(model) = &attempt.model {
+            parts.push(model.clone());
+        }
+        if let Some(status) = &attempt.status {
+            parts.push(status.clone());
+        }
+        if attempt.tokens_sent.is_some() || attempt.tokens_received.is_some() {
+            parts.push(format!(
+                "↑{} ↓{}",
+                attempt
+                    .tokens_sent
+                    .map(oscilloscope_core::format::format_tokens_thousands)
+                    .unwrap_or_else(|| "—".to_string()),
+                attempt
+                    .tokens_received
+                    .map(oscilloscope_core::format::format_tokens_thousands)
+                    .unwrap_or_else(|| "—".to_string())
+            ));
+        }
+        text.push_str(&parts.join(" · "));
+        lines.push(tape_detail_line(vec![Span::styled(text, default)], width));
+        if let Some(error) = &attempt.error {
+            for line in tape_word_wrap(error, width.saturating_sub(3)) {
+                lines.push(tape_detail_line(
+                    vec![Span::styled(format!("   {line}"), muted)],
+                    width,
+                ));
+            }
+        }
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Asked section for a tool step, for the
+/// Tape's own append-only renderer (`tape_normal_detail_lines`)
+/// alone -- every other screen's own Asked already shows a tool's
+/// own command line inline (`focused_step_full_lines`'s and `flow_
+/// selected_step_lines`'s own `asked` match), but the Tape's own
+/// detail pane never had an Asked section for anything but a
+/// prompt's own "Prompt Sent" at all.
+fn focused_tool_asked_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Tool {
+        command: Some(command),
+        ..
+    } = &step.detail
+    else {
+        return Vec::new();
+    };
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Asked", title_bold)], width),
+    ];
+    for line in tape_word_wrap(command, width.saturating_sub(1)) {
+        lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Tool section, shared by every screen: the
+/// exit code and full stdout/stderr -- the command line itself is
+/// each screen's own Asked section already, never repeated here.
+fn focused_tool_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Tool {
+        exit_code,
+        stdout,
+        stderr,
+        ..
+    } = &step.detail
+    else {
+        return Vec::new();
+    };
+    if exit_code.is_none() && stdout.is_none() && stderr.is_none() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Tool", title_bold)], width),
+    ];
+    if let Some(code) = exit_code {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("exit ", muted),
+                Span::styled(code.to_string(), default),
+            ],
+            width,
+        ));
+    }
+    if let Some(stdout) = stdout {
+        lines.push(tape_detail_line(vec![Span::styled("stdout", muted)], width));
+        for line in tape_word_wrap(stdout, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+    if let Some(stderr) = stderr {
+        lines.push(tape_detail_line(vec![Span::styled("stderr", muted)], width));
+        for line in tape_word_wrap(stderr, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Decision section, shared by every screen
+/// but the Flow (whose own `decision_detail_lines` already covers a
+/// decision's own Selected pane): condition, branch, the model's own
+/// answer, and an inferred decision's own evidence.
+fn focused_decision_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Decision(decision) = &step.detail else {
+        return Vec::new();
+    };
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Decision", title_bold)], width),
+    ];
+    if let Some(condition) = &decision.condition {
+        for line in tape_word_wrap(&condition.text, width.saturating_sub("condition ".len())) {
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("condition ", muted),
+                    Span::styled(line, default),
+                ],
+                width,
+            ));
+        }
+    }
+    let branch_text = match &decision.branch {
+        Some(branch) => branch.clone(),
+        None if decision.nothing_ran => "none".to_string(),
+        None => "pending".to_string(),
+    };
+    lines.push(tape_detail_line(
+        vec![
+            Span::styled("branch ", muted),
+            Span::styled(branch_text, default),
+        ],
+        width,
+    ));
+    if let Some(answer) = &decision.answer {
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled("answer ", muted),
+                Span::styled(answer.clone(), default),
+            ],
+            width,
+        ));
+    }
+    if let Some(evidence) = &decision.inferred_evidence {
+        lines.push(tape_detail_line(
+            vec![Span::styled(evidence.clone(), muted)],
+            width,
+        ));
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own Loop section, shared by every screen: one
+/// line per pass, its own status and tokens so far.
+fn focused_loop_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Loop(passes) = &step.detail else {
+        return Vec::new();
+    };
+    if passes.is_empty() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled("Loop", title_bold)], width),
+    ];
+    for pass in passes {
+        let (glyph, word, glyph_style) = tape_status_glyph_word_style(pass.status.kind, ctx.theme);
+        let tokens_text = pass
+            .tokens
+            .map(oscilloscope_core::format::format_tokens_t)
+            .unwrap_or_else(|| "—".to_string());
+        lines.push(tape_detail_line(
+            vec![
+                Span::styled(format!("{glyph} {word}  "), glyph_style),
+                Span::styled(format!("{:<16}", pass.label), default),
+                Span::styled(tokens_text, muted),
+            ],
+            width,
+        ));
+    }
+    lines
+}
+
+/// Issue #704 rule 4's own "enter on a pass opens it": which of
+/// `lines` (already built, by `focused_loop_lines`'s own padded-
+/// label text, unique per pass) is which pass's own line -- `App::
+/// loop_pass_line_paths`' own source, so `enter` while the full-
+/// screen step is open can tell which pass the cursor is actually
+/// over without the Loop section's own line count (Status/Asked/
+/// Produced/.../Meta, each only present when the node has data for
+/// it) ever needing to be recomputed separately from what was
+/// already drawn.
+fn loop_pass_line_paths(
+    lines: &[Line<'static>],
+    step: &oscilloscope_core::screens::FocusedStep,
+) -> Vec<(usize, String)> {
+    use oscilloscope_core::screens::FocusDetail;
+    let FocusDetail::Loop(passes) = &step.detail else {
+        return Vec::new();
+    };
+    passes
+        .iter()
+        .filter_map(|pass| {
+            let label = format!("{:<16}", pass.label);
+            let idx = lines
+                .iter()
+                .position(|line| line.to_string().contains(&label))?;
+            Some((idx, pass.path.clone()))
+        })
+        .collect()
+}
+
+/// Issue #704 rule 4's own Meta section, shared by every screen:
+/// every other key the run recorded, folded by default (`m`
+/// unfolds).
+fn focused_meta_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+    ctx: &DrawCtx,
+    unfolded: bool,
+) -> Vec<Line<'static>> {
+    if step.meta_extra.is_empty() {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let title = if unfolded {
+        "Meta".to_string()
+    } else {
+        format!("Meta · {} keys · m to unfold", step.meta_extra.len())
+    };
+    let mut lines = vec![
+        Line::from(""),
+        tape_detail_line(vec![Span::styled(title, title_bold)], width),
+    ];
+    if unfolded {
+        for (key, value) in &step.meta_extra {
+            for (i, line) in tape_word_wrap(value, width.saturating_sub(key.len() + 2))
+                .into_iter()
+                .enumerate()
+            {
+                let spans = if i == 0 {
+                    vec![
+                        Span::styled(format!("{key}: "), muted),
+                        Span::styled(line, default),
+                    ]
+                } else {
+                    vec![Span::styled(line, default)]
+                };
+                lines.push(tape_detail_line(spans, width));
+            }
+        }
+    }
+    lines
+}
+
 /// The Normal/Usual states' own detail pane (§2.1): the selected
 /// row's Status, Type, Tokens, Usual, Share, then the prompt sent and
 /// the reply in full, each headed with its own token count.
 fn tape_normal_detail_lines(
     screen: &oscilloscope_core::screens::TapeScreen,
     width: usize,
-    height: usize,
+    // Kept for every caller's own symmetry with the full-screen
+    // step's own viewport-sized call, though nothing here still
+    // reads it: the Agent block's own transcript no longer caps to
+    // it (issue #704 rule 4, "nothing is cut").
+    _height: usize,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
+    meta_unfolded: bool,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
@@ -2264,9 +2666,11 @@ fn tape_normal_detail_lines(
                 | oscilloscope_core::model::StatusKind::LikelyRunning
                 | oscilloscope_core::model::StatusKind::RunningOrQueued
         );
-        let note_reserved = usize::from(live.is_none() && running);
-        let max_lines = height.saturating_sub(lines.len() + note_reserved);
-        for line in agent_block_lines(step, transcript_view, ctx, now, Some(max_lines)) {
+        // Issue #704 rule 4: the detail pane (the small one and the
+        // full-screen step alike, both scrollable) reads the whole
+        // transcript, never cut to this pane's own current height --
+        // nothing the run recorded is cut.
+        for line in agent_block_lines(step, transcript_view, ctx, now, None) {
             lines.push(tape_detail_line(line.spans, width));
         }
         if live.is_none() && running {
@@ -2318,6 +2722,45 @@ fn tape_normal_detail_lines(
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
     }
+
+    // Issue #704 rule 4: the sections every screen's own selection
+    // now shares, each only when the node has data for it -- a
+    // prompt's own Produced is already the Reply block above, never
+    // repeated here.
+    if !matches!(
+        step.detail,
+        oscilloscope_core::screens::FocusDetail::Prompt { .. }
+    ) {
+        if let Some(value) = &step.value_full {
+            lines.push(Line::from(""));
+            lines.push(tape_detail_line(
+                vec![Span::styled("Produced", title_bold)],
+                width,
+            ));
+            for line in tape_word_wrap(value, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    }
+    if let Some(error) = &step.error {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Error", title_bold)],
+            width,
+        ));
+        for line in tape_word_wrap(error, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(
+                vec![Span::styled(line, Style::default().fg(ctx.theme.error))],
+                width,
+            ));
+        }
+    }
+    lines.extend(focused_tool_asked_lines(step, width, ctx));
+    lines.extend(focused_attempts_lines(step, width, ctx));
+    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(focused_decision_lines(step, width, ctx));
+    lines.extend(focused_loop_lines(step, width, ctx));
+    lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
 
     lines
 }
@@ -2731,20 +3174,34 @@ fn draw_tape_detail(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
-    app: &App,
+    app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
     ctx: &DrawCtx,
 ) {
     use oscilloscope_core::screens::TapeHead;
+    // Issue #704 rule 1: once the run has ended (or failed), the
+    // detail pane shows the run summary for as long as `selected_
+    // path` is still `tape_run_end_target` (the row `tape_select_
+    // run_end_once` moved the selection to the instant the run
+    // ended) -- a comparison made fresh on every draw, not a sticky
+    // flag, so moving the selection away through *any* screen or key
+    // (the Signal, the Flow, `[`/`]` in the full-screen step, not
+    // only the Tape's own ↑↓) ends summary mode, and moving back onto
+    // that exact row re-enters it, the same as any other row's own
+    // details always have.
+    let ended_row_selected = app.tape_run_end_target.is_some()
+        && app.tape_run_end_target.as_deref() == app.selected_path.as_deref();
     let title = match &screen.head {
         TapeHead::Starting => "Run · Starting".to_string(),
-        TapeHead::Ended { .. } => "Run · Ended".to_string(),
-        TapeHead::Failed { .. } => "Run · Failed".to_string(),
-        TapeHead::Normal => match &screen.selected_breadcrumb {
-            Some(breadcrumb) => format!("{breadcrumb} · Selected"),
-            None => "Tape".to_string(),
-        },
+        TapeHead::Ended { .. } if ended_row_selected => "Run · Ended".to_string(),
+        TapeHead::Failed { .. } if ended_row_selected => "Run · Failed".to_string(),
+        TapeHead::Ended { .. } | TapeHead::Failed { .. } | TapeHead::Normal => {
+            match &screen.selected_breadcrumb {
+                Some(breadcrumb) => format!("{breadcrumb} · Selected"),
+                None => "Tape".to_string(),
+            }
+        }
     };
     let border_color = if app.pane == Pane::Details {
         ctx.theme.border_focused
@@ -2781,26 +3238,47 @@ fn draw_tape_detail(
             .as_ref()
             .map(|d| tape_starting_detail_lines(d, width, ctx))
             .unwrap_or_default(),
-        TapeHead::Ended { .. } => screen
+        TapeHead::Ended { .. } if ended_row_selected => screen
             .ended_detail
             .as_ref()
             .map(|d| tape_ended_detail_lines(d, width, ctx))
             .unwrap_or_default(),
-        TapeHead::Failed { .. } => screen
+        TapeHead::Failed { .. } if ended_row_selected => screen
             .failed_detail
             .as_ref()
             .map(|d| tape_failed_detail_lines(d, width, ctx))
             .unwrap_or_default(),
-        TapeHead::Normal => tape_normal_detail_lines(
-            screen,
-            width,
-            content_area.height as usize,
-            transcript_view,
-            now,
-            ctx,
-        ),
+        TapeHead::Ended { .. } | TapeHead::Failed { .. } | TapeHead::Normal => {
+            tape_normal_detail_lines(
+                screen,
+                width,
+                content_area.height as usize,
+                transcript_view,
+                now,
+                app.step_meta_unfolded,
+                ctx,
+            )
+        }
     };
-    frame.render_widget(Paragraph::new(lines), content_area);
+    if let Some(step) = &screen.selected {
+        app.loop_pass_line_paths = loop_pass_line_paths(&lines, step);
+    }
+    // Issue #704 rule 4: the full-screen step scrolls with ↑↓/PgUp/
+    // PgDn/Home/End (`App::scroll_details`, the same shared scroll
+    // position the Flow's own Selected pane already uses) -- a no-op
+    // in the ordinary detail pane, whose content already fits.
+    let viewport = content_area.height as usize;
+    app.details_viewport = viewport;
+    let total = lines.len();
+    // Issue #704 rule 4: `End` lands on the last full page, not the
+    // last single line with the rest of the viewport left blank --
+    // the clamp is against a whole page's worth, never `total - 1`.
+    app.details_scroll = app
+        .details_scroll
+        .min(total.saturating_sub(viewport.max(1)));
+    let start = app.details_scroll.min(total);
+    let visible: Vec<Line> = lines.into_iter().skip(start).collect();
+    frame.render_widget(Paragraph::new(visible), content_area);
 }
 
 /// The too-small screen (§5): below 60×24, the minimum and
@@ -2931,12 +3409,12 @@ fn draw_tape(
         ctx,
         now,
     );
-    draw_key_bar(
-        frame,
-        sections[3],
-        &tape_key_bar_items(full_area.width >= 80),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        tape_key_bar_items(full_area.width >= 80)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
@@ -3003,7 +3481,22 @@ fn draw_signal(
         return;
     }
     app.signal_now_col = screen.now_col;
+    app.signal_drawn_col = screen.cursor_col;
     app.signal_has_step = screen.selected.is_some();
+    // Issue #704 rule 2: free scrubbing (`app.signal_cursor_col`
+    // itself `Some`) moves the shared selection to follow whatever
+    // step the cursor actually lands on, the same way the Tape's
+    // own `↑↓` already does -- not scrubbing, the selection already
+    // drove the cursor's own column (`screens::build_signal`'s
+    // `selection_col`), so this is a no-op then. Writes back through
+    // `select_tree_path_from_scrub`, never `select_tree_path`, which
+    // would otherwise clear `signal_cursor_col` on the very call
+    // that is driven by it.
+    if app.signal_cursor_col.is_some() {
+        if let Some(step) = &screen.selected {
+            app.select_tree_path_from_scrub(Some(step.path.clone()));
+        }
+    }
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -3015,12 +3508,12 @@ fn draw_signal(
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "SIGNAL", now, icon_frame, ctx);
     draw_signal_status_line(frame, sections[2], screen, header, ctx, now);
-    draw_key_bar(
-        frame,
-        sections[3],
-        &signal_key_bar_items(full_area.width >= 80),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        signal_key_bar_items(full_area.width >= 80)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
@@ -3030,6 +3523,7 @@ fn draw_signal(
             screen.selected.as_ref(),
             transcript_view,
             now,
+            app,
             ctx,
         );
         return;
@@ -4169,6 +4663,7 @@ fn draw_focused_step_detail(
     selected: Option<&oscilloscope_core::screens::FocusedStep>,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
+    app: &mut App,
     ctx: &DrawCtx,
 ) {
     let Some(step) = selected else {
@@ -4187,52 +4682,26 @@ fn draw_focused_step_detail(
         return;
     }
     fill_border_rows(frame, inner, border_color);
-    let muted = Style::default().fg(ctx.theme.fg_muted);
-    let default = Style::default().fg(ctx.theme.text);
-    let mut lines = vec![Line::from(vec![
-        Span::styled(" Status  ", muted),
-        Span::styled(
-            format!(
-                "{} ",
-                oscilloscope_core::format::format_duration(step.elapsed_s.unwrap_or(0.0))
-            ),
-            default,
-        ),
-    ])];
-    if let oscilloscope_core::screens::FocusDetail::Agent {
-        stale, live, note, ..
-    } = &step.detail
-    {
-        if *stale {
-            lines.push(Line::styled(" stopped", muted));
-        }
-        let running = matches!(
-            step.status.kind,
-            oscilloscope_core::model::StatusKind::Running
-                | oscilloscope_core::model::StatusKind::LikelyRunning
-                | oscilloscope_core::model::StatusKind::RunningOrQueued
-        );
-        let note_reserved = usize::from(live.is_none() && running);
-        let max_lines = (inner.height as usize).saturating_sub(lines.len() + note_reserved);
-        for line in agent_block_lines(step, transcript_view, ctx, now, Some(max_lines)) {
-            let mut spans = vec![Span::raw(" ")];
-            spans.extend(line.spans);
-            lines.push(Line::from(spans));
-        }
-        if live.is_none() && running {
-            lines.push(Line::styled(format!(" {}", *note), muted));
-        }
-    } else if let oscilloscope_core::screens::FocusDetail::Prompt { snippet, .. } = &step.detail {
-        lines.push(Line::from(""));
-        lines.push(Line::styled(" Reply", muted));
-        if let Some(snippet) = snippet {
-            for line in snippet.lines() {
-                lines.push(Line::styled(format!(" {line}"), default));
-            }
-        }
-    }
+    let width = (inner.width as usize).saturating_sub(1);
+    let lines = focused_step_full_lines(
+        step,
+        transcript_view,
+        now,
+        app.step_meta_unfolded,
+        width,
+        ctx,
+    );
+    app.loop_pass_line_paths = loop_pass_line_paths(&lines, step);
+    let viewport = inner.height as usize;
+    app.details_viewport = viewport;
+    let total = lines.len();
+    app.details_scroll = app
+        .details_scroll
+        .min(total.saturating_sub(viewport.max(1)));
+    let start = app.details_scroll.min(total);
+    let visible: Vec<Line> = lines.into_iter().skip(start).take(viewport).collect();
     frame.render_widget(
-        Paragraph::new(lines),
+        Paragraph::new(visible),
         Rect {
             x: inner.x + 1,
             y: inner.y,
@@ -4240,6 +4709,257 @@ fn draw_focused_step_detail(
             height: inner.height,
         },
     );
+}
+
+/// Issue #704 rule 4: the full-screen step view's own content, shared
+/// by the Signal's and the Store's own full-screen step (the Tape's
+/// own `tape_normal_detail_lines` and the Flow's own `flow_selected_
+/// step_lines` each keep their own existing Status/Asked/Produced/
+/// Agent rendering, append-only, to keep their own frame goldens
+/// cell-exact) -- Status, Asked, Produced, Error, Tokens, the Agent
+/// block, then every section `focused_*_lines` already shares.
+fn focused_step_full_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    now: &str,
+    meta_unfolded: bool,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::model::StatusKind;
+    use oscilloscope_core::screens::FocusDetail;
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let title_bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let (glyph, word, glyph_style) = tape_status_glyph_word_style(step.status.kind, ctx.theme);
+    let mut status_value = String::new();
+    if let Some(secs) = step.elapsed_s {
+        status_value.push_str(&oscilloscope_core::format::format_duration(secs));
+    }
+    // Issue #704 rule 4's own Status section, "start → end": both
+    // clock times when the step has actually finished, its own
+    // start alone while it hasn't.
+    let start_clock = step
+        .since_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    let end_clock = step
+        .finished_ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
+    if let Some(start) = &start_clock {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(start);
+        if let Some(end) = &end_clock {
+            status_value.push_str(" → ");
+            status_value.push_str(end);
+        }
+    }
+    let mut lines = vec![tape_detail_line(
+        vec![
+            Span::styled("Status  ", muted),
+            Span::styled(format!("{glyph} {word}  "), glyph_style),
+            Span::styled(status_value, default),
+        ],
+        width,
+    )];
+
+    let asked = match &step.detail {
+        FocusDetail::Prompt { .. } => step.prompt_sent_full.clone(),
+        FocusDetail::Tool { command, .. } => command.clone(),
+        _ => None,
+    };
+    if asked.is_some() || step.params_rendered_full.is_some() {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Asked", title_bold)],
+            width,
+        ));
+        if let Some(asked) = &asked {
+            for line in tape_word_wrap(asked, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+        // Issue #704 rule 4's own "rendered params": the whole
+        // `meta.params_rendered` object, not only the `command`/
+        // `args` a tool's own command line above already read out of
+        // it -- shown even when it duplicates that line, since a non-
+        // shell tool's own rendered params have no command line at
+        // all to stand in for them.
+        if let Some(params) = &step.params_rendered_full {
+            if asked.is_some() {
+                lines.push(Line::from(""));
+            }
+            lines.push(tape_detail_line(
+                vec![Span::styled("params ", muted)],
+                width,
+            ));
+            for line in tape_word_wrap(params, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    }
+
+    if !matches!(step.detail, FocusDetail::Prompt { .. }) {
+        if let Some(value) = &step.value_full {
+            lines.push(Line::from(""));
+            lines.push(tape_detail_line(
+                vec![Span::styled("Produced", title_bold)],
+                width,
+            ));
+            for line in tape_word_wrap(value, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    } else if let Some(received) = &step.received {
+        if let Some(value) = &step.value_full {
+            lines.push(Line::from(""));
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("Produced ", title_bold),
+                    Span::styled(
+                        received
+                            .tokens
+                            .map(|t| {
+                                format!(
+                                    "· {} t",
+                                    oscilloscope_core::format::format_tokens_thousands(t)
+                                )
+                            })
+                            .unwrap_or_default(),
+                        muted,
+                    ),
+                ],
+                width,
+            ));
+            for line in tape_word_wrap(value, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+            }
+        }
+    }
+
+    if let Some(error) = &step.error {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Error", title_bold)],
+            width,
+        ));
+        for line in tape_word_wrap(error, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(
+                vec![Span::styled(line, Style::default().fg(ctx.theme.error))],
+                width,
+            ));
+        }
+    }
+
+    if step.tokens.is_some() || step.usual_tokens.is_some() {
+        lines.push(Line::from(""));
+        let mut spans = vec![Span::styled("Tokens  ", muted)];
+        if let Some(total) = step.tokens {
+            spans.push(Span::styled(
+                oscilloscope_core::format::format_tokens_t(total),
+                default.add_modifier(Modifier::BOLD),
+            ));
+        }
+        if let Some(pct) = step.share_pct {
+            spans.push(Span::styled(format!("  {pct}% of this run so far"), muted));
+        }
+        lines.push(tape_detail_line(spans, width));
+        // Issue #704 rule 4's own Tokens section, "totals across
+        // attempts": only shown once there actually were more than
+        // one -- the figure above is already the winning attempt's
+        // own (`node_tokens`' own final-state rule), never repeated
+        // here.
+        if step.attempts.len() > 1 {
+            let attempts_total: u64 = step
+                .attempts
+                .iter()
+                .map(|a| a.tokens_sent.unwrap_or(0) + a.tokens_received.unwrap_or(0))
+                .sum();
+            lines.push(tape_detail_line(
+                vec![
+                    Span::styled("        ", muted),
+                    Span::styled(
+                        oscilloscope_core::format::format_tokens_t(attempts_total),
+                        default,
+                    ),
+                    Span::styled(
+                        format!(" total across {} attempts", step.attempts.len()),
+                        muted,
+                    ),
+                ],
+                width,
+            ));
+        }
+        if let Some((usual, count)) = step.usual_tokens {
+            let dev = step
+                .tokens
+                .filter(|_| usual > 0)
+                .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
+            let mut spans = vec![
+                Span::styled("Usual   ", muted),
+                Span::styled(
+                    format!(
+                        "{} t  ",
+                        oscilloscope_core::format::format_tokens_thousands(usual)
+                    ),
+                    default,
+                ),
+            ];
+            if let Some(d) = dev {
+                spans.push(Span::styled(
+                    format!("{d:+.0}% "),
+                    tape_deviation_style(d, ctx.theme).add_modifier(Modifier::BOLD),
+                ));
+            }
+            spans.push(Span::styled(format!("· median of {count} runs"), muted));
+            lines.push(tape_detail_line(spans, width));
+        }
+    }
+
+    if let FocusDetail::Agent {
+        stale, live, note, ..
+    } = &step.detail
+    {
+        lines.push(Line::from(""));
+        lines.push(tape_detail_line(
+            vec![Span::styled("Agent", title_bold)],
+            width,
+        ));
+        if *stale {
+            lines.push(tape_detail_line(
+                vec![Span::styled("stopped", muted)],
+                width,
+            ));
+        }
+        let running = matches!(
+            step.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        );
+        // Issue #704 rule 4: the full-screen view is scrollable (`App::
+        // details_scroll`/`scroll_details`), so the transcript reads
+        // in full here, never cut to fit a fixed line budget the way
+        // the Tape's own narrower, un-scrolled-by-section detail pane
+        // still is -- nothing the run recorded is cut.
+        for line in agent_block_lines(step, transcript_view, ctx, now, None) {
+            lines.push(tape_detail_line(line.spans, width));
+        }
+        if live.is_none() && running {
+            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        }
+    }
+
+    lines.extend(focused_attempts_lines(step, width, ctx));
+    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(focused_decision_lines(step, width, ctx));
+    lines.extend(focused_loop_lines(step, width, ctx));
+    lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
+
+    lines
 }
 
 /// One Agent block field line (issue #703's rule 3): an eight-cell
@@ -4754,7 +5474,7 @@ fn signal_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
 /// §4 already says are gone from the Flow.
 fn flow_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
-        ("← →", "scroll the rail", "+ -", "open / fold loop lanes"),
+        ("← →", "select a station", "+ -", "open / fold loop lanes"),
         (
             "↑ ↓",
             "select a pass",
@@ -5307,7 +6027,6 @@ fn draw_store_table(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::store::StoreScreen,
-    app: &App,
     max_rows: usize,
     wide: bool,
     ctx: &DrawCtx,
@@ -5351,8 +6070,8 @@ fn draw_store_table(
     // off, rather than always starting at row 0 and letting the
     // cursor itself disappear past the table's own bottom border.
     let total_rows = screen.table.len();
-    let selected_index = app
-        .store_selected
+    let selected_index = screen
+        .cursor_path
         .as_deref()
         .and_then(|path| screen.table.iter().position(|r| r.path == path));
     let max_start = total_rows.saturating_sub(max_rows);
@@ -5361,7 +6080,7 @@ fn draw_store_table(
         .unwrap_or(0)
         .min(max_start);
     for (i, row) in screen.table.iter().enumerate().skip(start).take(max_rows) {
-        let selected = app.store_selected.as_deref() == Some(row.path.as_str());
+        let selected = screen.cursor_path.as_deref() == Some(row.path.as_str());
         let bg = selected.then_some(theme.selection_bg);
         let label_fg = if selected {
             theme.selection_fg
@@ -5575,11 +6294,6 @@ fn draw_store(
         app.screen = oscilloscope_core::screens::Screen::Tape;
         return;
     }
-    // DESIGN.md §2.4's settled point 4: the cursor starts on the
-    // table's own first row.
-    if app.store_selected.is_none() {
-        app.store_selected = screen.table.first().map(|r| r.path.clone());
-    }
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -5591,23 +6305,23 @@ fn draw_store(
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "STORE", now, icon_frame, ctx);
     draw_store_status_line(frame, sections[2], screen, header, ctx, now);
-    draw_key_bar(
-        frame,
-        sections[3],
-        &store_key_bar_items(full_area.width >= 80),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        store_key_bar_items(full_area.width >= 80)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
-    if app.tape_fullscreen_step && screen.selected.is_some() {
-        draw_focused_step_detail(
-            frame,
-            body,
-            screen.selected.as_ref(),
-            transcript_view,
-            now,
-            ctx,
-        );
+    // Issue #704 rule 4: the full-screen view reads `raw_selected`
+    // (the exact selection, never climbed to an ancestor the way
+    // `selected`, the table's own cursor, is) -- it falls back to
+    // `selected` only when nothing stepped there at all (`enter` on
+    // the table's own fallback-to-first-row cursor, never set
+    // through `app.selected_path`).
+    let fullscreen_step = screen.raw_selected.as_ref().or(screen.selected.as_ref());
+    if app.tape_fullscreen_step && fullscreen_step.is_some() {
+        draw_focused_step_detail(frame, body, fullscreen_step, transcript_view, now, app, ctx);
         return;
     }
     let title_full = full_area.width >= 120;
@@ -5621,7 +6335,7 @@ fn draw_store(
             .constraints([Constraint::Min(6), Constraint::Length(table_height)])
             .split(body);
         draw_store_chart(frame, rows_split[0], screen, header, title_full, ctx);
-        draw_store_table(frame, rows_split[1], screen, app, 3, false, ctx);
+        draw_store_table(frame, rows_split[1], screen, 3, false, ctx);
         return;
     }
     let show_readings = full_area.height >= 30;
@@ -5637,10 +6351,10 @@ fn draw_store(
             .direction(Direction::Horizontal)
             .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
             .split(rows_split[1]);
-        draw_store_table(frame, cols[0], screen, app, max_rows, true, ctx);
+        draw_store_table(frame, cols[0], screen, max_rows, true, ctx);
         draw_store_readings(frame, cols[1], screen, ctx);
     } else {
-        draw_store_table(frame, rows_split[1], screen, app, max_rows, true, ctx);
+        draw_store_table(frame, rows_split[1], screen, max_rows, true, ctx);
     }
 }
 
@@ -5915,6 +6629,42 @@ fn draw_dialog_overlay(
     tape_history_runs: Option<usize>,
 ) {
     match &app.dialog {
+        // Issue #704 rule 5: while the full-screen step is open,
+        // `?` lists its own keys (`[ ]`/`↑↓`/`enter`/`m`/`esc`), the
+        // same ones every screen's own fullscreen key bar already
+        // does -- never whichever screen happened to open it, whose
+        // own keys don't work right now at all.
+        Dialog::Help if app.tape_fullscreen_step => {
+            let popup = Rect {
+                x: area.x + 2,
+                y: area.y + 5,
+                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+            };
+            frame.render_widget(Clear, popup);
+            let border = ctx.theme.border_focused;
+            frame.render_widget(
+                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+                popup,
+            );
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_set(ratatui::symbols::border::ROUNDED)
+                .title(tape_block_title("Help · Step", border, ctx))
+                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+            let inner = block.inner(popup);
+            frame.render_widget(block, popup);
+            fill_border_rows(frame, inner, border);
+            let content_area = Rect {
+                x: inner.x + 1,
+                y: inner.y,
+                width: inner.width.saturating_sub(1),
+                height: inner.height,
+            };
+            let paragraph = Paragraph::new(fullscreen_help_lines(ctx))
+                .style(Style::default().bg(ctx.theme.bg_surface));
+            frame.render_widget(paragraph, content_area);
+        }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
             // §4/§5's own fixed `2,5,72,18` (`design/frames/tape--
             // help`), not centred like every other dialog's own, and
@@ -6111,19 +6861,30 @@ fn draw_flow_selected_pane(
         "Selected".to_string()
     };
     let viewport = area.height.saturating_sub(2) as usize;
+    let content_width = (area.width as usize).saturating_sub(3);
     let lines = if let Some(pass) = &screen.selected_pass {
         selected_pass_lines(pass, wide, ctx)
     } else if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected_step {
-        flow_selected_step_lines(step, transcript_view, ctx, now, Some(viewport))
+        flow_selected_step_lines(
+            step,
+            transcript_view,
+            ctx,
+            now,
+            Some(viewport),
+            content_width,
+            app.step_meta_unfolded,
+        )
     } else {
         vec![Line::from("nothing selected")]
     };
     let border_color = ctx.theme.border;
     app.details_viewport = viewport;
     let total = lines.len();
-    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    app.details_scroll = app
+        .details_scroll
+        .min(total.saturating_sub(viewport.max(1)));
     let start = app.details_scroll.min(total);
     let block = Block::default()
         .borders(Borders::ALL)
@@ -6287,12 +7048,15 @@ fn tape_status_kind_word(kind: StatusKind) -> &'static str {
 /// through `Details::sent`/`received` (never `meta.prompt_sent` or
 /// `meta.answer` directly), so a later fix to either flows through
 /// here unchanged.
+#[allow(clippy::too_many_arguments)]
 fn flow_selected_step_lines(
     step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
     now: &str,
     max_lines: Option<usize>,
+    content_width: usize,
+    meta_unfolded: bool,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::model::StatusKind;
     use oscilloscope_core::screens::FocusDetail;
@@ -6352,7 +7116,7 @@ fn flow_selected_step_lines(
 
     let asked = match &step.detail {
         FocusDetail::Prompt { snippet, .. } => snippet.clone(),
-        FocusDetail::Tool { command } => command.clone(),
+        FocusDetail::Tool { command, .. } => command.clone(),
         _ => None,
     };
     if let Some(asked) = asked {
@@ -6432,6 +7196,16 @@ fn flow_selected_step_lines(
         lines.push(Line::styled("produced:", dim));
         lines.extend(produced);
     }
+
+    // Issue #704 rule 4: the sections every screen's own selection
+    // now shares -- `asked:`/`produced:` above already cover a
+    // tool's own command and value, so only the data they don't
+    // reach is new here.
+    lines.extend(focused_attempts_lines(step, content_width, ctx));
+    lines.extend(focused_tool_lines(step, content_width, ctx));
+    lines.extend(focused_decision_lines(step, content_width, ctx));
+    lines.extend(focused_loop_lines(step, content_width, ctx));
+    lines.extend(focused_meta_lines(step, content_width, ctx, meta_unfolded));
 
     lines
 }
@@ -6854,18 +7628,9 @@ fn flow_resolve_scroll(
         };
         if let Some(arrow) = anchor {
             if !in_view(app.flow_scroll, arrow) {
-                let target = (arrow as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
-                let layout = flow_layout(items, app, area_width);
-                let mut best = 0usize;
-                let mut best_dist = target;
-                for &(start, _) in std::iter::once(&(0, 0)).chain(layout.iter()) {
-                    let dist = start.abs_diff(target);
-                    if dist < best_dist {
-                        best = start;
-                        best_dist = dist;
-                    }
-                }
-                app.flow_scroll = best.min(max_scroll);
+                app.flow_scroll =
+                    flow_scroll_to_boundary(items, app, area_width, visible_width, arrow)
+                        .min(max_scroll);
             }
         }
     } else {
@@ -6880,10 +7645,29 @@ fn flow_resolve_scroll(
         // passes later, with no further key pressed at all.
         let rows: Vec<&oscilloscope_core::render::Row> = app.flow_rows.iter().collect();
         let land_back = app.lands_back_on_the_followed_row(&rows);
+        let mut resumed_follow = false;
         if app.flow_manual_scroll || land_back {
             if let Some(arrow) = arrow {
                 if in_view(app.flow_scroll, arrow) {
                     app.follow = true;
+                    resumed_follow = true;
+                }
+            }
+        }
+        // Issue #704 rule 2 (the Flow's own station cursor, "scrolled
+        // into view"): with follow off, the view has no other way to
+        // move at all (`←→` moves the selection itself, never
+        // scrolls, once follow is off -- `keys::flow_select_station`),
+        // so it must always keep the selected station in view on its
+        // own, the same snap-to-boundary rule follow itself uses.
+        if !resumed_follow {
+            if let Some(selected) = app.selected_path.clone() {
+                if let Some(x) = flow_selected_x(items, app, area_width, &selected) {
+                    if !in_view(app.flow_scroll, x) {
+                        app.flow_scroll =
+                            flow_scroll_to_boundary(items, app, area_width, visible_width, x)
+                                .min(max_scroll);
+                    }
                 }
             }
         }
@@ -6897,6 +7681,68 @@ fn flow_resolve_scroll(
     app.flow_manual_scroll = false;
     app.flow_scroll = app.flow_scroll.min(max_scroll);
     app.flow_scroll
+}
+
+/// The top-level item boundary closest to putting `x` at 60% of the
+/// visible width -- `flow_resolve_scroll`'s own snapping rule,
+/// shared by its follow-the-arrow branch and its follow-off
+/// selection-tracking branch.
+fn flow_scroll_to_boundary(
+    items: &[RailItem],
+    app: &App,
+    area_width: u16,
+    visible_width: usize,
+    x: usize,
+) -> usize {
+    let target = (x as f64 - visible_width as f64 * 0.6).max(0.0) as usize;
+    let layout = flow_layout(items, app, area_width);
+    let mut best = 0usize;
+    let mut best_dist = target;
+    for &(start, _) in std::iter::once(&(0, 0)).chain(layout.iter()) {
+        let dist = start.abs_diff(target);
+        if dist < best_dist {
+            best = start;
+            best_dist = dist;
+        }
+    }
+    best
+}
+
+/// Whether `item` is, or contains anywhere in its own lanes, the
+/// station, fork host or loop/`dynamic` lane path named `path` --
+/// [`flow_selected_x`]'s own membership test, recursing to any
+/// depth (never stopping at the first lane the way [`flow_now_
+/// arrow_x`] does, since a selection can be inside any lane, running
+/// or not).
+fn flow_item_contains(item: &RailItem, path: &str) -> bool {
+    match item {
+        RailItem::Station(s) => s.path == path,
+        RailItem::Fork(fork) => {
+            fork.path == path
+                || fork.lanes.iter().any(|lane| {
+                    lane.path
+                        .as_deref()
+                        .is_some_and(|p| p == path || path.starts_with(&format!("{p}.")))
+                        || lane.items.iter().any(|it| flow_item_contains(it, path))
+                })
+        }
+    }
+}
+
+/// Issue #704 rule 2: the selected effect's own x on the rail, for
+/// `flow_resolve_scroll`'s own follow-off scrolling -- the start of
+/// whichever top-level item owns it, at any depth inside a fork's
+/// own lanes (never only the x of its own leaf station, which a
+/// folded fork never draws at all) -- `None` when `path` is nowhere
+/// on the rail (a selection some other screen made that the Flow
+/// doesn't have, DESIGN.md's own "nothing selected" case).
+fn flow_selected_x(items: &[RailItem], app: &App, area_width: u16, path: &str) -> Option<usize> {
+    let layout = flow_layout(items, app, area_width);
+    items
+        .iter()
+        .zip(layout.iter())
+        .find(|(item, _)| flow_item_contains(item, path))
+        .map(|(_, &(start, _))| start)
 }
 
 /// Writes `text` into `buf` at the rail's own full-coordinate `x`,
@@ -7704,8 +8550,21 @@ fn flow_paint_fork(
     )
 }
 
-fn flow_key_bar_items(area_width: u16) -> Vec<(&'static str, &'static str)> {
-    let mut items = vec![("←→", "Scroll")];
+fn flow_key_bar_items(
+    area_width: u16,
+    selecting_stations: bool,
+) -> Vec<(&'static str, &'static str)> {
+    // Issue #704 rule 3: with follow off or the run ended, ←→ moves
+    // the selected lane's own station cursor instead of scrolling --
+    // the bar's own label follows whichever one actually happens.
+    let mut items = vec![(
+        "←→",
+        if selecting_stations {
+            "Select"
+        } else {
+            "Scroll"
+        },
+    )];
     // Below the three-pane threshold (DESIGN.md's own §5, 100×30,
     // the same one the Story pane itself drops below), `↑↓ Lane` goes
     // too -- there's no Story pane left for it to change the
@@ -8299,6 +9158,30 @@ mod flow_layout_tests {
         );
     }
 
+    /// Issue #704 rule 2: with follow off (the ordinary state once
+    /// a run has ended and the user has looked at anything),
+    /// `flow_resolve_scroll` must bring the selected station into
+    /// view on its own -- `←→` only moves the selection then, never
+    /// scrolls, so nothing else ever would.
+    #[test]
+    fn flow_resolve_scroll_brings_the_selected_station_into_view_with_follow_off() {
+        let items: Vec<RailItem> = (0..40)
+            .map(|i| station(&format!("s{i}"), StatusKind::Done))
+            .collect();
+        let mut app = App::new(false);
+        app.follow = false;
+        app.flow_scroll = 0;
+        app.selected_path = Some("s39".to_string());
+        let visible_width = 100usize;
+        let area_width = 200u16;
+        let scroll = flow_resolve_scroll(&items, &mut app, area_width, visible_width, true);
+        let x = flow_selected_x(&items, &app, area_width, "s39").expect("s39 is on the rail");
+        assert!(
+            scroll <= x && x < scroll + visible_width,
+            "the selected station must be in view: scroll={scroll} x={x}"
+        );
+    }
+
     #[test]
     fn flow_indicator_line_names_start_and_end_with_nothing_off_either_edge() {
         let items = vec![
@@ -8715,6 +9598,23 @@ fn draw_flow(
     app.flow_has_selection = screen.selected_pass.is_some()
         || screen.selected_step.is_some()
         || screen.selected_decision.is_some();
+    // Issue #704 rule 3: `←→`'s own station list for the next key,
+    // the selected lane's stations against the rail this redraw
+    // just built -- one frame stale at worst, the same lifecycle
+    // `flow_rows` already has.
+    app.flow_lane_stations =
+        oscilloscope_core::rail::lane_stations(&screen.rail, app.selected_path.as_deref());
+    // Issue #704 rule 3: what ←/→ step out to once the selection is
+    // already at the selected lane's own first/last station -- same
+    // lifecycle as `flow_lane_stations` above.
+    app.flow_step_out_before = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| oscilloscope_core::rail::step_out_of_lane(&screen.rail, p, false));
+    app.flow_step_out_after = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| oscilloscope_core::rail::step_out_of_lane(&screen.rail, p, true));
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -8726,21 +9626,45 @@ fn draw_flow(
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "FLOW", now, icon_frame, ctx);
     draw_flow_status_line(frame, sections[2], screen, header, ctx, now);
-    draw_key_bar(
-        frame,
-        sections[3],
-        &flow_key_bar_items(full_area.width),
-        ctx,
-    );
+    let key_bar_items = if app.tape_fullscreen_step {
+        fullscreen_step_key_bar_items(full_area.width >= 80)
+    } else {
+        let run_ended = matches!(
+            screen.head,
+            oscilloscope_core::screens::TapeHead::Ended { .. }
+                | oscilloscope_core::screens::TapeHead::Failed { .. }
+        );
+        flow_key_bar_items(full_area.width, !app.follow || run_ended)
+    };
+    draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
     // §5: the Story pane needs 100 columns and 30 rows both -- the
     // same tier the frames' own `flow--normal--80x24` drops it at.
     let wide = full_area.width >= 100 && full_area.height >= 30;
+    // Issue #704 rule 4: a plain station's own full-screen step
+    // reads the same shared renderer the Signal's and Store's
+    // already do (every section, the transcript in full, never the
+    // Selected pane's own shorter `flow_selected_step_lines`, which
+    // stays exactly as it was for the small, non-full-screen pane
+    // below) -- a pass or a decision has no such step of its own
+    // (`FocusDetail::Loop`/`Decision` belong to the *host* row, not
+    // to one of a loop's own passes), so those two keep their own
+    // panes even in full screen.
+    if app.tape_fullscreen_step && screen.selected_step.is_some() {
+        draw_focused_step_detail(
+            frame,
+            body,
+            screen.selected_step.as_ref(),
+            transcript_view,
+            now,
+            app,
+            ctx,
+        );
+        return;
+    }
     if app.tape_fullscreen_step
-        && (screen.selected_pass.is_some()
-            || screen.selected_step.is_some()
-            || screen.selected_decision.is_some())
+        && (screen.selected_pass.is_some() || screen.selected_decision.is_some())
     {
         draw_flow_selected_pane(frame, body, wide, screen, app, transcript_view, ctx, now);
         return;
@@ -8994,6 +9918,7 @@ mod golden_tests {
             kind_label: "agent",
             provider_or_model: None,
             since_ts: None,
+            finished_ts: None,
             elapsed_s: None,
             detail: FocusDetail::Agent {
                 asked: None,
@@ -9021,6 +9946,14 @@ mod golden_tests {
             received: None,
             tokens: None,
             cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
         }
@@ -9246,6 +10179,7 @@ mod golden_tests {
         let flat = oscilloscope_core::model::flatten_state(state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -9274,6 +10208,54 @@ mod golden_tests {
             .selected_step
             .expect("the Flow selected top_agent");
         (tape_screen, flow_step)
+    }
+
+    /// The same recorded-fixture pipeline [`agent_fixture_screens`]
+    /// already builds, for any path -- issue #704's own full-screen
+    /// sections, checked straight off a real run's own state rather
+    /// than hand-written JSON.
+    fn fixture_tape_screen(
+        name: &str,
+        selected_path: &str,
+        process: ProcessState,
+        now: &str,
+    ) -> (
+        oscilloscope_core::render::RenderState,
+        oscilloscope_core::screens::TapeScreen,
+    ) {
+        let state = agent_fixture_snapshots(name)
+            .into_iter()
+            .last()
+            .unwrap_or_else(|| panic!("{name}: no snapshot at all"));
+        let plan = agent_fixture_plan(name);
+        let mut model = RunModel::new();
+        let rendered = render::build_folded(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            process,
+            1.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            Some(selected_path),
+            true,
+            now,
+        );
+        (rendered, tape_screen)
     }
 
     fn agent_block_lines_text(lines: &[Line]) -> String {
@@ -9362,6 +10344,518 @@ mod golden_tests {
             tape_text.contains("\u{203a} edit src/MARKER_PATH.py \u{2713} 2.5s +3 \u{2212}1"),
             "{tape_text}"
         );
+    }
+
+    /// Issue #704 rule 4's own Attempts section, against the
+    /// recorded prompt_retried_cof fixture: a retried prompt's own
+    /// full-screen step names the attempt that decided the outcome
+    /// and the retry count a later pass's own chain otherwise
+    /// overwrites out of meta.fallback_attempts.
+    #[test]
+    fn fullscreen_sections_show_attempts_from_the_recorded_prompt_retried_fixture() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-10-19T16:15:06.890638+00:00";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "prompt_retried_cof",
+            "prime.ask",
+            ProcessState::exited(false),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(
+            text.contains("Attempts") && text.contains("1 retried"),
+            "{text}"
+        );
+        assert!(
+            text.contains("scripted")
+                && text.contains("scripted-model")
+                && text.contains("succeeded"),
+            "{text}"
+        );
+    }
+
+    /// Issue #704 rule 4's own Tokens section, "totals across
+    /// attempts": the shared full-screen renderer sums every
+    /// recorded attempt's own tokens, shown only once there was
+    /// more than one -- no recorded fixture's own `meta.fallback_
+    /// attempts` keeps more than its own final pass's one surviving
+    /// entry (`docs/orchestration-reference.md`'s own "only the
+    /// final pass's chain survives"), so this builds its own step
+    /// directly rather than reading one from a run.
+    #[test]
+    fn fullscreen_tokens_shows_the_total_across_attempts() {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{AttemptDetail, FocusDetail, FocusedStep};
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let step = FocusedStep {
+            path: "prime.ask".to_string(),
+            breadcrumb: "ask".to_string(),
+            kind_label: "prompt",
+            provider_or_model: None,
+            since_ts: None,
+            finished_ts: None,
+            elapsed_s: None,
+            detail: FocusDetail::Prompt {
+                tokens: Some(33),
+                estimated: false,
+                snippet: None,
+            },
+            status: RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: Some(33),
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: vec![
+                AttemptDetail {
+                    adapter: Some("ollama".to_string()),
+                    model: Some("m1".to_string()),
+                    status: Some("failed".to_string()),
+                    tokens_sent: Some(100),
+                    tokens_received: Some(0),
+                    error: Some("timed out".to_string()),
+                },
+                AttemptDetail {
+                    adapter: Some("scripted".to_string()),
+                    model: Some("scripted-model".to_string()),
+                    status: Some("succeeded".to_string()),
+                    tokens_sent: Some(11),
+                    tokens_received: Some(22),
+                    error: None,
+                },
+            ],
+            retries_used: Some(1),
+            meta_extra: Vec::new(),
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        };
+        let text = agent_block_lines_text(&focused_step_full_lines(
+            &step, None, "now", false, 80, &ctx,
+        ));
+        assert!(text.contains("total across 2 attempts"), "{text}");
+        assert!(text.contains("133 t"), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Error section, against the recorded
+    /// parity_tool_failed_continue_cof fixture: a handled tool
+    /// failure's own full-screen step shows the error in full even
+    /// though the run went on.
+    #[test]
+    fn fullscreen_sections_show_the_error_from_the_recorded_parity_tool_failed_continue_fixture() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "parity_tool_failed_continue_cof",
+            "prime.flaky",
+            ProcessState::exited(false),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Error"), "{text}");
+        assert!(text.contains("json: parse failed"), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Asked section: the Tape's own detail
+    /// pane (and so its own full-screen step, the same renderer)
+    /// shows a tool's own command line, against the recorded
+    /// each_tree_loop_concurrency fixture's own shell tool step.
+    #[test]
+    fn tape_detail_shows_the_tool_command_line_from_the_recorded_each_tree_loop_concurrency_fixture()
+     {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let leaf = "prime.each_tree.iter_0.nap";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "each_tree_loop_concurrency",
+            leaf,
+            ProcessState::exited(true),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Asked"), "{text}");
+        let oscilloscope_core::screens::FocusDetail::Tool {
+            command: Some(command),
+            ..
+        } = &tape_screen.selected.as_ref().unwrap().detail
+        else {
+            panic!("{leaf} must resolve its own tool command");
+        };
+        assert!(text.contains(command.as_str()), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Asked section, "rendered params":
+    /// the shared full-screen renderer shows the whole `params_
+    /// rendered` object, not only the command line built from its
+    /// own `command`/`args`, against the recorded parity_tool_
+    /// failed_continue_cof fixture's own tool step.
+    #[test]
+    fn fullscreen_asked_shows_rendered_params_from_the_recorded_parity_tool_failed_continue_fixture()
+     {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "parity_tool_failed_continue_cof",
+            "prime.flaky",
+            ProcessState::exited(false),
+            now,
+        );
+        let step = tape_screen
+            .selected
+            .as_ref()
+            .expect("prime.flaky resolves its own step");
+        assert!(
+            step.params_rendered_full.is_some(),
+            "a tool step must carry its own rendered params"
+        );
+        let text =
+            agent_block_lines_text(&focused_step_full_lines(step, None, now, false, 80, &ctx));
+        assert!(text.contains("params"), "{text}");
+        assert!(
+            text.contains(step.params_rendered_full.as_deref().unwrap()),
+            "{text}"
+        );
+    }
+
+    /// Issue #704 rule 4's own Status section, "start → end": the
+    /// shared full-screen renderer shows both clock times for a
+    /// finished step, against the recorded parity_tool_failed_
+    /// continue_cof fixture's own handled failure.
+    #[test]
+    fn fullscreen_status_shows_start_and_end_clocks_from_the_recorded_parity_tool_failed_continue_fixture()
+     {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "parity_tool_failed_continue_cof",
+            "prime.flaky",
+            ProcessState::exited(false),
+            now,
+        );
+        let step = tape_screen
+            .selected
+            .as_ref()
+            .expect("prime.flaky resolves its own step");
+        assert!(step.since_ts.is_some(), "{step:?}");
+        assert!(step.finished_ts.is_some(), "{step:?}");
+        let text =
+            agent_block_lines_text(&focused_step_full_lines(step, None, now, false, 80, &ctx));
+        let start = oscilloscope_core::format::format_clock_time(
+            step.since_ts.as_deref().unwrap(),
+            ctx.zone,
+        )
+        .unwrap();
+        let end = oscilloscope_core::format::format_clock_time(
+            step.finished_ts.as_deref().unwrap(),
+            ctx.zone,
+        )
+        .unwrap();
+        assert!(text.contains(&format!("{start} → {end}")), "{text}");
+    }
+
+    /// Issue #704 rule 4's own Loop section, against the recorded
+    /// each_tree_loop_concurrency fixture: a finished loop's own
+    /// full-screen step lists every pass, in plan order.
+    #[test]
+    fn fullscreen_sections_show_the_loop_from_the_recorded_each_tree_loop_concurrency_fixture() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "each_tree_loop_concurrency",
+            "prime.each_tree",
+            ProcessState::exited(true),
+            now,
+        );
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &tape_screen,
+            80,
+            40,
+            None,
+            now,
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Loop"), "{text}");
+        for pass in ["pass 1", "pass 2", "pass 3", "pass 4"] {
+            assert!(text.contains(pass), "missing {pass} in:\n{text}");
+        }
+    }
+
+    /// Issue #704 rule 4: `enter` on the Loop section's own pass line
+    /// opens that pass -- against the recorded each_tree_loop_
+    /// concurrency fixture's own finished loop, scrolling to each
+    /// pass's own line in turn and pressing `enter` lands the shared
+    /// selection on that exact pass.
+    #[test]
+    fn enter_on_a_loop_passs_own_line_opens_it() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-01-01T00:00:10Z";
+        let (_rendered, tape_screen) = fixture_tape_screen(
+            "each_tree_loop_concurrency",
+            "prime.each_tree",
+            ProcessState::exited(true),
+            now,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.each_tree".to_string());
+        app.tape_fullscreen_step = true;
+        let mut terminal = Terminal::new(TestBackend::new(80, 40)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_focused_step_detail(
+                    f,
+                    f.area(),
+                    tape_screen.selected.as_ref(),
+                    None,
+                    now,
+                    &mut app,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        assert!(
+            !app.loop_pass_line_paths.is_empty(),
+            "the loop's own passes must each resolve a line"
+        );
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &[],
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.each_tree.iter_0"),
+            "enter with nothing scrolled opens the first pass's own line"
+        );
+        assert!(
+            app.tape_fullscreen_step,
+            "enter on a pass never closes the full-screen view"
+        );
+    }
+
+    /// Issue #704 rule 4: `End` lands on the last full page of the
+    /// full-screen step's own content, not the last single line
+    /// with the rest of the pane left blank.
+    #[test]
+    fn end_scrolls_to_the_last_full_page_not_the_last_line_alone() {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{FocusDetail, FocusedStep};
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let step = FocusedStep {
+            path: "prime.a".to_string(),
+            breadcrumb: "a".to_string(),
+            kind_label: "tool",
+            provider_or_model: None,
+            since_ts: None,
+            finished_ts: None,
+            elapsed_s: None,
+            detail: FocusDetail::Plain,
+            status: RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: (0..50)
+                .map(|i| (format!("key{i}"), format!("value{i}")))
+                .collect(),
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+        };
+        let mut app = crate::keys::App::new(false);
+        app.tape_fullscreen_step = true;
+        app.step_meta_unfolded = true;
+        app.details_scroll = usize::MAX;
+        let mut terminal = Terminal::new(TestBackend::new(80, 20)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_focused_step_detail(f, f.area(), Some(&step), None, "now", &mut app, &ctx)
+            })
+            .unwrap();
+        assert!(
+            app.details_scroll + app.details_viewport >= 50,
+            "the last page must reach the end: scroll={} viewport={}",
+            app.details_scroll,
+            app.details_viewport
+        );
+        assert!(
+            app.details_scroll + 1 < 50,
+            "End must show a full page, not just the last line: scroll={}",
+            app.details_scroll
+        );
+    }
+
+    /// Issue #704's own snapshot of the full-screen step view against
+    /// the recorded agent_live_pi fixture's own finished session, at
+    /// a given terminal size.
+    fn fullscreen_step_snapshot(width: u16, height: u16) -> String {
+        let states = agent_fixture_snapshots("agent_live_pi");
+        let state = states.last().expect("at least one snapshot").clone();
+        let now = state["prime"]["meta"]["completed_at"]
+            .as_str()
+            .expect("the run itself finished")
+            .to_string();
+        let (rendered, tape_screen) = fixture_tape_screen(
+            "agent_live_pi",
+            "prime.top_agent",
+            ProcessState::exited(false),
+            &now,
+        );
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.top_agent".to_string());
+        app.tape_fullscreen_step = true;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    &now,
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn fullscreen_step_view_matches_the_snapshot_at_120x30() {
+        insta::assert_snapshot!(fullscreen_step_snapshot(120, 30));
+    }
+
+    #[test]
+    fn fullscreen_step_view_matches_the_snapshot_at_80x24() {
+        insta::assert_snapshot!(fullscreen_step_snapshot(80, 24));
     }
 
     /// Issue #703's rule 3, against the recorded `agent_live_claude_
@@ -10679,6 +12173,7 @@ mod highlight_tests {
         let model = oscilloscope_core::model::RunModel::new();
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -10893,6 +12388,7 @@ mod tape_live_tests {
         let flat = oscilloscope_core::model::flatten_state(state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -11148,6 +12644,7 @@ mod tape_live_tests {
         let flat = oscilloscope_core::model::flatten_state(&Value::Null);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -11842,6 +13339,7 @@ mod tape_frame_goldens {
         // screen on display, with no terminal-size check of its own.
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -11943,6 +13441,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(&state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -11954,6 +13453,12 @@ mod tape_frame_goldens {
         );
         let mut app = crate::keys::App::new(false);
         app.selected_path = Some("prime.tests".to_string());
+        // Issue #704 rule 1: the frame depicts the Tape right as the
+        // run fails -- the list highlights the failure's own row
+        // (its own default selection), but the detail pane still
+        // reads the run summary until the user actually moves away
+        // from it.
+        app.tape_run_end_target = Some("prime.tests".to_string());
         let ctx = DrawCtx {
             theme: &theme,
             theme_banner: None,
@@ -11987,6 +13492,57 @@ mod tape_frame_goldens {
             &mock,
             "tape--failed--120x30",
             &[],
+        );
+    }
+
+    /// Issue #704 rule 1: a failed run can be browsed exactly the
+    /// same way an ended one can -- moving the selection away from
+    /// the failure's own default row shows that row's own details
+    /// instead of the run summary, and moving back onto it shows the
+    /// summary again.
+    #[test]
+    fn tape_failed_moving_the_selection_shows_that_rows_own_details() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let run_dir = fixtures_dir().join("run");
+        let state = load_json(&run_dir.join("state.live.json"));
+        let events = load_events(&run_dir.join("events.jsonl"));
+        let now = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string();
+        let (_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::exited(false),
+            &now,
+            "cof",
+            Some("prime.tests"),
+            true,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.tests".to_string());
+        app.tape_run_end_target = Some("prime.tests".to_string());
+        let rows = crate::keys::visible_rows_for_tape(&tape_screen);
+        let visible: Vec<&oscilloscope_core::render::Row> = rows.iter().collect();
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Up,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &visible,
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert_ne!(app.selected_path.as_deref(), Some("prime.tests"));
+        assert_ne!(
+            app.tape_run_end_target.as_deref(),
+            app.selected_path.as_deref()
         );
     }
 
@@ -12026,6 +13582,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             plan,
@@ -12189,10 +13746,139 @@ mod tape_frame_goldens {
             &rendered,
             &tape_screen,
             Some("prime.flaky"),
-            |_| {},
+            // Issue #704 rule 1: the frame depicts the Tape right as
+            // the run ends -- the list highlights the handled
+            // failure (its own default selection), but the detail
+            // pane still reads the run summary until the user
+            // actually moves away from it.
+            |app| app.tape_run_end_target = Some("prime.flaky".to_string()),
             &now,
             &[(103, 4)],
         );
+    }
+
+    /// Issue #704 rule 1: moving the selection away from the Ended
+    /// Tape's own default row shows that row's own details instead
+    /// of the run summary, and `enter` opens it -- the same Tape the
+    /// `tape--ended--120x30` golden freezes right at the run's own
+    /// end, one `↓` later.
+    #[test]
+    fn tape_ended_moving_the_selection_shows_that_rows_own_details() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let run_dir = fixtures_dir().join("run2");
+        let state = load_json(&run_dir.join("state.live.json"));
+        let events = load_events(&run_dir.join("events.jsonl"));
+        let now = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(serde_json::Value::as_str)
+            .unwrap()
+            .to_string();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::exited(false),
+            &now,
+            "cof",
+            Some("prime.flaky"),
+            true,
+        );
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.flaky".to_string());
+        app.tape_run_end_target = Some("prime.flaky".to_string());
+        let rows = crate::keys::visible_rows_for_tape(&tape_screen);
+        let visible: Vec<&oscilloscope_core::render::Row> = rows.iter().collect();
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Down,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &visible,
+            &[],
+            false,
+            false,
+            &[],
+        );
+        // The handled failure (`prime.flaky`) is immediately
+        // followed by `prime.summary` in the Tape's own finish
+        // order (the `tape--ended--120x30` frame itself draws them
+        // in exactly that sequence), and moving away from the
+        // default row no longer matches `tape_run_end_target`, so
+        // summary mode ends.
+        assert_eq!(app.selected_path.as_deref(), Some("prime.summary"));
+        assert_ne!(
+            app.tape_run_end_target.as_deref(),
+            app.selected_path.as_deref()
+        );
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &oscilloscope_core::model::flatten_state(&state),
+            &plan,
+            &oscilloscope_core::model::RunModel::new(),
+            Some(&state),
+            app.selected_path.as_deref(),
+            true,
+            &now,
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    Some(&state),
+                    &ctx,
+                    0,
+                    &now,
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let screen: String = (0..buffer.area.height)
+            .map(|y| {
+                (0..buffer.area.width)
+                    .map(|x| buffer[(x, y)].symbol().to_string())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(screen.contains("summary · Selected"), "{screen}");
+        assert!(!screen.contains("Run · Ended"), "{screen}");
+        // `enter` opens the now-selected row full screen (§4, shared
+        // with every other screen's own toggle).
+        app.handle_key(
+            crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+            &visible,
+            &[],
+            false,
+            false,
+            &[],
+        );
+        assert!(app.tape_fullscreen_step);
     }
 
     fn run2_frozen_at_3_62s() -> (serde_json::Value, Vec<serde_json::Value>) {
@@ -12592,12 +14278,14 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(state);
         let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             plan,
             &model,
             Some(state),
             column_ms,
+            None,
             None,
             now,
         );
@@ -13095,7 +14783,7 @@ mod tape_frame_goldens {
         let zone = frame_zone();
         let mut app = crate::keys::App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Store;
-        app.store_selected = selected_path.map(str::to_string);
+        app.selected_path = selected_path.map(str::to_string);
         let ctx = DrawCtx {
             theme: &theme,
             theme_banner: None,
@@ -13488,7 +15176,7 @@ mod tape_frame_goldens {
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(text.contains("Help") && text.contains("Flow"), "{text}");
-        assert!(text.contains("scroll the rail"), "{text}");
+        assert!(text.contains("select a station"), "{text}");
         assert!(text.contains("select a pass"), "{text}");
         assert!(text.contains("open / fold loop lanes"), "{text}");
         assert!(
@@ -13581,6 +15269,248 @@ mod tape_frame_goldens {
             !text.contains("full value overlay"),
             "not the generic list:\n{text}"
         );
+    }
+
+    /// Issue #704 rule 5: the full-screen step's own key bar, shared
+    /// by every screen, lists `[ ]`/scroll/`m`/`esc` -- never a
+    /// screen's own ordinary key bar, whose keys (the Store's own
+    /// table navigation here) do not fire while it is open.
+    #[test]
+    fn the_fullscreen_step_key_bar_lists_its_own_keys_not_the_screens() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.tape_fullscreen_step = true;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Step"), "{text}");
+        assert!(text.contains("Scroll"), "{text}");
+        assert!(text.contains("Meta"), "{text}");
+        assert!(text.contains("Close"), "{text}");
+        // Issue #704 rule 4: `enter` opens a pass here, never the
+        // Store's own ↑↓ "Select" wording.
+        assert!(text.contains("Open pass"), "{text}");
+        assert!(
+            !text.contains("↑↓ Select"),
+            "not the Store's own ordinary key bar:\n{text}"
+        );
+    }
+
+    /// Issue #704 rule 5: `?` while the full-screen step is open
+    /// lists its own keys (`[ ]`/`enter`/`m`), never the Store's own
+    /// -- whichever screen opened it, its own keys don't work right
+    /// now at all.
+    #[test]
+    fn the_help_overlay_lists_the_fullscreen_steps_own_keys_while_its_open() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.tape_fullscreen_step = true;
+        app.dialog = Dialog::Help;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Help") && text.contains("Step"), "{text}");
+        assert!(text.contains("previous / next effect"), "{text}");
+        assert!(text.contains("unfold Meta"), "{text}");
+        assert!(text.contains("open a pass"), "{text}");
+        assert!(
+            !text.contains("open the selected store"),
+            "not the Store's own ordinary Help:\n{text}"
+        );
+    }
+
+    /// Issue #704's own key-sequence test: the same effect selected
+    /// on the Tape stays selected switching to the Signal, the Flow
+    /// and the Store -- one shared selection, not each screen's own.
+    #[test]
+    fn the_same_selected_effect_is_reachable_from_every_screen() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let selected = "prime.gate.reply";
+
+        let (_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some(selected),
+            true,
+        );
+        assert_eq!(
+            tape_screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, &events);
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            "cof 0.1.0",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(
+            &history,
+            &mut rendered.header,
+            Some(&state),
+            &plan,
+            now,
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let signal_screen = oscilloscope_core::screens::build_signal(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            100,
+            None,
+            Some(selected),
+            now,
+        );
+        assert_eq!(
+            signal_screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+
+        let flow_screen = oscilloscope_core::screens::build_flow(
+            &rendered.unfolded_rows,
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some(selected),
+            &frame_zone(),
+            rendered.header.run_end_ts.as_deref(),
+            now,
+        );
+        assert_eq!(
+            flow_screen.selected_step.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+
+        let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+            rendered
+                .unfolded_rows
+                .iter()
+                .map(|r| (r.path.clone(), r.kind))
+                .collect();
+        let store_screen = oscilloscope_core::store::build_store(
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            now,
+            Some(selected),
+        );
+        assert_eq!(
+            store_screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+        assert_eq!(store_screen.cursor_path.as_deref(), Some(selected));
     }
 
     /// Issue #695's rule 10: the full title (`Tokens by Store`
@@ -13737,6 +15667,11 @@ mod tape_frame_goldens {
                 deviation_pct: None,
             })
             .collect();
+        // `cursor_path` is this screen's own cursor now (issue #704
+        // rule 2) -- the override above replaced the table it was
+        // resolved against, so it's set here alongside it, the same
+        // as the override itself.
+        store_screen.cursor_path = Some("prime.n5".to_string());
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
         let zone = frame_zone();
         let ctx = DrawCtx {
@@ -13747,7 +15682,7 @@ mod tape_frame_goldens {
         };
         let mut app = crate::keys::App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Store;
-        app.store_selected = Some("prime.n5".to_string());
+        app.selected_path = Some("prime.n5".to_string());
         let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
         terminal
             .draw(|f| {

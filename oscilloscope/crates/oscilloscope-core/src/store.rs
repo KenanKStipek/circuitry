@@ -1067,13 +1067,27 @@ pub struct StoreScreen {
     /// shared chrome with the Tape/Signal/Flow.
     pub last_finished: Option<crate::screens::SignalLastFinished>,
     pub head: crate::screens::TapeHead,
-    /// The table's own cursor (`App::store_selected`, kept there
-    /// since it is UI state, not this screen's own model), resolved
-    /// to the same [`crate::screens::FocusedStep`] the Tape's,
-    /// Signal's and Flow's own full-screen step views already build
-    /// theirs from -- `None` with no row selected, or a selected path
-    /// no row in `rows` resolves to.
+    /// The table's own cursor (issue #704 rule 2): the one shared
+    /// `App::selected_path` itself when it names a store with tokens
+    /// of its own, else the nearest ancestor that is one, else (with
+    /// nothing in the whole run holding tokens yet) the table's own
+    /// first row -- `None` only with an empty table.
+    pub cursor_path: Option<String>,
+    /// `cursor_path` resolved to the same [`crate::screens::
+    /// FocusedStep`] the Tape's, Signal's and Flow's own full-screen
+    /// step views already build theirs from -- `None` only alongside
+    /// `cursor_path` itself.
     pub selected: Option<crate::screens::FocusedStep>,
+    /// Issue #704 rule 4: the shared selection's own exact path,
+    /// resolved the same way the Tape's and Signal's own full-screen
+    /// step is -- never climbed to an ancestor the way `selected`
+    /// (the table's own cursor, for the row/tile to highlight) is.
+    /// `[`/`]` always lands on a real row with a step of its own
+    /// (`App::fullscreen_step`'s own candidates), so the full-screen
+    /// view reads this, not `selected`, or stepping through a store
+    /// with no tokens of its own would show its nearest ancestor's
+    /// content instead of the very effect just stepped to.
+    pub raw_selected: Option<crate::screens::FocusedStep>,
     /// The Totals row's own deviation (§3.3), the same sum over every
     /// already-run-or-running row's own usual tokens the Tape's and
     /// Signal's own `usual_so_far_tokens` is.
@@ -1121,7 +1135,17 @@ pub fn build_store(
         .max();
     let unit = crate::screens::tape_unit(largest_usual_step);
     let run_start = header.run_start_ts.as_deref();
-    let selected = selected_path
+    let plan_order: Vec<String> = rows.iter().map(|r| r.path.clone()).collect();
+    let cursor_path = store_cursor_path(selected_path, &table, &plan_order)
+        .or_else(|| {
+            plan_order
+                .iter()
+                .find(|p| table.iter().any(|r| &r.path == *p))
+                .cloned()
+        })
+        .or_else(|| table.first().map(|r| r.path.clone()));
+    let selected = cursor_path
+        .as_deref()
         .and_then(|path| rows.iter().find(|r| r.path == path))
         .map(|row| {
             crate::screens::build_focused_step(
@@ -1132,6 +1156,21 @@ pub fn build_store(
                 state,
                 now,
                 header.run_end_ts.as_deref(),
+                header,
+            )
+        });
+    let raw_selected = selected_path
+        .and_then(|path| rows.iter().find(|r| r.path == path))
+        .map(|row| {
+            crate::screens::build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+                header,
             )
         });
     let usual_so_far_tokens = {
@@ -1150,9 +1189,79 @@ pub fn build_store(
         unit,
         last_finished: crate::screens::last_finished_row(rows, flat, plan, run_start),
         head: crate::screens::build_run_head(run_start, header, rows, flat),
+        cursor_path,
         selected,
+        raw_selected,
         usual_so_far_tokens,
     }
+}
+
+/// Issue #704 rule 2: the Store's own table cursor for `selected_path`
+/// -- itself, when it names a row the table already has (a store
+/// with tokens of its own); else the nearest ancestor that is one;
+/// else the nearest token-bearing leaf in plan order (`plan_order`,
+/// the run's own rows, is what gives "nearest" a real meaning --
+/// never the table's own tokens-descending order, which would pick
+/// the biggest store in the run instead of the closest one). `None`
+/// only when `selected_path` is absent from `plan_order` entirely
+/// (an inferred decision's own synthetic station has no row of its
+/// own) and the table is empty, which `build_store`'s own caller
+/// falls back from to the table's first row.
+pub fn store_cursor_path(
+    selected_path: Option<&str>,
+    table: &[StoreTableRow],
+    plan_order: &[String],
+) -> Option<String> {
+    let selected_path = selected_path?;
+    let mut candidate = selected_path;
+    loop {
+        if table.iter().any(|r| r.path == candidate) {
+            return Some(candidate.to_string());
+        }
+        match candidate.rsplit_once('.') {
+            Some((parent, _)) => candidate = parent,
+            None => break,
+        }
+    }
+    nearest_token_bearing_path(selected_path, table, plan_order)
+}
+
+/// `store_cursor_path`'s own plan-order fallback: the table's own
+/// path closest to `selected_path` by position in `plan_order`
+/// (ties broken toward the earlier one) -- `None` when `selected_
+/// path` isn't in `plan_order` at all, or no table row is either.
+pub fn nearest_token_bearing_path(
+    selected_path: &str,
+    table: &[StoreTableRow],
+    plan_order: &[String],
+) -> Option<String> {
+    let table_paths: Vec<String> = table.iter().map(|r| r.path.clone()).collect();
+    nearest_path_in_plan_order(selected_path, &table_paths, plan_order)
+}
+
+/// The path in `candidates` closest to `selected_path` by position
+/// in `plan_order` (ties broken toward the earlier one) -- shared by
+/// [`nearest_token_bearing_path`] and the Store's own `enter`/`
+/// ↑↓` key handling, which has no [`StoreTableRow`] of its own to
+/// read tokens off, only the table's own path list. `None` when
+/// `selected_path` isn't in `plan_order` at all, or no candidate is
+/// either.
+pub fn nearest_path_in_plan_order(
+    selected_path: &str,
+    candidates: &[String],
+    plan_order: &[String],
+) -> Option<String> {
+    let idx = plan_order.iter().position(|p| p == selected_path)?;
+    candidates
+        .iter()
+        .filter_map(|path| {
+            plan_order
+                .iter()
+                .position(|p| p == path)
+                .map(|pos| (pos.abs_diff(idx), pos, path.clone()))
+        })
+        .min_by_key(|(dist, pos, _)| (*dist, *pos))
+        .map(|(_, _, path)| path)
 }
 
 #[cfg(test)]
@@ -1183,6 +1292,60 @@ mod tests {
             children_with_tokens,
             children_planned: children_with_tokens,
         })
+    }
+
+    fn table_row(path: &str, tokens: u64) -> StoreTableRow {
+        StoreTableRow {
+            path: path.to_string(),
+            label: path.to_string(),
+            tokens_sent: tokens,
+            tokens_received: 0,
+            share_pct: 0.0,
+            deviation_pct: None,
+        }
+    }
+
+    /// Issue #704 rule 2: a selected effect with no tokens of its
+    /// own resolves to the nearest ancestor that has some, never to
+    /// nothing at all just because the leaf itself never held any.
+    #[test]
+    fn store_cursor_path_climbs_to_the_nearest_ancestor_with_tokens() {
+        let table = vec![table_row("prime.gate", 10)];
+        let plan_order = vec!["prime.gate".to_string(), "prime.gate.reply".to_string()];
+        assert_eq!(
+            store_cursor_path(Some("prime.gate.reply"), &table, &plan_order),
+            Some("prime.gate".to_string())
+        );
+        // Already in the table: itself, not an ancestor.
+        assert_eq!(
+            store_cursor_path(Some("prime.gate"), &table, &plan_order),
+            Some("prime.gate".to_string())
+        );
+        // Neither itself nor an ancestor is in `plan_order` at all:
+        // no cursor.
+        assert_eq!(
+            store_cursor_path(Some("prime.other.leaf"), &table, &plan_order),
+            None
+        );
+        assert_eq!(store_cursor_path(None, &table, &plan_order), None);
+    }
+
+    /// Issue #704 rule 2: with no ancestor in the table either,
+    /// "nearest" means plan order, never the table's own
+    /// tokens-descending order -- the bigger, farther store must
+    /// lose to the smaller, closer one.
+    #[test]
+    fn store_cursor_path_falls_back_to_the_nearest_leaf_in_plan_order() {
+        let table = vec![table_row("prime.big", 900), table_row("prime.small", 5)];
+        let plan_order = vec![
+            "prime.small".to_string(),
+            "prime.mid".to_string(),
+            "prime.big".to_string(),
+        ];
+        assert_eq!(
+            store_cursor_path(Some("prime.mid"), &table, &plan_order),
+            Some("prime.small".to_string())
+        );
     }
 
     /// The frames' own geometry (issue #695): at 120x30 `kind`
@@ -2114,6 +2277,63 @@ mod tests {
         let table = build_store_table(&tree, "prime", 0);
         let readings = build_store_readings(&table, &flat, &header, &rows);
         assert_eq!(readings.loop_progress, Some(("drafts".to_string(), 0, 3)));
+    }
+
+    /// Issue #704 rule 4: the full-screen step reads the exact
+    /// selected effect (`raw_selected`), never the ancestor `[`/`]`
+    /// substitutes for the table's own cursor/highlight (`selected`)
+    /// when the effect has no tokens of its own -- stepping to a
+    /// token-less tool must show that tool's own step, not whichever
+    /// store it happens to be nested under.
+    #[test]
+    fn raw_selected_is_the_exact_effect_never_the_cursors_own_nearest_ancestor() {
+        let plan = crate::plan::PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                "adapter": "scripted", "model": "m",
+                "tokens_sent_total": 20, "tokens_received_total": 15
+            }},
+            "check": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": "2026-01-01T00:00:02Z"
+            }}
+        }});
+        let rendered = crate::render::build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            crate::model::ProcessState::exited(false),
+            2.0,
+            "2026-01-01T00:00:02Z",
+            &[],
+        );
+        let flat = crate::model::flatten_state(&state);
+        let kinds: BTreeMap<String, RowKind> = BTreeMap::new();
+        let screen = build_store(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            "2026-01-01T00:00:02Z",
+            Some("prime.check"),
+        );
+        assert_ne!(
+            screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.check"),
+            "a token-less step's own cursor climbs to an ancestor, the same as ever"
+        );
+        assert_eq!(
+            screen.raw_selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.check"),
+            "but the full-screen step still reads the exact one"
+        );
     }
 
     #[test]

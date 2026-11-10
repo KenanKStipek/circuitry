@@ -25,4 +25,4 @@ expression: text
 "│ loop                                                                                             │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
 "                                                                                                    "
-" ←→ Scroll  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "
+" ←→ Select  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "

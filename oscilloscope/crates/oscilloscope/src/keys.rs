@@ -135,11 +135,6 @@ pub struct App {
     /// `pane == Pane::State` is only true while that pane itself has
     /// focus, never while scrolling its own selection's details.
     pub details_source: Pane,
-    /// The Store screen's own table cursor (issue #695), a path --
-    /// independent of `selected_path`/`state_selected_path`, same
-    /// reasoning as those two staying independent of each other.
-    /// Sticks to its own path as the table's own rows reorder.
-    pub store_selected: Option<String>,
     /// The rail's own horizontal scroll (issue #691, DESIGN.md
     /// §2.3's follow rule): a character offset from the run's own
     /// start, clamped to the rail's real width only at draw time
@@ -164,6 +159,21 @@ pub struct App {
     /// container with no `RowKind::Pass` row of its own, is still on
     /// the rail and must still be reachable.
     pub flow_rows: Vec<Row>,
+    /// Issue #704 rule 3: the selected lane's own stations in plan
+    /// order (`rail::lane_stations`'s own output), refreshed on
+    /// every rebuild -- `←→` steps through this list with follow off
+    /// or the run ended; `tui::draw_flow` is the only thing that
+    /// ever rebuilds it, the same lifecycle `flow_rows` already has.
+    pub flow_lane_stations: Vec<String>,
+    /// Issue #704 rule 3: what `←` steps out to when the selection is
+    /// already at the selected lane's own first station (`rail::
+    /// step_out_of_lane`'s own output, `tui::draw_flow`'s own
+    /// lifecycle) -- `None` with no enclosing fork at all (already
+    /// at the rail's own top level).
+    pub flow_step_out_before: Option<String>,
+    /// `flow_step_out_before`'s own `→` counterpart, for the lane's
+    /// own last station.
+    pub flow_step_out_after: Option<String>,
     /// Per-fork lane-open overrides (issue #691's `+`/`-`), keyed by
     /// the fork's own path: `0` folds it into its own band, the
     /// fork's own lane count fully opens it, anything in between is
@@ -181,9 +191,18 @@ pub struct App {
     /// per column, 100 the frame's own default).
     pub signal_column_ms: u64,
     /// The latest redraw's own Now column, cached the same way
-    /// `tree_viewport` is, so `signal_scrub`'s own first press off
-    /// Now has something to clamp and seed against.
+    /// `tree_viewport` is, so `signal_scrub`'s own clamp (never past
+    /// Now) has something to read.
     pub signal_now_col: Option<usize>,
+    /// The latest redraw's own resolved cursor column (`SignalScreen::
+    /// cursor_col`, issue #704 rule 2: `signal_cursor_col.or(selection_
+    /// col).or(now_col)`) -- wherever the trace actually drew its own
+    /// cursor, whether from a live scrub, the shared selection's own
+    /// column, or Now with neither. `signal_scrub`'s own first press
+    /// seeds from this, never from `signal_now_col` directly, or it
+    /// would jump the cursor to Now instead of moving it one column
+    /// from wherever it is already drawn.
+    pub signal_drawn_col: Option<usize>,
     /// Whether the latest redraw's own Signal screen has a step
     /// under its cursor at all, cached the same way `signal_now_col`
     /// is -- `enter` on Signal only opens one when this is true, so
@@ -205,6 +224,35 @@ pub struct App {
     pub tape_tokens_view: bool,
     /// ⏎ on the Tape (§4): the selected row's own step, full-screen.
     pub tape_fullscreen_step: bool,
+    /// `m` (issue #704 rule 4): the selected step's own Meta section
+    /// unfolds -- folded by default, on every screen, not per-screen
+    /// state (there is only one selection to unfold Meta for).
+    pub step_meta_unfolded: bool,
+    /// Issue #704 rule 1: set once, the instant the run ends --
+    /// guards [`Self::tape_select_run_end_once`] so the jump to the
+    /// run's own default row only ever happens that one time, never
+    /// again overriding wherever the user has since moved to.
+    pub tape_run_end_fired: bool,
+    /// Issue #704 rule 1: the exact path `tape_select_run_end_once`
+    /// moved the selection to the instant the run ended -- the
+    /// detail pane shows the run summary for as long as `selected_
+    /// path` is still this (drawing-time comparison, `tui::draw_tape_
+    /// detail`'s own `ended_row_selected`), never a separate sticky
+    /// flag: the selection can move away through any screen or key
+    /// (the Signal, the Flow, `[`/`]` in the full-screen step, not
+    /// only the Tape's own `move_tree_selection`/`jump`), and summary
+    /// mode must end the moment it does, from every one of them.
+    /// Moving back onto this exact row re-enters summary mode just
+    /// as readily, the same way any other selection shows its own
+    /// details whenever the cursor lands back on it.
+    pub tape_run_end_target: Option<String>,
+    /// Issue #704 rule 4's own "enter on a pass opens it": the
+    /// latest full-screen step draw's own Loop section, one `(line
+    /// index, pass path)` pair per pass (`tui::loop_pass_line_
+    /// paths`'s own output) -- empty whenever the open step's own
+    /// detail isn't a loop's at all. One frame stale at worst, the
+    /// same lifecycle `flow_lane_stations` already has.
+    pub loop_pass_line_paths: Vec<(usize, String)>,
 }
 
 impl App {
@@ -232,12 +280,15 @@ impl App {
             expanded_quick_steps: std::collections::BTreeSet::new(),
             details_source: Pane::Tree,
             screen: Screen::default(),
-            store_selected: None,
             flow_scroll: 0,
             flow_manual_scroll: false,
             flow_rows: Vec::new(),
+            flow_lane_stations: Vec::new(),
+            flow_step_out_before: None,
+            flow_step_out_after: None,
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
+            signal_drawn_col: None,
             signal_column_ms: 100,
             signal_now_col: None,
             signal_has_step: false,
@@ -245,6 +296,32 @@ impl App {
             tape_previews_on: true,
             tape_tokens_view: false,
             tape_fullscreen_step: false,
+            tape_run_end_fired: false,
+            tape_run_end_target: None,
+            loop_pass_line_paths: Vec::new(),
+            step_meta_unfolded: false,
+        }
+    }
+
+    /// Issue #704 rule 1: the instant a run ends, the Tape's own
+    /// selection moves to `default_target` (the run's own handled
+    /// failure, when it has one, else whatever row the caller
+    /// otherwise considers worth landing on) and the detail pane
+    /// starts showing the run summary rather than that row's own
+    /// detail -- exactly once, since a later manual move away from
+    /// summary mode must never be pulled back (`running` stays
+    /// `false` forever after, but `tape_run_end_fired` already stops
+    /// this from firing again). `tape_run_end_target` records exactly
+    /// which path that was, so summary mode can later be read off
+    /// the live selection instead of a separate flag.
+    pub fn tape_select_run_end_once(&mut self, running: bool, default_target: Option<String>) {
+        if !running && !self.tape_run_end_fired {
+            let target = default_target.or_else(|| self.selected_path.clone());
+            if let Some(target) = target.clone() {
+                self.select_tree_path_keeping_details(Some(target));
+            }
+            self.tape_run_end_fired = true;
+            self.tape_run_end_target = target;
         }
     }
 
@@ -280,13 +357,18 @@ impl App {
     }
 
     /// `←→` (§4): moves the scrub cursor one column at a time, turning
-    /// follow off -- the first press off Now seeds from
-    /// `signal_now_col` (`main.rs`'s own cache of the latest frame's
-    /// Now column, the same way `tree_viewport` already caches a
-    /// redraw's own height for the next key to clamp against).
+    /// follow off -- the first press off Now seeds from `signal_
+    /// drawn_col` (wherever the trace actually drew its own cursor
+    /// last, the shared selection's own column included, issue #704
+    /// rule 2), never from Now directly, or the first press would
+    /// jump the cursor there instead of moving it one column from
+    /// wherever it already is.
     pub fn signal_scrub(&mut self, delta: i64) {
         let now = self.signal_now_col.unwrap_or(0);
-        let current = self.signal_cursor_col.unwrap_or(now) as i64;
+        let current = self
+            .signal_cursor_col
+            .or(self.signal_drawn_col)
+            .unwrap_or(now) as i64;
         self.signal_cursor_col = Some(current.saturating_add(delta).clamp(0, now as i64) as usize);
     }
 
@@ -340,6 +422,114 @@ impl App {
         self.select_tree_path(Some(paths[next].to_string()));
         let rows: Vec<&Row> = self.flow_rows.iter().collect();
         self.follow = self.lands_back_on_the_followed_row(&rows);
+    }
+
+    /// `←→` on the Flow screen with follow off or the run ended
+    /// (issue #704 rule 3): moves over the selected lane's own
+    /// stations, in plan order (`self.flow_lane_stations`, refreshed
+    /// every redraw against the current selection) -- a plain
+    /// station, a decision (named or inferred) or a fork's own host
+    /// (a loop, a parallel `dynamic`) are all stations here, never
+    /// one of a fork's own lanes, which `↑↓` alone still reaches.
+    pub fn flow_select_station(&mut self, delta: i32) {
+        if self.flow_lane_stations.is_empty() {
+            return;
+        }
+        let idx = self
+            .selected_path
+            .as_deref()
+            .and_then(|p| self.flow_lane_stations.iter().position(|q| q.as_str() == p));
+        // Issue #704 rule 3: already at the selected lane's own end
+        // in the direction of travel -- step out of it instead of
+        // clamping in place, so ←→ can always leave a lane.
+        if let Some(i) = idx {
+            let last = self.flow_lane_stations.len() - 1;
+            if delta < 0 && i == 0 {
+                if let Some(target) = self.flow_step_out_before.clone() {
+                    self.select_tree_path(Some(target));
+                    self.follow = false;
+                }
+                return;
+            }
+            if delta > 0 && i == last {
+                if let Some(target) = self.flow_step_out_after.clone() {
+                    self.select_tree_path(Some(target));
+                    self.follow = false;
+                }
+                return;
+            }
+        }
+        // Issue #704 rule 3: a bare pass path (`↑↓`'s own selection,
+        // never one of `flow_lane_stations`' own entries) is already
+        // at its own zone's own edge in both directions at once --
+        // step out to the fork host's own neighbour the same way,
+        // rather than entering the pass's own first/last station the
+        // way landing here from some other screen's unrelated
+        // selection still should.
+        if idx.is_none() {
+            let step_out = if delta >= 0 {
+                self.flow_step_out_after.clone()
+            } else {
+                self.flow_step_out_before.clone()
+            };
+            if let Some(target) = step_out {
+                self.select_tree_path(Some(target));
+                self.follow = false;
+                return;
+            }
+        }
+        let next = match idx {
+            Some(i) => {
+                (i as i32 + delta).clamp(0, self.flow_lane_stations.len() as i32 - 1) as usize
+            }
+            None if delta >= 0 => 0,
+            None => self.flow_lane_stations.len() - 1,
+        };
+        self.select_tree_path(Some(self.flow_lane_stations[next].clone()));
+        self.follow = false;
+    }
+
+    /// `[`/`]` on the full-screen step (issue #704 rule 4): the
+    /// previous/next effect in plan order, skipping a row that has
+    /// not started -- over `self.flow_rows` (`render::RenderState::
+    /// unfolded_rows`, refreshed every tick regardless of which
+    /// screen is on display, so every effect the run plans is here,
+    /// not just whichever screen opened the full-screen view).
+    pub fn fullscreen_step(&mut self, delta: i32) {
+        use oscilloscope_core::model::StatusKind;
+        use oscilloscope_core::render::RowKind;
+        let candidates: Vec<&str> = self
+            .flow_rows
+            .iter()
+            .filter(|r| {
+                !matches!(
+                    r.kind,
+                    RowKind::Root | RowKind::Pass | RowKind::QuickSteps | RowKind::Report
+                )
+            })
+            .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+            .map(|r| r.path.as_str())
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let idx = self
+            .selected_path
+            .as_deref()
+            .and_then(|p| candidates.iter().position(|q| *q == p));
+        let next = match idx {
+            Some(i) => (i as i32 + delta).clamp(0, candidates.len() as i32 - 1) as usize,
+            None if delta >= 0 => 0,
+            None => candidates.len() - 1,
+        };
+        self.select_tree_path(Some(candidates[next].to_string()));
+        // Issue #704 rule 4: like every other way of moving the
+        // shared selection, `[`/`]` turns follow off -- otherwise a
+        // live run's own next tick (`main.rs`'s own follow update)
+        // reverts the step before it is ever seen, and on the Flow,
+        // `default_follow_path` keeps showing instead regardless of
+        // where `[`/`]` just stepped to.
+        self.follow = false;
     }
 
     /// The fork `+`/`-` act on (issue #677 §9.3's "the selected
@@ -434,6 +624,25 @@ impl App {
             self.selected_path = path;
             self.details_scroll = 0;
             self.details_source = Pane::Tree;
+            // Issue #704 rule 2: the selection moved by some route
+            // other than the Signal's own scrub (which writes the
+            // selection back through `select_tree_path_from_scrub`
+            // below, never this one) -- a stale scrub column must
+            // not keep overriding it on the next redraw, so this is
+            // the one place every other mover shares to drop it.
+            self.signal_cursor_col = None;
+        }
+    }
+
+    /// The Signal's own scrub (`tui::draw_signal`) writing the shared
+    /// selection back to whatever step the cursor actually landed on
+    /// -- like `select_tree_path`, but it must never clear `signal_
+    /// cursor_col` itself, the very thing that is driving this call.
+    pub(crate) fn select_tree_path_from_scrub(&mut self, path: Option<String>) {
+        if self.selected_path != path {
+            self.selected_path = path;
+            self.details_scroll = 0;
+            self.details_source = Pane::Tree;
         }
     }
 
@@ -449,6 +658,11 @@ impl App {
             if self.details_source == Pane::Tree {
                 self.details_scroll = 0;
             }
+            // Same reasoning as `select_tree_path`'s own: follow's
+            // own target update (`main.rs`) and `tape_select_run_
+            // end_once` both move the selection through here, and a
+            // stale scrub column must give way to either.
+            self.signal_cursor_col = None;
         }
     }
 
@@ -457,9 +671,9 @@ impl App {
     /// `visible_rows` below) — navigation and collapse/expand act on
     /// exactly what the user can see, in the order they see it.
     /// `has_prompt_sent` is whether the currently selected row's own
-    /// details carry a `prompt_sent` (review finding 5): `v` opens
-    /// that first when there is one, since it's usually the more
-    /// useful of the two to read in full, and the value otherwise.
+    /// details carry a `prompt_sent`: `v` opens that first when
+    /// there is one, since it's usually the more useful of the two
+    /// to read in full, and the value otherwise.
     /// `store_rows` is the Store screen's own Largest Stores table,
     /// in its own rank order (issue #695) -- empty for every caller
     /// that doesn't care about it (every screen but Store never
@@ -562,6 +776,78 @@ impl App {
         has_prompt_sent: bool,
         store_rows: &[String],
     ) -> Action {
+        // Issue #704 rule 4: while the full-screen step is open, its
+        // own keys take over first, before any screen's own bindings
+        // below (including the Store's own table navigation just
+        // below) -- `[`/`]` step to the previous/next effect in plan
+        // order (skipping rows that have not started), ↑↓/PgUp/PgDn/
+        // Home/End scroll its content, `esc` closes it. `0`-`3`, `?`,
+        // `c`/`q` and Ctrl-C still fall through to the match below
+        // unchanged, so switching screens or quitting still works.
+        if self.tape_fullscreen_step {
+            match key.code {
+                KeyCode::Esc => {
+                    self.tape_fullscreen_step = false;
+                    return Action::None;
+                }
+                // Issue #704 rule 4: `enter` on a pass opens it --
+                // the pass whose own line in the Loop section is at
+                // or just below the current scroll position, or the
+                // last one once scrolled past all of them. Consumed
+                // here only when the open step's own detail is
+                // actually a loop's; any other `enter` falls through
+                // unchanged to the per-screen toggle below, which
+                // closes the full-screen view.
+                KeyCode::Enter if !self.loop_pass_line_paths.is_empty() => {
+                    let target = self
+                        .loop_pass_line_paths
+                        .iter()
+                        .find(|(line, _)| *line >= self.details_scroll)
+                        .or_else(|| self.loop_pass_line_paths.last())
+                        .map(|(_, path)| path.clone());
+                    if let Some(target) = target {
+                        self.select_tree_path(Some(target));
+                        self.details_scroll = 0;
+                    }
+                    return Action::None;
+                }
+                KeyCode::Char('[') => {
+                    self.fullscreen_step(-1);
+                    return Action::None;
+                }
+                KeyCode::Char(']') => {
+                    self.fullscreen_step(1);
+                    return Action::None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.scroll_details(-1);
+                    return Action::None;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.scroll_details(1);
+                    return Action::None;
+                }
+                KeyCode::PageUp => {
+                    let page = self.details_viewport.max(1) as i32;
+                    self.scroll_details(-page);
+                    return Action::None;
+                }
+                KeyCode::PageDown => {
+                    let page = self.details_viewport.max(1) as i32;
+                    self.scroll_details(page);
+                    return Action::None;
+                }
+                KeyCode::Home | KeyCode::Char('g') => {
+                    self.details_scroll = 0;
+                    return Action::None;
+                }
+                KeyCode::End | KeyCode::Char('G') => {
+                    self.details_scroll = usize::MAX;
+                    return Action::None;
+                }
+                _ => {}
+            }
+        }
         // Issue #695: the Store screen's own keys (↑↓ and aliases to
         // select a table row, `⏎` to open it) take over first, before
         // any of the generic panes' own bindings below -- `0`-`3`
@@ -617,22 +903,28 @@ impl App {
             KeyCode::Char('n') if self.screen == Screen::Signal => self.signal_now(),
             KeyCode::Char('+') if self.screen == Screen::Signal => self.signal_zoom_in(),
             KeyCode::Char('-') if self.screen == Screen::Signal => self.signal_zoom_out(),
-            // Issue #691 (design v1 part 3, §4): ←→ scroll the rail,
-            // turning follow off -- `tui::draw_flow` is the only
-            // thing that knows the rail's own real width, so it (not
-            // this key handler) turns follow back on once a manual
-            // scroll lands Now back in view, the same way the Tape's
-            // own selection rule already does.
-            KeyCode::Left if self.screen == Screen::Flow => {
+            // Issue #691 (design v1 part 3, §4): ←→ scroll the rail
+            // while actually following a live run, turning follow
+            // off -- `tui::draw_flow` is the only thing that knows
+            // the rail's own real width, so it (not this key
+            // handler) turns follow back on once a manual scroll
+            // lands Now back in view, the same way the Tape's own
+            // selection rule already does.
+            KeyCode::Left if self.screen == Screen::Flow && self.follow && running => {
                 self.flow_scroll = self.flow_scroll.saturating_sub(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
                 self.flow_manual_scroll = true;
             }
-            KeyCode::Right if self.screen == Screen::Flow => {
+            KeyCode::Right if self.screen == Screen::Flow && self.follow && running => {
                 self.flow_scroll = self.flow_scroll.saturating_add(Self::FLOW_SCROLL_STEP);
                 self.follow = false;
                 self.flow_manual_scroll = true;
             }
+            // Issue #704 rule 3: with follow off, or after the run,
+            // ←→ instead move the selection between the selected
+            // lane's own stations, in plan order.
+            KeyCode::Left if self.screen == Screen::Flow => self.flow_select_station(-1),
+            KeyCode::Right if self.screen == Screen::Flow => self.flow_select_station(1),
             // Issue #691: `+` opens the selected fork's own lanes
             // (three at a time, DESIGN.md §2.3's folded loop), `-`
             // folds them back into the band.
@@ -660,9 +952,6 @@ impl App {
             }
             KeyCode::Enter if self.screen == Screen::Signal && self.signal_has_step => {
                 self.tape_fullscreen_step = !self.tape_fullscreen_step;
-            }
-            KeyCode::Esc if self.tape_fullscreen_step => {
-                self.tape_fullscreen_step = false;
             }
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
@@ -701,6 +990,15 @@ impl App {
                     // other's full-screen view too.
                     if screen != self.screen {
                         self.tape_fullscreen_step = false;
+                        // Issue #704 rule 4: the detail pane's own
+                        // scroll is shared state too (the Tape's
+                        // normal pane, the Flow's Selected pane, the
+                        // Signal's and Store's own full-screen step)
+                        // -- without this, a scroll left over from
+                        // one screen's own pane shows up, mid-
+                        // scroll, in whichever unrelated pane the
+                        // next screen draws.
+                        self.details_scroll = 0;
                     }
                     self.screen = screen;
                 }
@@ -715,6 +1013,10 @@ impl App {
             KeyCode::Char('p') if self.screen == Screen::Tape => {
                 self.tape_previews_on = !self.tape_previews_on;
             }
+            // Issue #704 rule 4: `m` unfolds the selected step's own
+            // Meta section -- the same key on every screen, since
+            // there is only one selection to unfold it for.
+            KeyCode::Char('m') => self.step_meta_unfolded = !self.step_meta_unfolded,
             KeyCode::Char('f') => self.follow = !self.follow,
             // Issue #695: `e`/`/` act on the Tape's own rows alone
             // (§4); gone from the Store, which has no rows of its own
@@ -779,43 +1081,96 @@ impl App {
         /// real draw the way the Tree/State/Details panes do.
         const STORE_PAGE_SIZE: i32 = 4;
         match key.code {
+            // Issue #704 rule 2: the Store's own cursor is the shared
+            // selection now, so a manual move here must turn follow
+            // off the same way every other screen's own movement
+            // already does -- otherwise the very next tick's own
+            // follow update (main.rs) overwrites it right back to
+            // whatever is running, undoing the move before it is
+            // ever seen.
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_store_selection(rows, -1);
+                self.follow = false;
                 true
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.move_store_selection(rows, 1);
+                self.follow = false;
                 true
             }
             KeyCode::PageUp => {
                 self.move_store_selection(rows, -STORE_PAGE_SIZE);
+                self.follow = false;
                 true
             }
             KeyCode::PageDown => {
                 self.move_store_selection(rows, STORE_PAGE_SIZE);
+                self.follow = false;
                 true
             }
             KeyCode::Home | KeyCode::Char('g') => {
-                self.store_selected = rows.first().cloned();
+                if let Some(first) = rows.first() {
+                    self.select_tree_path(Some(first.clone()));
+                }
+                self.follow = false;
                 true
             }
             KeyCode::End | KeyCode::Char('G') => {
-                self.store_selected = rows.last().cloned();
+                if let Some(last) = rows.last() {
+                    self.select_tree_path(Some(last.clone()));
+                }
+                self.follow = false;
                 true
             }
             // `⏎` opens the selected store's own step full-screen
             // (DESIGN.md §2.4), the same toggle the Tape/Signal/Flow
-            // already share -- only while a row is actually selected,
-            // but consumed here either way so it never falls through
-            // to the generic pane's own quick-steps expand below.
+            // already share -- gated on the table actually having a
+            // row to open at all, never on `store_cursor_index`
+            // resolving a path (it falls back to the first row on
+            // screen the same way `move_store_selection` already
+            // does, so `enter` opens whatever is actually drawn as
+            // the cursor, not nothing). Consumed here either way so
+            // it never falls through to the generic pane's own
+            // quick-steps expand below.
             KeyCode::Enter => {
-                if self.store_selected.is_some() {
+                if !rows.is_empty() {
                     self.tape_fullscreen_step = !self.tape_fullscreen_step;
                 }
                 true
             }
             _ => false,
         }
+    }
+
+    /// Issue #704 rule 2: the shared `selected_path`'s own index in
+    /// the table's own order, resolved the same way `store::
+    /// store_cursor_path` resolves a cursor for drawing -- itself
+    /// when it names a row the table already has, else the nearest
+    /// ancestor that is one, else the nearest row in plan order
+    /// (`self.flow_rows`, the run's own plan-ordered rows, never the
+    /// table's own tokens-descending order). `None` only when
+    /// nothing at all resolves, which `move_store_selection` and the
+    /// `enter` handler both fall back from to the first row on
+    /// screen, the same way `store::build_store`'s own cursor does.
+    fn store_cursor_index(&self, rows: &[String]) -> Option<usize> {
+        let selected_path = self.selected_path.as_deref()?;
+        let mut candidate = selected_path;
+        loop {
+            if let Some(idx) = rows.iter().position(|r| r == candidate) {
+                return Some(idx);
+            }
+            match candidate.rsplit_once('.') {
+                Some((parent, _)) => candidate = parent,
+                None => break,
+            }
+        }
+        let plan_order: Vec<String> = self.flow_rows.iter().map(|r| r.path.clone()).collect();
+        if let Some(path) =
+            oscilloscope_core::store::nearest_path_in_plan_order(selected_path, rows, &plan_order)
+        {
+            return rows.iter().position(|r| *r == path);
+        }
+        None
     }
 
     /// `↑`/`↓` select rows in the table's own order (DESIGN.md §2.4:
@@ -827,16 +1182,15 @@ impl App {
         if rows.is_empty() {
             return;
         }
-        let current = self
-            .store_selected
-            .as_deref()
-            .and_then(|p| rows.iter().position(|r| r == p));
-        let next = match current {
-            Some(idx) => (idx as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize,
-            None if delta >= 0 => 0,
-            None => rows.len() - 1,
-        };
-        self.store_selected = Some(rows[next].clone());
+        // The Store screen's own cursor always resolves to some row
+        // (the same fallback-to-first-row `store::build_store` itself
+        // uses once nothing in `self.selected_path`'s own lineage has
+        // tokens at all) -- arrow keys move from THAT position, or a
+        // first press while unresolved would just resync to the row
+        // already on screen instead of actually moving.
+        let current = self.store_cursor_index(rows).unwrap_or(0);
+        let next = (current as i32 + delta).clamp(0, rows.len() as i32 - 1) as usize;
+        self.select_tree_path(Some(rows[next].clone()));
     }
 
     /// Issue #678's own addition for the Tape: a manual move turns
@@ -1047,10 +1401,22 @@ impl App {
     /// that one, or extends it with `.` (the breadcrumb that
     /// absorbed it).
     pub fn reconcile_folding(&mut self, rows: &[Row]) {
-        if let Some(selected) = self.selected_path.clone() {
-            if !rows.iter().any(|r| r.path == selected) {
-                if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
-                    self.select_tree_path_keeping_details(Some(absorbed));
+        // Issue #704 rule 4: while the full-screen step is open, the
+        // selection is never a row to highlight in this (always
+        // folded) list -- it names whichever effect `[`/`]` just
+        // landed on, resolved against the unfolded rows regardless
+        // of what folds here. Reassigning it to the absorbing row
+        // the instant a loop pass's quick-steps fold around it would
+        // land the very next `[`/`]` back on the first effect (that
+        // row's own `RowKind::QuickSteps` is excluded from `App::
+        // fullscreen_step`'s own candidates), undoing the step
+        // before it is ever seen.
+        if !self.tape_fullscreen_step {
+            if let Some(selected) = self.selected_path.clone() {
+                if !rows.iter().any(|r| r.path == selected) {
+                    if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
+                        self.select_tree_path_keeping_details(Some(absorbed));
+                    }
                 }
             }
         }
@@ -1419,6 +1785,27 @@ mod tests {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         app.reconcile_folding(&rows);
         assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+    }
+
+    /// Issue #704 rule 4: while the full-screen step is open, the
+    /// selection names an effect to show, resolved against the
+    /// unfolded rows, never a row to highlight in this (always
+    /// folded) list -- reassigning it to the row that absorbed it
+    /// would land the very next `]` back on the first effect, since
+    /// that absorbing row's own kind (`QuickSteps`) is excluded from
+    /// `App::fullscreen_step`'s own candidates.
+    #[test]
+    fn reconcile_folding_does_nothing_while_the_fullscreen_step_is_open() {
+        let mut app = App::new(false);
+        app.selected_path = Some("prime.a.b".to_string());
+        app.tape_fullscreen_step = true;
+        let folded_rows = [row("prime.a", 1, StatusKind::Done)];
+        app.reconcile_folding(&folded_rows);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.a.b"),
+            "the full-screen step's own selection must survive a row folding around it"
+        );
     }
 
     #[test]
@@ -1791,8 +2178,103 @@ mod tests {
         app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
         assert!(!app.follow);
         assert_eq!(app.flow_scroll, 10);
+        // Issue #704 rule 3: follow is already off, so the very next
+        // ←→ moves the station selection instead of scrolling
+        // further -- a no-op here with no station to move to
+        // (`flow_lane_stations` empty), but the rail must not keep
+        // scrolling either.
         app.handle_key(key(KeyCode::Left), &[], &[], true, false, &[]);
+        assert_eq!(app.flow_scroll, 10);
+    }
+
+    /// Issue #704 rule 3: ←→ scrolls the rail only while actually
+    /// following a live run -- with follow off, or the run ended, it
+    /// instead moves the selection between the selected lane's own
+    /// stations.
+    #[test]
+    fn flow_left_right_move_stations_once_follow_is_off_or_the_run_has_ended() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.follow = false;
+        app.flow_lane_stations = vec![
+            "prime.a".to_string(),
+            "prime.b".to_string(),
+            "prime.c".to_string(),
+        ];
+        app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.flow_scroll, 0, "the rail itself never scrolls here");
+        app.handle_key(key(KeyCode::Right), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        app.handle_key(key(KeyCode::Left), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+
+        // Following, but the run itself has ended (`running` false):
+        // still moves stations, never scrolls.
+        app.follow = true;
+        app.handle_key(key(KeyCode::Right), &[], &[], false, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         assert_eq!(app.flow_scroll, 0);
+    }
+
+    /// Issue #704 rule 4: `[`/`]` on the full-screen step move
+    /// between effects in plan order, skipping a row that has not
+    /// started (a container, or a row the run never reached) --
+    /// `↑↓`/PgUp/PgDn/Home/End scroll its content instead, taking
+    /// over before any screen's own bindings, and `esc` closes it.
+    #[test]
+    fn fullscreen_step_moves_between_started_effects_and_arrows_scroll_instead() {
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        app.flow_rows = vec![
+            row("prime", 0, StatusKind::Running),
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Pending),
+            row("prime.c", 1, StatusKind::Done),
+        ];
+        app.flow_rows[0].kind = oscilloscope_core::render::RowKind::Root;
+        app.selected_path = Some("prime.a".to_string());
+
+        app.handle_key(key(KeyCode::Char(']')), &[], &[], true, false, &[]);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.c"),
+            "prime.b hasn't started, so ] skips it"
+        );
+        app.handle_key(key(KeyCode::Char('[')), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+
+        // ↑↓/PgUp/PgDn scroll the content, never the selection, while
+        // the full-screen step is open.
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &[]);
+        assert_eq!(app.details_scroll, 1);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::PageDown), &[], &[], true, false, &[]);
+        assert_eq!(app.details_scroll, 1 + app.details_viewport.max(1));
+        app.handle_key(key(KeyCode::Home), &[], &[], true, false, &[]);
+        assert_eq!(app.details_scroll, 0);
+
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert!(!app.tape_fullscreen_step);
+    }
+
+    /// Issue #704 rule 4: `[`/`]` turns follow off, the same as
+    /// every other way of moving the shared selection -- a live
+    /// run's own next follow update would otherwise revert the step
+    /// before it is ever seen.
+    #[test]
+    fn fullscreen_step_turns_follow_off() {
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        app.flow_rows = vec![
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Done),
+        ];
+        app.selected_path = Some("prime.a".to_string());
+        assert!(app.follow);
+        app.handle_key(key(KeyCode::Char(']')), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        assert!(!app.follow);
     }
 
     #[test]
@@ -2132,21 +2614,22 @@ mod tests {
     fn up_down_select_table_rows_in_order_and_clamp_at_the_ends() {
         let mut app = store_app();
         let rows = vec!["prime.a".to_string(), "prime.b".to_string()];
+        // The screen's own cursor already shows `prime.a` (`store::
+        // build_store`'s own fallback-to-first-row, issue #704 rule
+        // 2) before any key at all, so the first ↓ moves past it.
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
-        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.b"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
         assert_eq!(
-            app.store_selected.as_deref(),
+            app.selected_path.as_deref(),
             Some("prime.b"),
             "clamped at the end"
         );
         app.handle_key(key(KeyCode::Up), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::Up), &[], &[], true, false, &rows);
         assert_eq!(
-            app.store_selected.as_deref(),
+            app.selected_path.as_deref(),
             Some("prime.a"),
             "clamped at the start"
         );
@@ -2160,22 +2643,24 @@ mod tests {
             "prime.b".to_string(),
             "prime.c".to_string(),
         ];
+        // Same reasoning as the plain ↑↓ test above: the first `j`
+        // moves past the screen's own already-shown first row.
         app.handle_key(key(KeyCode::Char('j')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::Char('G')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Char('g')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::End), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Home), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
         app.handle_key(key(KeyCode::PageDown), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.c"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.c"));
         app.handle_key(key(KeyCode::Char('k')), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.b"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         app.handle_key(key(KeyCode::PageUp), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected.as_deref(), Some("prime.a"));
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
     }
 
     #[test]
@@ -2187,17 +2672,33 @@ mod tests {
             !app.tape_fullscreen_step,
             "enter does nothing with no row selected"
         );
-        app.store_selected = Some("prime.a".to_string());
+        let rows = vec!["prime.a".to_string()];
+        app.selected_path = Some("prime.a".to_string());
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
         assert!(app.tape_fullscreen_step);
         app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &rows);
         assert!(!app.tape_fullscreen_step);
     }
 
+    /// Issue #704 rule 2: the selected effect has no tokens of its
+    /// own, and no ancestor does either -- the table's own cursor
+    /// draws on the first row anyway (`store::build_store`'s own
+    /// fallback), and `enter` must open that same row, never do
+    /// nothing just because `self.selected_path` itself isn't the
+    /// table's first entry.
+    #[test]
+    fn enter_opens_the_first_row_even_when_the_selection_has_no_tokens_anywhere_in_its_lineage() {
+        let mut app = store_app();
+        let rows = vec!["prime.a".to_string(), "prime.b".to_string()];
+        app.selected_path = Some("prime.other.leaf".to_string());
+        app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
+        assert!(app.tape_fullscreen_step);
+    }
+
     #[test]
     fn switching_screens_resets_the_shared_fullscreen_toggle_for_the_store_too() {
         let mut app = store_app();
-        app.store_selected = Some("prime.a".to_string());
+        app.selected_path = Some("prime.a".to_string());
         let rows = vec!["prime.a".to_string()];
         app.handle_key(key(KeyCode::Enter), &[], &[], true, false, &rows);
         assert!(app.tape_fullscreen_step);
@@ -2212,7 +2713,7 @@ mod tests {
         assert_eq!(app.screen, Screen::Tape);
         let rows = vec!["prime.a".to_string()];
         app.handle_key(key(KeyCode::Down), &[], &[], true, false, &rows);
-        assert_eq!(app.store_selected, None);
+        assert_eq!(app.selected_path, None);
     }
 
     #[test]
@@ -2233,7 +2734,7 @@ mod tests {
         ] {
             app.handle_key(key(code), &[], &[], true, false, &rows);
         }
-        assert_eq!(app.store_selected, None);
+        assert_eq!(app.selected_path, None);
         assert_eq!(app.pane, Pane::Tree);
         assert!(app.fold_enabled);
         assert!(!app.errors_only);
@@ -2331,6 +2832,32 @@ mod tests {
         );
     }
 
+    /// Issue #704 rule 2: a scrub's own column must give way to a
+    /// selection made through any other screen -- moving the Tape's
+    /// own selection (which, unlike the no-op above, actually goes
+    /// through `select_tree_path`) drops the stale scrub, so
+    /// switching back to the Signal reads the new selection's own
+    /// column instead of wherever the cursor was left.
+    #[test]
+    fn a_selection_made_elsewhere_drops_the_signals_own_stale_scrub() {
+        let rows = [
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Done),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(5);
+        app.signal_scrub(-2);
+        assert_eq!(app.signal_cursor_col, Some(3));
+        app.screen = Screen::Tape;
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(
+            app.signal_cursor_col, None,
+            "a real selection elsewhere drops the stale scrub"
+        );
+    }
+
     #[test]
     fn enter_opens_and_closes_the_signal_fullscreen_step_the_same_as_the_tapes() {
         let mut app = App::new(false);
@@ -2366,5 +2893,18 @@ mod tests {
             !app.tape_fullscreen_step,
             "the Tape's own open step view must not reappear as Signal's"
         );
+    }
+
+    /// Issue #704 rule 4: a scroll left over from one screen's own
+    /// detail pane must not show up, mid-scroll, in an unrelated
+    /// pane the next screen draws.
+    #[test]
+    fn switching_screens_resets_the_shared_details_scroll() {
+        let mut app = App::new(false);
+        app.screen = Screen::Flow;
+        app.details_scroll = 7;
+        app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &[]);
+        assert_eq!(app.screen, Screen::Tape);
+        assert_eq!(app.details_scroll, 0);
     }
 }

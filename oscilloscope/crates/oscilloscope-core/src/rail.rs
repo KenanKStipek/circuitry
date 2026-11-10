@@ -893,7 +893,16 @@ fn build_unnamed_decision(
         detail: Detail::Condition(condition),
     };
     let fork = Fork {
-        path: decision.host_path.clone(),
+        // Issue #704 rule 3: the decision's own unique path (shared
+        // with its own `station` right above, so `flatten_lane_
+        // stations`'s own adjacent-pair dedup collapses the two into
+        // one station, the same as a named decision's Station/Fork
+        // pair already does) -- never `decision.host_path`, the
+        // *container* every unnamed `if` on it shares, which would
+        // otherwise show up as its own bogus, unrelated station with
+        // the host's own path and no station of its own before it to
+        // collapse with.
+        path: station.path.clone(),
         kind: ForkKind::Decision,
         source_status: status,
         lanes,
@@ -1638,6 +1647,156 @@ pub fn find_station<'a>(items: &'a [RailItem], path: &str) -> Option<&'a Station
     None
 }
 
+/// A `RailItem`'s own selectable path (issue #704 rule 3): a plain
+/// station's own, or a fork's own host path (the decision, loop or
+/// `dynamic` itself) -- never one of the fork's own lanes, which
+/// `↑↓` alone (`App::flow_select_lane`) still reaches.
+fn rail_item_path(item: &RailItem) -> Option<&str> {
+    match item {
+        RailItem::Station(s) if s.selectable => Some(s.path.as_str()),
+        RailItem::Station(_) => None,
+        RailItem::Fork(f) => Some(f.path.as_str()),
+    }
+}
+
+/// `items`' own stations in plan order (issue #704 rule 3's "stations
+/// in plan order along the selected lane"), a decision fork's own
+/// taken lane inlined right after its own station -- a decision
+/// never really forks the sequence the way a loop's passes or a
+/// parallel `dynamic`'s children do (only one of its two lanes is
+/// ever real), so `←→` flows straight through it; a loop's or a
+/// `dynamic`'s own lanes stay their own separate zones, reached only
+/// by `↑↓` first.
+fn flatten_lane_stations(items: &[RailItem]) -> Vec<String> {
+    let mut out = Vec::new();
+    for item in items {
+        // The Start/End sentinel stations share an identical empty
+        // path (`rail::start_station`/`end_station`'s own doc) --
+        // neither names a real effect for `enter`/the Selected pane
+        // to show, and the empty path can't tell the two apart from
+        // each other, so neither is a station `←→` can land on.
+        if let Some(path) = rail_item_path(item).filter(|p| !p.is_empty()) {
+            out.push(path.to_string());
+        }
+        if let RailItem::Fork(fork) = item {
+            if fork.kind == ForkKind::Decision {
+                if let Some(taken) = fork.lanes.iter().find(|l| l.ghost.is_none()) {
+                    out.extend(flatten_lane_stations(&taken.items));
+                }
+            }
+        }
+    }
+    // A folded loop/`dynamic` fork's own band sits right next to a
+    // plain station sharing its own path (the fork's own host, the
+    // band that actually draws its lanes) -- `←→` must step over
+    // the pair as the one station it visually is, or landing on
+    // either one's own index, found afresh by path every time
+    // (`position`'s own "first match" rule), can never progress past
+    // the other.
+    out.dedup();
+    out
+}
+
+/// The zone (the rail's own top level, or one specific loop/`dynamic`
+/// lane) that owns `selected`, recursing through a decision fork's
+/// own taken lane transparently (same reasoning as `flatten_lane_
+/// stations`'s own inlining): a decision never terminates a zone
+/// search on its own, only a loop's or a `dynamic`'s own lane does,
+/// and only the one that actually holds `selected` -- `None` when
+/// `selected` isn't inside any loop/`dynamic` lane in `items` at any
+/// depth (the rail's own top level is `lane_stations`' own fallback
+/// then, never something this returns itself).
+fn deepest_fork_zone<'a>(
+    items: &'a [RailItem],
+    selected: &str,
+) -> Option<(&'a str, &'a [RailItem])> {
+    for item in items {
+        let RailItem::Fork(fork) = item else { continue };
+        if fork.kind == ForkKind::Decision {
+            if let Some(taken) = fork.lanes.iter().find(|l| l.ghost.is_none()) {
+                if let Some(found) = deepest_fork_zone(&taken.items, selected) {
+                    return Some(found);
+                }
+            }
+        } else {
+            for lane in &fork.lanes {
+                if !lane_owns(lane, selected) {
+                    continue;
+                }
+                return Some(
+                    deepest_fork_zone(&lane.items, selected)
+                        .unwrap_or((fork.path.as_str(), &lane.items)),
+                );
+            }
+        }
+    }
+    None
+}
+
+/// Whether `selected` is, or is nested under, one of `items`' own
+/// flattened stations (a decision's taken lane already inlined) --
+/// `flatten_lane_stations`' own membership test.
+fn lane_contains(items: &[RailItem], selected: &str) -> bool {
+    flatten_lane_stations(items)
+        .iter()
+        .any(|p| p == selected || selected.starts_with(&format!("{p}.")))
+}
+
+/// Whether `selected` is the lane's own path itself (a loop pass or
+/// a parallel `dynamic`'s named child, selected directly by `↑↓`
+/// before any station inside it is, `Lane::path`'s own doc), or is
+/// owned by it per [`lane_contains`] -- `deepest_fork_zone`'s own
+/// membership test, so landing on a pass path right after `↑↓`
+/// still finds the lane `←→` must then walk.
+fn lane_owns(lane: &Lane, selected: &str) -> bool {
+    let on_lane_path = lane
+        .path
+        .as_deref()
+        .is_some_and(|p| p == selected || selected.starts_with(&format!("{p}.")));
+    on_lane_path || lane_contains(&lane.items, selected)
+}
+
+/// Issue #704 rule 3: the stations (plain, decision or fork-host) of
+/// the lane that owns `selected_path`, in plan order -- the rail's
+/// own top level with nothing selected, or with a selection the rail
+/// doesn't (yet) contain at all (a path from another screen's own
+/// selection history, say).
+pub fn lane_stations(rail: &Rail, selected_path: Option<&str>) -> Vec<String> {
+    let items = selected_path
+        .and_then(|p| deepest_fork_zone(&rail.items, p))
+        .map(|(_, items)| items)
+        .unwrap_or(&rail.items);
+    flatten_lane_stations(items)
+}
+
+/// Issue #704 rule 3: `←→` at a lane's own ends steps out of it --
+/// `forward` (`→` past the lane's own last station) lands on the
+/// fork host's own next station in the zone one level up (never
+/// back inside the lane it just left); `!forward` (`←` before the
+/// lane's own first) lands on the one before it there. Resolved
+/// fresh from `selected` every call, so stepping out through nested
+/// loops/`dynamic`s one level at a time, not recursively past more
+/// than one, matches a single arrow press moving by exactly one
+/// station. `None` with no enclosing fork at all (already at the
+/// rail's own top level) or already at that outer zone's own end
+/// too, so `App::flow_select_station` can tell "nothing left to step
+/// out to" from "something to land on" and clamp only in the first
+/// case.
+pub fn step_out_of_lane(rail: &Rail, selected: &str, forward: bool) -> Option<String> {
+    let (fork_path, _) = deepest_fork_zone(&rail.items, selected)?;
+    let parent_items = deepest_fork_zone(&rail.items, fork_path)
+        .map(|(_, items)| items)
+        .unwrap_or(&rail.items);
+    let parent_stations = flatten_lane_stations(parent_items);
+    let idx = parent_stations.iter().position(|p| p == fork_path)?;
+    let next = if forward {
+        idx.checked_add(1)?
+    } else {
+        idx.checked_sub(1)?
+    };
+    parent_stations.get(next).cloned()
+}
+
 /// Every unnamed `if`'s own inferred decision anywhere on the rail
 /// (recursing into every fork's own lanes), ready for the Story pane
 /// (`crate::flow::build_story`'s own `inferred` parameter): the
@@ -1742,6 +1901,301 @@ mod tests {
             waiting: false,
             path: Some(path.to_string()),
         }
+    }
+
+    fn nav_station(path: &str) -> super::RailItem {
+        super::RailItem::Station(super::Station {
+            path: path.to_string(),
+            selectable: true,
+            is_edge: false,
+            row_kind: crate::render::RowKind::Tool,
+            status: StatusKind::Done,
+            name: path.rsplit('.').next().unwrap_or(path).to_string(),
+            headline: super::Headline::Blank,
+            detail: super::Detail::Blank,
+        })
+    }
+
+    fn lane(path: &str, items: Vec<super::RailItem>, ghost: Option<&str>) -> super::Lane {
+        super::Lane {
+            items,
+            ghost: ghost.map(str::to_string),
+            running: false,
+            waiting: false,
+            path: (ghost.is_none()).then(|| path.to_string()),
+        }
+    }
+
+    /// Issue #704 rule 3: a decision fork never really forks the
+    /// navigable sequence (only one of its two lanes is ever real),
+    /// so ←→ flows straight through its own taken lane -- the fork's
+    /// own station, then the taken lane's own stations, whichever of
+    /// the three is actually selected.
+    #[test]
+    fn lane_stations_flattens_a_decisions_own_taken_lane() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.gate".to_string(),
+                    kind: super::ForkKind::Decision,
+                    source_status: StatusKind::Done,
+                    lanes: vec![
+                        lane(
+                            "prime.gate.then",
+                            vec![nav_station("prime.gate.reply")],
+                            None,
+                        ),
+                        lane("", vec![], Some("else")),
+                    ],
+                }),
+                nav_station("prime.summary"),
+            ],
+        };
+        let expected = vec![
+            "prime.a".to_string(),
+            "prime.gate".to_string(),
+            "prime.gate.reply".to_string(),
+            "prime.summary".to_string(),
+        ];
+        assert_eq!(super::lane_stations(&rail, Some("prime.a")), expected);
+        assert_eq!(super::lane_stations(&rail, Some("prime.gate")), expected);
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.gate.reply")),
+            expected
+        );
+        assert_eq!(super::lane_stations(&rail, Some("prime.summary")), expected);
+    }
+
+    /// Issue #704 rule 3: a loop's own lanes (folded into one band or
+    /// not) are each their own zone, reached only once the selection
+    /// is actually inside one -- the top level sees the loop as a
+    /// single station, never its own passes inlined the way a
+    /// decision's taken lane is.
+    #[test]
+    fn lane_stations_keeps_a_folded_loops_own_lanes_separate_zones() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.drafts".to_string(),
+                    kind: super::ForkKind::Loop,
+                    source_status: StatusKind::Done,
+                    lanes: vec![
+                        lane(
+                            "prime.drafts.iter_0",
+                            vec![nav_station("prime.drafts.iter_0.draft")],
+                            None,
+                        ),
+                        lane(
+                            "prime.drafts.iter_1",
+                            vec![nav_station("prime.drafts.iter_1.draft")],
+                            None,
+                        ),
+                    ],
+                }),
+                nav_station("prime.b"),
+            ],
+        };
+        // Outside the loop: the loop itself is one station, its own
+        // passes never inlined into the top-level sequence.
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.a")),
+            vec![
+                "prime.a".to_string(),
+                "prime.drafts".to_string(),
+                "prime.b".to_string()
+            ]
+        );
+        // Inside one specific pass: only that pass's own stations,
+        // never the other pass's or the top level's.
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.drafts.iter_0.draft")),
+            vec!["prime.drafts.iter_0.draft".to_string()]
+        );
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.drafts.iter_1.draft")),
+            vec!["prime.drafts.iter_1.draft".to_string()]
+        );
+    }
+
+    /// Issue #704 rule 3: `↑↓` selects a pass by its own path
+    /// (`prime.drafts.iter_1`, never one of its stations), so
+    /// `lane_stations` must resolve that path to the same zone as
+    /// any station already inside it, not fall back to the top
+    /// level.
+    #[test]
+    fn lane_stations_resolves_a_bare_pass_path_to_its_own_zone() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.drafts".to_string(),
+                    kind: super::ForkKind::Loop,
+                    source_status: StatusKind::Done,
+                    lanes: vec![
+                        lane(
+                            "prime.drafts.iter_0",
+                            vec![nav_station("prime.drafts.iter_0.draft")],
+                            None,
+                        ),
+                        lane(
+                            "prime.drafts.iter_1",
+                            vec![nav_station("prime.drafts.iter_1.draft")],
+                            None,
+                        ),
+                    ],
+                }),
+            ],
+        };
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.drafts.iter_1")),
+            vec!["prime.drafts.iter_1.draft".to_string()]
+        );
+    }
+
+    /// Issue #704 rule 3: a folded loop's own band sits right next
+    /// to a plain station sharing its own path (the fork's own
+    /// host) -- the pair must collapse to one station, or landing
+    /// on either one's own index by path, found afresh every time,
+    /// can never progress past the other.
+    #[test]
+    fn lane_stations_collapses_a_forks_own_adjacent_station_and_band() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                nav_station("prime.drafts"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.drafts".to_string(),
+                    kind: super::ForkKind::Loop,
+                    source_status: StatusKind::Done,
+                    lanes: vec![lane(
+                        "prime.drafts.iter_0",
+                        vec![nav_station("prime.drafts.iter_0.draft")],
+                        None,
+                    )],
+                }),
+                nav_station("prime.b"),
+            ],
+        };
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.a")),
+            vec![
+                "prime.a".to_string(),
+                "prime.drafts".to_string(),
+                "prime.b".to_string(),
+            ]
+        );
+    }
+
+    /// Issue #704 rule 3: the Start/End sentinel stations
+    /// (`start_station`/`end_station`) share an identical empty
+    /// path -- neither is a station `←→` can land on, since the
+    /// empty path can't tell the two apart and resolves to no real
+    /// effect at all.
+    #[test]
+    fn lane_stations_excludes_the_start_and_end_sentinels() {
+        let rail = super::Rail {
+            items: vec![
+                super::RailItem::Station(super::Station {
+                    path: String::new(),
+                    selectable: true,
+                    is_edge: true,
+                    row_kind: crate::render::RowKind::Root,
+                    status: StatusKind::Done,
+                    name: "Start".to_string(),
+                    headline: super::Headline::Blank,
+                    detail: super::Detail::Blank,
+                }),
+                nav_station("prime.a"),
+                super::RailItem::Station(super::Station {
+                    path: String::new(),
+                    selectable: true,
+                    is_edge: true,
+                    row_kind: crate::render::RowKind::Root,
+                    status: StatusKind::Done,
+                    name: "End".to_string(),
+                    headline: super::Headline::Blank,
+                    detail: super::Detail::Blank,
+                }),
+            ],
+        };
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.a")),
+            vec!["prime.a".to_string()]
+        );
+    }
+
+    /// Issue #704 rule 3: `←→` at a lane's own ends steps out of it
+    /// -- `→` past the last station of a selected pass lands on the
+    /// fork host's own next top-level station, `←` before the
+    /// first lands on the one before it, so `←→` can always leave
+    /// a lane.
+    #[test]
+    fn step_out_of_lane_leaves_through_the_fork_hosts_own_neighbours() {
+        let rail = super::Rail {
+            items: vec![
+                nav_station("prime.a"),
+                super::RailItem::Fork(super::Fork {
+                    path: "prime.drafts".to_string(),
+                    kind: super::ForkKind::Loop,
+                    source_status: StatusKind::Done,
+                    lanes: vec![lane(
+                        "prime.drafts.iter_0",
+                        vec![nav_station("prime.drafts.iter_0.draft")],
+                        None,
+                    )],
+                }),
+                nav_station("prime.b"),
+            ],
+        };
+        assert_eq!(
+            super::step_out_of_lane(&rail, "prime.drafts.iter_0.draft", false),
+            Some("prime.a".to_string())
+        );
+        assert_eq!(
+            super::step_out_of_lane(&rail, "prime.drafts.iter_0.draft", true),
+            Some("prime.b".to_string())
+        );
+        assert_eq!(super::step_out_of_lane(&rail, "prime.a", false), None);
+    }
+
+    /// Issue #704 rule 3: a parallel `dynamic`'s own children are
+    /// separate zones the same way a loop's own passes are -- never
+    /// inlined into the top level or into each other.
+    #[test]
+    fn lane_stations_keeps_a_parallel_dynamics_own_children_separate_zones() {
+        let rail = super::Rail {
+            items: vec![super::RailItem::Fork(super::Fork {
+                path: "prime.par".to_string(),
+                kind: super::ForkKind::Parallel,
+                source_status: StatusKind::Done,
+                lanes: vec![
+                    lane(
+                        "prime.par.child_a",
+                        vec![nav_station("prime.par.child_a.step")],
+                        None,
+                    ),
+                    lane(
+                        "prime.par.child_b",
+                        vec![nav_station("prime.par.child_b.step")],
+                        None,
+                    ),
+                ],
+            })],
+        };
+        assert_eq!(
+            super::lane_stations(&rail, None),
+            vec!["prime.par".to_string()]
+        );
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.par.child_a.step")),
+            vec!["prime.par.child_a.step".to_string()]
+        );
+        assert_eq!(
+            super::lane_stations(&rail, Some("prime.par.child_b.step")),
+            vec!["prime.par.child_b.step".to_string()]
+        );
     }
 
     /// Six dispatched passes two wide: the two definitely running
@@ -2243,6 +2697,38 @@ mod tests {
         assert_ne!(
             decision_paths[0], decision_paths[1],
             "two unnamed ifs sharing a host must not collide on the same path"
+        );
+    }
+
+    /// Issue #704 rule 3: an unnamed `if`'s own Fork carries the
+    /// same path as its own Station right before it (the decision's
+    /// own unique `.__if` path, never the shared host container's)
+    /// -- `flatten_lane_stations`' own adjacent-pair dedup then
+    /// collapses the two into the one station the rail actually
+    /// draws, the same as a named decision's Station/Fork pair
+    /// already does; the host's own path must never show up as a
+    /// bogus station of its own.
+    #[test]
+    fn an_unnamed_ifs_own_fork_shares_its_stations_own_path() {
+        let plan = compile_doc(&unnamed_if_yaml("a", "b"));
+        let state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        });
+        let rail = build_rail_for(&plan, &state);
+        for (i, item) in rail.items.iter().enumerate() {
+            if let RailItem::Station(s) = item {
+                if s.path.contains(".__if") {
+                    let RailItem::Fork(fork) = &rail.items[i + 1] else {
+                        panic!("expected the decision's own fork right after its station");
+                    };
+                    assert_eq!(fork.path, s.path);
+                }
+            }
+        }
+        let lanes = lane_stations(&rail, None);
+        assert!(
+            !lanes.contains(&"prime".to_string()),
+            "the host's own bare path must not be a station of its own: {lanes:?}"
         );
     }
 

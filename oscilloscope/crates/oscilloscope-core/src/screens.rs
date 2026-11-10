@@ -405,7 +405,23 @@ pub enum FocusDetail {
     },
     Tool {
         command: Option<String>,
+        /// Issue #704's own Tool section: the process exit code,
+        /// full stdout and stderr -- each `None` for anything the
+        /// run didn't record (a non-shell tool, or an attempt that
+        /// never reached the point of running one at all).
+        exit_code: Option<i64>,
+        stdout: Option<String>,
+        stderr: Option<String>,
     },
+    /// Issue #704's own Decision section, for an `if` row's own
+    /// `FocusedStep` -- the same data `FlowScreen::selected_decision`
+    /// already builds for a named decision, now reachable from every
+    /// screen a decision can be selected from, not only the Flow's
+    /// own Selected pane.
+    Decision(Box<SelectedDecision>),
+    /// Issue #704's own Loop section, for a loop row's own
+    /// `FocusedStep`: one summary per pass, in plan order.
+    Loop(Vec<LoopPassSummary>),
     /// A `tool` step whose own `provider` is `"agent"` (DESIGN.md's
     /// token-bar rule). `live` carries `meta.live` (issue #637) for as
     /// long as the agent tool is tracking the session -- running, or
@@ -537,6 +553,10 @@ pub struct FocusedStep {
     pub provider_or_model: Option<String>,
     pub since_ts: Option<String>,
     pub elapsed_s: Option<f64>,
+    /// Issue #704 rule 4's own Status section, "start → end": the
+    /// node's own `completed_at` -- `None` while still running, or
+    /// for a step the run never recorded one for at all.
+    pub finished_ts: Option<String>,
     pub detail: FocusDetail,
     /// The step's own status (issue #635's selected pane: "produced"
     /// only shows once the step has actually finished, and a
@@ -555,6 +575,31 @@ pub struct FocusedStep {
     /// A prompt's own reply block (`Details::received`) -- `None`
     /// for a non-prompt step, or a prompt that hasn't replied yet.
     pub received: Option<TokenBlock>,
+    /// Issue #704's own Produced section: the node's own value in
+    /// full, never cut to `DETAILS_PREVIEW_CHARS` the way [`Self::
+    /// value`] is -- `None` for anything but a finished leaf with a
+    /// real value of its own.
+    pub value_full: Option<String>,
+    /// Issue #704's own Asked section for a prompt or reflector:
+    /// `meta.prompt_sent` in full -- `None` for every other kind, or
+    /// a prompt the engine never recorded the rendered text for.
+    pub prompt_sent_full: Option<String>,
+    /// Issue #704's own Asked section, "rendered params": `meta.
+    /// params_rendered` in full, for any step kind that has one --
+    /// a tool's own command line (`FocusDetail::Tool::command`) is
+    /// built from this same object's `command`/`args`, but this
+    /// shows the whole thing, not only those two keys (a tool with
+    /// other rendered params, say). `None` for a step the engine
+    /// never rendered any params for at all.
+    pub params_rendered_full: Option<String>,
+    /// Issue #704's own Tokens section: history's own median for
+    /// this exact step and the run count behind it (§3.5's "usually"
+    /// -- the Tape's own `selected_usual`, now shared) -- `None`
+    /// below the 3-run threshold.
+    pub usual_tokens: Option<(u64, usize)>,
+    /// This step's own share of the run's tokens so far, a whole
+    /// percent (the Tape's own `selected_share_pct`, now shared).
+    pub share_pct: Option<u64>,
     /// `node_tokens`'s own sent-plus-received total, the same rule
     /// [`crate::flow::FlowRow::tokens`] uses.
     pub tokens: Option<u64>,
@@ -569,6 +614,47 @@ pub struct FocusedStep {
     /// [`Self::usual_busy_p50_s`]'s own p90 -- `None` below the
     /// 5-run threshold even with a p50 in hand.
     pub usual_busy_p90_s: Option<f64>,
+    /// Issue #704's own Attempts section: `meta.fallback_attempts`,
+    /// oldest first -- a prompt's own earlier, replaced attempts,
+    /// each with whatever the run recorded of its provider/model,
+    /// status, tokens and error. Empty for a step the run never
+    /// retried at all.
+    pub attempts: Vec<AttemptDetail>,
+    /// `meta.retries_used`: set only once an actual retry happened
+    /// (absent, never `0`, when the first attempt was also the
+    /// last) -- the one further signal left once a retry pass's own
+    /// earlier attempt is overwritten out of `attempts` itself.
+    pub retries_used: Option<u64>,
+    /// Issue #704's own Meta section: every other key the run
+    /// recorded for this step beyond every other section above --
+    /// folded by default, `m` unfolds. Already formatted the same
+    /// way [`crate::render::Details::meta_summary`] is.
+    pub meta_extra: Vec<(String, String)>,
+}
+
+/// One line of [`FocusDetail::Loop`] (issue #704's own Loop section):
+/// one loop pass, its own status and tokens so far -- `enter` on one
+/// opens it, the same full-screen step every other row does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LoopPassSummary {
+    pub path: String,
+    pub label: String,
+    pub status: RowStatus,
+    pub tokens: Option<u64>,
+}
+
+/// One line of [`FocusedStep::attempts`] (issue #704's own Attempts
+/// section): one earlier, replaced attempt from `meta.fallback_
+/// attempts`, each field `None` for whatever that one attempt's own
+/// entry didn't record.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct AttemptDetail {
+    pub adapter: Option<String>,
+    pub model: Option<String>,
+    pub status: Option<String>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub error: Option<String>,
 }
 
 fn node_for<'a>(row: &Row, flat: &'a BTreeMap<String, NodeMeta>) -> Option<&'a NodeMeta> {
@@ -603,6 +689,7 @@ pub(crate) fn is_agent_row(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &
 /// running to remove it (`docs/plugins/agent.md`: "a watcher shows
 /// it as stopped"). `None` once every agent either finished normally
 /// or never started at all.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_focused_step(
     row: &Row,
     flat: &BTreeMap<String, NodeMeta>,
@@ -611,6 +698,7 @@ pub(crate) fn build_focused_step(
     state: Option<&Value>,
     now: &str,
     run_ended_at: Option<&str>,
+    header: &Header,
 ) -> FocusedStep {
     let node = node_for(row, flat);
     // Issue #631: a step known only from `--events` (a tree-loop
@@ -622,6 +710,7 @@ pub(crate) fn build_focused_step(
     let since_ts = node
         .and_then(|n| n.created_at.clone())
         .or_else(|| model.event_started_at(&row.path).map(str::to_string));
+    let finished_ts = node.and_then(|n| n.completed_at.clone());
     // A step that has already finished reads its own real duration
     // (`completed_at` - `created_at`), never `now - created_at`: once
     // the whole run has ended, `now` is wall-clock time at render,
@@ -676,6 +765,19 @@ pub(crate) fn build_focused_step(
                 .iter()
                 .find(|(k, _)| k == "command")
                 .map(|(_, v)| v.clone()),
+            exit_code: node
+                .and_then(|n| n.meta.get("exit_code"))
+                .and_then(Value::as_i64),
+            stdout: node
+                .and_then(|n| n.meta.get("stdout"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
+            stderr: node
+                .and_then(|n| n.meta.get("stderr"))
+                .and_then(Value::as_str)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
         }
     } else if row.kind == RowKind::Prompt || row.kind == RowKind::Reflector {
         FocusDetail::Prompt {
@@ -683,6 +785,10 @@ pub(crate) fn build_focused_step(
             estimated: details.sent.as_ref().is_some_and(|b| b.estimated),
             snippet: details.sent.as_ref().and_then(|b| b.snippet.clone()),
         }
+    } else if row.kind == RowKind::If {
+        FocusDetail::Decision(Box::new(decision_detail_for(row, flat, plan)))
+    } else if row.kind == RowKind::Loop {
+        FocusDetail::Loop(loop_passes_for(row, flat))
     } else {
         FocusDetail::Plain
     };
@@ -705,6 +811,46 @@ pub(crate) fn build_focused_step(
     let cost_usd = node
         .and_then(|n| n.meta.get("cost_usd"))
         .and_then(Value::as_f64);
+    let attempts = node.map(|n| attempts_for(&n.meta)).unwrap_or_default();
+    let retries_used = node
+        .and_then(|n| n.meta.get("retries_used"))
+        .and_then(Value::as_u64);
+    let meta_extra = node.map(|n| meta_extra_for(&n.meta)).unwrap_or_default();
+    let value_full = node
+        .map(|n| crate::render::display_value(&n.value))
+        .filter(|v| !v.is_empty());
+    let prompt_sent_full = (row.kind == RowKind::Prompt || row.kind == RowKind::Reflector)
+        .then(|| {
+            node.and_then(|n| n.meta.get("prompt_sent"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .flatten();
+    let params_rendered_full = node
+        .and_then(|n| n.meta.get("params_rendered"))
+        .filter(|v| !v.is_null())
+        .map(crate::render::display_value);
+    let usual_tokens = crate::history::display_key(&row.path, plan)
+        .and_then(|key| header.history_step_usual.get(&key))
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+    let share_pct = {
+        let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
+            let (sent, received) = node
+                .map(|n| crate::model::node_tokens(&n.meta))
+                .unwrap_or((0, 0));
+            let total = sent + received;
+            (total > 0).then_some(total)
+        } else {
+            crate::model::step_tokens_so_far(node, &row.path, model, now).total()
+        };
+        let run_total = header.tokens_sent
+            + header.tokens_received
+            + header.tokens_sent_live_estimate
+            + header.tokens_received_live_estimate;
+        total
+            .filter(|_| run_total > 0)
+            .map(|total| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
+    };
     FocusedStep {
         path: row.path.clone(),
         breadcrumb: row.label.clone(),
@@ -712,16 +858,222 @@ pub(crate) fn build_focused_step(
         provider_or_model,
         since_ts,
         elapsed_s,
+        finished_ts,
         detail,
         status: row.status.clone(),
         error: details.error.clone(),
         value: details.value.clone(),
         received: details.received.clone(),
+        value_full,
+        prompt_sent_full,
+        params_rendered_full,
+        usual_tokens,
+        share_pct,
         tokens,
         cost_usd,
+        attempts,
+        retries_used,
+        meta_extra,
         usual_busy_p50_s: None,
         usual_busy_p90_s: None,
     }
+}
+
+/// Issue #704's own Decision section for a named `if` row: the same
+/// data `build_flow`'s own inline construction already builds for
+/// `FlowScreen::selected_decision`, now shared so every screen's own
+/// full-screen step shows it for a decision, not only the Flow's.
+fn decision_detail_for(
+    row: &Row,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> SelectedDecision {
+    let node = flat.get(&row.path);
+    let branch = node.and_then(|n| n.branch.clone());
+    let answer = node.and_then(|n| n.meta.get("answer")).map(|v| match v {
+        Value::String(s) => s.clone(),
+        other => other.to_string(),
+    });
+    let condition = plan.match_path(&row.path).and_then(|m| {
+        m.entries.iter().find_map(|e| match &e.kind {
+            PlanEntryKind::If {
+                condition: Some(c), ..
+            } => Some(c.clone()),
+            _ => None,
+        })
+    });
+    SelectedDecision {
+        label: row.label.clone(),
+        condition,
+        branch,
+        inferred: false,
+        nothing_ran: false,
+        answer,
+        inferred_evidence: None,
+    }
+}
+
+/// Issue #704's own Loop section: one summary per pass directly
+/// under `row`'s own path, in plan order -- `rows` is whichever list
+/// the caller already has (the Tape's own, the Flow's unfolded
+/// rows, ...), so a pass folded away entirely (a quick-steps
+/// summary) is simply absent here, the same as everywhere else that
+/// list already drops it.
+fn loop_passes_for(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> Vec<LoopPassSummary> {
+    let prefix = format!("{}.iter_", row.path);
+    // Reads `flat` directly, never `rows` (whichever list the caller
+    // has -- the Tape's own is folded, so a uniform loop's own
+    // passes are routinely absorbed into one quick-steps summary row
+    // there, with no `Row` of their own left to read): every pass
+    // the state actually has a node for, plus any the loop's own
+    // `loop_progress.total` still counts as ahead.
+    let mut indices: std::collections::BTreeSet<u64> = flat
+        .keys()
+        .filter_map(|k| k.strip_prefix(&prefix))
+        .filter_map(|rest| rest.split('.').next())
+        .filter_map(|idx| idx.parse().ok())
+        .collect();
+    if let Some(total) = row.loop_progress.and_then(|p| p.total) {
+        indices.extend(0..total);
+    }
+    indices
+        .into_iter()
+        .map(|i| {
+            let pass_path = format!("{prefix}{i}");
+            let (sent, received) = crate::model::subtree_tokens(&pass_path, flat);
+            let total = sent + received;
+            LoopPassSummary {
+                path: pass_path.clone(),
+                label: format!("pass {}", i + 1),
+                status: RowStatus {
+                    kind: pass_status_kind(&pass_path, flat),
+                    skip_reason: None,
+                    retrying: false,
+                },
+                tokens: (total > 0).then_some(total),
+            }
+        })
+        .collect()
+}
+
+/// Issue #704's own Loop section: one pass's own real status --
+/// failed if any of its own leaves recorded an error, running if any
+/// has started but not finished, done once every leaf has, pending
+/// with no leaf at all yet (`loop_passes_for`'s own "ahead" pass,
+/// counted from the loop's own `loop_progress.total` with no node of
+/// its own in `flat` yet). Reads `flat` directly rather than a
+/// `Row`'s own status (no `Row` exists for most leaves under a
+/// pass, only for the loop and for whichever one the plan names
+/// directly), so every pass still reads correctly whichever list the
+/// caller's own rows came from.
+fn pass_status_kind(pass_path: &str, flat: &BTreeMap<String, NodeMeta>) -> StatusKind {
+    let prefix = format!("{pass_path}.");
+    let mut any_failed = false;
+    let mut any_running = false;
+    let mut any_unfinished = false;
+    let mut saw_any = false;
+    for (path, node) in flat {
+        if path != pass_path && !path.starts_with(&prefix) {
+            continue;
+        }
+        saw_any = true;
+        if node.error.is_some() {
+            any_failed = true;
+        } else if node.completed_at.is_none() {
+            if node.created_at.is_some() {
+                any_running = true;
+            } else {
+                any_unfinished = true;
+            }
+        }
+    }
+    if !saw_any {
+        StatusKind::Pending
+    } else if any_failed {
+        StatusKind::Failed
+    } else if any_running {
+        StatusKind::Running
+    } else if any_unfinished {
+        StatusKind::Pending
+    } else {
+        StatusKind::Done
+    }
+}
+
+/// Issue #704's own Attempts section: `meta.fallback_attempts`,
+/// oldest first, read permissively -- a wrong-typed or missing field
+/// in any one entry just leaves that one field `None`, never a panic
+/// or a dropped entry.
+fn attempts_for(meta: &Value) -> Vec<AttemptDetail> {
+    meta.get("fallback_attempts")
+        .and_then(Value::as_array)
+        .map(|attempts| {
+            attempts
+                .iter()
+                .map(|a| AttemptDetail {
+                    adapter: a.get("adapter").and_then(Value::as_str).map(str::to_string),
+                    model: a.get("model").and_then(Value::as_str).map(str::to_string),
+                    status: a.get("status").and_then(Value::as_str).map(str::to_string),
+                    tokens_sent: a.get("tokens_sent").and_then(Value::as_u64),
+                    tokens_received: a.get("tokens_received").and_then(Value::as_u64),
+                    error: a.get("error").and_then(Value::as_str).map(str::to_string),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Every key [`FocusDetail`]/[`FocusedStep`]'s own named sections
+/// above already read (directly, or through [`details_for`]'s own
+/// `meta_summary`) -- issue #704's own Meta section is everything
+/// else `meta` still has.
+const META_EXTRA_EXCLUDE: &[&str] = &[
+    "created_at",
+    "completed_at",
+    // Already its own Error section (`FocusedStep::error`, read
+    // from `render::Details::error`, never from this key directly).
+    "error",
+    "provider",
+    "model",
+    "model_reason",
+    "adapter",
+    "exit_code",
+    "stdout",
+    "stderr",
+    "params_rendered",
+    "prompt_sent",
+    "prompt_chars",
+    "prompt_sent_sha256",
+    "prompt_type",
+    "dry_run",
+    "fallback_attempts",
+    "fallback_recovered",
+    "attempts",
+    "live",
+    "raw",
+    "branch",
+    "answer",
+    "tokens_sent",
+    "tokens_received",
+    "tokens_sent_total",
+    "tokens_received_total",
+    "cost_usd",
+    "retries_used",
+    "waiting_for",
+];
+
+/// Issue #704's own Meta section: every other key the run recorded
+/// for this step, in `meta`'s own (alphabetical) key order --
+/// `display_value` the same way [`details_for`]'s own `meta_summary`
+/// already renders one.
+fn meta_extra_for(meta: &Value) -> Vec<(String, String)> {
+    let Some(obj) = meta.as_object() else {
+        return Vec::new();
+    };
+    obj.iter()
+        .filter(|(k, v)| !META_EXTRA_EXCLUDE.contains(&k.as_str()) && !v.is_null())
+        .map(|(k, v)| (k.clone(), crate::render::display_value(v)))
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -2235,6 +2587,15 @@ pub(crate) fn build_run_head(
 #[allow(clippy::too_many_arguments)]
 pub fn build_tape(
     rows: &[Row],
+    // Issue #704 rule 4: `[`/`]` steps to any effect in plan order,
+    // folded or not (`App::fullscreen_step`'s own candidates are
+    // `App::flow_rows`, always unfolded) -- a row folding away (a
+    // quick-steps summary swallowing it) must not make the Tape's
+    // own full-screen view go blank once the selection lands there,
+    // so every `selected_*` field below falls back to this list when
+    // `rows` itself (folded, what the visible list actually draws)
+    // doesn't have the row.
+    unfolded_rows: &[Row],
     header: &crate::render::Header,
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
@@ -2244,6 +2605,11 @@ pub fn build_tape(
     previews_on: bool,
     now: &str,
 ) -> TapeScreen {
+    let find_selected_row = |p: &str| {
+        rows.iter()
+            .find(|r| r.path == p)
+            .or_else(|| unfolded_rows.iter().find(|r| r.path == p))
+    };
     let run_start = header.run_start_ts.as_deref();
     let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
 
@@ -2533,19 +2899,18 @@ pub fn build_tape(
     // their own.
     let ahead = bucket3.len() as u64;
 
-    let selected = selected_path
-        .and_then(|p| rows.iter().find(|r| r.path == p))
-        .map(|row| {
-            build_focused_step(
-                row,
-                flat,
-                plan,
-                model,
-                state,
-                now,
-                header.run_end_ts.as_deref(),
-            )
-        });
+    let selected = selected_path.and_then(find_selected_row).map(|row| {
+        build_focused_step(
+            row,
+            flat,
+            plan,
+            model,
+            state,
+            now,
+            header.run_end_ts.as_deref(),
+            header,
+        )
+    });
 
     let selected_usual = selected_path
         .and_then(|p| crate::history::display_key(p, plan))
@@ -2564,7 +2929,7 @@ pub fn build_tape(
     // share until it finishes) -- its own Live block covers it
     // instead, same as before this issue.
     let selected_share_pct = selected_path.and_then(|p| {
-        let row = rows.iter().find(|r| r.path == p)?;
+        let row = find_selected_row(p)?;
         let node = flat.get(p);
         let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
             let (sent, received) = node
@@ -2582,7 +2947,7 @@ pub fn build_tape(
         (run_total > 0)
             .then(|| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
     });
-    let selected_row = selected_path.and_then(|p| rows.iter().find(|r| r.path == p));
+    let selected_row = selected_path.and_then(find_selected_row);
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
     let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat, model, now));
 
@@ -2977,6 +3342,11 @@ pub(crate) fn last_finished_row(
 #[allow(clippy::too_many_arguments)]
 pub fn build_signal(
     rows: &[Row],
+    // Issue #704 rule 4: same reasoning as `build_tape`'s own --
+    // `[`/`]` can land the selection on a row a quick-steps summary
+    // has folded away, and the Signal's own full-screen step must
+    // still find it.
+    unfolded_rows: &[Row],
     header: &crate::render::Header,
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
@@ -2984,8 +3354,14 @@ pub fn build_signal(
     state: Option<&Value>,
     column_ms: u64,
     cursor_col: Option<usize>,
+    selected_path: Option<&str>,
     now: &str,
 ) -> SignalScreen {
+    let find_selected_row = |p: &str| {
+        rows.iter()
+            .find(|r| r.path == p)
+            .or_else(|| unfolded_rows.iter().find(|r| r.path == p))
+    };
     // Once a run has ended, its own Now sweep stays at the run's
     // own end rather than drifting on with the wall clock a caller
     // still passes in (`osi watch` of an old run, say) -- the run
@@ -3002,10 +3378,36 @@ pub fn build_signal(
     let col_of_100 = |offset_s: f64| (offset_s / 0.1).floor().max(0.0) as usize;
     let now_offset = elapsed_offset(now);
     let now_col = now_offset.map(col_of);
+    // Issue #704 rule 2: with no explicit scrub cursor of its own,
+    // the cursor sits at the shared selection's own column instead
+    // of always defaulting to Now -- its end time once finished, its
+    // start while it's still running (the same `since_ts` rule
+    // `build_focused_step` already reads its own elapsed from).
+    // `←→` (`cursor_col` actually `Some`) still scrubs freely, and
+    // `tui::draw_signal` syncs the shared selection back to whatever
+    // `selected` below resolves to once it does.
+    let selection_col = selected_path.and_then(|p| {
+        let row = find_selected_row(p)?;
+        let node = flat.get(p);
+        let running = matches!(
+            row.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        );
+        if running {
+            let since_ts = node
+                .and_then(|n| n.created_at.clone())
+                .or_else(|| model.event_started_at(p).map(str::to_string));
+            since_ts.as_deref().and_then(elapsed_offset).map(col_of)
+        } else {
+            node.and_then(|n| n.completed_at.as_deref())
+                .and_then(elapsed_offset)
+                .map(col_of)
+        }
+    });
     // ←→'s own scrub cursor (§4): a column at or before Now --
     // Readings' own Peak, Largest and Quiet all read up to here, not
     // past it, once scrubbed away from Now.
-    let cursor = cursor_col.or(now_col);
+    let cursor = cursor_col.or(selection_col).or(now_col);
 
     let model_label = rows
         .iter()
@@ -3585,29 +3987,46 @@ pub fn build_signal(
         .max();
     let unit = tape_unit(largest_usual_step);
 
-    // §4's own "opens the step under the cursor": the step row with
-    // the greatest start column at or before the cursor (Now's own
-    // column when not scrubbed) is whichever step the cursor is
-    // currently sitting over.
-    let selected = cursor
-        .and_then(|c| {
-            step_rows
-                .iter()
-                .filter(|r| r.col <= c)
-                .max_by_key(|r| r.col)
-        })
-        .and_then(|r| rows.iter().find(|row| row.path == r.path))
-        .map(|row| {
-            build_focused_step(
-                row,
-                flat,
-                plan,
-                model,
-                state,
-                now,
-                header.run_end_ts.as_deref(),
-            )
-        });
+    // §4's own "opens the step under the cursor": while actually
+    // scrubbing (`cursor_col` itself `Some`), the step row with the
+    // greatest start column at or before the cursor is whichever
+    // step the cursor is sitting over -- issue #704 rule 2's own
+    // "the selection follows the effect under the cursor". Not
+    // scrubbing, the shared selection already names the step
+    // directly (`selection_col` above is exactly its own column), so
+    // this reads it the same direct way every other screen's own
+    // `selected` does, with the nearest-column lookup only as a
+    // fallback for a `selected_path` this screen doesn't resolve
+    // (Starting, say, before anything names one).
+    let step_under_cursor = || {
+        cursor
+            .and_then(|c| {
+                step_rows
+                    .iter()
+                    .filter(|r| r.col <= c)
+                    .max_by_key(|r| r.col)
+            })
+            .and_then(|r| rows.iter().find(|row| row.path == r.path))
+    };
+    let selected_row = if cursor_col.is_none() {
+        selected_path
+            .and_then(find_selected_row)
+            .or_else(step_under_cursor)
+    } else {
+        step_under_cursor()
+    };
+    let selected = selected_row.map(|row| {
+        build_focused_step(
+            row,
+            flat,
+            plan,
+            model,
+            state,
+            now,
+            header.run_end_ts.as_deref(),
+            header,
+        )
+    });
 
     SignalScreen {
         model_label,
@@ -4015,7 +4434,8 @@ pub fn build_flow(
                     inferred_evidence: None,
                 });
             } else {
-                let mut step = build_focused_step(row, flat, plan, model, state, now, run_ended_at);
+                let mut step =
+                    build_focused_step(row, flat, plan, model, state, now, run_ended_at, header);
                 // A sequential container's own child keeps its own
                 // ten-cell station name on the rail, but the Selected
                 // pane's own title still says which container it's
@@ -4097,6 +4517,65 @@ pub fn build_flow(
 
 #[cfg(test)]
 mod tests {
+
+    /// Issue #704 rule 4's own Meta section: `meta.error` is already
+    /// its own Error section, never repeated here under its own raw
+    /// key.
+    #[test]
+    fn meta_extra_excludes_error_already_shown_as_its_own_section() {
+        let meta = json!({"error": "boom", "other_key": "kept"});
+        let extra = meta_extra_for(&meta);
+        assert!(!extra.iter().any(|(k, _)| k == "error"), "{extra:?}");
+        assert!(extra.iter().any(|(k, _)| k == "other_key"), "{extra:?}");
+    }
+
+    /// Issue #704 rule 4's own Loop section: a pass's own status is
+    /// read from its own leaves, never assumed "done" just because
+    /// it has a node at all -- a failed leaf fails the pass even
+    /// with an earlier one already finished, a running leaf with no
+    /// failure yet still reads running, and a pass with no node at
+    /// all (the loop's own `loop_progress.total` still counting it
+    /// as ahead) reads pending.
+    #[test]
+    fn loop_passes_read_each_passs_own_real_status() {
+        let loop_row = tape_row(
+            "prime.drafts",
+            1,
+            "drafts",
+            RowKind::Loop,
+            StatusKind::Running,
+        );
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.drafts.iter_0.a".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        flat.insert(
+            "prime.drafts.iter_1.a".to_string(),
+            tape_node("2026-01-01T00:00:01Z", Some("2026-01-01T00:00:02Z")),
+        );
+        flat.insert(
+            "prime.drafts.iter_1.b".to_string(),
+            NodeMeta {
+                error: Some("boom".to_string()),
+                ..tape_node("2026-01-01T00:00:02Z", Some("2026-01-01T00:00:03Z"))
+            },
+        );
+        flat.insert(
+            "prime.drafts.iter_2.a".to_string(),
+            tape_node("2026-01-01T00:00:03Z", None),
+        );
+        let passes = loop_passes_for(&loop_row, &flat);
+        let status = |path: &str| {
+            passes
+                .iter()
+                .find(|p| p.path == path)
+                .map(|p| p.status.kind)
+        };
+        assert_eq!(status("prime.drafts.iter_0"), Some(StatusKind::Done));
+        assert_eq!(status("prime.drafts.iter_1"), Some(StatusKind::Failed));
+        assert_eq!(status("prime.drafts.iter_2"), Some(StatusKind::Running));
+    }
 
     /// A pass whose body is a single unnamed `if` carries the `if`'s
     /// kind and a `Pending` status on its own row; the default pass
@@ -4407,6 +4886,7 @@ mod tests {
         let model = RunModel::new();
         let tape = build_tape(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
@@ -4462,6 +4942,56 @@ mod tests {
         assert_eq!(tape.done, 2); // `kind` and the loop's own finished pass, `iter_0 › draft`
         assert_eq!(tape.running, 1);
         assert_eq!(tape.ahead, 1);
+    }
+
+    /// Issue #704 rule 4: `[`/`]` names any effect in plan order,
+    /// folded away or not (`App::fullscreen_step`'s own candidates
+    /// are always unfolded) -- a leaf a quick-steps summary has
+    /// absorbed (no row of its own left in the folded list at all)
+    /// must still resolve its own full-screen step, from the
+    /// unfolded rows `build_tape` falls back to.
+    #[test]
+    fn a_folded_away_leafs_own_selection_still_resolves_against_the_unfolded_rows() {
+        let unfolded_rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done),
+            tape_row("prime.b", 1, "b", RowKind::Tool, StatusKind::Done),
+        ];
+        // The folded list a quick-steps summary leaves behind: both
+        // rows absorbed into one, under `prime.a`'s own path (the
+        // first of the run, `fold::merge_quick_steps`'s own `rep_
+        // path`) -- `prime.b` has no row of its own here at all.
+        let folded_rows = vec![Row {
+            path: "prime.a".to_string(),
+            label: "2 quick steps".to_string(),
+            kind: RowKind::QuickSteps,
+            ..tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done)
+        }];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.b".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:00Z")),
+        );
+        let header = base_header();
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let tape = build_tape(
+            &folded_rows,
+            &unfolded_rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            Some("prime.b"),
+            true,
+            "2026-01-01T00:00:01Z",
+        );
+        assert_eq!(
+            tape.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.b"),
+            "a folded-away leaf must still resolve its own full-screen step"
+        );
+        assert_eq!(tape.selected_breadcrumb.as_deref(), Some("b"));
     }
 
     #[test]
@@ -5531,6 +6061,7 @@ mod tests {
             None,
             "2026-01-01T12:00:00Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -5587,6 +6118,7 @@ mod tests {
             None,
             "2026-01-01T11:52:54Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -5829,6 +6361,7 @@ mod tests {
             None,
             "2026-10-08T11:52:55Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -5872,6 +6405,7 @@ mod tests {
             None,
             "2026-10-08T11:52:55Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -5924,6 +6458,7 @@ mod tests {
             None,
             "2026-10-08T11:52:56Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -5995,6 +6530,7 @@ mod tests {
             None,
             "2026-10-08T11:52:55Z",
             None,
+            &base_header(),
         );
         match step.detail {
             FocusDetail::Agent {
@@ -6078,12 +6614,14 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:03.100Z",
         );
@@ -6125,12 +6663,14 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:03.100Z",
         );
@@ -6186,12 +6726,14 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:03.100Z",
         );
@@ -6232,7 +6774,9 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.650Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
         assert_eq!(signal.now_col, Some(6));
         let bucket = &signal.buckets[6];
         assert_eq!(bucket.sent, 40);
@@ -6280,7 +6824,19 @@ mod tests {
         let mut header = base_header();
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:02.100Z";
-        let signal = build_signal(&[], &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(
+            &[],
+            &[],
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+        );
         // The two live sightings land at their own observation
         // columns (350ms and 1350ms since the run started, at 100ms
         // per column); the remainder lands at the agent's own end
@@ -6365,7 +6921,9 @@ mod tests {
         let mut header = base_header();
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:01.100Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
         let (total_sent, total_received) = signal
             .buckets
             .iter()
@@ -6415,12 +6973,14 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:03.100Z",
         );
@@ -6469,12 +7029,14 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
             &model,
             None,
             100,
+            None,
             None,
             "2026-01-01T00:00:01.100Z",
         );
@@ -6558,7 +7120,9 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:02.100Z";
-        let signal = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
+        let signal = build_signal(
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
 
         assert_eq!(signal.now_pane.running.len(), 1);
         assert_eq!(signal.now_pane.running[0].path, "prime.drafts.iter_1.draft");
@@ -6584,6 +7148,101 @@ mod tests {
             .expect("a next signal");
         assert!(next_signal.starts_with("next"), "{next_signal:?}");
         assert!(next_signal.contains("queued"), "{next_signal:?}");
+    }
+
+    /// Issue #704 rule 2: with no explicit scrub, the cursor sits at
+    /// the shared selection's own column -- a finished step's own
+    /// end time, a running one's own start -- never always at Now.
+    #[test]
+    fn build_signal_cursor_follows_the_selected_effect_not_always_now() {
+        let rows = vec![
+            tape_row("prime.ask", 1, "ask", RowKind::Prompt, StatusKind::Done),
+            tape_row("prime.fix", 1, "fix", RowKind::Prompt, StatusKind::Running),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.ask".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:01.000Z"),
+                80,
+                50,
+            ),
+        );
+        flat.insert(
+            "prime.fix".to_string(),
+            tape_node("2026-01-01T00:00:01.500Z", None),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:02.100Z";
+
+        // `prime.ask` finished at 1.0s (column 10 at 100ms/column) --
+        // not Now's own column 21, and not scrubbed either.
+        let signal = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            Some("prime.ask"),
+            now,
+        );
+        assert_eq!(signal.cursor_col, Some(10));
+        assert_eq!(
+            signal.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.ask")
+        );
+
+        // `prime.fix` is still running, started at 1.5s (column 15) --
+        // its own start, not Now, and not `prime.ask`'s own end either.
+        let signal = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            Some("prime.fix"),
+            now,
+        );
+        assert_eq!(signal.cursor_col, Some(15));
+        assert_eq!(
+            signal.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.fix")
+        );
+
+        // An explicit scrub (`←→`) still wins outright, and finds
+        // whichever step the cursor itself lands on, ignoring the
+        // shared selection entirely -- issue #704 rule 2's own "free
+        // scrubbing still possible".
+        let signal = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            Some(10),
+            Some("prime.fix"),
+            now,
+        );
+        assert_eq!(signal.cursor_col, Some(10));
+        assert_eq!(
+            signal.selected.as_ref().map(|s| s.path.as_str()),
+            Some("prime.ask")
+        );
     }
 
     /// A running prompt's own live estimate marks its column
@@ -6618,12 +7277,14 @@ mod tests {
         let now = "2026-01-01T00:00:00.650Z";
         let running = build_signal(
             &rows_running,
+            &rows_running,
             &header,
             &flat_running,
             &plan,
             &model,
             None,
             100,
+            None,
             None,
             now,
         );
@@ -6648,7 +7309,7 @@ mod tests {
             ),
         );
         let done = build_signal(
-            &rows_done, &header, &flat_done, &plan, &model, None, 100, None, now,
+            &rows_done, &rows_done, &header, &flat_done, &plan, &model, None, 100, None, None, now,
         );
         assert!(!done.buckets[6].received_live);
         assert_eq!(done.buckets[6].received, 9);
@@ -6681,8 +7342,12 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.400Z";
-        let at_100ms = build_signal(&rows, &header, &flat, &plan, &model, None, 100, None, now);
-        let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, now);
+        let at_100ms = build_signal(
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
+        let at_200ms = build_signal(
+            &rows, &rows, &header, &flat, &plan, &model, None, 200, None, None, now,
+        );
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");
     }

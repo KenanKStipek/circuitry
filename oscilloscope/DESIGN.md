@@ -2718,9 +2718,12 @@ that ran's -- own `name · n of m passes have tokens`, absent with no
 loop in the document at all.
 
 **Keys.** `↑↓`/`j`/`k`/`PageUp`/`PageDown`/`Home`/`End`/`g`/`G` move
-the table's own cursor (`keys::App::store_selected`, a path, sticking
-to it as the table's own rows reorder; defaults to the first row the
-moment the screen is first drawn); `enter` opens the selected store's
+the table's own cursor -- the shared `keys::App::selected_path`
+(issue #704; `keys::App::store_selected` is gone), resolved to the
+nearest ancestor in the table with tokens of its own when the
+effect itself has none, sticking to it as the table's own rows
+reorder; defaults to the first row with nothing in its own lineage
+holding tokens yet; `enter` opens the selected store's
 own step full-screen, the same shared toggle the Tape's, Signal's and
 Flow's own already share, consumed either way so it never falls
 through to the generic pane's own quick-steps expand; `esc` closes
@@ -2988,6 +2991,77 @@ either); `registry::resolve_attached_config` gives the fallback order
 a later screen showing an attached run's config will use: the
 registry entry's own `config`, else `run_start.config`, else the
 process's own arguments, else nothing.
+
+**Browsing every effect after a run, with one selection across
+screens** (issue #704, beyond anything `design/tui-design.md` itself
+describes). The Tape's own `TapeHead::Ended` state (`App::
+tape_run_end_mode`, set once the instant the run ends, keyed off the
+Tape's own default selection -- the run's handled failure when it has
+one, else its last row) shows the run summary for as long as that
+mode holds; moving the selection (`App::move_tree_selection`/`jump`)
+clears it for good, and the detail pane then shows that row's own
+detail instead, the same `tape_normal_detail_lines` the `TapeHead::
+Normal` state already does -- `enter` opens whichever of the two is
+currently showing. `App::selected_path` is now the one selection
+every screen reads: the Store's own table cursor (`store::
+build_store`'s own `cursor_path`, `store_cursor_path`) resolves to it
+directly, or the nearest ancestor in the Largest Stores table when
+the effect itself has no tokens of its own, and `App::store_selected`
+is gone; the Signal's own scrub cursor (`screens::build_signal`'s
+`selection_col`) sits at the selected effect's own column -- its end
+time once finished, its start while it is still running -- whenever
+the cursor is not actively being scrubbed with ←→, and a scrub still
+moves `selected_path` to follow whichever step the cursor lands on
+(`tui::draw_signal`).
+
+The Flow rail's own stations are reachable from the keyboard
+(closing #693's keyboard-selection item): with follow off or the run
+ended, ←→ (`App::flow_select_station`, over `App::
+flow_lane_stations`, `rail::lane_stations`) move between the
+selected lane's own stations in plan order -- a plain station, a
+named or inferred decision and a fork's own host (a loop, a parallel
+`dynamic`) alike. A decision fork never really forks this sequence
+(only one of its own two lanes is ever real), so it flattens its own
+taken lane's stations right in; a loop's or a `dynamic`'s own lanes
+stay their own separate zones, reached only by ↑↓ first, the same as
+before. Following a live run, ←→ still scrolls the rail exactly as
+it already did.
+
+The full-screen step (`enter`, shared by every screen) now has every
+section the run recorded, each only when the node has data for it:
+Status, Asked (a prompt's own `prompt_sent` in full, or a tool's own
+command line), Produced (`FocusedStep::value_full`, the node's own
+value in full, never cut to a preview the way `FocusedStep::value`
+already is), Error, Tokens (`FocusedStep::usual_tokens`/`share_pct`,
+the Tape's own `selected_usual`/`selected_share_pct` figures, now
+built for every screen's own selection inside `build_focused_step`
+itself), Attempts (`FocusDetail`'s own fallback-attempt chain, shown
+only past a single trivial entry, alongside `FocusedStep::
+retries_used` when an earlier, now-overwritten pass actually
+retried), Tool (`FocusDetail::Tool`'s own `exit_code`/`stdout`/
+`stderr`), Decision (`FocusDetail::Decision`, the same data the
+Flow's own `SelectedDecision` already carries, now reachable for an
+`if` row selected from any screen), Loop (`FocusDetail::Loop`, one
+line per pass read straight from state rather than from whichever
+row list the caller has -- a uniform loop's own passes are routinely
+folded into one quick-steps summary row on the Tape, with no `Row`
+of their own left for a list-based reading), the existing Agent
+block, and Meta (`FocusedStep::meta_extra`, every other key the node
+recorded beyond every section above, folded by default, `m`
+unfolds). The Tape's own `tape_normal_detail_lines` and the Flow's
+own `flow_selected_step_lines` each append these sections after
+their own existing content, keeping every frame golden cell-exact;
+the Signal's and the Store's own full-screen step
+(`draw_focused_step_detail`, never part of a normal-layout golden)
+builds all of it together (`tui::focused_step_full_lines`). `[`/`]`
+(`App::fullscreen_step`, over `App::flow_rows` -- every effect in
+plan order, refreshed every tick regardless of which screen is on
+display) step to the previous/next effect that has started;
+↑↓/PgUp/PgDn/Home/End scroll the step's own content instead of
+moving the selection underneath it, and both take over before any
+screen's own bindings while the full-screen step is open. Every
+screen's key bar reads this shared full-screen key bar instead of
+its own ordinary one for as long as it stays open.
 
 ### 6.4 Tests
 

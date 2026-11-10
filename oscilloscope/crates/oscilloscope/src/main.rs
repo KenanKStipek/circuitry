@@ -1742,6 +1742,18 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// is actually looking at once they tab onto `Pane::Details` itself
 /// to scroll it -- including a named report's own row, which never
 /// has an orchestration-tree row of its own at all to select instead.
+/// Issue #704 rule 1: the Tape's own default selection the instant
+/// a run ends -- the handled failure's own row when the run has
+/// one (worth pointing at even though the run itself still
+/// succeeded), else the last row the plan runs, right next to the
+/// head rule's own place in the list.
+fn tape_run_end_default_target(rows: &[oscilloscope_core::render::Row]) -> Option<String> {
+    rows.iter()
+        .find(|r| r.status.kind == oscilloscope_core::model::StatusKind::FailedHandled)
+        .or_else(|| rows.last())
+        .map(|r| r.path.clone())
+}
+
 /// Screen 0's own model (issue #678), built only while it's actually
 /// on display -- the performance rule ("models for screens not on
 /// display aren't built"). `flatten_state` runs again here rather
@@ -1764,6 +1776,7 @@ fn build_tape_if_active(
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     Some(oscilloscope_core::screens::build_tape(
         &render_state.rows,
+        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
         plan,
@@ -1811,7 +1824,7 @@ fn build_store_screen_if_active(
         state,
         "prime",
         now,
-        app.store_selected.as_deref(),
+        app.selected_path.as_deref(),
     ))
 }
 
@@ -1843,16 +1856,25 @@ fn build_flow_screen_if_active(
     // still land on the rail's own sensible default pass, not the
     // root's own step pane or whatever leaf follow happens to be on.
     let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
-    let flow_selected_path = if app.follow || selected_path.as_deref() == root_path {
-        // Issue #703's rule 5: following lands on whichever step is
-        // actually running, not only on the default pass -- `None`
-        // (the default-pass fallback below) only when the running
-        // step is itself inside a loop pass, or nothing is running.
-        oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
-            .map(str::to_string)
-    } else {
-        selected_path
-    };
+    // Issue #704 rule 2: once the run has ended there is nothing left
+    // to follow, so `app.follow` sitting on from before (nobody ever
+    // turned it off) must no longer override a real selection with
+    // `default_follow_path`, which itself finds nothing running and
+    // returns `None` -- the Flow must show whatever the selection
+    // actually is then, the same as every other screen already does
+    // post-run.
+    let still_running = render_state.header.status == RunStatus::Running;
+    let flow_selected_path =
+        if (app.follow && still_running) || selected_path.as_deref() == root_path {
+            // Issue #703's rule 5: following lands on whichever step is
+            // actually running, not only on the default pass -- `None`
+            // (the default-pass fallback below) only when the running
+            // step is itself inside a loop pass, or nothing is running.
+            oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
+                .map(str::to_string)
+        } else {
+            selected_path
+        };
     Some(oscilloscope_core::screens::build_flow(
         &render_state.unfolded_rows,
         &render_state.rows,
@@ -1887,6 +1909,7 @@ fn build_signal_screen_if_active(
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     Some(oscilloscope_core::screens::build_signal(
         &render_state.rows,
+        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
         plan,
@@ -1894,6 +1917,7 @@ fn build_signal_screen_if_active(
         state,
         app.signal_column_ms,
         app.signal_cursor_col,
+        app.selected_path.as_deref(),
         now,
     ))
 }
@@ -1950,15 +1974,21 @@ fn focused_agent_transcript_path(
 struct TranscriptTailCache {
     path: Option<String>,
     len: Option<u64>,
+    bound: Option<u64>,
     view: Option<oscilloscope_core::transcript::TranscriptView>,
 }
 
 /// Tails the one step's transcript this frame actually needs
 /// (`focused_agent_transcript_path`), bounded to the last 64 KiB
-/// (DESIGN.md, issue #637) -- switching focus to a different step
-/// (or off a screen that shows one at all) costs nothing more than
-/// this call simply returning `None` next time; no file is ever
-/// opened for a step that isn't the one on screen.
+/// (DESIGN.md, issue #637), or the whole file while the full-screen
+/// step is open (issue #704 rule 4, "nothing is cut": a transcript
+/// longer than 64 KiB has lines the compact pane never showed
+/// anyway, but the full-screen view, scrollable and reading every
+/// other section in full already, must not cut this one alone) --
+/// switching focus to a different step (or off a screen that shows
+/// one at all) costs nothing more than this call simply returning
+/// `None` next time; no file is ever opened for a step that isn't
+/// the one on screen.
 fn tail_focused_transcript(
     app: &App,
     tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
@@ -1969,18 +1999,24 @@ fn tail_focused_transcript(
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
     let path =
         focused_agent_transcript_path(app, tape_screen, flow_screen, signal_screen, store_screen)?;
+    let bound = if app.tape_fullscreen_step {
+        u64::MAX
+    } else {
+        TRANSCRIPT_TAIL_BYTES
+    };
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
-    if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
+    if cache.path.as_deref() == Some(path.as_str())
+        && cache.len == len
+        && cache.bound == Some(bound)
+    {
         return cache.view.clone();
     }
-    let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
-    let truncated = oscilloscope_core::observe::transcript_tail_truncated(
-        Path::new(&path),
-        TRANSCRIPT_TAIL_BYTES,
-    );
+    let lines = tail_transcript_lines(Path::new(&path), bound);
+    let truncated = oscilloscope_core::observe::transcript_tail_truncated(Path::new(&path), bound);
     let view = oscilloscope_core::transcript::build_transcript_view(&lines, truncated);
     cache.path = Some(path);
     cache.len = len;
+    cache.bound = Some(bound);
     cache.view = Some(view.clone());
     Some(view)
 }
@@ -2419,6 +2455,15 @@ fn run_tui(
             }
             app.reconcile_folding(&render_state.rows);
             app.flow_rows = render_state.unfolded_rows.clone();
+            // Issue #704 rule 1: moves the Tape's own selection to
+            // the Run End row the instant the run ends -- before the
+            // fallback below, which would otherwise land it on the
+            // first row instead on an attach to an already-ended run
+            // that never had a selection of its own yet.
+            app.tape_select_run_end_once(
+                render_state.header.status == RunStatus::Running,
+                tape_run_end_default_target(&render_state.rows),
+            );
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -3763,6 +3808,10 @@ fn run_tui_watch(
             }
             app.reconcile_folding(&render_state.rows);
             app.flow_rows = render_state.unfolded_rows.clone();
+            app.tape_select_run_end_once(
+                render_state.header.status == RunStatus::Running,
+                tape_run_end_default_target(&render_state.rows),
+            );
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -4275,10 +4324,17 @@ mod tests {
     use super::*;
 
     fn agent_running_state_for_transcript_path_test() -> serde_json::Value {
+        // Issue #704 rule 2: the Store only lists a step as a store
+        // at all once it has tokens of its own -- a running agent's
+        // own live estimate counts, the same figure its Tape row
+        // already shows, so `fix` needs one here too for the
+        // Store's own selection to resolve to it rather than falling
+        // through to "nothing has tokens yet".
         serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
             "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
                 "provider": "agent",
-                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z"}
+                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z",
+                    "tokens_sent": 12, "tokens_received": 34}
             }}
         }})
     }
@@ -4309,6 +4365,7 @@ mod tests {
         );
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -4334,12 +4391,14 @@ mod tests {
         );
         let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
             &model,
             Some(&state),
             100,
+            None,
             None,
             "2026-01-01T00:00:01Z",
         );
@@ -4440,6 +4499,7 @@ mod tests {
         );
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,

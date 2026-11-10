@@ -25,4 +25,4 @@ expression: text
 "│ tool                                                                                             │"
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────╯"
 " engine launching · waiting for the first event · cof                                               "
-" ←→ Scroll  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "
+" ←→ Select  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                    ? Help  q Quit "

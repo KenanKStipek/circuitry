@@ -477,6 +477,90 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #704: once a run has ended, `↓` moves the selection to
+/// another finished row, `enter` opens it full-screen, and `]` steps
+/// to the next effect in plan order -- the full-screen title changes
+/// to name it, proving the key actually moved the selection rather
+/// than just redrawing the same step.
+#[test]
+fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    assert!(
+        screen.contains("alpha") && screen.contains("beta") && screen.contains("gamma"),
+        "expected all three rows on the ended Tape; screen:\n{screen}"
+    );
+
+    // The run's just ended: the selection starts on the last row the
+    // plan ran (issue #704 rule 1's own default target, "gamma"
+    // here) and the detail pane shows the run summary -- two ↑
+    // actually move the selection, landing on "alpha", never back on
+    // "gamma" itself (which would show the summary again, the same
+    // as any other selection landing back on that exact row does).
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[A\x1b[A");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Tape \u{b7} "),
+        "expected enter to open the full-screen step; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("alpha \u{b7} Selected"),
+        "expected alpha's own full-screen step; screen:\n{screen}"
+    );
+
+    // `]` steps to the next effect in plan order -- "beta", never
+    // "gamma" (the run's own default end target, two steps further).
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"]");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "beta \u{b7} Selected",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("beta \u{b7} Selected"),
+        "expected stepping to reach the next effect; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
 /// A run this `osi` launched has a registry entry while it's live --
 /// named by its own document and run directory in bare `osi`'s own
 /// non-TTY list too -- and that entry is gone once the run ends.
@@ -1170,7 +1254,7 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            screen.contains("Help") && screen.contains("scroll the rail"),
+            screen.contains("Help") && screen.contains("select a station"),
             "expected ? to open the Flow's own Help; screen:\n{screen}"
         );
     }
