@@ -346,17 +346,19 @@ pub fn format_shared_axis_label(n: u64) -> String {
 /// whose own finish times land in the same 100 ms Signal column --
 /// as many tokens merge there as the trace's own bucketing already
 /// puts in one column, never a separate rule of its own. `label` is
-/// the group's own earliest finisher; `extra` is every other one in
-/// it (the frame's own `+N`); `tokens` is their sum.
+/// the group's own first member in plan order (a stable sort on the
+/// column alone, never a further sort by the real finish time within
+/// one column); `extra` is every other one in it (the frame's own
+/// `+N`); `tokens` is their sum.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SignalFinishedLabelGroup {
     pub label: String,
     pub extra: usize,
     pub tokens: u64,
-    /// The group's own 100 ms column (its earliest finisher's own
-    /// bucket) -- the frame sits each label at its own column, the
-    /// same way the chart's own trace does, never flush against the
-    /// tile's own left edge.
+    /// The group's own 100 ms column, shared by every member in it
+    /// -- the frame sits each label at its own column, the same way
+    /// the chart's own trace does, never flush against the tile's
+    /// own left edge.
     pub col: usize,
 }
 
@@ -401,7 +403,9 @@ pub fn signal_tile_finished_labels(
     }
     // `rows` is already plan order; a stable sort on the column
     // alone keeps every tie in that same order, so the group's own
-    // first member is always its earliest finisher (ties included).
+    // first member is its first in plan order among the finishes
+    // sharing that column, not necessarily the one that finished
+    // first by real timestamp.
     finishes.sort_by_key(|(col, _)| *col);
     let mut groups: Vec<(usize, Vec<&Row>)> = Vec::new();
     for (col, row) in finishes {

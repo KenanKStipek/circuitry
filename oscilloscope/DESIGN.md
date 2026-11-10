@@ -3253,8 +3253,12 @@ chart, two rows carry the tile's own most recent finished-prompt
 label groups (`✓ name [+N] · T t`, `fg.muted`), each sitting at its
 own trace column rather than flush against the tile's own left
 edge; finishes that land in the same 100 ms column merge into one
-group, named for its own earliest finisher, `+N` for every other one
-in it, tokens summed. Below that, the tile's own Now pane lists the
+group, named for its own first member in plan order (not
+necessarily its earliest finisher, when two land in the same
+column), `+N` for every other one in it, tokens summed. A group
+scrolled off the window's own left edge isn't drawn at all, never
+clamped to column 0; too narrow a budget drops the `· T t` part
+before cutting the name itself with `⋯`. Below that, the tile's own Now pane lists the
 running leaf rows (never a loop's own container row) then the rows
 ahead, each read straight off the Tape's own built rows rather than
 this screen's own breadcrumb-based running/waiting rows -- a loop's

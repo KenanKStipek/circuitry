@@ -5863,11 +5863,10 @@ struct SignalVisibleStepRow<'a> {
     clipped: bool,
 }
 
-/// A Signal tile's own two rows under the chart (issue #698's own
-/// Signal tile rule): its two most recent finished-prompt label
-/// groups, oldest first, each `✓ name [+N] · T t` in `fg.muted` --
-/// never a single-run Signal's own time-positioned step rows, which
-/// a tile has no room for.
+/// A Signal tile's own two rows under the chart (issue #698): its
+/// two most recent finished-prompt label groups, oldest first, each
+/// `✓ name [+N] · T t` in `fg.muted` -- never a single-run Signal's
+/// own time-positioned step rows, which a tile has no room for.
 fn draw_signal_tile_finished_labels(
     frame: &mut Frame,
     area: Rect,
@@ -5886,25 +5885,40 @@ fn draw_signal_tile_finished_labels(
         let Some(g) = groups.get(row) else {
             continue;
         };
-        let extra = if g.extra > 0 {
+        // Scrolled off the window's own left edge entirely: a
+        // label is a plain point-in-time mark, the same as the
+        // single-run Signal's own finished-prompt step row -- it
+        // just isn't there any more, never clamped to column 0 the
+        // way `col.saturating_sub(start_col)` alone would for a
+        // group to the left of the window.
+        if g.col < start_col {
+            continue;
+        }
+        let extra_text = if g.extra > 0 {
             format!(" +{}", g.extra)
         } else {
             String::new()
         };
-        let text = format!(
-            "\u{2713} {}{extra} \u{b7} {}",
-            g.label,
+        let tokens_text = format!(
+            " \u{b7} {}",
             oscilloscope_core::format::format_tokens_t(g.tokens)
         );
-        // Each group sits at its own column -- the same one its
-        // own earliest finisher occupies in the trace above it,
-        // never flush against the tile's own left edge.
-        let label_x = data_x + g.col.saturating_sub(start_col) as u16;
+        let label_x = data_x + (g.col - start_col) as u16;
         if label_x >= right_edge {
             continue;
         }
         let budget = (right_edge - label_x) as usize;
-        let clipped: String = text.chars().take(budget).collect();
+        // The frame's own form is `\u{2713} name [+N] \u{b7} T t` --
+        // a budget too narrow for all of it drops the ` \u{b7} T t`
+        // part first (the trace above already carries the exact
+        // figure), then cuts the name itself with `\u22ef`, never
+        // mid-token-count with no mark at all.
+        let head = format!("\u{2713} {}{extra_text}", g.label);
+        let clipped = if head.chars().count() + tokens_text.chars().count() <= budget {
+            format!("{head}{tokens_text}")
+        } else {
+            truncate_text(&head, budget)
+        };
         let width = clipped.chars().count() as u16;
         frame.buffer_mut().set_string(label_x, y, &clipped, style);
         let fill_from = label_x + width;
@@ -6162,10 +6176,12 @@ fn draw_signal_now_pane(
 
 /// A Signal tile's own Now pane: the running leaf rows, then the
 /// rows ahead, each a glyph, an 18-cell name field (20 together
-/// with the glyph and its own trailing space) and the Tape's own
-/// `what` text for it -- never the single-run pane's breadcrumbs or
-/// its waiting/loop-summary/Last-Burst/Next-Signal sections, which
-/// a tile has no room for.
+/// with the glyph and its own trailing space, a name over 17 chars
+/// cut with `⋯` so one space always separates it from the `what`
+/// text that follows) and the Tape's own `what` text for it --
+/// never the single-run pane's breadcrumbs or its waiting/loop-
+/// summary/Last-Burst/Next-Signal sections, which a tile has no
+/// room for.
 fn draw_signal_tile_now_pane(
     frame: &mut Frame,
     area: Rect,
@@ -6204,10 +6220,11 @@ fn draw_signal_tile_now_pane(
         if y >= bottom {
             break;
         }
+        let name = truncate_text(&row.label, NAME_WIDTH - 1);
         let line = pad_line(
             vec![
                 Span::styled("● ", running_glyph_style),
-                Span::styled(format!("{:<NAME_WIDTH$}", row.label), bold),
+                Span::styled(format!("{name:<NAME_WIDTH$}"), bold),
                 Span::styled(row.what.clone(), muted),
             ],
             (inner.width - 1) as usize,
@@ -6221,10 +6238,11 @@ fn draw_signal_tile_now_pane(
         if y >= bottom {
             break;
         }
+        let name = truncate_text(&row.label, NAME_WIDTH - 1);
         let line = pad_line(
             vec![
                 Span::styled("· ", faint),
-                Span::styled(format!("{:<NAME_WIDTH$}", row.label), faint),
+                Span::styled(format!("{name:<NAME_WIDTH$}"), faint),
                 Span::styled(row.what.clone(), faint),
             ],
             (inner.width - 1) as usize,
@@ -15654,6 +15672,109 @@ mod tape_frame_goldens {
             &mock,
             "all--signal--180x48",
             &allowed,
+        );
+    }
+
+    /// A group scrolled off the window's own left edge is never
+    /// drawn at column 0 -- it just isn't there any more, the same
+    /// as a single-run Signal's own point-in-time step rows.
+    #[test]
+    fn signal_tile_finished_label_scrolled_off_the_left_is_not_drawn_at_column_0() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let groups = [oscilloscope_core::multi::SignalFinishedLabelGroup {
+            label: "plan".to_string(),
+            extra: 0,
+            tokens: 100,
+            col: 3,
+        }];
+        let backend = TestBackend::new(40, 2);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 40, 2);
+        terminal
+            .draw(|f| draw_signal_tile_finished_labels(f, area, 0, 10, &groups, &ctx))
+            .unwrap();
+        let row: String = buffer_row_cells(terminal.backend().buffer(), 0, 0..40)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert!(
+            row.trim().is_empty(),
+            "a group whose column scrolled off the left should draw nothing:\n{row:?}"
+        );
+    }
+
+    /// Too narrow a budget drops the ` · T t` part before cutting the
+    /// name itself with `⋯`, never mid-token-count with no mark.
+    #[test]
+    fn signal_tile_finished_label_drops_tokens_before_cutting_the_name() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let groups = [oscilloscope_core::multi::SignalFinishedLabelGroup {
+            label: "a_very_long_finished_prompt_name".to_string(),
+            extra: 0,
+            tokens: 4_646,
+            col: 0,
+        }];
+        let backend = TestBackend::new(20, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        let area = Rect::new(0, 0, 20, 1);
+        terminal
+            .draw(|f| draw_signal_tile_finished_labels(f, area, 0, 0, &groups, &ctx))
+            .unwrap();
+        let row: String = buffer_row_cells(terminal.backend().buffer(), 0, 0..20)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert!(
+            !row.contains("4,646"),
+            "the tokens should drop first:\n{row:?}"
+        );
+        assert!(row.contains('⋯'), "the name should still be cut:\n{row:?}");
+    }
+
+    /// A Now pane name over 17 characters is cut with `⋯`, never run
+    /// straight into the `what` text that follows it with no space
+    /// at all.
+    #[test]
+    fn signal_tile_now_pane_cuts_a_long_name_and_keeps_a_space() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::screens::SignalScreen {
+            tile_now_running: vec![oscilloscope_core::multi::TileNowRow {
+                label: "iter_12 › a_very_long_step_name".to_string(),
+                what: "tool · sleep 1".to_string(),
+            }],
+            ..Default::default()
+        };
+        let backend = TestBackend::new(40, 10);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_signal_tile_now_pane(f, f.area(), &screen, &ctx))
+            .unwrap();
+        let row: String = buffer_row_cells(terminal.backend().buffer(), 1, 0..40)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert!(row.contains('⋯'), "expected a cut name:\n{row}");
+        assert!(
+            row.contains("⋯ tool"),
+            "expected one space between the cut name and `what`:\n{row}"
         );
     }
 
