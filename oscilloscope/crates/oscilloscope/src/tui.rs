@@ -14475,6 +14475,117 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #704's own key-sequence test: the same effect selected
+    /// on the Tape stays selected switching to the Signal, the Flow
+    /// and the Store -- one shared selection, not each screen's own.
+    #[test]
+    fn the_same_selected_effect_is_reachable_from_every_screen() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let selected = "prime.gate.reply";
+
+        let (_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some(selected),
+            true,
+        );
+        assert_eq!(
+            tape_screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, &events);
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            "cof 0.1.0",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(
+            &history,
+            &mut rendered.header,
+            Some(&state),
+            &plan,
+            now,
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let signal_screen = oscilloscope_core::screens::build_signal(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            100,
+            None,
+            Some(selected),
+            now,
+        );
+        assert_eq!(
+            signal_screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+
+        let flow_screen = oscilloscope_core::screens::build_flow(
+            &rendered.unfolded_rows,
+            &rendered.rows,
+            &flat,
+            &plan,
+            &model,
+            &rendered.header,
+            Some(&state),
+            &[],
+            Some(selected),
+            &frame_zone(),
+            rendered.header.run_end_ts.as_deref(),
+            now,
+        );
+        assert_eq!(
+            flow_screen.selected_step.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+
+        let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+            rendered
+                .unfolded_rows
+                .iter()
+                .map(|r| (r.path.clone(), r.kind))
+                .collect();
+        let store_screen = oscilloscope_core::store::build_store(
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            now,
+            Some(selected),
+        );
+        assert_eq!(
+            store_screen.selected.as_ref().map(|s| s.path.as_str()),
+            Some(selected)
+        );
+        assert_eq!(store_screen.cursor_path.as_deref(), Some(selected));
+    }
+
     /// Issue #695's rule 10: the full title (`Tokens by Store`
     /// included) only at 120 columns and up; 100-119 and 80-99 both
     /// use the short title.
