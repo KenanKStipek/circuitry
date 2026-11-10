@@ -1098,6 +1098,14 @@ pub struct RunModel {
     /// each into one Signal column at its own `ts`, so the sum of one
     /// path's own sightings always equals its final tokens.
     agent_live_sightings: Vec<AgentLiveSighting>,
+    /// Paths an end-of-session remainder has already been recorded
+    /// for, by path -- an agent session osi never saw running (`osi
+    /// watch` of an already-finished run, an attach after the fact,
+    /// or a session shorter than one poll) still owes its whole
+    /// `node_tokens` as one sighting the moment it's seen finished,
+    /// but a redraw with no new state must never record it twice.
+    /// Cleared on retry, same as `agent_live_last_totals`.
+    agent_live_finish_recorded: BTreeSet<String>,
 }
 
 /// One entry of [`RunModel::agent_live_sightings`]: `path`'s own
@@ -1201,6 +1209,7 @@ impl RunModel {
             agent_live_last_totals: BTreeMap::new(),
             agent_live_last_seen_at: BTreeMap::new(),
             agent_live_sightings: Vec::new(),
+            agent_live_finish_recorded: BTreeSet::new(),
         }
     }
 
@@ -1790,11 +1799,18 @@ impl RunModel {
     /// an abandoned attempt's own partial tokens are folded into the
     /// retried attempt's own first sighting instead of appearing as a
     /// column of their own, the one simplification this makes (no
-    /// recorded fixture ever retries an agent session).
+    /// recorded fixture ever retries an agent session). A session osi
+    /// never saw running at all (`osi watch` of an already-finished
+    /// run, an attach after the fact, or one shorter than one poll)
+    /// owes its whole `node_tokens` as a single sighting at
+    /// `completed_at` instead of a remainder, since nothing was ever
+    /// plotted for it; `agent_live_finish_recorded` keeps that from
+    /// happening twice on a redraw with no new state.
     fn observe_agent_live(&mut self, path: &str, node: &NodeMeta, retrying: bool) {
         if retrying {
             self.agent_live_last_totals.remove(path);
             self.agent_live_last_seen_at.remove(path);
+            self.agent_live_finish_recorded.remove(path);
         }
         if let Some(live) = &node.live {
             let current = (
@@ -1826,24 +1842,46 @@ impl RunModel {
             }
             return;
         }
-        let Some(last) = self.agent_live_last_totals.remove(path) else {
-            return;
-        };
-        self.agent_live_last_seen_at.remove(path);
         let Some(completed_at) = &node.completed_at else {
             return;
         };
+        if let Some(last) = self.agent_live_last_totals.remove(path) {
+            self.agent_live_last_seen_at.remove(path);
+            let (final_sent, final_received) = node_tokens(&node.meta);
+            let remainder_sent = final_sent.saturating_sub(last.0);
+            let remainder_received = final_received.saturating_sub(last.1);
+            if remainder_sent > 0 || remainder_received > 0 {
+                self.agent_live_sightings.push(AgentLiveSighting {
+                    path: path.to_string(),
+                    ts: completed_at.clone(),
+                    tokens_sent: remainder_sent,
+                    tokens_received: remainder_received,
+                });
+            }
+            self.agent_live_finish_recorded.insert(path.to_string());
+            return;
+        }
+        if self.agent_live_finish_recorded.contains(path) {
+            return;
+        }
+        let is_agent = node
+            .meta
+            .get("provider")
+            .and_then(Value::as_str)
+            .is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"));
+        if !is_agent {
+            return;
+        }
         let (final_sent, final_received) = node_tokens(&node.meta);
-        let remainder_sent = final_sent.saturating_sub(last.0);
-        let remainder_received = final_received.saturating_sub(last.1);
-        if remainder_sent > 0 || remainder_received > 0 {
+        if final_sent > 0 || final_received > 0 {
             self.agent_live_sightings.push(AgentLiveSighting {
                 path: path.to_string(),
                 ts: completed_at.clone(),
-                tokens_sent: remainder_sent,
-                tokens_received: remainder_received,
+                tokens_sent: final_sent,
+                tokens_received: final_received,
             });
         }
+        self.agent_live_finish_recorded.insert(path.to_string());
     }
 
     /// Recomputes every row's status from one snapshot, the plan, and
