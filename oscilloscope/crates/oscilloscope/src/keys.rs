@@ -465,6 +465,13 @@ impl App {
             None => candidates.len() - 1,
         };
         self.select_tree_path(Some(candidates[next].to_string()));
+        // Issue #704 rule 4: like every other way of moving the
+        // shared selection, `[`/`]` turns follow off -- otherwise a
+        // live run's own next tick (`main.rs`'s own follow update)
+        // reverts the step before it is ever seen, and on the Flow,
+        // `default_follow_path` keeps showing instead regardless of
+        // where `[`/`]` just stepped to.
+        self.follow = false;
     }
 
     /// The fork `+`/`-` act on (issue #677 §9.3's "the selected
@@ -1308,10 +1315,22 @@ impl App {
     /// that one, or extends it with `.` (the breadcrumb that
     /// absorbed it).
     pub fn reconcile_folding(&mut self, rows: &[Row]) {
-        if let Some(selected) = self.selected_path.clone() {
-            if !rows.iter().any(|r| r.path == selected) {
-                if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
-                    self.select_tree_path_keeping_details(Some(absorbed));
+        // Issue #704 rule 4: while the full-screen step is open, the
+        // selection is never a row to highlight in this (always
+        // folded) list -- it names whichever effect `[`/`]` just
+        // landed on, resolved against the unfolded rows regardless
+        // of what folds here. Reassigning it to the absorbing row
+        // the instant a loop pass's quick-steps fold around it would
+        // land the very next `[`/`]` back on the first effect (that
+        // row's own `RowKind::QuickSteps` is excluded from `App::
+        // fullscreen_step`'s own candidates), undoing the step
+        // before it is ever seen.
+        if !self.tape_fullscreen_step {
+            if let Some(selected) = self.selected_path.clone() {
+                if !rows.iter().any(|r| r.path == selected) {
+                    if let Some(absorbed) = Self::absorbing_row_path(rows, &selected) {
+                        self.select_tree_path_keeping_details(Some(absorbed));
+                    }
                 }
             }
         }

@@ -2528,6 +2528,15 @@ pub(crate) fn build_run_head(
 #[allow(clippy::too_many_arguments)]
 pub fn build_tape(
     rows: &[Row],
+    // Issue #704 rule 4: `[`/`]` steps to any effect in plan order,
+    // folded or not (`App::fullscreen_step`'s own candidates are
+    // `App::flow_rows`, always unfolded) -- a row folding away (a
+    // quick-steps summary swallowing it) must not make the Tape's
+    // own full-screen view go blank once the selection lands there,
+    // so every `selected_*` field below falls back to this list when
+    // `rows` itself (folded, what the visible list actually draws)
+    // doesn't have the row.
+    unfolded_rows: &[Row],
     header: &crate::render::Header,
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
@@ -2537,6 +2546,11 @@ pub fn build_tape(
     previews_on: bool,
     now: &str,
 ) -> TapeScreen {
+    let find_selected_row = |p: &str| {
+        rows.iter()
+            .find(|r| r.path == p)
+            .or_else(|| unfolded_rows.iter().find(|r| r.path == p))
+    };
     let run_start = header.run_start_ts.as_deref();
     let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
 
@@ -2827,7 +2841,7 @@ pub fn build_tape(
     let ahead = bucket3.len() as u64;
 
     let selected = selected_path
-        .and_then(|p| rows.iter().find(|r| r.path == p))
+        .and_then(find_selected_row)
         .map(|row| {
             build_focused_step(
                 row,
@@ -2858,7 +2872,7 @@ pub fn build_tape(
     // share until it finishes) -- its own Live block covers it
     // instead, same as before this issue.
     let selected_share_pct = selected_path.and_then(|p| {
-        let row = rows.iter().find(|r| r.path == p)?;
+        let row = find_selected_row(p)?;
         let node = flat.get(p);
         let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
             let (sent, received) = node
@@ -2876,7 +2890,7 @@ pub fn build_tape(
         (run_total > 0)
             .then(|| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
     });
-    let selected_row = selected_path.and_then(|p| rows.iter().find(|r| r.path == p));
+    let selected_row = selected_path.and_then(find_selected_row);
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
     let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat, model, now));
 
@@ -3271,6 +3285,11 @@ pub(crate) fn last_finished_row(
 #[allow(clippy::too_many_arguments)]
 pub fn build_signal(
     rows: &[Row],
+    // Issue #704 rule 4: same reasoning as `build_tape`'s own --
+    // `[`/`]` can land the selection on a row a quick-steps summary
+    // has folded away, and the Signal's own full-screen step must
+    // still find it.
+    unfolded_rows: &[Row],
     header: &crate::render::Header,
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
@@ -3281,6 +3300,11 @@ pub fn build_signal(
     selected_path: Option<&str>,
     now: &str,
 ) -> SignalScreen {
+    let find_selected_row = |p: &str| {
+        rows.iter()
+            .find(|r| r.path == p)
+            .or_else(|| unfolded_rows.iter().find(|r| r.path == p))
+    };
     // Once a run has ended, its own Now sweep stays at the run's
     // own end rather than drifting on with the wall clock a caller
     // still passes in (`osi watch` of an old run, say) -- the run
@@ -3306,7 +3330,7 @@ pub fn build_signal(
     // `tui::draw_signal` syncs the shared selection back to whatever
     // `selected` below resolves to once it does.
     let selection_col = selected_path.and_then(|p| {
-        let row = rows.iter().find(|r| r.path == p)?;
+        let row = find_selected_row(p)?;
         let node = flat.get(p);
         let running = matches!(
             row.status.kind,
@@ -3929,7 +3953,7 @@ pub fn build_signal(
     };
     let selected_row = if cursor_col.is_none() {
         selected_path
-            .and_then(|p| rows.iter().find(|r| r.path == p))
+            .and_then(find_selected_row)
             .or_else(step_under_cursor)
     } else {
         step_under_cursor()
@@ -4745,6 +4769,7 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let tape = build_tape(
+            &rows,
             &rows,
             &header,
             &flat,
@@ -6423,6 +6448,7 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
@@ -6470,6 +6496,7 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let signal = build_signal(
+            &rows,
             &rows,
             &header,
             &flat,
@@ -6533,6 +6560,7 @@ mod tests {
         let model = RunModel::new();
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
@@ -6581,7 +6609,7 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.650Z";
         let signal = build_signal(
-            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
         );
         assert_eq!(signal.now_col, Some(6));
         let bucket = &signal.buckets[6];
@@ -6631,6 +6659,7 @@ mod tests {
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:02.100Z";
         let signal = build_signal(
+            &[],
             &[],
             &header,
             &flat,
@@ -6727,7 +6756,7 @@ mod tests {
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:01.100Z";
         let signal = build_signal(
-            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
         );
         let (total_sent, total_received) = signal
             .buckets
@@ -6777,6 +6806,7 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let signal = build_signal(
+            &rows,
             &rows,
             &header,
             &flat,
@@ -6832,6 +6862,7 @@ mod tests {
         let plan = PlanTree::empty();
         let model = RunModel::new();
         let signal = build_signal(
+            &rows,
             &rows,
             &header,
             &flat,
@@ -6924,7 +6955,7 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:02.100Z";
         let signal = build_signal(
-            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
         );
 
         assert_eq!(signal.now_pane.running.len(), 1);
@@ -6986,6 +7017,7 @@ mod tests {
         // not Now's own column 21, and not scrubbed either.
         let signal = build_signal(
             &rows,
+            &rows,
             &header,
             &flat,
             &plan,
@@ -7005,6 +7037,7 @@ mod tests {
         // `prime.fix` is still running, started at 1.5s (column 15) --
         // its own start, not Now, and not `prime.ask`'s own end either.
         let signal = build_signal(
+            &rows,
             &rows,
             &header,
             &flat,
@@ -7027,6 +7060,7 @@ mod tests {
         // shared selection entirely -- issue #704 rule 2's own "free
         // scrubbing still possible".
         let signal = build_signal(
+            &rows,
             &rows,
             &header,
             &flat,
@@ -7077,6 +7111,7 @@ mod tests {
         let now = "2026-01-01T00:00:00.650Z";
         let running = build_signal(
             &rows_running,
+            &rows_running,
             &header,
             &flat_running,
             &plan,
@@ -7108,7 +7143,7 @@ mod tests {
             ),
         );
         let done = build_signal(
-            &rows_done, &header, &flat_done, &plan, &model, None, 100, None, None, now,
+            &rows_done, &rows_done, &header, &flat_done, &plan, &model, None, 100, None, None, now,
         );
         assert!(!done.buckets[6].received_live);
         assert_eq!(done.buckets[6].received, 9);
@@ -7142,10 +7177,10 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.400Z";
         let at_100ms = build_signal(
-            &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
         );
         let at_200ms = build_signal(
-            &rows, &header, &flat, &plan, &model, None, 200, None, None, now,
+            &rows, &rows, &header, &flat, &plan, &model, None, 200, None, None, now,
         );
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");

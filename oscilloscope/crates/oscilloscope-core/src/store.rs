@@ -1078,6 +1078,16 @@ pub struct StoreScreen {
     /// step views already build theirs from -- `None` only alongside
     /// `cursor_path` itself.
     pub selected: Option<crate::screens::FocusedStep>,
+    /// Issue #704 rule 4: the shared selection's own exact path,
+    /// resolved the same way the Tape's and Signal's own full-screen
+    /// step is -- never climbed to an ancestor the way `selected`
+    /// (the table's own cursor, for the row/tile to highlight) is.
+    /// `[`/`]` always lands on a real row with a step of its own
+    /// (`App::fullscreen_step`'s own candidates), so the full-screen
+    /// view reads this, not `selected`, or stepping through a store
+    /// with no tokens of its own would show its nearest ancestor's
+    /// content instead of the very effect just stepped to.
+    pub raw_selected: Option<crate::screens::FocusedStep>,
     /// The Totals row's own deviation (§3.3), the same sum over every
     /// already-run-or-running row's own usual tokens the Tape's and
     /// Signal's own `usual_so_far_tokens` is.
@@ -1149,6 +1159,20 @@ pub fn build_store(
                 header,
             )
         });
+    let raw_selected = selected_path
+        .and_then(|path| rows.iter().find(|r| r.path == path))
+        .map(|row| {
+            crate::screens::build_focused_step(
+                row,
+                flat,
+                plan,
+                model,
+                state,
+                now,
+                header.run_end_ts.as_deref(),
+                header,
+            )
+        });
     let usual_so_far_tokens = {
         use crate::model::StatusKind;
         let sum: u64 = rows
@@ -1167,6 +1191,7 @@ pub fn build_store(
         head: crate::screens::build_run_head(run_start, header, rows, flat),
         cursor_path,
         selected,
+        raw_selected,
         usual_so_far_tokens,
     }
 }

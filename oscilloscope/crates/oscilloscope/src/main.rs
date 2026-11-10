@@ -1776,6 +1776,7 @@ fn build_tape_if_active(
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     Some(oscilloscope_core::screens::build_tape(
         &render_state.rows,
+        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
         plan,
@@ -1907,6 +1908,7 @@ fn build_signal_screen_if_active(
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     Some(oscilloscope_core::screens::build_signal(
         &render_state.rows,
+        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
         plan,
@@ -4350,6 +4352,7 @@ mod tests {
         );
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -4375,6 +4378,7 @@ mod tests {
         );
         let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -4482,6 +4486,7 @@ mod tests {
         );
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,

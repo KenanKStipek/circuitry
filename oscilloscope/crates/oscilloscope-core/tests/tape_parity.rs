@@ -55,6 +55,7 @@ fn build_case_tape(dir_name: &str) -> TapeScreen {
     let flat = flatten_state(&state);
     build_tape(
         &rendered.rows,
+        &rendered.rows,
         &rendered.header,
         &flat,
         &plan,

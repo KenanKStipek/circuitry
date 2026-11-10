@@ -116,6 +116,7 @@ fn tape_token_column_draws_for_a_running_and_a_finished_agent_row() {
     let flat = flatten_state(&state);
     let tape = build_tape(
         &rendered.rows,
+        &rendered.rows,
         &rendered.header,
         &flat,
         &plan,
@@ -144,6 +145,7 @@ fn tape_token_column_draws_for_a_running_and_a_finished_agent_row() {
         replay_through("agent_live_pi", 10, ProcessState::Running, PI_ENDED_NOW);
     let flat = flatten_state(&state);
     let tape = build_tape(
+        &rendered.rows,
         &rendered.rows,
         &rendered.header,
         &flat,
@@ -195,6 +197,7 @@ fn claude_codes_null_received_never_becomes_a_false_zero() {
     let plan = oscilloscope_core::plan::PlanTree::empty();
     let tape = build_tape(
         &rendered.rows,
+        &rendered.rows,
         &rendered.header,
         &flat,
         &plan,
@@ -224,6 +227,7 @@ fn a_running_agents_tape_share_never_exceeds_100_percent() {
     let flat = flatten_state(&state);
     let plan = oscilloscope_core::plan::PlanTree::empty();
     let tape = build_tape(
+        &rendered.rows,
         &rendered.rows,
         &rendered.header,
         &flat,
@@ -261,6 +265,7 @@ fn an_interrupted_runs_store_share_agrees_with_the_tapes() {
     let kinds: BTreeMap<String, RowKind> = BTreeMap::new();
 
     let tape = build_tape(
+        &rendered.rows,
         &rendered.rows,
         &rendered.header,
         &flat,
@@ -320,6 +325,7 @@ fn signal_columns_sum_to_the_agents_final_tokens_and_readings_match_totals() {
     let plan = oscilloscope_core::plan::PlanTree::empty();
     let signal = build_signal(
         &rendered.rows,
+        &rendered.rows,
         &rendered.header,
         &flat,
         &plan,
@@ -361,6 +367,7 @@ fn the_run_summarys_largest_names_an_agent_session() {
     let flat = flatten_state(&state);
     let plan = oscilloscope_core::plan::PlanTree::empty();
     let tape = build_tape(
+        &rendered.rows,
         &rendered.rows,
         &rendered.header,
         &flat,

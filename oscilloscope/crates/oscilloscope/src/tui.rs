@@ -681,6 +681,7 @@ mod tape_token_bar_tests {
         let flat = oscilloscope_core::model::flatten_state(&state);
         let tape = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -6116,11 +6117,18 @@ fn draw_store(
     draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
     let body = sections[1];
-    if app.tape_fullscreen_step && screen.selected.is_some() {
+    // Issue #704 rule 4: the full-screen view reads `raw_selected`
+    // (the exact selection, never climbed to an ancestor the way
+    // `selected`, the table's own cursor, is) -- it falls back to
+    // `selected` only when nothing stepped there at all (`enter` on
+    // the table's own fallback-to-first-row cursor, never set
+    // through `app.selected_path`).
+    let fullscreen_step = screen.raw_selected.as_ref().or(screen.selected.as_ref());
+    if app.tape_fullscreen_step && fullscreen_step.is_some() {
         draw_focused_step_detail(
             frame,
             body,
-            screen.selected.as_ref(),
+            fullscreen_step,
             transcript_view,
             now,
             app,
@@ -9895,6 +9903,7 @@ mod golden_tests {
         let flat = oscilloscope_core::model::flatten_state(state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -9960,6 +9969,7 @@ mod golden_tests {
         let flat = oscilloscope_core::model::flatten_state(&state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -11548,6 +11558,7 @@ mod highlight_tests {
         let model = oscilloscope_core::model::RunModel::new();
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -11762,6 +11773,7 @@ mod tape_live_tests {
         let flat = oscilloscope_core::model::flatten_state(state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -12017,6 +12029,7 @@ mod tape_live_tests {
         let flat = oscilloscope_core::model::flatten_state(&Value::Null);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -12711,6 +12724,7 @@ mod tape_frame_goldens {
         // screen on display, with no terminal-size check of its own.
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -12812,6 +12826,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(&state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
@@ -12952,6 +12967,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(state);
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             plan,
@@ -13180,6 +13196,7 @@ mod tape_frame_goldens {
         assert_ne!(app.tape_run_end_target.as_deref(), app.selected_path.as_deref());
         let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &oscilloscope_core::model::flatten_state(&state),
             &plan,
@@ -13643,6 +13660,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(state);
         let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             plan,
@@ -14750,6 +14768,7 @@ mod tape_frame_goldens {
         let flat = oscilloscope_core::model::flatten_state(&state);
         let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.unfolded_rows,
             &rendered.header,
             &flat,
             &plan,
