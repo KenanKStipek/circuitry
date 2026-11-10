@@ -59,17 +59,18 @@ and shows it running.
   osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
   osi watch <dir | state.live.json> [--plan doc.yml]
 
-With no orchestration: on a TTY this is a usage error, same as always, until the Select screen (design v1 part 5)
-lands. Without a TTY, or with --log, it instead finds the orchestrations already running on this machine (the run
-registry, a process scan, and any state.live.json in the current directory) and prints one line each, then exits 0.";
+With no orchestration, on a TTY with no --log: finds the orchestrations already running on this machine (the run
+registry, a process scan, and any state.live.json in the current directory) and attaches to the only one, or shows
+a Select screen to choose among several, or a Recent Runs table from history with none. Without a TTY, or with
+--log, it instead prints one line per running orchestration and exits 0.";
 
 #[derive(Parser, Debug)]
 #[command(name = "osi", version = VERSION, about = ABOUT)]
 struct RunArgs {
     /// The orchestration document to run (YAML or JSON). With none,
-    /// on a TTY this is a usage error; without a TTY, or with
-    /// `--log`, osi instead lists the orchestrations already running
-    /// on this machine and exits 0 (issue #698).
+    /// on a TTY with no `--log` osi opens the Select screen instead
+    /// (issue #698); without a TTY, or with `--log`, it lists the
+    /// orchestrations already running on this machine and exits 0.
     orchestration: Option<String>,
     /// The engine's own config (JSON), passed through unchanged. With
     /// none, the engine resolves its own default (DESIGN.md §4).

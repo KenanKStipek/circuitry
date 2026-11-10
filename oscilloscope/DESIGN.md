@@ -2977,8 +2977,7 @@ machine's own processes. Bare `osi` with no orchestration argument,
 without a TTY (or with `--log`), now runs this discovery and prints
 one plain line per result -- document, config, engine, pid, run
 directory, `"—"` for anything not known -- then exits 0; on a TTY
-with no `--log` it is still the usage error it always was, until the
-Select screen replaces it.
+with no `--log` it opens the Select screen (below).
 
 The history record (§6.3c) gains two optional fields, `config` (the
 path as given on the command line, never resolved further) and
@@ -2991,6 +2990,91 @@ either); `registry::resolve_attached_config` gives the fallback order
 a later screen showing an attached run's config will use: the
 registry entry's own `config`, else `run_start.config`, else the
 process's own arguments, else nothing.
+
+**The Select screen** (issue #698, part 5 of the epic -- the running
+list and the empty state's Recent Runs table; `All`, the tiled grid
+and the Combined Signal have not shipped). A bare `osi` on a TTY with
+no `--log` runs the same discovery as the groundwork above
+(`oscilloscope_core::select::build_rows`) and shows one of three
+shapes: with exactly one running orchestration, attaches to it
+straight away, the same as `osi watch <run_dir>` (read-only, `c`
+inert); with none, the empty Select (below); with more than one, the
+running list -- `All` first (`N runs · tiled`, inert for now: `All`
+itself is part of a later pull request), then one row per run with
+the document and config basenames, the engine, and a `●` (every row
+here is live by definition); the cursor starts on the first run, not
+`All`. `↑↓`/`j k`/`Home End`/`g G` move the cursor, `enter` attaches
+to a run row (inert on `All`), `q` quits at once (no confirm: leaving
+Select only ever stops watching, never cancels anything), `?` shows
+Select's own Help, `0`-`3` and `c` do nothing (no run is attached from
+here). `esc` on a run attached from Select returns to Select (§2.5's
+own text: "`esc` from the run comes back here") -- a new
+`App::opened_from_select` flag and `keys::Action::BackToSelect`, set
+only for an attach reached this way; `esc` on bare `osi`'s own direct
+single-run attach, or on a plain `osi watch`, still does nothing, as
+before.
+
+With no running orchestrations, the empty Select shows where
+discovery looked, and a Recent Runs table built from
+`oscilloscope_core::select::build_recent_rows`: every history record
+across every document (`history::read_all_records`, new), newest
+finished run first, with DOC, CONFIG (`—` for a record with none),
+STARTED, TOOK, TOKENS and OUTCOME -- `ok` alone with no step recorded
+`ok: false`, `ok · N handled failure(s)` for one that still ended ok,
+`failed · <step>` naming whichever recorded step actually has `ok:
+false` for a failed run (never the raw error text, which this module
+never reads at all -- the same privacy rule history's own module
+doc already states), and `gone` -- not opened -- once the record's own
+`run_dir` no longer exists on disk, or was never recorded at all.
+`enter` on a row that isn't `gone` opens `osi watch <run_dir>`
+read-only, same as a running row's own attach.
+
+From the frames, not from the design text: the running list's own
+two rows for the same document (`triage.yml` twice in the fixture)
+are told apart by their config column alone, so basenames suffice
+there; a document whose (basename, config-basename) pair collides
+with another row's own gets the parent directory added to the
+document column only (`select::build_rows`'s own tie-break, issue
+#698's rule 9 -- not shown in either frame, since the fixture's own
+rows never actually collide, but implemented and unit-tested
+against a synthetic case). The running list's own box is 56 cells
+wide at 80 columns and 60 at 120 and up (narrower widths are a
+reasonable interpolation, not frame-verified); the empty Select's own
+panel is always the full body width and height, with no centring.
+The Select header's own `osi` word never animates (there is no
+single run's own process to trace) -- a deviation from every other
+screen's header, which this screen's own frames don't contradict
+(neither was captured with animation off or on specifically).
+
+Goldens: `select--normal--120x30`/`select--normal--80x24`
+(`tui::tape_frame_goldens::select_normal_120x30_matches_the_frame`/
+`_80x24`), from the design's own six-run fixture
+(`design/fixtures/multi/snap6`, already on disk from the groundwork),
+and `select--empty--80x24` (`select_empty_80x24_matches_the_frame`),
+from `run`, `run2` and `hist/run-h1..3` replayed into
+`HistoryRecord`s the same way `demo_history` already does for the
+Tape's own "usual" goldens. One cell is allow-listed there:
+`hist/run-h1`'s own precise timestamps (`totals.wall_time_s`
+5.060017s) round to `5.1s`, one tenth past the frame's own `5.0s` --
+the fixture's own timestamps disagree with the frame, as parts 1-3
+already did for `gate › reply`, reported rather than bent into the
+rounding rule.
+
+A real pty: toggling raw mode and the alternate screen off and then
+back on, within one process, left the terminal's own write side
+returning an I/O error for the rest of the process -- the first
+place in this codebase that ever re-enters `TerminalGuard` more than
+once per process (an attach opened from Select, then `esc` back to
+Select, then another attach). `run_tui_watch` now takes a
+`manage_terminal` flag: `true` keeps its existing, self-contained
+lifecycle (`osi watch`, and bare `osi`'s own single-run attach);
+`false`, only for a run attached from Select, skips `TerminalGuard`
+entirely and draws into a fresh `Terminal` built on the one guard
+`run_select` itself holds for the screen's whole lifetime (every
+attach and every return to Select, in one process), never toggled a
+second time. The one shared event-reader thread (`spawn_event_reader`,
+the groundwork's own `EventReader`) is handed back and forth the same
+way, never a second one spawned.
 
 **Browsing every effect after a run, with one selection across
 screens** (issue #704, beyond anything `design/tui-design.md` itself
