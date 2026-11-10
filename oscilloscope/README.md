@@ -312,9 +312,14 @@ A running agent session's own tokens plot on the trace too, one
 column per increase actually observed (sent above, received below),
 at the time each was seen -- not only in the Now column the way a
 running prompt's own estimate does -- so the sum of its own columns
-always equals its final tokens once it finishes. Readings' own Sent,
-Received, Ratio, Peak and Largest all read the trace's own columns,
-so a running agent's tokens count there too.
+always equals its final tokens once it finishes, even for a session
+osi never once saw running. Readings' own Peak, Largest and Quiet
+read the trace's own columns up to the cursor; Sent and Received,
+while following Now, read the same live-inclusive total the run's
+own Totals do instead, since the trace's own columns alone leave out
+anything with no column of its own (a model-mode decision's own
+tokens, say) -- switching to the trace's own columns, up to the
+cursor, once scrubbed away from Now.
 
 `←`/`→` scrub a cursor along the axis, drawn distinctly from the Now
 sweep, turning follow off; `n` returns it to Now, and moves which

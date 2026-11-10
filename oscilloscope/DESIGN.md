@@ -2215,29 +2215,44 @@ with `live` read `false` rather than `true`. `tokens_received` stays
 
 `render::build_header`'s own `tokens_sent_live_estimate`/
 `tokens_received_live_estimate` now sum a running agent's tokens the
-same way they already summed a running prompt's; a leftover from an
-interrupted session (no longer `Running` once the run itself has
-ended, so no longer counted there either) instead folds straight
-into the exact pair, since nothing is updating it any more to call it
-live -- `runtime.last_run.totals` never carries it (the attempt never
-finished), so without this a cancelled run's own agent tokens would
-simply vanish from the Totals row. Every share (the Tape detail
-pane's own Share line, the Store table and Readings) now divides by
-this same live-inclusive total, never only what has actually
-finished, which previously let a running agent's own share read far
-past 100% (a run with 35 t finished and an agent already at 6,650 t
-once read `19000%`). The Store's own tiles (`store::build_leaf`) read
-the same helper, so a stale leftover there also stops drawing faint
-once it stops updating. The Tape's own token column
-(`screens::tape_row_tool_tokens`) now draws for any `tool`/`use`/
-`yield`/`dynamic`/`finally` row with tokens, not only a `prompt` row
--- an agent's finished row reads a bar and figure like a prompt's; a
-running one draws faint -- and the run summary's own Largest
-(`tape_largest_tokens`) picks it up the same way. Issue #702 also
-widened the bar's own 16-cell budget's gap to allow `0`, not a forced
-minimum of `1`: an agent's own total routinely reaches five or six
-digits, which previously left no room for the trailing `t` and
-silently lost it to the pane's own clipping.
+same way they already summed a running prompt's, gated on the same
+`AgentLive::is_recent` recency check `step_tokens_so_far` uses --
+never merely on whether the run as a whole still reads `Running`, so
+an agent whose own heartbeat has gone stale while the rest of the
+run carries on stops counting as live at the same moment `step_
+tokens_so_far` would call it stale. A leftover whose own heartbeat is
+stale (the interrupted-run case #637 already parses, or simply a
+still-running process whose one agent went quiet) instead folds
+straight into the exact pair, since nothing is updating it any more
+to call it live -- `runtime.last_run.totals` never carries it (the
+attempt never finished), so without this a cancelled run's own agent
+tokens would simply vanish from the Totals row. Every share (the
+Tape detail pane's own Share line, the Store table and Readings) now
+divides by this same live-inclusive total, never only what has
+actually finished, which previously let a running agent's own share
+read far past 100% (a run with 35 t finished and an agent already at
+6,650 t once read `19000%`); the Store's own denominator
+(`store::build_store`) reads the identical header figure the Tape's
+share already does, rather than re-deriving it from state, so the
+two screens can't disagree about the same step's own share even for
+a cancelled run whose agent never finished an attempt. The Store's
+own tiles (`store::build_leaf`) read the same helper, so a stale
+leftover there also stops drawing faint once it stops updating. The
+Tape's own token column (`screens::tape_row_tool_tokens`) now draws
+for any `tool`/`use`/`yield`/`dynamic`/`finally` row with tokens, not
+only a `prompt` row -- an agent's finished row reads a bar and figure
+like a prompt's; a running one draws faint -- and the run summary's
+own Largest (`tape_largest_tokens`) picks it up the same way. The
+detail pane's own Tokens line (`screens::build_tape_selected_
+detail`) carries `None`, not a false `0`, for whichever of sent/
+received an agent's own CLI has never reported at all (Claude Code's
+mid-turn `tokens_received: null`), drawing `—` for it rather than a
+wrong figure. Issue #702 also widened the bar's own 16-cell budget's
+gap to allow `0`, not a forced minimum of `1`, and -- once the count
+itself needs more than 7 of those 16 cells -- lets the bar give up
+cells of its own (down to 1) rather than let the pane's own clipping
+cut the count instead: an agent's own total, cached input tokens
+included, routinely reaches six digits or more.
 
 **The Signal's own agent trace** (issue #702, replacing the single
 Now-column estimate an agent otherwise would have gotten).
@@ -2247,18 +2262,27 @@ node): each increase since the last sighting becomes its own entry
 (`AgentLiveSighting`), at the live record's own `updated_at`; once
 the session ends, only the remainder not yet plotted is added, at
 its own `completed_at` -- so the sum of one path's own sightings
-always equals its final tokens exactly, never double-counted.
-`build_signal` plots one column per sighting
-(`RunModel::agent_live_sightings`), sent above and received below,
-never marked live (an agent's own figures are the provider's exact
-count, never a character-count estimate the way a running prompt's
-are) -- unlike a prompt, whose own running estimate only ever
-occupies the current Now column, overwritten on every redraw. The
-Readings line (Sent, Received, Ratio, Peak, Largest) now sums the
-trace's own columns up to the cursor rather than reading the header's
-exact totals directly, so a running agent's tokens count there too,
-and a finished agent session counts toward Largest the same way a
-finished prompt already does.
+always equals its final tokens exactly, never double-counted. A
+session `osi` never once saw running (`osi watch` of an
+already-finished run, an attach after the fact, or one shorter than
+one poll) still gets this same end-of-session entry, its whole
+`node_tokens` rather than a remainder, the moment it's seen finished
+with nothing plotted for it yet. `build_signal` plots one column per
+sighting (`RunModel::agent_live_sightings`), sent above and received
+below, never marked live (an agent's own figures are the provider's
+exact count, never a character-count estimate the way a running
+prompt's are) -- unlike a prompt, whose own running estimate only
+ever occupies the current Now column, overwritten on every redraw.
+Peak, Largest and Quiet still read the trace's own columns up to the
+cursor; Sent and Received, while following Now, instead read the
+same live-inclusive figure the Totals row does, since the trace's
+own columns alone leave out anything that never earns a column of
+its own (a model-mode `if`'s own tokens, an unnamed loop's earlier
+passes, a declared-outputs `use` child's effects) -- switching back
+to the trace's own columns up to the cursor once scrubbed away from
+Now, matching what the trace actually drew there. A finished agent
+session counts toward Largest the same way a finished prompt already
+does.
 
 None of this changes a run with no agent tool at all, or an
 electricity run (electricity has no agent tool): the Tape, Signal,
