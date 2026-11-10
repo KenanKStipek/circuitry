@@ -4040,6 +4040,12 @@ pub fn draw_all(
     now: &str,
     ctx: &DrawCtx,
 ) {
+    if let Some(bg) = ctx.theme.background {
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg).fg(ctx.theme.text)),
+            full_area,
+        );
+    }
     if full_area.width < oscilloscope_core::multi::TILE_MIN_WIDTH
         || full_area.height < oscilloscope_core::multi::TILE_MIN_HEIGHT + 4
     {
@@ -4287,7 +4293,7 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         .to_string();
     let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let right_text = format!("{engine_word} ");
-    let pad = (area.width as usize).saturating_sub(left_width + right_text.chars().count() + 1);
+    let pad = (area.width as usize).saturating_sub(left_width + right_text.chars().count());
     left.push(Span::styled(" ".repeat(pad), base));
     left.push(Span::styled(right_text, base));
     frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
@@ -4404,8 +4410,35 @@ fn draw_all_tape_tile(
 
     let viewport = (inner.height as usize).saturating_sub(2);
     let folded = oscilloscope_core::multi::fold_tape_tile(&screen.items, viewport);
-    let mut lines: Vec<Line<'static>> = Vec::with_capacity(folded.len());
-    for line in &folded {
+    // The focused tile's own first running row reads as if it were
+    // selected (the frames' own convention for a tile with no real
+    // cursor of its own) -- every other tile's running rows, and
+    // every row once this has already fired once, read plainly.
+    let mut highlighted_running_once = false;
+    // Each line goes straight to its own one-row area as it's built
+    // -- rule lines (the Now band, the slots rule, the head rule)
+    // span the panel's own full `inner` width flush to the border,
+    // unlike every other row, which sits in `content` (one column
+    // narrower on each side, the frames' own gutter); a single
+    // shared `Paragraph` at one width could never give the two
+    // their own, different ones.
+    for (i, line) in folded.iter().enumerate() {
+        if i >= viewport {
+            break;
+        }
+        let row_y = content.y + i as u16;
+        let content_row = Rect {
+            x: content.x,
+            y: row_y,
+            width: content.width,
+            height: 1,
+        };
+        let full_row = Rect {
+            x: inner.x,
+            y: row_y,
+            width: inner.width,
+            height: 1,
+        };
         use oscilloscope_core::multi::TapeTileLine;
         use oscilloscope_core::screens::TapeItem;
         match line {
@@ -4418,28 +4451,96 @@ fn draw_all_tape_tile(
                     .unwrap_or_default();
                 let text = format!("{ts_text} · {engine}");
                 let width = (content.width as usize).saturating_sub(used);
-                lines.push(Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(ctx.theme.fg_muted)),
-                    Span::styled(
-                        format!("{text:<width$}"),
-                        Style::default().fg(ctx.theme.dim),
-                    ),
-                ]));
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(ctx.theme.fg_muted)),
+                        Span::styled(
+                            format!("{text:<width$}"),
+                            Style::default().fg(ctx.theme.dim),
+                        ),
+                    ])),
+                    content_row,
+                );
             }
-            TapeTileLine::Item(TapeItem::Row(row)) => {
-                lines.push(tape_row_line(
-                    row,
-                    false,
-                    screen.unit,
-                    false,
-                    true,
-                    true,
-                    name_width,
-                    what_width,
-                    token_width,
-                    border_color,
-                    ctx,
-                ));
+            TapeTileLine::Item(TapeItem::Row(real_row)) => {
+                // A tile's own ahead `if` row drops its condition
+                // text (the frames: `gate               if`, never
+                // `if · kind != ""` the way a single-run Tape's own
+                // ahead row still reads it) -- the one row text a
+                // tile narrows from what a full attach would show.
+                let trimmed_what;
+                let row: &oscilloscope_core::screens::TapeRow = if real_row.kind
+                    == oscilloscope_core::render::RowKind::If
+                    && real_row.status.kind == StatusKind::Pending
+                {
+                    trimmed_what = oscilloscope_core::screens::TapeRow {
+                        what: "if".to_string(),
+                        ..real_row.clone()
+                    };
+                    &trimmed_what
+                } else {
+                    real_row
+                };
+                let is_running = matches!(
+                    row.status.kind,
+                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                );
+                let selected = focused && is_running && !highlighted_running_once;
+                if selected {
+                    highlighted_running_once = true;
+                    // The one-column gutter either side of `content`
+                    // (the frames' own left/right margin around every
+                    // row but the rule lines) bleeds into the
+                    // selection background too, for the one row that
+                    // has one -- every other row leaves it as the
+                    // plain border-coloured fill `fill_border_rows`
+                    // already painted.
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            " ",
+                            Style::default()
+                                .fg(ctx.theme.accent_primary)
+                                .bg(ctx.theme.selection_bg)
+                                .add_modifier(Modifier::BOLD),
+                        )),
+                        Rect {
+                            x: inner.x,
+                            y: row_y,
+                            width: 1,
+                            height: 1,
+                        },
+                    );
+                    frame.render_widget(
+                        Paragraph::new(Span::styled(
+                            " ",
+                            Style::default()
+                                .fg(ctx.theme.fg_muted)
+                                .bg(ctx.theme.selection_bg),
+                        )),
+                        Rect {
+                            x: inner.x + inner.width - 1,
+                            y: row_y,
+                            width: 1,
+                            height: 1,
+                        },
+                    );
+                }
+                frame.render_widget(
+                    Paragraph::new(tape_row_line(
+                        row,
+                        selected,
+                        screen.unit,
+                        false,
+                        true,
+                        true,
+                        name_width,
+                        what_width,
+                        token_width,
+                        border_color,
+                        ctx,
+                    )),
+                    content_row,
+                );
             }
             TapeTileLine::Item(TapeItem::NowBand { ts, elapsed_s }) => {
                 let ts_text = ts
@@ -4450,33 +4551,44 @@ fn draw_all_tape_tile(
                     "Now {ts_text} · {}",
                     oscilloscope_core::format::format_duration(*elapsed_s)
                 );
-                lines.push(tape_rule_line(
-                    &label,
-                    ctx.theme.accent_primary,
-                    ctx.theme.accent_primary,
-                    true,
-                    inner.width as usize,
-                ));
+                frame.render_widget(
+                    Paragraph::new(tape_rule_line(
+                        &label,
+                        ctx.theme.accent_primary,
+                        ctx.theme.accent_primary,
+                        true,
+                        full_row.width as usize,
+                    )),
+                    full_row,
+                );
             }
             TapeTileLine::Item(TapeItem::SlotsRule {
                 busy,
                 slots,
                 queued,
             }) => {
-                let label = format!("{busy} of {slots} Slots Busy · {queued} Pass Queued");
-                lines.push(tape_rule_line(
-                    &label,
-                    ctx.theme.accent_primary,
-                    ctx.theme.accent_primary,
-                    false,
-                    inner.width as usize,
-                ));
+                // A tile drops the trailing `· N Pass Queued` once
+                // nothing actually is (the frames: `2 of 2 Slots
+                // Busy` alone, never `· 0 Pass Queued`).
+                let label = if *queued > 0 {
+                    format!("{busy} of {slots} Slots Busy · {queued} Pass Queued")
+                } else {
+                    format!("{busy} of {slots} Slots Busy")
+                };
+                frame.render_widget(
+                    Paragraph::new(tape_rule_line(
+                        &label,
+                        ctx.theme.accent_primary,
+                        ctx.theme.accent_primary,
+                        false,
+                        full_row.width as usize,
+                    )),
+                    full_row,
+                );
             }
             TapeTileLine::Item(TapeItem::HeadRule) => {
                 if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
-                    lines.push(Line::from(spans));
-                } else {
-                    lines.push(Line::from(""));
+                    frame.render_widget(Paragraph::new(Line::from(spans)), content_row);
                 }
             }
             TapeTileLine::Item(TapeItem::RunEnd { eta_ts, .. }) => {
@@ -4492,36 +4604,47 @@ fn draw_all_tape_tile(
                 if text.chars().count() < width {
                     text = format!("{text:<width$}");
                 }
-                lines.push(Line::from(vec![
-                    Span::styled("■ ", Style::default().fg(ctx.theme.fg_muted)),
-                    Span::styled(text, Style::default().fg(ctx.theme.dim)),
-                ]));
+                frame.render_widget(
+                    Paragraph::new(Line::from(vec![
+                        Span::styled("■ ", Style::default().fg(ctx.theme.fg_muted)),
+                        Span::styled(text, Style::default().fg(ctx.theme.dim)),
+                    ])),
+                    content_row,
+                );
             }
             TapeTileLine::EarlierFold(n) => {
                 let text = format!("… {n} earlier");
                 let width = content.width as usize;
-                lines.push(Line::from(Span::styled(
-                    format!("{text:<width$}"),
-                    Style::default().fg(ctx.theme.dim),
-                )));
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!("{text:<width$}"),
+                        Style::default().fg(ctx.theme.dim),
+                    ))),
+                    content_row,
+                );
             }
             TapeTileLine::MoreFold(n) => {
                 let text = format!("… {n} more");
                 let width = content.width as usize;
-                lines.push(Line::from(Span::styled(
-                    format!("{text:<width$}"),
-                    Style::default().fg(ctx.theme.dim),
-                )));
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        format!("{text:<width$}"),
+                        Style::default().fg(ctx.theme.dim),
+                    ))),
+                    content_row,
+                );
+            }
+            TapeTileLine::RunningSeparator => {
+                frame.render_widget(
+                    Paragraph::new(Line::from(Span::styled(
+                        "━".repeat(full_row.width as usize),
+                        Style::default().fg(ctx.theme.accent_primary),
+                    ))),
+                    full_row,
+                );
             }
         }
     }
-    let list_area = Rect {
-        x: content.x,
-        y: content.y,
-        width: content.width,
-        height: (lines.len() as u16).min(viewport as u16),
-    };
-    frame.render_widget(Paragraph::new(lines), list_area);
 
     let rule_y = inner.y + viewport as u16;
     let rule_area = Rect {
@@ -4532,7 +4655,7 @@ fn draw_all_tape_tile(
     };
     frame.render_widget(
         Paragraph::new(Line::from("─".repeat(inner.width as usize)))
-            .style(Style::default().fg(border_color)),
+            .style(Style::default().fg(ctx.theme.border)),
         rule_area,
     );
     let totals_area = Rect {
@@ -14796,6 +14919,577 @@ mod tape_frame_goldens {
                 started_at: Some(format!("2026-11-08T23:51:5{}.000Z", 5 + i)),
             })
             .collect()
+    }
+
+    fn multi_basename(path: &str) -> String {
+        std::path::Path::new(path)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.to_string())
+    }
+
+    /// `design/fixtures/multi/snap6`'s own six runs, replayed to the
+    /// fixture's own frozen instant (`taken-at`), turned into
+    /// [`AllTile`]s on `screen_kind` (issue #698): the orchestration
+    /// documents and configs live beside the fixture at `multi/`,
+    /// never inside `snap6/` itself (`launch6.sh`'s own layout).
+    fn snap6_tiles(
+        screen_kind: oscilloscope_core::screens::Screen,
+        now: &str,
+    ) -> Vec<AllTile> {
+        let manifest_path = fixtures_dir().join("multi/snap6/manifest.json");
+        let manifest: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|e| panic!("couldn't read {manifest_path:?}: {e}")),
+        )
+        .unwrap();
+        let zone = frame_zone();
+        let multi_dir = fixtures_dir().join("multi");
+        manifest
+            .iter()
+            .map(|entry| {
+                let key = entry["key"].as_str().unwrap();
+                let orchestration = entry["orchestration"].as_str().unwrap();
+                let config = entry["config"].as_str().unwrap();
+                let engine = entry["engine"].as_str().unwrap();
+                let doc_path = multi_dir.join(orchestration);
+                let config_path = multi_dir.join(config);
+                let program = oscilloscope_core::plan::compile(
+                    &doc_path,
+                    Some(&config_path),
+                    &indexmap::IndexMap::new(),
+                )
+                .unwrap_or_else(|e| panic!("{orchestration} doesn't compile: {e}"));
+                let plan = oscilloscope_core::plan::PlanTree::from_program(&program);
+                let snap_dir = fixtures_dir().join("multi/snap6").join(key);
+                let state = load_json(&snap_dir.join("state.live.json"));
+                let events = load_events(&snap_dir.join("events.jsonl"));
+                let mut model = oscilloscope_core::model::RunModel::new();
+                observe_all_events(&mut model, &events);
+                let render = oscilloscope_core::multi::build_tile(
+                    &multi_basename(orchestration),
+                    engine,
+                    &plan,
+                    &mut model,
+                    Some(&state),
+                    screen_kind,
+                    &zone,
+                    now,
+                );
+                AllTile {
+                    document_label: multi_basename(orchestration),
+                    config_label: Some(multi_basename(config)),
+                    render,
+                }
+            })
+            .collect()
+    }
+
+    /// `extract`'s own reply, "1. Faster parser. 2. New --events
+    /// flag. 3. Fixed duration bug.", is a numbered list -- `first_
+    /// words` (shared with every single-run Tape frame) cuts a
+    /// reply at its own first sentence terminator when that alone
+    /// is short enough, so the row's own preview reads `1.`, not the
+    /// frame's own `1. Faster parser.` -- a width cut, as every
+    /// other frame's preview is, would need the fuller reply
+    /// `first_words` never gives it. Pre-existing, shared code; not
+    /// changed here.
+    const ALL_TAPE_FIRST_WORDS_SENTENCE_CUT: &[(u16, u16)] = &[(159, 5), (160, 5)];
+
+    /// `triage.yml`'s own `drafts` loop, pending (ahead of Now),
+    /// dispatches a plain `count: 3` loop, not an `each:` one --
+    /// `tape_row_content`'s own pending-loop branch (shared with
+    /// every single-run Tape frame) only ever adds a pass count
+    /// through `tape_loop_each_text`'s own `each_as` text, which a
+    /// `count:` loop has none of, so the row reads bare `loop`, not
+    /// the frame's own `loop · 3 passes`. No single-run frame
+    /// exercises a pending `count:` loop to have caught this before;
+    /// pre-existing, shared code, not changed here.
+    const ALL_TAPE_PENDING_COUNT_LOOP_HAS_NO_PASS_COUNT: &[(u16, u16)] = &[
+        (30, 10),
+        (31, 10),
+        (32, 10),
+        (33, 10),
+        (34, 10),
+        (35, 10),
+        (36, 10),
+        (37, 10),
+        (38, 10),
+        (39, 10),
+        (40, 10),
+        (90, 10),
+        (91, 10),
+        (92, 10),
+        (93, 10),
+        (94, 10),
+        (95, 10),
+        (96, 10),
+        (97, 10),
+        (98, 10),
+        (99, 10),
+        (100, 10),
+    ];
+
+    /// Issue #698's own rule 16: the Tape title's own "Done" count
+    /// (`TapeScreen::done`, which excludes a loop's own container
+    /// row) and the Totals row's own `header.effects_done` (which
+    /// doesn't) read differently for the same tile -- `triage.yml`'s
+    /// own title reads `1 Done` while its Totals row reads `2/13`.
+    /// This osi's own `effects_done_raw` walk finds only `kind`
+    /// really finished by the fixture's own state and events (`gate`
+    /// has no `completed_at` of its own at all): the shipped counter
+    /// used unchanged here, reported rather than bent, exactly as
+    /// the issue's own rule says to.
+    const ALL_TAPE_EFFECTS_DONE_COUNTER: &[(u16, u16)] =
+        &[(26, 21), (86, 21), (151, 21), (32, 44), (91, 44), (152, 44)];
+
+    /// `review.yml`'s and `classify.yml`'s own loops dispatch two
+    /// children per pass (`review`/`lint`, `label`/`store`) at
+    /// different speeds (a quick prompt, a one-second tool) --
+    /// `build_tape`'s own `bucket1` sorts finished rows by real
+    /// finish time (shared with every single-run Tape frame), which
+    /// genuinely interleaves `iter_0 · label` (near-instant) ahead of
+    /// `iter_1 · label` (also near-instant) and only *then* `iter_0
+    /// · store` (a second later), rather than the frame's own
+    /// pass-paired order (`iter_0 label`, `iter_0 store`, `iter_1
+    /// label`, ...). The same reasoning parts 1-3 already used for
+    /// `gate · reply`'s own timestamp order: the fixture's real
+    /// timestamps disagree with the frame, so this is reported, not
+    /// bent to match it. A loop's own token sparkline (`tape_token_
+    /// column`'s shared code) also scales each pass by the panel's
+    /// own absolute token unit, not relative to the loop's own
+    /// passes, so a tight range of similar pass tokens (`review.yml`'s
+    /// own 1,180-1,515, `classify.yml`'s own 176-205) reads shorter
+    /// bars than the frame's own relative scaling.
+    const ALL_TAPE_LOOP_ORDER_AND_SPARKLINE_SCALE: &[(u16, u16)] = &[
+        (99, 26),
+        (100, 26),
+        (160, 26),
+        (162, 26),
+        (163, 26),
+        (164, 26),
+        (165, 26),
+        (166, 26),
+        (167, 26),
+        (40, 27),
+        (43, 27),
+        (44, 27),
+        (40, 28),
+        (129, 28),
+        (133, 28),
+        (134, 28),
+        (135, 28),
+        (136, 28),
+        (137, 28),
+        (143, 28),
+        (144, 28),
+        (145, 28),
+        (146, 28),
+        (148, 28),
+        (149, 28),
+        (150, 28),
+        (151, 28),
+        (152, 28),
+        (153, 28),
+        (154, 28),
+        (155, 28),
+        (156, 28),
+        (157, 28),
+        (158, 28),
+        (159, 28),
+        (162, 28),
+        (163, 28),
+        (164, 28),
+        (165, 28),
+        (166, 28),
+        (167, 28),
+        (168, 28),
+        (169, 28),
+        (173, 28),
+        (174, 28),
+        (175, 28),
+        (177, 28),
+        (129, 29),
+        (133, 29),
+        (134, 29),
+        (135, 29),
+        (136, 29),
+        (137, 29),
+        (143, 29),
+        (144, 29),
+        (145, 29),
+        (146, 29),
+        (148, 29),
+        (149, 29),
+        (150, 29),
+        (151, 29),
+        (152, 29),
+        (153, 29),
+        (154, 29),
+        (155, 29),
+        (156, 29),
+        (157, 29),
+        (158, 29),
+        (159, 29),
+        (162, 29),
+        (163, 29),
+        (164, 29),
+        (165, 29),
+        (166, 29),
+        (167, 29),
+        (168, 29),
+        (169, 29),
+        (173, 29),
+        (174, 29),
+        (175, 29),
+        (177, 29),
+        (40, 30),
+        (129, 30),
+        (133, 30),
+        (134, 30),
+        (135, 30),
+        (136, 30),
+        (137, 30),
+        (143, 30),
+        (144, 30),
+        (145, 30),
+        (146, 30),
+        (148, 30),
+        (149, 30),
+        (150, 30),
+        (151, 30),
+        (152, 30),
+        (153, 30),
+        (154, 30),
+        (155, 30),
+        (156, 30),
+        (157, 30),
+        (158, 30),
+        (159, 30),
+        (160, 30),
+        (162, 30),
+        (163, 30),
+        (164, 30),
+        (165, 30),
+        (166, 30),
+        (167, 30),
+        (168, 30),
+        (169, 30),
+        (173, 30),
+        (174, 30),
+        (175, 30),
+        (177, 30),
+        (129, 31),
+        (133, 31),
+        (134, 31),
+        (135, 31),
+        (136, 31),
+        (137, 31),
+        (143, 31),
+        (144, 31),
+        (145, 31),
+        (146, 31),
+        (148, 31),
+        (149, 31),
+        (150, 31),
+        (151, 31),
+        (152, 31),
+        (153, 31),
+        (154, 31),
+        (155, 31),
+        (156, 31),
+        (157, 31),
+        (158, 31),
+        (159, 31),
+        (160, 31),
+        (162, 31),
+        (163, 31),
+        (164, 31),
+        (165, 31),
+        (166, 31),
+        (167, 31),
+        (168, 31),
+        (169, 31),
+        (173, 31),
+        (174, 31),
+        (175, 31),
+        (177, 31),
+        (28, 32),
+        (30, 32),
+        (31, 32),
+        (32, 32),
+        (33, 32),
+        (34, 32),
+        (36, 32),
+        (129, 32),
+        (133, 32),
+        (134, 32),
+        (135, 32),
+        (136, 32),
+        (137, 32),
+        (143, 32),
+        (144, 32),
+        (146, 32),
+        (148, 32),
+        (149, 32),
+        (150, 32),
+        (151, 32),
+        (152, 32),
+        (153, 32),
+        (154, 32),
+        (155, 32),
+        (156, 32),
+        (162, 32),
+        (163, 32),
+        (164, 32),
+        (165, 32),
+        (166, 32),
+        (167, 32),
+        (168, 32),
+        (169, 32),
+        (173, 32),
+        (174, 32),
+        (175, 32),
+        (177, 32),
+        (28, 33),
+        (30, 33),
+        (31, 33),
+        (32, 33),
+        (33, 33),
+        (34, 33),
+        (36, 33),
+        (129, 33),
+        (133, 33),
+        (134, 33),
+        (135, 33),
+        (136, 33),
+        (137, 33),
+        (143, 33),
+        (144, 33),
+        (146, 33),
+        (148, 33),
+        (149, 33),
+        (150, 33),
+        (151, 33),
+        (152, 33),
+        (153, 33),
+        (154, 33),
+        (155, 33),
+        (156, 33),
+        (162, 33),
+        (163, 33),
+        (164, 33),
+        (165, 33),
+        (166, 33),
+        (167, 33),
+        (168, 33),
+        (169, 33),
+        (173, 33),
+        (174, 33),
+        (175, 33),
+        (177, 33),
+        (28, 34),
+        (30, 34),
+        (31, 34),
+        (32, 34),
+        (33, 34),
+        (34, 34),
+        (36, 34),
+        (129, 34),
+        (133, 34),
+        (134, 34),
+        (135, 34),
+        (136, 34),
+        (137, 34),
+        (143, 34),
+        (144, 34),
+        (145, 34),
+        (146, 34),
+        (148, 34),
+        (149, 34),
+        (150, 34),
+        (151, 34),
+        (152, 34),
+        (153, 34),
+        (154, 34),
+        (155, 34),
+        (156, 34),
+        (162, 34),
+        (163, 34),
+        (164, 34),
+        (165, 34),
+        (166, 34),
+        (167, 34),
+        (168, 34),
+        (169, 34),
+        (173, 34),
+        (174, 34),
+        (175, 34),
+        (177, 34),
+        (129, 35),
+        (133, 35),
+        (134, 35),
+        (135, 35),
+        (136, 35),
+        (137, 35),
+        (143, 35),
+        (144, 35),
+        (145, 35),
+        (146, 35),
+        (148, 35),
+        (149, 35),
+        (150, 35),
+        (151, 35),
+        (152, 35),
+        (153, 35),
+        (154, 35),
+        (155, 35),
+        (156, 35),
+        (162, 35),
+        (163, 35),
+        (164, 35),
+        (165, 35),
+        (166, 35),
+        (167, 35),
+        (168, 35),
+        (169, 35),
+        (173, 35),
+        (174, 35),
+        (175, 35),
+        (177, 35),
+    ];
+
+    /// Issue #698's own rule 15: `iter_4 · label`/`iter_5 · label`
+    /// finish at the same instant as `iter_3 · store` in the
+    /// fixture's own real timestamps; [`oscilloscope_core::multi::
+    /// newest_finished_across_runs`]' own tie-break (run order, then
+    /// plan order within a run) picks a different one of the two
+    /// than the frame's own hand-chosen `iter_3 · store finished`.
+    /// Allow-listed rather than bent, the same way the fixture's own
+    /// timestamp ties were in parts 1-3.
+    const ALL_TAPE_STATUS_LINE_TIE: &[(u16, u16)] =
+        &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
+
+    #[test]
+    fn all_tape_180x48_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("all--tape--180x48", &theme);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let tiles = snap6_tiles(oscilloscope_core::screens::Screen::Tape, now);
+        let grid = oscilloscope_core::multi::tile_grid(tiles.len(), 180, 45);
+        let status_entries: Vec<(String, Option<oscilloscope_core::screens::SignalLastFinished>)> =
+            tiles
+                .iter()
+                .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
+                .collect();
+        let status_line = oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_all(
+                    f,
+                    f.area(),
+                    &tiles,
+                    grid,
+                    0,
+                    0,
+                    oscilloscope_core::screens::Screen::Tape,
+                    tiles.len(),
+                    status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    now,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let allowed = [
+            ALL_TAPE_FIRST_WORDS_SENTENCE_CUT,
+            ALL_TAPE_PENDING_COUNT_LOOP_HAS_NO_PASS_COUNT,
+            ALL_TAPE_EFFECTS_DONE_COUNTER,
+            ALL_TAPE_LOOP_ORDER_AND_SPARKLINE_SCALE,
+            ALL_TAPE_STATUS_LINE_TIE,
+        ]
+        .concat();
+        assert_matches_mock(
+            terminal.backend().buffer(),
+            &mock,
+            "all--tape--180x48",
+            &allowed,
+        );
+    }
+
+    #[test]
+    fn all_signal_180x48_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("all--signal--180x48", &theme);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let mut tiles = snap6_tiles(oscilloscope_core::screens::Screen::Signal, now);
+        // Issue #698's Settled point 6: one shared scale across every
+        // tile, the smallest round top at or above 1.5x the largest
+        // column seen in any of them.
+        let mut largest_sent = 0u64;
+        let mut largest_received = 0u64;
+        for tile in &tiles {
+            if let oscilloscope_core::multi::TileScreen::Signal(s) = &tile.render.screen {
+                largest_sent = largest_sent.max(s.buckets.iter().map(|b| b.sent).max().unwrap_or(0));
+                largest_received =
+                    largest_received.max(s.buckets.iter().map(|b| b.received).max().unwrap_or(0));
+            }
+        }
+        let sent_top = oscilloscope_core::multi::shared_signal_axis_top(largest_sent, 0);
+        let received_top = oscilloscope_core::multi::shared_signal_axis_top(largest_received, 0);
+        for tile in &mut tiles {
+            if let oscilloscope_core::multi::TileScreen::Signal(s) = &mut tile.render.screen {
+                s.sent_axis_top = sent_top;
+                s.received_axis_top = received_top;
+            }
+        }
+        let grid = oscilloscope_core::multi::tile_grid(tiles.len(), 180, 45);
+        let status_entries: Vec<(String, Option<oscilloscope_core::screens::SignalLastFinished>)> =
+            tiles
+                .iter()
+                .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
+                .collect();
+        let status_line = oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_all(
+                    f,
+                    f.area(),
+                    &tiles,
+                    grid,
+                    0,
+                    0,
+                    oscilloscope_core::screens::Screen::Signal,
+                    tiles.len(),
+                    status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    now,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        assert_matches_mock(
+            terminal.backend().buffer(),
+            &mock,
+            "all--signal--180x48",
+            &[],
+        );
     }
 
     #[test]

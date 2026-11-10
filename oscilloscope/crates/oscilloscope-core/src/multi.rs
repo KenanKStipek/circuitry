@@ -124,6 +124,12 @@ pub enum TapeTileLine<'a> {
     Item(&'a TapeItem),
     EarlierFold(usize),
     MoreFold(usize),
+    /// The rule between the running block and the rows ahead when
+    /// no loop is running to give that rule its own `SlotsRule`
+    /// text (from the frames: a tile always draws one rule there,
+    /// labelled or not, where a single-run Tape draws none at all
+    /// without a running loop).
+    RunningSeparator,
 }
 
 fn is_ahead_row(item: &TapeItem) -> bool {
@@ -176,8 +182,12 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
     let ahead_start = body.iter().position(is_ahead_row).unwrap_or(body.len());
     let kept_head = &body[..ahead_start];
     let ahead = &body[ahead_start..];
+    let has_slots_rule = kept_head
+        .iter()
+        .any(|it| matches!(it, TapeItem::SlotsRule { .. }));
 
-    let mandatory = 1 + kept_head.len() + usize::from(has_run_end);
+    let mandatory =
+        1 + kept_head.len() + usize::from(!has_slots_rule) + usize::from(has_run_end);
     let budget = max_rows.saturating_sub(mandatory);
 
     let mut fin_shown = finished.len();
@@ -205,6 +215,9 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
     }
     out.extend(finished[fin_folded..].iter().map(TapeTileLine::Item));
     out.extend(kept_head.iter().map(TapeTileLine::Item));
+    if !has_slots_rule {
+        out.push(TapeTileLine::RunningSeparator);
+    }
     out.extend(ahead[..ahead_shown].iter().map(TapeTileLine::Item));
     let ahead_folded = ahead.len() - ahead_shown;
     if ahead_folded > 0 {
