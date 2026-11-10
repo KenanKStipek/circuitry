@@ -459,6 +459,25 @@ impl App {
                 return;
             }
         }
+        // Issue #704 rule 3: a bare pass path (`↑↓`'s own selection,
+        // never one of `flow_lane_stations`' own entries) is already
+        // at its own zone's own edge in both directions at once --
+        // step out to the fork host's own neighbour the same way,
+        // rather than entering the pass's own first/last station the
+        // way landing here from some other screen's unrelated
+        // selection still should.
+        if idx.is_none() {
+            let step_out = if delta >= 0 {
+                self.flow_step_out_after.clone()
+            } else {
+                self.flow_step_out_before.clone()
+            };
+            if let Some(target) = step_out {
+                self.select_tree_path(Some(target));
+                self.follow = false;
+                return;
+            }
+        }
         let next = match idx {
             Some(i) => {
                 (i as i32 + delta).clamp(0, self.flow_lane_stations.len() as i32 - 1) as usize

@@ -893,7 +893,16 @@ fn build_unnamed_decision(
         detail: Detail::Condition(condition),
     };
     let fork = Fork {
-        path: decision.host_path.clone(),
+        // Issue #704 rule 3: the decision's own unique path (shared
+        // with its own `station` right above, so `flatten_lane_
+        // stations`'s own adjacent-pair dedup collapses the two into
+        // one station, the same as a named decision's Station/Fork
+        // pair already does) -- never `decision.host_path`, the
+        // *container* every unnamed `if` on it shares, which would
+        // otherwise show up as its own bogus, unrelated station with
+        // the host's own path and no station of its own before it to
+        // collapse with.
+        path: station.path.clone(),
         kind: ForkKind::Decision,
         source_status: status,
         lanes,
@@ -2688,6 +2697,38 @@ mod tests {
         assert_ne!(
             decision_paths[0], decision_paths[1],
             "two unnamed ifs sharing a host must not collide on the same path"
+        );
+    }
+
+    /// Issue #704 rule 3: an unnamed `if`'s own Fork carries the
+    /// same path as its own Station right before it (the decision's
+    /// own unique `.__if` path, never the shared host container's)
+    /// -- `flatten_lane_stations`' own adjacent-pair dedup then
+    /// collapses the two into the one station the rail actually
+    /// draws, the same as a named decision's Station/Fork pair
+    /// already does; the host's own path must never show up as a
+    /// bogus station of its own.
+    #[test]
+    fn an_unnamed_ifs_own_fork_shares_its_stations_own_path() {
+        let plan = compile_doc(&unnamed_if_yaml("a", "b"));
+        let state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        });
+        let rail = build_rail_for(&plan, &state);
+        for (i, item) in rail.items.iter().enumerate() {
+            if let RailItem::Station(s) = item {
+                if s.path.contains(".__if") {
+                    let RailItem::Fork(fork) = &rail.items[i + 1] else {
+                        panic!("expected the decision's own fork right after its station");
+                    };
+                    assert_eq!(fork.path, s.path);
+                }
+            }
+        }
+        let lanes = lane_stations(&rail, None);
+        assert!(
+            !lanes.contains(&"prime".to_string()),
+            "the host's own bare path must not be a station of its own: {lanes:?}"
         );
     }
 
