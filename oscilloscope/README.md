@@ -169,16 +169,17 @@ stdout (a pipe, a file, `CI` set), keeps the plain stream unchanged.
 osi has four screens, switched with `0`-`3`: the Tape (`0`, the
 default for both `osi <doc>` and `osi watch`), Signal (`1`, the
 token trace, below), Flow (`2`, the rail as control flow, below) and
-cost (`3`, below). Selection, follow, folding, filters and collapsed
-rows are shared across every screen but the Signal's and the Flow's
-own, which draw their own self-contained header, status line, key
-bar and Totals row instead (below).
+the Store (`3`, where the run's tokens went, below). Selection,
+follow, folding, filters and collapsed rows live on `keys::App`
+outside the `screen` field, so switching never touches them; each of
+the four screens draws its own self-contained header band, status
+line, key bar and Totals row (below).
 
 Every screen shares one header band, status line, key bar and Totals
 row: `osi <document> · <status> <elapsed>` on the left, the `osi`
 word itself animating in place of a separate icon while the run is
 live (a static word with `--no-animation`), the screen's own chip
-(`TAPE`/`SIGNAL`/`FLOW`/`COST`) and the clock on the right; below the
+(`TAPE`/`SIGNAL`/`FLOW`/`STORE`) and the clock on the right; below the
 screen's own panel, a status line (the run's own latest report once
 one has arrived, else the newest finished step); a key bar naming
 that screen's own keys; and a Totals row (tokens sent/received and
@@ -253,12 +254,12 @@ what's running, then what's ahead), not the plan's own tree order,
 and turn follow off unless the move lands the selection right back
 on the row follow would have picked itself -- `f` toggles follow by
 hand. `T` cycles the colour theme; `?` opens Help, listing exactly
-this screen's own keys. `Tab`, `z`, `v`, `←`/`→`, `s` and `l` are not
-Tape keys at all -- they still work on the Cost screen below, which
-keeps its own panes until its own part of this redesign; the Signal
-and the Flow have their own keys entirely (above, below). Below
-60×24, every screen -- not only the Tape -- shows the too-small
-notice instead.
+this screen's own keys. `Tab`, `z`, `s` and `l` are not Tape keys at
+all, nor any other screen's; `v`, `e`, `/` and `←`/`→` are not Tape
+keys either, but each still works on at least one of the Signal or
+the Flow (never the Store). The Signal, the Flow and the Store each
+have their own keys entirely (below). Below 60×24, every screen --
+not only the Tape -- shows the too-small notice instead.
 
 ### `--glance`
 
@@ -399,14 +400,14 @@ the globals every key bar shares.
 | `+` / `-` | open / fold the selected fork's own lanes, three at a time |
 | `⏎` | open the selection full-screen, and back |
 | `f` | follow the running station (on by default) |
-| `0`-`3` | switch screens (Tape, Signal, Flow, Cost) |
+| `0`-`3` | switch screens (Tape, Signal, Flow, Store) |
 | `?` | help |
 | `c` | cancel, with a confirm (the same as a confirmed `q`) |
 | `q` | quit — asks first if a run is going; with nothing running, quits at once; in `osi watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
 | Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osi watch` always just detaches |
 
 The token rule is the same everywhere a count shows up (the header, the
-rail, the Selected pane and the Cost screen's treemap and table): a
+rail, the Selected pane and the Store's own tiles and table): a
 node's own `tokens_sent_total`/`tokens_received_total` when present,
 falling back to `tokens_sent`/`tokens_received` otherwise — the same pair
 both `cof`'s and electricity's own `runtime.last_run.totals` are built
@@ -468,96 +469,99 @@ reading its own slot's history, the pass pane and the story:
  ←→ Scroll  ↑↓ Lane  +/- Lanes  f Follow  enter Open  0-3 Screens                                        ? Help  q Quit 
 ```
 
-### Screen 3 (`cost`): where the tokens and money went
+### The Store (`3`): where the run's tokens went
 
-A treemap of the current run's state stores (one tile per store, area
-proportional to its tokens), a stacked "tokens over time" chart (one band
-per top-level step, on a clock axis from the run's start to now) and a
-table of the largest stores, laid out at three sizes:
+An area diagram of filled tiles, one per store (a leaf step) that has
+used tokens so far, drawn self-contained the same way the Tape, the
+Signal and the Flow are: a decision, loop, `dynamic` or `use` step is
+always a container, a darker surface holding its own children's
+tiles; a loop pass folds into its own single token-bearing step when
+it has exactly one (`drafts › iter_0` reads as `iter_0 › draft`),
+staying a plain container, named `iter_N`, once it has more than one.
+Nothing is drawn for a store, or a whole container, that has not used
+any tokens at all; a running container's own title carries `●` and
+the accent colour until the run itself ends. Children sort in plan
+order, not alphabetically by path. A tile's own text drops lines from
+the bottom as it runs out of room: `name · N t` on one line where it
+fits, else `name` then `N t` on their own two, then the deviation from
+usual (absent without history), then sent and received. A container
+too small for its own children collapses to its own title and
+`<n>/<m> with tokens`; too-small top-level stores fold together into
+one trailing `… N more · T t` tile.
 
-1. 100×30 and up: the treemap (62% of the height) above the chart and the
-   table, side by side at 62/38;
-2. 80×20 to just under that: the treemap above the table alone (no chart);
-3. below 80×20: the table alone, where `⏎` still zooms it.
+Below the diagram, the Largest Stores table ranks every leaf by
+tokens descending, ties in plan order: each row's own full path from
+the run's root (`drafts › iter_1 › draft`, cut on the right with
+`⋯`), the fixed-scale bar, tokens, share of the run's tokens so far
+and deviation, with a cursor. Readings shows the table's own first
+row (Largest), how many stores have used tokens so far, the ratio of
+sent to received tokens, and the running loop's -- or the last one
+that ran's -- own `name · n of m passes have tokens`, absent with no
+loop in the document at all.
 
-The treemap's default measure is total tokens (in + out); `i`/`o`/`$`
-switch it to input tokens, output tokens or cost, and the same key again
-returns to total. A single-child chain folds into one tile (`plan ›
-agent`), by the exact same breadcrumb-eligibility rule the orchestration
-pane's own breadcrumbs use (a loop, the document root and a quick-steps
-summary never fold away, and neither side folds while its own status is
-still pending). `↑`/`↓` select a tile in size order, `⏎` zooms into the
-selected store's own children, and `esc` zooms back out; the zoomed
-store's own name at each level (never its full dotted path) is shown
-alongside the measure in the treemap's title. A store with no value for
-the chosen measure is left out, and the title counts how many were
-(`N stores without cost`); a store still running shows "tokens when
-done" instead of a number, however small its placeholder weight is, and
-one that never finished because the run itself ended first (aborted or
-cancelled) reads "no tokens reported" instead, rather than its own
-placeholder weight read back as if it were real. A `while: mode: model`
-loop's own tokens (written onto the loop's own meta alongside its
-passes) get a leaf of their own next to them, rather than being dropped.
-A running `agent` tool step is the one exception to "tokens when done":
-its own tile (and the largest-stores table's own row for it) sizes and
-labels itself `live` from its own live `tokens_sent` under the
-`tokens`/`input tokens` measures, growing as the session goes. A tile
-with room for a second row also draws a per-turn strip (`turn_tokens`,
-oldest first) and a cache bar (`tokens_cached_in`'s own share of
-`tokens_sent`). `output tokens`/`cost` still read "tokens when done"
-until the step finishes: pi does report `tokens_received`/`cost_usd`
-live too, but sizing a tile from them is left for a later issue.
-The treemap's own squarify layout accounts for the terminal's own tall
-character cells (about 2:1), so a tile that is actually square in
-character cells (and so visibly tall and narrow on screen) is never what
-"the worst aspect ratio" means — a visually square tile is. The largest-
-stores table always ranks by total tokens, regardless of the treemap's
-own measure, filters to the zoomed store below the treemap (so `⏎` still
-has a visible effect even where the treemap itself doesn't fit), and its
-footer gives the run's own totals (`runtime.last_run.totals`) and any gap
-between them and the table (a declared-outputs `use` child's effects, for
-one, never reach the final state tree at all even though the run's own
-totals counted them as they completed). `meta.cost_usd` shows wherever an
-effect reports it; when only some finished stores do, the figure is
-marked with its own coverage (`$4.20 (from 3 of 9 prompts)`) -- a store
-still running is never counted either way.
+`↑↓`/`j`/`k`/`PageUp`/`PageDown`/`Home`/`End`/`g`/`G` move the
+table's own cursor, sticking to its own path as the table's rows
+reorder; `enter` opens the selected store's own step full-screen, the
+same shared toggle the other three screens already use, and `esc`
+closes it. `i`/`o`/`$`, `Tab`, `z`, `v`, `e`, `/` and `←`/`→` are
+not Store keys at all.
 
 | Key | Action |
 |---|---|
-| `↑↓` / `j`/`k` | select a store, in size order |
-| `⏎` | zoom into the selected store |
-| `esc` | zoom back out |
-| `i` | switch the treemap's measure to input tokens (again: total) |
-| `o` | switch the treemap's measure to output tokens (again: total) |
-| `$` | switch the treemap's measure to cost (again: total) |
+| `↑↓` / `j`/`k`/`PageUp`/`PageDown`/`Home`/`End`/`g`/`G` | select a row in the Largest Stores table |
+| `⏎` | open the selected store's own step full-screen, and back |
+| `0`-`3` | switch screens (Tape, Signal, Flow, Store) |
+| `?` | help |
+| `c` | cancel, with a confirm (the same as a confirmed `q`) |
+| `q` | quit -- asks first if a run is going; with nothing running, quits at once; in `osi watch` on a still-going run, detaches at once with a distinct ending (`■ detached (the run is still going)`, exit 0) |
+| Ctrl-C | checked before any dialog, never merely dismissing one: cancels at once with no confirm while something's running, quits at once with nothing running, and in `osi watch` always just detaches |
 
-A `TestBackend` capture at 120×40 (blank rows trimmed here; the full
-capture is `crates/oscilloscope/src/snapshots/osi__tui__golden_tests__
-cost_running_at_120x40.snap`):
+At 100 columns and up, and 30 rows and up, the chart sits above the
+table (about 62% of the lower band's own width) beside Readings;
+below 30 rows, still 100 columns and up, Readings drops and the table
+keeps three rows instead of four; 80-99 columns is one pane, no
+Readings, the table at the pane's own full width, still three rows;
+below 80 columns the Store isn't offered, bouncing back to the Tape
+on its own if the terminal shrinks below it while the Store is on
+screen. The title drops `Tokens by Store` below 120 columns.
+
+A `TestBackend` capture (`crates/oscilloscope/src/tui.rs`'s own golden
+tests, `design/frames/store--normal--120x30.mock`'s cell-exact twin,
+checked cell by cell rather than through `insta`) of `design/
+fixtures/run2`, replayed to 3.62 s after its own start, the cursor on
+`gate › reply`:
 
 ```
-⠔⠒⠒⠤⠤⠔⠒⠒ do-thing.yml · ♥ running 5m00s · 00:05:00   0 tape  2 flow  [3 cost]                                       
-┌ tokens by store · tokens ────────────────────────────────────────────────────────────────────────────────────────────┐
-│a 1.3 kt                                          ┌fan tokens when done─────────────────────────────┐b 450 t          │
-│                                                  │iter_0 › nap tokens when done                    │                 │
-│                                                  │                                                 │                 │
-│                                                  └─────────────────────────────────────────────────┘                 │
-└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌ tokens over time ──────────────────────────────────────────────────────┐┌ largest stores ────────────────────────────┐
-│            ███                                                         ││a  ↑900 t ↓400 t  $1.20  74%                │
-│            ███                                                         ││b  ↑300 t ↓150 t  26%                       │
-│            ███                                                         ││fan › iter_0 › nap  tokens when done        │
-│            ███                                                         ││                                            │
-│            ███                                                         ││total ↑1.2 kt ↓550 t                        │
-│            ███                                                         ││$1.20 (from 1 of 2 prompts)                 │
-│            ███                                                         ││                                            │
-│            ███            ▓▓▓                                          ││                                            │
-│            ███            ▓▓▓                                          ││                                            │
-│            ███            ▓▓▓                                          ││                                            │
-│            ███            ▓▓▓                                          ││                                            │
-│00:00:00                        00:02:30                        00:05:00││                                            │
-│█ a ▓ b ▒ fan                                                           ││                                            │
-└────────────────────────────────────────────────────────────────────────┘└────────────────────────────────────────────┘
+ osi  demo.yml · ● Running 3.6s                                                                       STORE    12:50:50 
+╭─ Store · Tokens by Store · Area = Tokens Used So Far ────────────────────────────────────────────────────────────────╮
+│  kind · 215 t                 gate · 389 t                                        ● drafts · 261 t                   │
+│  +6% vs usual                  reply · 389 t                                       iter_0 › draft · 130 t            │
+│  ↑212 ↓3                       +47% vs usual                                       -16% vs usual                     │
+│                                ↑348 ↓41                                            ↑118 ↓12                          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                    iter_1 › draft · 131 t            │
+│                                                                                    -14% vs usual                     │
+│                                                                                    ↑118 ↓13                          │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│                                                                                                                      │
+│──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────│
+│ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —                                              │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
+╭─ Largest Stores · ▰ = 50 t ────────────────────────────────────────────╮╭─ Readings ─────────────────────────────────╮
+│   STORE                               TOKENS SHARE VS USUAL            ││ Largest gate › reply 389 t · 45%           │
+│ ❯ gate › reply               ▰▰▰▰▰▰▰▰  389 t   45%     +47%            ││ Stores  4 with tokens so far               │
+│   kind                       ▰▰▰▰▱▱▱▱  215 t   25%      +6%            ││ Ratio   11.5 : 1 sent to received          │
+│   drafts › iter_1 › draft    ▰▰▰▱▱▱▱▱  131 t   15%     -14%            ││ Loop    drafts · 2 of 3 passes have tokens │
+│   drafts › iter_0 › draft    ▰▰▰▱▱▱▱▱  130 t   15%     -16%            ││                                            │
+╰────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────╯
+ ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago                                                                        
+ ↑↓ Select  enter Open  0-3 Screens                                                                      ? Help  q Quit 
 ```
 
 Raw mode and the alternate screen are entered once and restored on every
@@ -593,7 +597,7 @@ cargo test --workspace
 oscilloscope/
   Cargo.toml                 # workspace; path deps on ../electricity/crates/{electricity-compiler,electricity-bytecode}
   crates/
-    oscilloscope-core/       # no terminal code, so a future GUI can reuse it (render.rs: the TUI's own render model, treemap.rs: the Cost screen's by-store treemap layout, cost.rs: its largest-stores table and tokens-over-time chart)
+    oscilloscope-core/       # no terminal code, so a future GUI can reuse it (render.rs: the TUI's own render model, store.rs: the Store screen's own area-diagram layout, table and Readings)
     oscilloscope/            # the `osi` binary: clap CLI, the plain stream, and the ratatui/crossterm TUI (tui.rs, keys.rs, terminal.rs)
 ```
 

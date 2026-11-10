@@ -516,10 +516,11 @@ effects:
     ),
 ]
 
-# The Cost screen's own fixture pair (issue #632): a run with a
-# retried prompt, recorded against both engines the same way
-# PARITY_CASES is, so `cost_fixtures.rs` can load each engine's real
-# final state instead of a hand-written one. `backoff_ms: 1`, not `0`:
+# The Store screen's own fixture pair (issue #632, now read by issue
+# #695's Store too): a run with a retried prompt, recorded against
+# both engines the same way PARITY_CASES is, so `store_fixtures.rs`
+# can load each engine's real final state instead of a hand-written
+# one. `backoff_ms: 1`, not `0`:
 # both engines' own retries compiler treats a falsy `backoff_ms`
 # (`0` included) as unset and substitutes the 1000ms default
 # (`core/compiler.py::_compile_prompt`'s own `or 1000`, ported as-is
@@ -1145,10 +1146,11 @@ def main() -> int:
                 file=sys.stderr,
             )
 
-    # COST_FIXTURE_CASES (issue #632): same both-engines pairing as
-    # PARITY_CASES, for `cost_fixtures.rs` rather than `engine_parity.rs`
-    # -- skipped under `--parity-only` too, same as `CASES` above: that
-    # flag's own promise is every other committed fixture untouched.
+    # COST_FIXTURE_CASES (issue #632, now read by issue #695's Store
+    # too): same both-engines pairing as PARITY_CASES, for
+    # `store_fixtures.rs` rather than `engine_parity.rs` -- skipped
+    # under `--parity-only` too, same as `CASES` above: that flag's
+    # own promise is every other committed fixture untouched.
     if "--parity-only" not in sys.argv:
         for case in COST_FIXTURE_CASES:
             record_one(case, cof_bin, engine="cof", out_name=f"{case.name}_cof")

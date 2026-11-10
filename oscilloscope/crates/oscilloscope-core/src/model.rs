@@ -374,8 +374,9 @@ pub struct NodeMeta {
     pub progress_eta_s: Option<f64>,
     /// `meta.live` (`docs/plugins/agent.md`'s "Live progress while the
     /// session runs"), parsed once here so every reader (the overview's
-    /// now pane, Flow's selected pane, the Cost screen) shares one
-    /// parse instead of re-reading the raw `Value` each time. `None`
+    /// now pane, Flow's selected pane, the Store's own running tiles)
+    /// shares one parse instead of re-reading the raw `Value` each
+    /// time. `None`
     /// for every node that isn't a currently- or recently-live agent
     /// session, including one that finished normally (`meta.live` is
     /// removed once the attempt ends, success or failure, except when
@@ -993,19 +994,6 @@ pub struct RunModel {
     /// this cache alone, no observable state of the model itself ever
     /// changes because of it.
     interval_offset_cache: std::cell::RefCell<IntervalOffsetCache>,
-    /// Every distinct `meta.live.tokens_sent`/`tokens_received`
-    /// reading seen for a path while osi actually watched it live
-    /// (issue #641), oldest first: `(ts, tokens_sent, tokens_
-    /// received)`, `ts` the moment this model observed it, not the
-    /// live summary's own `updated_at` -- `meta.live` carries no
-    /// per-sample timestamp of its own, only a `started_at`/
-    /// `updated_at` pair for the whole session. Lets the "tokens
-    /// over time" chart attribute a long session's own tokens to
-    /// when they actually arrived instead of dumping the whole
-    /// total into one bucket at its own `completed_at`. Empty for a
-    /// session never observed running at all (a finished run opened
-    /// fresh, or a watch that started after it ended).
-    agent_token_observations: BTreeMap<String, Vec<(String, u64, u64)>>,
     /// The latest `progress` line seen for each path (issue #675's
     /// events-only attach) -- cleared at the path's next `start`
     /// (a retry, or an unnamed loop's next pass reusing it), so a
@@ -1098,83 +1086,8 @@ impl RunModel {
             overflowed_minute_counts: BTreeMap::new(),
             overflowed_total_passes: 0,
             interval_offset_cache: std::cell::RefCell::new((None, Vec::new())),
-            agent_token_observations: BTreeMap::new(),
             progress: BTreeMap::new(),
         }
-    }
-
-    /// Records a new sample of every live agent session's own
-    /// running token totals, at `now` (issue #641) -- called once
-    /// per redraw, right alongside [`Self::observe`] (which this
-    /// does not replace: `meta.live` isn't an event, so there is no
-    /// `observe_event` counterpart for it). Only a session whose
-    /// `tokens_sent`/`tokens_received` actually moved since the last
-    /// sample gets a new entry -- `meta.live` is published at most
-    /// once a second, but a redraw can easily happen more often than
-    /// that, and a repeated identical reading would otherwise read
-    /// as a burst of new tokens arriving at every one of those
-    /// redraws instead of one real update. `run_already_ended` gates
-    /// a path's very first sample: a leftover `meta.live` first seen
-    /// after the run itself has already ended is never recorded at
-    /// all (see this field's own doc comment), and a sample whose
-    /// own totals dropped below the path's last one clears that
-    /// path's earlier samples first, so a rerun of the same agent
-    /// path never adds its own tokens on top of an already-finished
-    /// pass's.
-    pub fn record_live_token_observations(
-        &mut self,
-        flat: &BTreeMap<String, NodeMeta>,
-        now: &str,
-        run_already_ended: bool,
-    ) {
-        for (path, node) in flat {
-            let Some(live) = &node.live else { continue };
-            let sent = live.tokens_sent.unwrap_or(0);
-            let received = live.tokens_received.unwrap_or(0);
-            if run_already_ended && !self.agent_token_observations.contains_key(path) {
-                // An interrupted session's leftover `meta.live` is
-                // seen for the very first time only once the run
-                // itself has already ended -- it was never actually
-                // watched running in this process, so there is no
-                // real moment to attribute a sample to. Leaving it
-                // unrecorded lets the "tokens over time" chart spread
-                // its tokens over its own span instead, the same as
-                // any other session never observed running.
-                continue;
-            }
-            let samples = self
-                .agent_token_observations
-                .entry(path.clone())
-                .or_default();
-            if let Some((_, prev_sent, prev_received)) = samples.last() {
-                if sent < *prev_sent || received < *prev_received {
-                    // An unnamed loop rerunning the same agent path
-                    // starts that path's own running totals back at
-                    // zero -- the previous pass's samples no longer
-                    // describe anything `node_tokens` will ever
-                    // report again for this path, so keeping them
-                    // would only ever overshoot the chart's own total
-                    // for the step once it next completes.
-                    samples.clear();
-                }
-            }
-            let unchanged = samples
-                .last()
-                .is_some_and(|(_, s, r)| *s == sent && *r == received);
-            if !unchanged {
-                samples.push((now.to_string(), sent, received));
-            }
-        }
-    }
-
-    /// A path's own recorded live token samples (issue #641), oldest
-    /// first -- empty when that path was never observed running with
-    /// `meta.live` at all.
-    pub fn agent_token_observations(&self, path: &str) -> &[(String, u64, u64)] {
-        self.agent_token_observations
-            .get(path)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
     }
 
     /// Feeds one parsed `--events` line in (DESIGN.md §2.1's "With

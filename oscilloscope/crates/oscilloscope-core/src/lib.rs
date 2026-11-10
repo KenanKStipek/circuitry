@@ -10,7 +10,6 @@
 
 pub mod changes;
 pub mod config_discovery;
-pub mod cost;
 pub mod diff;
 pub mod discovery;
 pub mod engine;
@@ -27,6 +26,6 @@ pub mod rail;
 pub mod registry;
 pub mod render;
 pub mod screens;
+pub mod store;
 pub mod supervise;
 pub mod transcript;
-pub mod treemap;
