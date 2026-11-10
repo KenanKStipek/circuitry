@@ -8198,7 +8198,15 @@ fn draw_flow_rail_pane(
         header.effects_planned.unwrap_or(header.effects_done),
         screen.unit
     );
-    if app.follow && area.width >= 100 {
+    // Once the run has ended, there is nothing left to follow --
+    // the title drops the word on its own, the same instant the
+    // run does, never waiting on the next key press to notice.
+    let nothing_to_follow = matches!(
+        screen.head,
+        oscilloscope_core::screens::TapeHead::Ended { .. }
+            | oscilloscope_core::screens::TapeHead::Failed { .. }
+    );
+    if app.follow && !nothing_to_follow && area.width >= 100 {
         title.push_str(" · Following");
     }
     let block = Block::default()
@@ -9746,6 +9754,39 @@ mod golden_tests {
         insta::assert_snapshot!(text);
     }
 
+    /// Issue #691's own follow-up: once a run has ended, there is
+    /// nothing left to follow -- the Flow's own title must drop
+    /// `· Following` the instant the run does, never waiting on a
+    /// key press to notice (the Tape's own chrome already behaves
+    /// this way: its status line reads the run's own end the moment
+    /// it happens, regardless of any selection or follow state).
+    #[test]
+    fn the_title_drops_following_the_instant_the_run_ends() {
+        let plan = sample_plan();
+        let mut model = RunModel::new();
+        let state = json!({
+            "runtime": {"last_run": {"completed_at": "t1"}},
+            "prime": {"value": true, "meta": {"completed_at": "t1", "error": null},
+            "a": {"value": "ok\n", "meta": {"created_at": "t0", "completed_at": "t1", "error": null, "provider": "shell"}}
+        }});
+        let text = snapshot_at(
+            120,
+            24,
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::exited(false),
+            "cof",
+            "prime.a",
+            &[],
+            true,
+        );
+        assert!(
+            !text.contains("Following"),
+            "an ended run has nothing left to follow: {text}"
+        );
+    }
+
     #[test]
     fn cancelled_row_with_no_final_write_yet() {
         // The process exited and osi itself forwarded a signal
@@ -9875,6 +9916,7 @@ mod golden_tests {
         engine: &str,
         selected: &str,
         log_lines: &[String],
+        follow: bool,
     ) -> String {
         let rendered = render::build(
             "do-thing.yml",
@@ -9903,7 +9945,7 @@ mod golden_tests {
         let mut app = App::new(engine == "watch");
         app.screen = oscilloscope_core::screens::Screen::Flow;
         app.selected_path = Some(selected.to_string());
-        app.follow = false;
+        app.follow = follow;
         let test_theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
         let test_ctx = DrawCtx {
             theme: &test_theme,
@@ -9949,7 +9991,18 @@ mod golden_tests {
         engine: &str,
         selected: &str,
     ) -> String {
-        snapshot_at(100, 24, plan, model, state, process, engine, selected, &[])
+        snapshot_at(
+            100,
+            24,
+            plan,
+            model,
+            state,
+            process,
+            engine,
+            selected,
+            &[],
+            false,
+        )
     }
 
     /// [`snapshot`], at 70x20 -- below 80 columns, so the Flow
@@ -9964,7 +10017,18 @@ mod golden_tests {
         engine: &str,
         selected: &str,
     ) -> String {
-        snapshot_at(70, 20, plan, model, state, process, engine, selected, &[])
+        snapshot_at(
+            70,
+            20,
+            plan,
+            model,
+            state,
+            process,
+            engine,
+            selected,
+            &[],
+            false,
+        )
     }
 
     /// [`snapshot`], with the log pane given real lines (review
@@ -9981,7 +10045,7 @@ mod golden_tests {
         log_lines: &[String],
     ) -> String {
         snapshot_at(
-            100, 24, plan, model, state, process, engine, selected, log_lines,
+            100, 24, plan, model, state, process, engine, selected, log_lines, false,
         )
     }
 
@@ -9997,7 +10061,7 @@ mod golden_tests {
         log_lines: &[String],
     ) -> String {
         snapshot_at(
-            120, 40, plan, model, state, process, engine, selected, log_lines,
+            120, 40, plan, model, state, process, engine, selected, log_lines, false,
         )
     }
 
