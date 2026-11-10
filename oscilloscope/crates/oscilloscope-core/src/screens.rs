@@ -16,8 +16,8 @@ use serde_json::Value;
 use crate::format::{ClockZone, format_clock_time};
 use crate::model::{NodeMeta, RowStatus, RunModel, RunStatus, StatusKind};
 use crate::observe::duration_seconds;
-use crate::plan::{LeafEffectKind, PlanEntryKind, PlanTree};
-use crate::render::{Row, RowKind, TokenBlock, details_for};
+use crate::plan::{Flow, LeafEffectKind, PlanEntryKind, PlanTree};
+use crate::render::{Header, Row, RowKind, TokenBlock, details_for};
 
 /// Which of the four screens is on display (issue #650: all four
 /// now have a screen to show).
@@ -732,11 +732,12 @@ fn build_phase_strip(rows: &[Row]) -> Vec<PhaseStep> {
 
 /// The Tape's own head rule (`design/tui-design.md` §2.1): which of
 /// the four states the list's own top border reads.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TapeHead {
     /// No events yet -- `header.run_start_ts` is `None`.
     Starting,
     /// A run under way, or an attached run already past its start.
+    #[default]
     Normal,
     Ended {
         ok: bool,
@@ -1006,7 +1007,7 @@ pub struct TapeFailedDetail {
 /// (`tape_token_bar`'s round-half-up, capped at eight) -- 402 at a
 /// 50-token unit rounds to a full 8-cell bar, not 9, so the unit
 /// stays 50 for it.
-fn tape_unit(largest_usual: Option<u64>) -> u64 {
+pub(crate) fn tape_unit(largest_usual: Option<u64>) -> u64 {
     const STEPS: [u64; 6] = [10, 20, 50, 100, 200, 500];
     let Some(largest) = largest_usual else {
         return 50;
@@ -1191,7 +1192,7 @@ fn first_words(text: &str, max_chars: usize) -> String {
 /// through this, not only the ones ahead, so a finished or running
 /// row's `+47%` deviation has the same figure behind it as a queued
 /// one's `usually 155 t`.
-fn tape_row_usual_tokens(
+pub(crate) fn tape_row_usual_tokens(
     path: &str,
     plan: &PlanTree,
     header: &crate::render::Header,
@@ -1539,7 +1540,27 @@ fn tape_row_label(row: &Row, flat: &BTreeMap<String, NodeMeta>, plan: &PlanTree)
         .match_path(parent_path)
         .and_then(|m| m.entries.first())
         .is_some_and(|entry| matches!(entry.kind, crate::plan::PlanEntryKind::If { .. }));
-    if is_pass || parent_is_if {
+    // A sequential container (`use`, a chain-flow `dynamic`, a
+    // `try`/`finally`) inlines its own children straight onto the
+    // rail (`rail::build_level`'s own doc comment) -- its child
+    // still carries this same parent breadcrumb everywhere a plain
+    // step's own name is shown on its own, the Flow screen's
+    // Selected pane and status line included. The document root
+    // itself compiles to the very same `Dynamic { flow: Chain }`
+    // shape its own top-level block is, so it's excluded here by
+    // its own path having no parent of its own -- otherwise every
+    // top-level step in every document would read "prime › x".
+    let parent_is_sequential_container = parent_path.contains('.')
+        && plan
+            .match_path(parent_path)
+            .and_then(|m| m.entries.first())
+            .is_some_and(|entry| {
+                matches!(
+                    entry.kind,
+                    PlanEntryKind::Leaf(LeafEffectKind::Use) | PlanEntryKind::TryFinally
+                ) || matches!(&entry.kind, PlanEntryKind::Dynamic { flow: Flow::Chain })
+            });
+    if is_pass || parent_is_if || parent_is_sequential_container {
         format!("{parent_name} › {own_name}")
     } else {
         row.label.clone()
@@ -1939,6 +1960,60 @@ fn build_tape_failed_detail(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The Starting/Normal/Ended/Failed head rule (`design/tui-design.md`
+/// §2.1): shared chrome, read the same way by every screen's own
+/// status line (`tui::draw_tape_status_line` and the Flow's/Signal's
+/// own counterparts), not only the Tape's own head rule.
+pub(crate) fn build_run_head(
+    run_start: Option<&str>,
+    header: &Header,
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+) -> TapeHead {
+    if run_start.is_none() {
+        return TapeHead::Starting;
+    }
+    match header.status {
+        RunStatus::Running => TapeHead::Normal,
+        RunStatus::Failed => {
+            // The deepest failed leaf, not the root (`prime`
+            // itself reads `Failed` too, by the same chain-
+            // failure propagation, but is never the row whose own
+            // error this head or the detail pane want).
+            let failing = rows
+                .iter()
+                .find(|r| r.kind.is_leaf() && r.status.kind == StatusKind::Failed)
+                .or_else(|| rows.iter().find(|r| r.status.kind == StatusKind::Failed));
+            let error = failing
+                .and_then(|r| flat.get(&r.path))
+                .and_then(|n| n.error.clone())
+                .unwrap_or_default();
+            TapeHead::Failed {
+                error,
+                failing_path: failing.map(|r| r.path.clone()),
+            }
+        }
+        _ => {
+            let handled = rows
+                .iter()
+                .find(|r| r.status.kind == StatusKind::FailedHandled)
+                .map(|r| {
+                    let error = flat
+                        .get(&r.path)
+                        .and_then(|n| n.error.clone())
+                        .unwrap_or_default();
+                    (r.label.clone(), error)
+                });
+            TapeHead::Ended {
+                ok: matches!(header.status, RunStatus::Ok),
+                duration_s: header.elapsed_s,
+                handled_failure: handled,
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn build_tape(
     rows: &[Row],
     header: &crate::render::Header,
@@ -2056,48 +2131,7 @@ pub fn build_tape(
         .copied()
         .collect();
 
-    let head = if run_start.is_none() {
-        TapeHead::Starting
-    } else {
-        match header.status {
-            RunStatus::Running => TapeHead::Normal,
-            RunStatus::Failed => {
-                // The deepest failed leaf, not the root (`prime`
-                // itself reads `Failed` too, by the same chain-
-                // failure propagation, but is never the row whose own
-                // error this head or the detail pane want).
-                let failing = rows
-                    .iter()
-                    .find(|r| r.kind.is_leaf() && r.status.kind == StatusKind::Failed)
-                    .or_else(|| rows.iter().find(|r| r.status.kind == StatusKind::Failed));
-                let error = failing
-                    .and_then(|r| flat.get(&r.path))
-                    .and_then(|n| n.error.clone())
-                    .unwrap_or_default();
-                TapeHead::Failed {
-                    error,
-                    failing_path: failing.map(|r| r.path.clone()),
-                }
-            }
-            _ => {
-                let handled = rows
-                    .iter()
-                    .find(|r| r.status.kind == StatusKind::FailedHandled)
-                    .map(|r| {
-                        let error = flat
-                            .get(&r.path)
-                            .and_then(|n| n.error.clone())
-                            .unwrap_or_default();
-                        (r.label.clone(), error)
-                    });
-                TapeHead::Ended {
-                    ok: matches!(header.status, RunStatus::Ok),
-                    duration_s: header.elapsed_s,
-                    handled_failure: handled,
-                }
-            }
-        }
-    };
+    let head = build_run_head(run_start, header, rows, flat);
     // §2.1's own frames: a preview line (and the title's own
     // "Previews On/Off") is a Normal/Usual-state-only thing -- every
     // Starting/Ended/Failed row, finished or not, reads plainly.
@@ -2555,8 +2589,14 @@ pub struct SignalScreen {
     /// §3.2's status line: the most recently finished row, any
     /// depth -- a front end reads its own glyph/colour straight off
     /// `kind`/`status`, the same way the Tape's own status line
-    /// already does for its own last row.
+    /// already does for its own last row. Read only in
+    /// [`TapeHead::Normal`]; the Starting/Ended/Failed states read
+    /// `head` instead, the same shared chrome the Tape's own status
+    /// line builder reads.
     pub last_finished: Option<SignalLastFinished>,
+    /// The Starting/Normal/Ended/Failed head rule (`build_run_head`),
+    /// shared chrome with the Tape's own status line.
+    pub head: TapeHead,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -2641,6 +2681,42 @@ fn signal_loop_pass_tokens(loop_path: &str, flat: &BTreeMap<String, NodeMeta>) -
     }
     let with_tokens: Vec<u64> = per_pass.values().copied().filter(|&t| t > 0).collect();
     (with_tokens.iter().sum(), with_tokens.len() as u64)
+}
+
+#[allow(clippy::too_many_arguments)]
+/// The newest finished (or handled-failed) row, by its own finish
+/// time (DESIGN.md §3.2: "the newest finished step") -- shared by
+/// the Signal's and the Flow's own status lines.
+pub(crate) fn last_finished_row(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    run_start: Option<&str>,
+) -> Option<SignalLastFinished> {
+    let elapsed_offset = |ts: &str| run_start.and_then(|s| duration_seconds(s, ts));
+    let finish_ts = |r: &&Row| -> Option<&str> {
+        let node = flat.get(&r.path)?;
+        if r.kind == RowKind::If {
+            node.created_at.as_deref()
+        } else {
+            node.completed_at.as_deref()
+        }
+    };
+    rows.iter()
+        .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
+        .filter_map(|r| Some((r, elapsed_offset(finish_ts(&r)?)?)))
+        .max_by(|(_, a), (_, b)| a.total_cmp(b))
+        .map(|(row, _)| {
+            let node = flat.get(&row.path);
+            let tokens = node.map(|n| crate::model::node_tokens(&n.meta));
+            SignalLastFinished {
+                label: tape_row_label(row, flat, plan),
+                kind: row.kind,
+                status: row.status.kind,
+                tokens: tokens.filter(|(s, r)| s + r > 0),
+                ts: finish_ts(&row).map(str::to_string),
+            }
+        })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3261,31 +3337,8 @@ pub fn build_signal(
                 .sum();
             (sum > 0).then_some(sum)
         },
-        last_finished: {
-            let finish_ts = |r: &&Row| -> Option<&str> {
-                let node = flat.get(&r.path)?;
-                if r.kind == RowKind::If {
-                    node.created_at.as_deref()
-                } else {
-                    node.completed_at.as_deref()
-                }
-            };
-            rows.iter()
-                .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
-                .filter_map(|r| Some((r, elapsed_offset(finish_ts(&r)?)?)))
-                .max_by(|(_, a), (_, b)| a.total_cmp(b))
-                .map(|(row, _)| {
-                    let node = flat.get(&row.path);
-                    let tokens = node.map(|n| crate::model::node_tokens(&n.meta));
-                    SignalLastFinished {
-                        label: tape_row_label(row, flat, plan),
-                        kind: row.kind,
-                        status: row.status.kind,
-                        tokens: tokens.filter(|(s, r)| s + r > 0),
-                        ts: finish_ts(&row).map(str::to_string),
-                    }
-                })
-        },
+        last_finished: last_finished_row(rows, flat, plan, run_start),
+        head: build_run_head(run_start, header, rows, flat),
     }
 }
 
@@ -3382,6 +3435,9 @@ pub fn build_cost_screen(
 /// an ordinary step (issue #635: "a decision row shows its condition,
 /// its mode, the branch it took, and the model's answer for a
 /// model-mode condition").
+/// A selected decision station's own detail (DESIGN.md §2.3): its
+/// condition, the branch it took, and the model's own answer for a
+/// model-mode condition.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SelectedDecision {
     pub label: String,
@@ -3390,32 +3446,258 @@ pub struct SelectedDecision {
     pub inferred: bool,
     pub nothing_ran: bool,
     pub answer: Option<String>,
+    /// Why an *inferred* decision read the branch it did (`None` for
+    /// a named one, whose `meta.branch` is exact and needs no
+    /// explaining) -- an unnamed `if` has no event of its own to
+    /// point at, only which side's own steps actually started.
+    pub inferred_evidence: Option<String>,
 }
 
-/// Screen 2's own model (issue #635, part of #612) -- built only
+/// One named step inside the selected pass (DESIGN.md §2.3's
+/// `Pass 1 · cats · Selected` pane): `Draft` -- a capitalised step
+/// name, its own status, tokens and deviation, and (once done) what
+/// it produced.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedPassStep {
+    pub label: String,
+    pub status: RowStatus,
+    pub sent: u64,
+    pub received: u64,
+    pub usual: Option<u64>,
+    pub produced: Option<String>,
+}
+
+/// The selected loop pass (DESIGN.md §2.3, §5's "the selected pass
+/// or station pane"): `index`/`label` name it (`Pass 1 · cats`),
+/// `active_*`/`slot` describe whichever of its own steps is
+/// currently live (or, once the pass has finished, its own last
+/// step) for the Status line, and `steps` is every prompt the pass
+/// ran, for its own named row and the Produced text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SelectedPass {
+    pub index: usize,
+    pub label: String,
+    pub active_label: String,
+    pub active_status: RowStatus,
+    pub active_elapsed_s: Option<f64>,
+    pub slot: Option<usize>,
+    pub steps: Vec<SelectedPassStep>,
+}
+
+/// Screen 2's own model (issue #691, part 3 of #677) -- built only
 /// while the Flow screen is actually on display, the same
 /// performance rule `build_cost_screen` already follows for screen
-/// 3. `rows`/`footer`/`story` are `crate::flow::build_flow_rows`'s
-/// and `build_story`'s own outputs; `selected`/`selected_decision`
-/// pick whichever of the two the current selection actually is --
-/// never both, since a flow-pane selection is always exactly one
-/// kind of row at a time.
+/// 3. `rail` is [`crate::rail::build_rail`]'s own output; `story` is
+/// `crate::flow::build_story`'s; `selected_pass`/`selected_step` pick
+/// whichever of the two the current selection actually is -- never
+/// both, a loop pass and a plain station are never the same
+/// selection at once.
 #[derive(Debug, Clone, PartialEq)]
 pub struct FlowScreen {
-    pub rows: Vec<crate::flow::FlowRow>,
-    pub footer: crate::flow::FlowFooter,
+    pub rail: crate::rail::Rail,
+    pub unit: u64,
     pub story: Vec<crate::flow::StoryEntry>,
-    pub selected: Option<FocusedStep>,
+    pub selected_pass: Option<SelectedPass>,
     pub selected_decision: Option<SelectedDecision>,
+    pub selected_step: Option<FocusedStep>,
+    /// §3.2's status line: the newest finished step, shared with
+    /// the Signal's own -- read only in [`TapeHead::Normal`]; the
+    /// Starting/Ended/Failed states read `head` instead, the same
+    /// shared chrome the Tape's own status line builder reads.
+    pub last_finished: Option<SignalLastFinished>,
+    /// The Starting/Normal/Ended/Failed head rule (`build_run_head`),
+    /// shared chrome with the Tape's own status line.
+    pub head: TapeHead,
+    /// The Totals row's own deviation (§3.3): the sum of every
+    /// row's usual tokens that has actually run so far, same as the
+    /// Tape's own -- comparing against the whole run's eventual
+    /// usual instead would read wildly off on any partial run.
+    pub usual_so_far_tokens: Option<u64>,
+}
+
+/// The first pass of the first loop that is either running or, with
+/// nothing running, simply first in plan order -- the rail's own
+/// default selection (DESIGN.md's own frames: `Pass 1 · cats` is
+/// selected with no explicit selection at all).
+/// A loop's own story entry (DESIGN.md §2.3: `⟳ drafts · 3 passes
+/// · 2 wide`) -- `--log` has no such line (a loop writes no event
+/// of its own for *starting*), so this synthesises one, the same
+/// way an unnamed `if`'s own inferred decision already is.
+fn loop_story_lines(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> Vec<crate::diff::LogLine> {
+    rows.iter()
+        .filter(|r| r.kind == RowKind::Loop)
+        .filter_map(|r| {
+            let total = r.loop_progress.and_then(|p| p.total)?;
+            let max_concurrency = plan.match_path(&r.path).and_then(|m| {
+                m.entries.iter().find_map(|e| match &e.kind {
+                    PlanEntryKind::Loop {
+                        max_concurrency, ..
+                    } => *max_concurrency,
+                    _ => None,
+                })
+            });
+            // An unbounded loop's own width is its pass count itself
+            // (DESIGN.md §2.3: "max_concurrency or the pass count when
+            // unbounded") -- never skipped just because it has no
+            // `max_concurrency` of its own to report instead.
+            let wide = max_concurrency.unwrap_or(total as u32);
+            let ts = flat.get(&r.path).and_then(|n| n.created_at.clone());
+            Some(crate::diff::LogLine {
+                ts,
+                text: format!("⟳ {} · {total} passes · {wide} wide", r.label),
+                kind: crate::diff::LogKind::Progress,
+                path: Some(r.path.clone()),
+            })
+        })
+        .collect()
+}
+
+/// The pass the Flow's Selected pane falls back to: the pass that is
+/// running (itself, or any step inside it), else the first pass. A
+/// pass is told by its path (`crate::rail::is_pass_row_path`), never
+/// by `RowKind::Pass`: a pass whose body is a single unnamed `if`
+/// carries that op's kind and a `Pending` status on its own row while
+/// its steps run underneath.
+pub(crate) fn default_pass_path(rows: &[Row]) -> Option<&str> {
+    let live = |r: &Row| {
+        matches!(
+            r.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        )
+    };
+    let passes = || {
+        rows.iter()
+            .filter(|r| crate::rail::is_pass_row_path(&r.path))
+    };
+    let running = passes().find(|p| {
+        live(p)
+            || rows
+                .iter()
+                .any(|c| c.path.starts_with(&format!("{}.", p.path)) && live(c))
+    });
+    running.or_else(|| passes().next()).map(|r| r.path.as_str())
+}
+
+fn capitalize(label: &str) -> String {
+    let mut chars = label.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn build_flow_screen(
+fn build_selected_pass(
+    pass_path: &str,
     rows: &[Row],
-    unfolded_rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    header: &Header,
+    state: Option<&Value>,
+) -> Option<SelectedPass> {
+    let pass_row = rows.iter().find(|r| r.path == pass_path)?;
+    let loop_path = pass_path.rsplit_once('.').map(|(p, _)| p)?;
+    let index_str = pass_path.rsplit('.').next()?.strip_prefix("iter_")?;
+    let pass_index: u64 = index_str.parse().ok()?;
+    let label = crate::rail::pass_each_value(loop_path, pass_index, plan, state)
+        .unwrap_or_else(|| format!("pass {}", pass_index + 1));
+    let children: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.depth == pass_row.depth + 1 && r.path.starts_with(&format!("{pass_path}.")))
+        .collect();
+    let active = children
+        .iter()
+        .find(|r| {
+            matches!(
+                r.status.kind,
+                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+            )
+        })
+        .or_else(|| children.last())
+        .copied();
+    let slot = active.and_then(|active| {
+        if active.status.kind != StatusKind::Running {
+            return None;
+        }
+        let siblings: Vec<&Row> = rows
+            .iter()
+            .filter(|r| {
+                crate::rail::is_pass_row_path(&r.path)
+                    && r.path.starts_with(&format!("{loop_path}."))
+                    && r.status.kind == StatusKind::Running
+            })
+            .collect();
+        let mut ordered: Vec<(&str, Option<String>)> = siblings
+            .iter()
+            .map(|r| {
+                (
+                    r.path.as_str(),
+                    flat.get(&r.path).and_then(|n| n.created_at.clone()),
+                )
+            })
+            .collect();
+        ordered.sort_by(|a, b| a.1.cmp(&b.1));
+        ordered
+            .iter()
+            .position(|(p, _)| *p == pass_path)
+            .map(|i| i + 1)
+    });
+    let steps = children
+        .iter()
+        .filter(|r| r.kind == RowKind::Prompt)
+        .map(|r| {
+            let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
+            let usual = tape_row_usual_tokens(&r.path, plan, header);
+            let produced = flat
+                .get(&r.path)
+                .and_then(|n| n.value.as_str())
+                .map(str::to_string);
+            SelectedPassStep {
+                label: capitalize(&r.label),
+                status: r.status.clone(),
+                sent,
+                received,
+                usual,
+                produced,
+            }
+        })
+        .collect();
+    Some(SelectedPass {
+        index: (pass_index + 1) as usize,
+        label,
+        active_label: active.map(|r| r.label.clone()).unwrap_or_default(),
+        active_status: active.map(|r| r.status.clone()).unwrap_or(RowStatus {
+            kind: StatusKind::Pending,
+            skip_reason: None,
+            retrying: false,
+        }),
+        active_elapsed_s: active.and_then(|r| r.duration_s),
+        slot,
+        steps,
+    })
+}
+
+/// `rows` is always `render::RenderState::unfolded_rows`, never
+/// `RenderState::rows` -- the tree screen's own folding plays no
+/// part in the rail (`rail::build_rail`'s own doc comment).
+/// `folded_rows` is `RenderState::rows`, the same input the Tape's
+/// and the Signal's own builders take: the status line's "newest
+/// finished step", the Totals row's deviation and the shared head
+/// rule all read it instead, so the three screens never disagree
+/// over something folding changed (a breadcrumb's own quick steps,
+/// say) just because the Flow alone read the unfolded list.
+#[allow(clippy::too_many_arguments)]
+pub fn build_flow(
+    rows: &[Row],
+    folded_rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     model: &RunModel,
+    header: &Header,
     state: Option<&Value>,
     story_lines: &[crate::diff::LogLine],
     selected_path: Option<&str>,
@@ -3423,59 +3705,208 @@ pub fn build_flow_screen(
     run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
-    let (flow_rows, footer) =
-        crate::flow::build_flow_rows(rows, unfolded_rows, flat, plan, story_lines);
-    let story = crate::flow::build_story(story_lines, &flow_rows, zone);
-    let mut selected = None;
+    let mut rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
+    crate::rail::cap_running_lanes(&mut rail.items, &|path| model.running_or_queued_bound(path));
+    let largest_usual_step = header
+        .history_step_usual
+        .values()
+        .filter_map(|s| s.tokens_p50)
+        .max();
+    let unit = tape_unit(largest_usual_step);
+    let mut story_lines_with_loops = story_lines.to_vec();
+    story_lines_with_loops.extend(loop_story_lines(rows, flat, plan));
+    let inferred_decisions = crate::rail::inferred_decisions(&rail.items, flat);
+    let story = crate::flow::build_story(&story_lines_with_loops, &inferred_decisions, zone);
+    // The default pass only stands in for the selection when there
+    // is none at all, or when the selection already names one of a
+    // loop's own passes -- never for a selection that lands on some
+    // other station or decision entirely, which must show its own
+    // pane instead (issue #691's own follow-up: a loop existing on
+    // the rail must not make every other station's own pane
+    // unreachable).
+    let pass_path = match selected_path {
+        None => default_pass_path(rows).map(str::to_string),
+        Some(p)
+            if rows
+                .iter()
+                .any(|r| r.path == p && crate::rail::is_pass_row_path(&r.path)) =>
+        {
+            Some(p.to_string())
+        }
+        Some(_) => None,
+    };
+    let selected_pass =
+        pass_path.and_then(|p| build_selected_pass(&p, rows, flat, plan, header, state));
     let mut selected_decision = None;
-    if let Some(path) = selected_path {
-        // A named `if`'s own decision row shares its real `Row`'s own
-        // path, so `flow_rows` is checked first -- `rows` is only the
-        // fallback for an ordinary step, which never has a `Decision`
-        // entry of its own in `flow_rows` at all.
-        let flow_row = flow_rows.iter().find(|r| r.path == path);
-        match flow_row.map(|r| &r.kind) {
-            Some(crate::flow::FlowRowKind::Decision {
-                branch,
-                inferred,
-                nothing_ran,
-                answer,
-            }) => {
-                selected_decision = Some(SelectedDecision {
-                    label: flow_row.unwrap().label.clone(),
-                    condition: flow_row.unwrap().condition.clone(),
-                    branch: branch.clone(),
-                    inferred: *inferred,
-                    nothing_ran: *nothing_ran,
-                    answer: answer.clone(),
+    let mut selected_step = None;
+    if selected_pass.is_none() {
+        if let Some(row) = selected_path.and_then(|path| rows.iter().find(|r| r.path == path)) {
+            if row.kind == RowKind::If {
+                let node = flat.get(&row.path);
+                let branch = node.and_then(|n| n.branch.clone());
+                let answer = node.and_then(|n| n.meta.get("answer")).map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    other => other.to_string(),
                 });
+                let condition = plan.match_path(&row.path).and_then(|m| {
+                    m.entries.iter().find_map(|e| match &e.kind {
+                        PlanEntryKind::If {
+                            condition: Some(c), ..
+                        } => Some(c.clone()),
+                        _ => None,
+                    })
+                });
+                selected_decision = Some(SelectedDecision {
+                    label: row.label.clone(),
+                    condition,
+                    branch,
+                    inferred: false,
+                    nothing_ran: false,
+                    answer,
+                    inferred_evidence: None,
+                });
+            } else {
+                let mut step = build_focused_step(row, flat, plan, model, state, now, run_ended_at);
+                // A sequential container's own child keeps its own
+                // ten-cell station name on the rail, but the Selected
+                // pane's own title still says which container it's
+                // inside (`gate › reply`), the same breadcrumb the
+                // status line already reads through `tape_row_label`.
+                step.breadcrumb = tape_row_label(row, flat, plan);
+                selected_step = Some(step);
             }
-            _ => {
-                if let Some(row) = rows.iter().find(|r| r.path == path) {
-                    selected = Some(build_focused_step(
-                        row,
-                        flat,
-                        plan,
-                        model,
-                        state,
-                        now,
-                        run_ended_at,
-                    ));
+        } else if let Some(path) = selected_path {
+            // An unnamed `if`'s own inferred decision has no row at
+            // all in `rows` (DESIGN.md §1.3: it writes no node and
+            // fires no event) -- its own synthetic `.__if` station
+            // lives only on the rail itself.
+            if let Some(station) = crate::rail::find_station(&rail.items, path) {
+                if station.row_kind == RowKind::If {
+                    let branch = match &station.headline {
+                        crate::rail::Headline::Branch(b) => b.clone(),
+                        _ => None,
+                    };
+                    let nothing_ran = branch.as_deref() == Some("none");
+                    let condition = match &station.detail {
+                        crate::rail::Detail::Condition(c) if !c.is_empty() => {
+                            Some(crate::plan::ConditionInfo {
+                                mode: crate::plan::ConditionMode::Cel,
+                                text: c.clone(),
+                            })
+                        }
+                        _ => None,
+                    };
+                    let inferred_evidence = if nothing_ran {
+                        Some("neither branch's own steps ever started".to_string())
+                    } else {
+                        branch
+                            .as_deref()
+                            .map(|b| format!("{b}'s own steps started running"))
+                    };
+                    selected_decision = Some(SelectedDecision {
+                        label: station.name.clone(),
+                        condition,
+                        branch: if nothing_ran { None } else { branch },
+                        inferred: true,
+                        nothing_ran,
+                        answer: None,
+                        inferred_evidence,
+                    });
                 }
             }
         }
     }
+    let last_finished = last_finished_row(folded_rows, flat, plan, header.run_start_ts.as_deref());
+    let usual_so_far: u64 = folded_rows
+        .iter()
+        .filter(|row| {
+            !matches!(
+                row.kind,
+                RowKind::Root
+                    | RowKind::Pass
+                    | RowKind::QuickSteps
+                    | RowKind::Report
+                    | RowKind::Unknown
+            ) && !matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped)
+        })
+        .filter_map(|row| tape_row_usual_tokens(&row.path, plan, header))
+        .sum();
+    let usual_so_far_tokens = (usual_so_far > 0).then_some(usual_so_far);
+    let head = build_run_head(header.run_start_ts.as_deref(), header, folded_rows, flat);
     FlowScreen {
-        rows: flow_rows,
-        footer,
+        rail,
+        unit,
         story,
-        selected,
+        selected_pass,
         selected_decision,
+        selected_step,
+        last_finished,
+        head,
+        usual_so_far_tokens,
     }
 }
 
 #[cfg(test)]
 mod tests {
+
+    /// A pass whose body is a single unnamed `if` carries the `if`'s
+    /// kind and a `Pending` status on its own row; the default pass
+    /// is still that pass when a step under it runs, and never the
+    /// loop's `iter_*` template row.
+    #[test]
+    fn default_pass_is_told_by_path_shape_and_a_running_step_underneath() {
+        fn row(path: &str, kind: RowKind, status: StatusKind, depth: usize) -> Row {
+            Row {
+                path: path.to_string(),
+                depth,
+                label: path.rsplit('.').next().unwrap_or(path).to_string(),
+                kind,
+                status: RowStatus {
+                    kind: status,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            }
+        }
+        let rows = vec![
+            row("prime", RowKind::Root, StatusKind::Running, 0),
+            row("prime.loop_a", RowKind::Loop, StatusKind::Running, 1),
+            row("prime.loop_a.iter_0", RowKind::If, StatusKind::Pending, 2),
+            row(
+                "prime.loop_a.iter_0.step_a",
+                RowKind::Tool,
+                StatusKind::Done,
+                3,
+            ),
+            row("prime.loop_a.iter_*", RowKind::Pass, StatusKind::Pending, 2),
+            row("prime.loop_a.iter_1", RowKind::If, StatusKind::Pending, 2),
+            row(
+                "prime.loop_a.iter_1.step_a",
+                RowKind::Tool,
+                StatusKind::Running,
+                3,
+            ),
+        ];
+        assert_eq!(default_pass_path(&rows), Some("prime.loop_a.iter_1"));
+        let none_running: Vec<Row> = rows
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                if r.status.kind == StatusKind::Running {
+                    r.status.kind = StatusKind::Done;
+                }
+                r
+            })
+            .collect();
+        assert_eq!(
+            default_pass_path(&none_running),
+            Some("prime.loop_a.iter_0")
+        );
+    }
     use super::*;
     use crate::model::ProcessState;
     use crate::plan::PlanTree;
@@ -4272,48 +4703,6 @@ mod tests {
         program
     }
 
-    /// [`program_with_ifs`], with its `if` unnamed -- the decision it
-    /// produces is inferred (issue #643's first follow-up), not read
-    /// straight from a real node's own `meta.branch`.
-    fn program_with_an_unnamed_if() -> electricity_bytecode::Program {
-        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let tmp = std::env::temp_dir().join(format!(
-            "osi-screens-test-unnamed-if-{}-{call}",
-            std::process::id()
-        ));
-        std::fs::create_dir_all(&tmp).unwrap();
-        let path = tmp.join("doc.yml");
-        std::fs::write(
-            &path,
-            r#"effects:
-  - type: if
-    if:
-      mode: cel
-      expr: "true"
-    then:
-      - name: taken
-        type: tool
-        provider: shell
-        params:
-          command: echo
-          args: ["ok"]
-    else:
-      - name: untaken
-        type: tool
-        provider: shell
-        params:
-          command: echo
-          args: ["no"]
-"#,
-        )
-        .unwrap();
-        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
-            .expect("document compiles");
-        std::fs::remove_dir_all(&tmp).ok();
-        program
-    }
-
     fn flat_from(json: Value) -> BTreeMap<String, NodeMeta> {
         crate::model::flatten_state(&json)
     }
@@ -4449,12 +4838,13 @@ mod tests {
         );
 
         let elapsed_at = |now: &str| {
-            let screen = build_flow_screen(
+            let screen = build_flow(
                 &rows,
                 &rows,
                 &flat,
                 &plan,
                 &model,
+                &base_header(),
                 Some(&state),
                 &[],
                 Some("prime.fix"),
@@ -4463,7 +4853,7 @@ mod tests {
                 now,
             );
             screen
-                .selected
+                .selected_step
                 .expect("prime.fix is selectable")
                 .elapsed_s
                 .expect("since_ts is known")
@@ -4625,13 +5015,13 @@ mod tests {
             &model,
             None,
         );
-        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
-        let screen = build_flow_screen(
-            &folded,
+        let screen = build_flow(
+            &rows,
             &rows,
             &flat,
             &plan,
             &model,
+            &base_header(),
             Some(&state),
             &[],
             Some("prime.check"),
@@ -4639,7 +5029,7 @@ mod tests {
             None,
             "2026-10-08T11:00:10Z",
         );
-        assert!(screen.selected.is_none());
+        assert!(screen.selected_step.is_none());
         let decision = screen.selected_decision.expect("a decision selection");
         assert_eq!(decision.branch.as_deref(), Some("then"));
         assert!(!decision.inferred);
@@ -4652,10 +5042,52 @@ mod tests {
         );
     }
 
-    /// Issue #643's first follow-up: selecting an unnamed `if`'s own
-    /// inferred decision row (no real path of its own) gives the
-    /// selected pane the same condition/branch detail a named one's
-    /// does, not an ordinary `FocusedStep`.
+    fn program_with_an_unnamed_if() -> electricity_bytecode::Program {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "osi-screens-unnamed-if-test-{}-{call}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("doc.yml");
+        std::fs::write(
+            &path,
+            r#"effects:
+  - type: if
+    if:
+      mode: cel
+      expr: "true"
+    then:
+      - name: taken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["ok"]
+    else:
+      - name: untaken
+        type: tool
+        provider: shell
+        params:
+          command: echo
+          args: ["no"]
+"#,
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
+        std::fs::remove_dir_all(&tmp).ok();
+        program
+    }
+
+    /// Issue #691's own follow-up (ported from the removed tree
+    /// screen's own `build_flow_screen_selected_inferred_decision_
+    /// reads_the_condition_and_branch`): selecting an unnamed `if`'s
+    /// own inferred decision station -- no row of its own, since it
+    /// writes no node at all -- gives the Selected pane the same
+    /// condition/branch detail a named one's does, resolved against
+    /// the rail rather than `rows`.
     #[test]
     fn build_flow_screen_selected_inferred_decision_reads_the_condition_and_branch() {
         let plan = PlanTree::from_program(&program_with_an_unnamed_if());
@@ -4682,31 +5114,33 @@ mod tests {
             &model,
             None,
         );
-        let folded = crate::fold::fold_rows(rows.clone(), true, &Default::default());
-        let (flow_rows, _) = crate::flow::build_flow_rows(&folded, &rows, &flat, &plan, &[]);
-        let inferred = flow_rows
+        let rail =
+            crate::rail::build_rail(&rows, &flat, &plan, &base_header(), Some(&state), &utc());
+        let inferred_path = rail
+            .items
             .iter()
-            .find(|r| {
-                matches!(
-                    r.kind,
-                    crate::flow::FlowRowKind::Decision { inferred: true, .. }
-                )
+            .find_map(|it| match it {
+                crate::rail::RailItem::Station(s) if s.path.contains(".__if") => {
+                    Some(s.path.clone())
+                }
+                _ => None,
             })
-            .expect("an inferred decision row");
-        let screen = build_flow_screen(
-            &folded,
+            .expect("an inferred decision station");
+        let screen = build_flow(
+            &rows,
             &rows,
             &flat,
             &plan,
             &model,
+            &base_header(),
             Some(&state),
             &[],
-            Some(inferred.path.as_str()),
+            Some(inferred_path.as_str()),
             &utc(),
             None,
             "2026-10-08T11:00:10Z",
         );
-        assert!(screen.selected.is_none());
+        assert!(screen.selected_step.is_none());
         let decision = screen.selected_decision.expect("a decision selection");
         assert_eq!(decision.branch.as_deref(), Some("then"));
         assert!(decision.inferred);
@@ -5531,5 +5965,56 @@ mod tests {
         let at_200ms = build_signal(&rows, &header, &flat, &plan, &model, None, 200, None, now);
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");
+    }
+
+    /// Issue #691's own follow-up: the Flow's status line and
+    /// Totals deviation read `folded_rows` (the same `RenderState::
+    /// rows` the Tape's and the Signal's own builders take), never
+    /// the rail's own unfolded list -- a row folding absorbed into a
+    /// breadcrumb and dropped from `folded_rows` must not still read
+    /// as the newest finished step just because the unfolded list
+    /// still carries it.
+    #[test]
+    fn flow_status_line_reads_folded_rows_not_the_rails_own_unfolded_list() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut header = base_header();
+        header.run_end_ts = None;
+        let unfolded_rows = vec![
+            tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done),
+            tape_row("prime.z", 1, "z", RowKind::Tool, StatusKind::Done),
+        ];
+        // `folded_rows` never carries `z` at all (folded away into a
+        // breadcrumb, say) -- only `a` is left to read as the newest
+        // finished step.
+        let folded_rows = vec![tape_row("prime.a", 1, "a", RowKind::Tool, StatusKind::Done)];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.a".to_string(),
+            tape_node("2026-10-08T11:05:00Z", Some("2026-10-08T11:05:01Z")),
+        );
+        flat.insert(
+            "prime.z".to_string(),
+            tape_node("2026-10-08T11:06:00Z", Some("2026-10-08T11:06:01Z")),
+        );
+        let screen = build_flow(
+            &unfolded_rows,
+            &folded_rows,
+            &flat,
+            &plan,
+            &model,
+            &header,
+            None,
+            &[],
+            None,
+            &utc(),
+            None,
+            "2026-10-08T11:06:02Z",
+        );
+        let last_finished = screen.last_finished.expect("a newest finished step");
+        assert_eq!(
+            last_finished.label, "a",
+            "must read folded_rows' own newest step, not the unfolded list's later 'z': {last_finished:?}"
+        );
     }
 }

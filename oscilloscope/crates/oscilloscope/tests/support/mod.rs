@@ -348,3 +348,132 @@ pub fn assert_no_leftover_process(needle: &Path) {
         String::from_utf8_lossy(&ps.stdout)
     );
 }
+
+/// Replays raw terminal output onto a blank character grid: cursor positioning (`CSI r;cH` / `f`,
+/// `CSI nA/B/C/D`), carriage return and line feed move the cursor, every other escape sequence
+/// (colours, attributes, clears, cursor visibility, alternate screen) is skipped, and printable text
+/// lands at the cursor. Each returned line is one row, trailing blanks trimmed, so a test can look for
+/// the text a screen actually shows rather than for bytes that a styled run may split with escapes.
+pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut row, mut col) = (0usize, 0usize);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\u{1b}' {
+            i += 1;
+            if i < chars.len() && chars[i] == '[' {
+                i += 1;
+                let start = i;
+                while i < chars.len() && !chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    break;
+                }
+                let params: String = chars[start..i].iter().collect();
+                let fin = chars[i];
+                i += 1;
+                let nums: Vec<usize> = params
+                    .trim_start_matches('?')
+                    .split(';')
+                    .filter_map(|p| p.parse().ok())
+                    .collect();
+                match fin {
+                    'H' | 'f' => {
+                        row = nums.first().copied().unwrap_or(1).saturating_sub(1);
+                        col = nums.get(1).copied().unwrap_or(1).saturating_sub(1);
+                    }
+                    'A' => row = row.saturating_sub(nums.first().copied().unwrap_or(1)),
+                    'B' => row += nums.first().copied().unwrap_or(1),
+                    'C' => col += nums.first().copied().unwrap_or(1),
+                    'D' => col = col.saturating_sub(nums.first().copied().unwrap_or(1)),
+                    // Erase in display/line (`\x1b[2J`, `\x1b[K`, ...)
+                    // -- a real terminal drops the erased cells for
+                    // good; a resize mid-stream (ratatui clears and
+                    // redraws from scratch at the new size) leaves a
+                    // wider frame's own stale cells bleeding through
+                    // underneath a narrower one otherwise, since this
+                    // replay buffer never actually shrinks.
+                    'J' => {
+                        let mode = nums.first().copied().unwrap_or(0);
+                        match mode {
+                            0 => {
+                                if row < rows {
+                                    for c in grid[row].iter_mut().skip(col) {
+                                        *c = ' ';
+                                    }
+                                    for line in grid.iter_mut().skip(row + 1) {
+                                        line.iter_mut().for_each(|c| *c = ' ');
+                                    }
+                                }
+                            }
+                            1 => {
+                                for line in grid.iter_mut().take(row) {
+                                    line.iter_mut().for_each(|c| *c = ' ');
+                                }
+                                if row < rows {
+                                    for c in grid[row].iter_mut().take(col.min(cols)) {
+                                        *c = ' ';
+                                    }
+                                }
+                            }
+                            _ => {
+                                for line in grid.iter_mut() {
+                                    line.iter_mut().for_each(|c| *c = ' ');
+                                }
+                            }
+                        }
+                    }
+                    'K' => {
+                        let mode = nums.first().copied().unwrap_or(0);
+                        if row < rows {
+                            match mode {
+                                0 => {
+                                    for c in grid[row].iter_mut().skip(col) {
+                                        *c = ' ';
+                                    }
+                                }
+                                1 => {
+                                    for c in grid[row].iter_mut().take(col.min(cols)) {
+                                        *c = ' ';
+                                    }
+                                }
+                                _ => {
+                                    grid[row].iter_mut().for_each(|c| *c = ' ');
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else if i < chars.len() {
+                // a two-character escape (`ESC 7`, `ESC =`, ...)
+                i += 1;
+            }
+            continue;
+        }
+        match c {
+            '\r' => col = 0,
+            '\n' => {
+                row += 1;
+                col = 0;
+            }
+            '\u{7}' | '\u{8}' | '\u{f}' | '\u{e}' => {}
+            _ => {
+                if !c.is_control() {
+                    if row < rows && col < cols {
+                        grid[row][col] = c;
+                    }
+                    col += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    grid.into_iter()
+        .map(|r| r.into_iter().collect::<String>().trim_end().to_string())
+        .collect()
+}

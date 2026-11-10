@@ -22,6 +22,7 @@ pub mod layout;
 pub mod model;
 pub mod observe;
 pub mod plan;
+pub mod rail;
 pub mod render;
 pub mod screens;
 pub mod supervise;

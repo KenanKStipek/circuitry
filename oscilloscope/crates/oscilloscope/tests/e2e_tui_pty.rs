@@ -493,11 +493,20 @@ fn screen_keys_switch_screens_during_a_live_run() {
     send_bytes(&mut master, b"2");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_2..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        // A key press only redraws the cells that changed (the `· 0/2 · ▰ = 50 t` part of the title
+        // keeps its columns from the Tape's own title), and a styled run is split by escapes in the raw
+        // stream, so neither the bytes after the key nor the raw bytes can be searched for the title:
+        // replay everything drawn so far onto a screen and read that. `Flow ·` is the rail pane's
+        // own title, drawn only on the Flow screen.
         assert!(
-            rendered.contains("flow ("),
-            "expected the Flow screen's own flow pane after pressing 2; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_2,
+            "pressing 2 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Flow \u{b7}"),
+            "expected the Flow screen's own rail pane after pressing 2; screen:\n{screen}"
         );
     }
 
@@ -505,11 +514,16 @@ fn screen_keys_switch_screens_during_a_live_run() {
     send_bytes(&mut master, b"0");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_0..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        // Same replay; `Tape ·` is the Tape's own pane title (the Totals row is on every screen now).
         assert!(
-            rendered.contains("Totals"),
-            "expected the Tape's own list back after pressing 0; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_0,
+            "pressing 0 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Tape \u{b7}"),
+            "expected the Tape's own list back after pressing 0; screen:\n{screen}"
         );
     }
 
@@ -615,10 +629,16 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #635's own acceptance item: pressing `2` during a live `cof`
-/// run of a document with a named `if` opens the Flow screen with
-/// the decision's own `◆` row and a matching story line, and `s`
-/// swaps the selected pane for the state tree.
+/// Issue #691's own acceptance item: pressing `2` during a live
+/// `cof` run of a document with a named `if` opens the Flow screen
+/// with the decision's own `◆` row and a matching story line;
+/// `→`/`←` scroll the rail and turn follow off, then back on once
+/// the scroll lands Now back in view; `⏎` opens the selection
+/// full-screen and back; `f` toggles follow (the title's own `·
+/// Following` marker); `?` opens Flow's own Help listing §4's own
+/// keys, `esc` closes it. Every check reads the replayed screen
+/// (`support::screen_grid`), not the raw byte stream, since a
+/// differential redraw only retransmits the cells that changed.
 #[test]
 fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     if !e2e_enabled() {
@@ -665,39 +685,216 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     // takes.
     wait_for_pattern(&captured_buf, "→ then".as_bytes(), Duration::from_secs(10));
     {
-        let after = captured_buf.lock().unwrap()[before_2..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
         assert!(
-            rendered.contains("◆"),
-            "expected the named if's own decision row after pressing 2; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_2,
+            "pressing 2 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("◆"),
+            "expected the named if's own decision row after pressing 2; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("gate"),
-            "expected gate's own row after pressing 2; got:\n{rendered:?}"
+            screen.contains("gate"),
+            "expected gate's own row after pressing 2; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("story"),
-            "expected the story pane's own border title after pressing 2; got:\n{rendered:?}"
+            screen.contains("Story"),
+            "expected the Story pane's own border title after pressing 2; screen:\n{screen}"
         );
     }
 
-    let before_s = captured_buf.lock().unwrap().len();
-    send_bytes(&mut master, b"s");
+    // → scrolls the rail; this fixture's own rail (three stations)
+    // fits well within the replay's own width regardless, so Now
+    // never actually leaves view and follow resumes on the very
+    // next redraw -- the follow-off/land-back cycle itself is a
+    // buffer-level unit test (`keys::tests::flow_up_down_turns_
+    // follow_off_and_back_on_the_same_way_the_tape_does`); this only
+    // checks that neither key breaks the screen.
+    let before_right = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b[C");
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        captured_buf.lock().unwrap().len() > before_right,
+        "pressing → drew nothing at all"
+    );
+    send_bytes(&mut master, b"\x1b[D");
+    std::thread::sleep(Duration::from_millis(400));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Following"),
+            "expected follow to be back on after ← lands Now back in view; screen:\n{screen}"
+        );
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_s..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        // A differential redraw only retransmits changed cells
-        // (`a_fast_exiting_engine_shows_the_real_ok_ending_not_
-        // aborted`'s own comment, below): the border title's own
-        // leading " s" can coincidentally already match the
-        // previous frame's " selected " title at the same cell and
-        // style, leaving only "tate" actually retransmitted --
-        // checked for instead of the full word for exactly that
-        // reason.
         assert!(
-            rendered.contains("tate"),
-            "expected the state tree's own border title in the selected pane's own place after pressing s; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_enter,
+            "pressing ⏎ drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Selected"),
+            "expected ⏎ to open the selection full-screen; screen:\n{screen}"
+        );
+    }
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Toggling follow off then back on nets back to the same
+    // title (`· Following` present once more) -- a live run's own
+    // continuous spinner redraws regardless of either key, so the
+    // single off state in between is not a reliable thing for a
+    // real PTY to observe; the off state itself is a buffer-level
+    // unit test (`keys::tests::flow_left_right_scroll_and_turn_
+    // follow_off`).
+    let before_f = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"f");
+    std::thread::sleep(Duration::from_millis(300));
+    send_bytes(&mut master, b"f");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_f,
+            "expected f to redraw the title"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Following"),
+            "expected f twice to net back to the same title; screen:\n{screen}"
+        );
+    }
+
+    let before_help = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"?");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_help,
+            "pressing ? drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Help") && screen.contains("scroll the rail"),
+            "expected ? to open the Flow's own Help; screen:\n{screen}"
+        );
+    }
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(500));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #691's own acceptance item: `↓`/`↑` select a lane on the
+/// Flow screen over a live tree loop's own passes, turning follow
+/// off and back on the same way the Tape's own land-back rule
+/// does; `+`/`-` open and fold the selected fork's own lanes.
+#[test]
+fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "interface:\n  inputs:\n    items: {type: array, default: [\"a\", \"b\", \"c\", \"d\"]}\neffects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n    flow: tree\n    max_concurrency: 1\n    body:\n      - name: slow\n        type: tool\n        provider: shell\n        params:\n          command: tail\n          args: [\"-f\", \"/dev/null\"]\n          allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.fan.iter_0.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let before_2 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"2");
+    wait_for_pattern_since(&captured_buf, before_2, b"fan", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("fan") && screen.contains("4 lanes"),
+            "expected the loop's own folded lane band after pressing 2; screen:\n{screen}"
+        );
+    }
+
+    // `+` opens three lanes; the fork then draws real lane content
+    // (a station per open lane) instead of the folded band alone.
+    let before_plus = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"+");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_plus,
+            "pressing + drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("slow"),
+            "expected an open lane's own station after pressing +; screen:\n{screen}"
+        );
+    }
+
+    // `↓` selects the next lane; `↑` selects back.
+    send_bytes(&mut master, b"\x1b[B");
+    std::thread::sleep(Duration::from_millis(400));
+    send_bytes(&mut master, b"\x1b[A");
+    std::thread::sleep(Duration::from_millis(400));
+
+    // `-` folds the lanes back into their own band.
+    let before_minus = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"-");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_minus,
+            "pressing - drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("lanes +"),
+            "expected the folded band back after pressing -; screen:\n{screen}"
         );
     }
 
@@ -711,6 +908,75 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
         "osi should exit 130 (cancelled), got {status:?}"
     );
 
+    assert_no_leftover_process(work.path());
+}
+
+/// §4: at 80×24 the Flow's own Story pane drops, and every loop's
+/// own lanes fold into their own band regardless of lane count,
+/// picked up on the TUI's own next redraw with no key needed; below
+/// 80 columns the Flow isn't offered at all, bouncing to the Tape
+/// the same way the Signal does.
+#[test]
+fn resizing_the_flow_screen_drops_the_story_pane_then_bounces_to_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_2 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"2");
+    wait_for_pattern_since(&captured_buf, before_2, b"Story", Duration::from_secs(10));
+
+    let before_80 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_80,
+            "resizing to 80x24 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            !screen.contains("Story"),
+            "expected the Story pane gone at 80x24; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("slow"),
+            "expected the running station's own name still shown at 80x24; screen:\n{screen}"
+        );
+    }
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    wait_for_pattern_since(&captured_buf, before_60, b"Tape", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Tape"),
+            "expected the Tape's own panel title once the terminal is too narrow for Flow; screen:\n{screen}"
+        );
+        assert!(
+            !screen.contains("Flow"),
+            "Flow must not still be offered below 80 columns; screen:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
     assert_no_leftover_process(work.path());
 }
 

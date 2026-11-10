@@ -688,7 +688,7 @@ struct WalkCtx<'a> {
 /// reached inside a named loop's pass carries the loop's concrete
 /// `iter_N`, not `iter_*`, so a lookup against that set must normalise
 /// first.
-fn normalize_pass_segments(path: &str) -> String {
+pub(crate) fn normalize_pass_segments(path: &str) -> String {
     path.split('.')
         .map(|seg| {
             let digits = seg.strip_prefix("iter_").unwrap_or("");

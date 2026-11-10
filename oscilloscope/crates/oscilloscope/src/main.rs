@@ -85,8 +85,8 @@ struct RunArgs {
     /// line. Can't be combined with `--log`.
     #[arg(long)]
     glance: bool,
-    /// Switches off the update highlights and the scope icon's
-    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's own trace: the header draws a
+    /// still frame in its place instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
@@ -137,8 +137,8 @@ struct WatchArgs {
     /// own command on a timer instead of leaving one process attached.
     #[arg(long)]
     once: bool,
-    /// Switches off the update highlights and the scope icon's
-    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's own trace: the header draws a
+    /// still frame in its place instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
@@ -1757,15 +1757,30 @@ fn build_flow_screen_if_active(
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     let selected_path = details_selection_path(app);
-    Some(oscilloscope_core::screens::build_flow_screen(
-        &render_state.rows,
+    // A root or follow-chosen selection counts as "nothing selected"
+    // for `build_flow`'s own default-pass fallback: `app.selected_path`
+    // is never actually `None` in the real app (the redraw loop
+    // always fills an empty selection with the root's own path), and
+    // while following, the selection is wherever the Tree-wide follow
+    // rule put it, not a real Flow-level choice -- either one should
+    // still land on the rail's own sensible default pass, not the
+    // root's own step pane or whatever leaf follow happens to be on.
+    let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
+    let flow_selected_path = if app.follow || selected_path.as_deref() == root_path {
+        None
+    } else {
+        selected_path
+    };
+    Some(oscilloscope_core::screens::build_flow(
         &render_state.unfolded_rows,
+        &render_state.rows,
         &flat,
         plan,
         model,
+        &render_state.header,
         state,
         story,
-        selected_path.as_deref(),
+        flow_selected_path.as_deref(),
         &LocalZone,
         render_state.header.run_end_ts.as_deref(),
         now,
@@ -1816,7 +1831,7 @@ fn focused_agent_transcript_path(
     use oscilloscope_core::screens::{FocusDetail, Screen};
     let step = match app.screen {
         Screen::Tape => tape_screen.and_then(|t| t.selected.as_ref()),
-        Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),
+        Screen::Flow => flow_screen.and_then(|f| f.selected_step.as_ref()),
         Screen::Signal => signal_screen.and_then(|t| t.selected.as_ref()),
         _ => None,
     }?;
@@ -2312,6 +2327,7 @@ fn run_tui(
                 }
             }
             app.reconcile_folding(&render_state.rows);
+            app.flow_rows = render_state.unfolded_rows.clone();
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -2365,27 +2381,10 @@ fn run_tui(
         // only and the selection itself can change on a key alone),
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
-        // Issue #635: on the Flow screen, movement must land only
-        // on a row the Flow pane actually draws, never on a step
-        // hidden under an untaken branch or merged into its own
-        // single-pass loop row -- `visible_rows_for_flow` narrows the
-        // same real-`Row` list every other screen moves over to
-        // exactly those. Issue #650: the same rule, for the Time
-        // screen's own collapsed loop rows. `visible_rows_for_flow`
-        // returns owned rows (issue #643's first follow-up: an
-        // unnamed `if`'s own synthesised decision has no real `Row`
-        // of its own to borrow), so `flow_owned` holds them for as
-        // long as `visible`'s own references into it need to live.
-        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
-            == oscilloscope_core::screens::Screen::Flow
-        {
-            flow_screen
-                .as_ref()
-                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        // Issue #691 (design v1 part 3): the Flow screen's own
+        // `↑↓` moves over `RowKind::Pass`, not this list -- it needs
+        // only the plain, unfiltered `rows` the rail itself is built
+        // from, the same as Cost still does below.
         let tape_owned: Vec<oscilloscope_core::render::Row> =
             if app.screen == oscilloscope_core::screens::Screen::Tape {
                 tape_screen
@@ -2395,14 +2394,10 @@ fn run_tui(
             } else {
                 Vec::new()
             };
-        let visible = match &flow_screen {
-            Some(_) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                flow_owned.iter().collect()
-            }
-            _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
-                tape_owned.iter().collect()
-            }
-            _ => keys::visible_rows(&render_state.rows, &app),
+        let visible = if app.screen == oscilloscope_core::screens::Screen::Tape {
+            tape_owned.iter().collect()
+        } else {
+            keys::visible_rows(&render_state.rows, &app)
         };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
@@ -2593,17 +2588,17 @@ fn run_tui(
         }
 
         // Issue #535's own redraw rule: while any highlight is
-        // fading, or the run is live with animation on (so the scope
-        // icon's own trace keeps moving), mark the frame dirty every
-        // tick -- the existing `REDRAW_INTERVAL` cap still paces the
-        // actual draw. With neither, this adds no redraws beyond what
-        // was already dirty. Finding 1: this sets only `needs_draw`,
-        // never `needs_rebuild` -- an animation-only tick has nothing
-        // new to rebuild from.
+        // While the run is live, with animation on, the scope icon's
+        // own trace keeps moving -- mark the frame dirty every tick
+        // so it does, the existing `REDRAW_INTERVAL` cap still pacing
+        // the actual draw; once the run has ended, this adds no
+        // redraws beyond what was already dirty. This sets only
+        // `needs_draw`, never `needs_rebuild` -- an animation-only
+        // tick has nothing new to rebuild from.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
-            if highlights.has_active(highlight_now) || exit_status.is_none() {
+            if exit_status.is_none() {
                 needs_draw = true;
             }
         }
@@ -2618,9 +2613,6 @@ fn run_tui(
                 .map(|_| resolved_theme.theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &resolved_theme.theme,
-                highlights: &highlights,
-                now: highlight_now,
-                color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
                 no_animation,
@@ -2631,7 +2623,6 @@ fn run_tui(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    next_log_seq,
                     &mut app,
                     current_state.as_ref(),
                     &ctx,
@@ -3616,6 +3607,7 @@ fn run_tui_watch(
                 }
             }
             app.reconcile_folding(&render_state.rows);
+            app.flow_rows = render_state.unfolded_rows.clone();
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -3662,18 +3654,8 @@ fn run_tui_watch(
                 &mut transcript_cache,
             );
         }
-        // Issue #635/#650: same narrowing as `osi <doc>`'s own main
-        // loop -- see the comment there.
-        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
-            == oscilloscope_core::screens::Screen::Flow
-        {
-            flow_screen
-                .as_ref()
-                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
+        // Issue #691: same as `osi <doc>`'s own main loop -- see the
+        // comment there.
         let tape_owned: Vec<oscilloscope_core::render::Row> =
             if app.screen == oscilloscope_core::screens::Screen::Tape {
                 tape_screen
@@ -3683,14 +3665,10 @@ fn run_tui_watch(
             } else {
                 Vec::new()
             };
-        let visible = match &flow_screen {
-            Some(_) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                flow_owned.iter().collect()
-            }
-            _ if app.screen == oscilloscope_core::screens::Screen::Tape => {
-                tape_owned.iter().collect()
-            }
-            _ => keys::visible_rows(&render_state.rows, &app),
+        let visible = if app.screen == oscilloscope_core::screens::Screen::Tape {
+            tape_owned.iter().collect()
+        } else {
+            keys::visible_rows(&render_state.rows, &app)
         };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
@@ -3843,11 +3821,11 @@ fn run_tui_watch(
             break 'tui;
         }
 
-        // Finding 1: this sets only `needs_draw`, same as `run_tui`.
+        // This sets only `needs_draw`, same as `run_tui`.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
-            if highlights.has_active(highlight_now) || !ended {
+            if !ended {
                 needs_draw = true;
             }
         }
@@ -3862,9 +3840,6 @@ fn run_tui_watch(
                 .map(|_| resolved_theme.theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &resolved_theme.theme,
-                highlights: &highlights,
-                now: highlight_now,
-                color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
                 no_animation,
@@ -3875,7 +3850,6 @@ fn run_tui_watch(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    next_log_seq,
                     &mut app,
                     last_state.as_ref(),
                     &ctx,
@@ -4163,12 +4137,13 @@ mod tests {
             true,
             "2026-01-01T00:00:01Z",
         );
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
+        let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.unfolded_rows,
+            &rendered.rows,
             &flat,
             &plan,
             &model,
+            &rendered.header,
             Some(&state),
             &[],
             Some("prime.fix"),
@@ -4668,14 +4643,7 @@ mod tests {
             baseline_exists,
         );
         assert!(
-            highlights
-                .style_for(
-                    "log:3",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some(),
+            highlights.is_active("log:3", now),
             "a line pushed after the first frame must still highlight"
         );
     }
@@ -4692,40 +4660,13 @@ mod tests {
         let mut prev_total = 0u64;
         mark_new_log_lines(&mut highlights, &mut prev_total, 3, false, true);
         let now = Instant::now();
-        assert!(
-            highlights
-                .style_for(
-                    "log:0",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some()
-        );
-        assert!(
-            highlights
-                .style_for(
-                    "log:2",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some()
-        );
+        assert!(highlights.is_active("log:0", now));
+        assert!(highlights.is_active("log:2", now));
         assert_eq!(prev_total, 3);
 
         // A second call only marks what's new since the last one.
         mark_new_log_lines(&mut highlights, &mut prev_total, 5, false, true);
-        assert!(
-            highlights
-                .style_for(
-                    "log:3",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some()
-        );
+        assert!(highlights.is_active("log:3", now));
         assert_eq!(prev_total, 5);
 
         // `--no-animation` still advances `prev_total`, marks nothing.
@@ -4757,14 +4698,7 @@ mod tests {
         // Once a baseline exists, a line pushed after it still marks.
         mark_new_log_lines(&mut highlights, &mut prev_total, 6, false, true);
         assert!(
-            highlights
-                .style_for(
-                    "log:5",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some(),
+            highlights.is_active("log:5", now),
             "a line pushed after the first frame must still highlight"
         );
         assert_eq!(prev_total, 6);
@@ -4864,7 +4798,7 @@ mod tests {
         assert!(rendered.contains("Puts the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
         assert!(rendered.contains("Shows only the header line"));
-        assert!(rendered.contains("Switches off the update highlights"));
+        assert!(rendered.contains("Switches off the scope icon's own trace"));
         assert!(rendered.contains("The colour theme"));
         assert!(rendered.contains("Turns run history off"));
         // Finding 10: `--theme`'s possible values (a derived
@@ -5892,6 +5826,54 @@ mod tests {
         assert_eq!(
             line.text,
             "■ run failed: Orchestration validation failed: bad type  0.0s"
+        );
+    }
+
+    /// Issue #691's own follow-up: the real redraw loop never leaves
+    /// `app.selected_path` as `None` (it fills an empty selection
+    /// with the root's own path), so a root selection must still
+    /// count as "nothing selected" for `build_flow`'s own
+    /// default-pass fallback -- otherwise the rail never opens on
+    /// its own default pass in a real run at all.
+    #[test]
+    fn flow_screen_lands_on_its_own_default_pass_when_only_the_root_is_selected() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 0, "total": 2}},
+                "iter_0": {
+                    "nap": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+                }
+            }
+        }});
+        let render_state = oscilloscope_core::render::build(
+            "do.yml",
+            "watch",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.follow = false;
+        app.selected_path = render_state.unfolded_rows.first().map(|r| r.path.clone());
+        let flow_screen = build_flow_screen_if_active(
+            &app,
+            &render_state,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            "t0",
+        )
+        .expect("Flow is the active screen");
+        assert!(
+            flow_screen.selected_pass.is_some(),
+            "a root selection must still land on the rail's own default pass: {flow_screen:?}"
         );
     }
 }

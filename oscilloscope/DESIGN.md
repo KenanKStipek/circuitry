@@ -506,6 +506,14 @@ geometry, computed in `oscilloscope-core` and only ever drawn, never
 computed, by `tui.rs`) only while that screen is actually on display,
 not on every redraw regardless of which screen is showing.
 
+**The tree screen that used to be here (issue #635) is superseded.**
+The four paragraphs below describe screen 2 as it shipped under that
+issue -- an indented tree read as control flow. Issue #691 (design v1
+part 3, §6.3e below) replaces it with a left-to-right rail; nothing
+in these four paragraphs, including the module paths they name
+(`crate::flow::build_flow_rows`, the per-pane `s`/`l` swaps), ships
+any more.
+
 **Layout** (screen 2, `Flow`, issue #635 — §6.3a below covers the
 screens this language switches between and the one-line header every
 one of them shares). Below the header line: the flow pane on the left
@@ -2036,15 +2044,15 @@ start/duration columns additionally dropped below 90 columns. Below
 depth the same way the overview's and Flow's own small-terminal
 lists are, no axis at all.
 
-### 6.3e The Tape and the shared language (shipped, issues #678, #688)
+### 6.3e The Tape and the shared language (shipped, issues #678, #688, #691)
 
 `design/tui-design.md` is the intent for osi's screens; this section
-describes what has actually shipped of it so far -- parts 1 and 2 of
-the epic (#677): colour roles, the shared chrome, the history
-median-tokens query, the Tape (`0`), replacing the Overview, and
-Signal (`1`), replacing Time. Flow as a rail (`2`) and Store (`3`)
-are not built yet; screens `2`-`3` still render as Flow and Cost,
-§6.3/§6.3b above, under their own chip names.
+describes what has actually shipped of it so far -- parts 1 through
+3 of the epic (#677): colour roles, the shared chrome, the history
+median-tokens query, the Tape (`0`), replacing the Overview, Signal
+(`1`), replacing Time, and Flow (`2`), replacing the tree. Store
+(`3`) is not built yet; screen `3` still renders as Cost, §6.3b
+above, under its own chip name.
 
 **Colour roles.** `theme::Theme` grows the design's token set (its
 §6 table) for every shipped theme: `bg_inset`/`bg_surface`,
@@ -2348,6 +2356,102 @@ Now pane keeps only the running rows, and the title shortens to
 Tape's own key bar drops `0-3` to `0` (§4), same as before Signal
 existed to switch to at all.
 
+**The Flow** (`rail::build_rail`, `screens::build_flow`; `tui::
+draw_flow`, issue #691, design v1 part 3) replaces the tree as
+screen `2`: a left-to-right rail of stations and forks
+(`rail::RailItem`), built once per redraw straight off `render::
+Row`s (always the unfolded ones -- the tree screen's own breadcrumb
+and quick-steps folding plays no part here at all) rather than
+keeping any tree shape of its own. A `Station` holds §2.3's own
+three lines (name, headline, detail); a decision is a two-lane
+`Fork` (the taken branch, then the untaken one's own ghost lane --
+`· <else-name>`/`not taken`) -- a named `if` reads its own branch
+from `meta.branch`, straight off its own row the same way `rows`
+already nests it; an *unnamed* one writes no state node, and so no
+row, of its own, so its own decision is spliced in here instead
+(`build_unnamed_decision`, ported from the removed tree screen's
+own `unnamed_branch_state`/`push_unnamed_decision`): inferred from
+which branch's own paths actually started (`PlanTree::
+unnamed_if_decisions`, concretised against the real pass it's
+inside when it is one, since the decision's own host is recorded
+with a named loop's `iter_*` placeholder, shared by every pass), a
+still-pending one draws both sides as ahead ghosts, a settled one
+where neither side ever ran reads `→ none` and ghosts both sides
+`not taken`, and two unnamed `if`s sharing one host still get their
+own distinct `.__if`/`.__if_1` paths; selecting one resolves
+against the rail itself, there being no row for it in `rows`, and
+the Selected pane adds a line saying which side's own steps
+actually started (or that neither one's did). A parallel `dynamic`
+(`flow: tree`) forks into one lane per named child the same way a
+loop does; a sequential one (`use`, a chain-flow `dynamic`, a `try`
+body with its own `finally`) inlines its own children as plain
+stations in plan order instead, each still carrying its own
+container's breadcrumb (`gate › reply`) in the Selected pane and the
+status line; a container with no child known yet is one station
+whose headline is its own type and whose detail is whichever child
+it resolves to, once that's known. A loop is one lane per *pass*,
+never per concurrency slot -- the frames draw it that way
+throughout, and the folded band's own `● n run · m wait` reading
+only makes sense that way (a lane that *waits* is a pass that
+hasn't started; an idle concurrency slot is not a thing the rail
+ever draws) -- the observed real passes first, then an
+`ahead_pass_lane` per further pass the loop's own count promises
+(`progress.total`, or a named `each` loop's own input read before
+any event at all), reading its own position's history for a label,
+a usual token figure and a queued tool's own command (`cats`/`usual
+155`/`sleep 1`, §2.3's own folded-loop frame) -- never `iter_0`'s,
+the ahead lane's own template, whose history is a different slot's;
+with not even one pass observed yet, the template is read straight
+from the plan's own loop body instead. At most three of an open
+loop's own lanes ever draw at once -- the window slides to keep the
+selected lane in view the same way the rail itself slides to keep
+Now in view, defaulting to the first running lane with nothing of
+this fork selected. Selecting a pass (`screens::build_selected_pass`)
+or a plain station/decision (`build_focused_step`/`SelectedDecision`)
+drives the Selected pane the same way the Tape's own full-screen view
+already does, falling back to the default pass only when nothing at
+all is selected, or the selection already names one of that loop's
+own passes -- never for an unrelated station or decision, which
+must show its own pane instead; the Story pane (`flow::build_story`)
+adds one synthesized line per loop start (`⟳ drafts · 3 passes · 2
+wide`, an unbounded loop's own width reading its pass count instead
+of a `max_concurrency` it has none of; `--log` writes no event for a
+loop merely starting) and one per unnamed decision's own branch,
+since nothing else ever will for either.
+
+**Keys.** `←→` (`keys::App`'s own `flow_scroll`) scroll the rail,
+turning follow off -- `tui::draw_flow` itself is the only thing
+that knows the rail's own real width, so it (not the key handler)
+turns follow back on once a manual scroll lands Now's own arrow
+back in view, the same way the Tape's own selection rule already
+does. `↑↓`/`j`/`k` move the selected pass over the rail's own `Pass`
+rows, turning follow off the same way, resuming it on their own the
+moment the selection lands back on the pass the Selected pane would
+otherwise default to; `PageUp`/`PageDown`/`Home`/`End`/`g`/`G` are
+no-ops on Flow (there is no tree left to page or jump through), and
+never touch follow either. `+`/`-` (`flow_open_lanes`/`_fold_lanes`)
+open or fold the *selected* fork's own lanes three at a time --
+whichever loop a selected pass belongs to, or the selected loop
+station itself, falling back to the first loop on the rail with
+nothing selected at all -- never every loop at once. `f` follow;
+`⏎` the same full-screen toggle the Tape and Signal already share,
+armed only while something is actually selected (the same guard
+Signal's own `signal_has_step` is). `z`, `v`, `s`, `l` and `Tab` are
+gone from the Flow, per §4: quick-steps folding and the full-value
+overlay have no Flow-side anatomy to toggle, and there is only ever
+the rail's one list.
+
+**Sizes.** 100 columns and 30 rows both: three panes, the rail above
+Selected and Story, roughly 31/60 of the lower band's own width
+(scaled from §2.3's own 120-column frame's 62/58 split); below 100
+columns, or a loop four or more lanes wide, those lanes fold into
+their own band (§2.3's own `══ 3 lanes + ══`) regardless of height;
+under the three-pane threshold the Story pane drops, Selected taking
+the whole lower band; below 80, the Tape's own key bar drops `0-3`
+same as every other screen. `↑↓ Lane` itself drops from the key bar
+below 100 columns too, alongside `Following`, since there is no
+longer room to show either.
+
 **Goldens and allow-listed cells.** Every `tape--*` frame in
 `design/frames/` is a cell-exact golden (`tui::tape_frame_goldens`:
 symbol, fg, bg, bold and dim per cell). The design's fixture run
@@ -2396,6 +2500,32 @@ allow-listed, the same `gate › reply`-vs-`drafts.iter_1.draft`
 reason as the Tape's own goldens above -- every other cell matches
 exactly, no further allow-list needed.
 
+All three `flow--*` frames (Normal at 120×30 and 80×24, Folded at
+120×30 -- the lanes forced shut with `app.flow_lanes_open`, the key
+`+`/`-` itself would otherwise need a live redraw loop to reach) are
+cell-exact goldens the same way too, in `tui::tape_frame_goldens::
+flow_normal_120x30_matches_the_frame`/`_folded_120x30`/`_normal_
+80x24`, replayed to the same frozen instant and history. Each pins
+the same status-line row the Tape's and Signal's own goldens do,
+the same `gate › reply`-vs-`drafts.iter_1.draft` reason (§3.2's
+status line is shared verbatim) -- every other cell, across all
+three, matches exactly, no further allow-list needed.
+
+Engine parity for the rail follows the same pattern issue #635's
+own acceptance item set for the tree (`oscilloscope-core/tests/
+flow_parity.rs`): `flow_parity_if_taken`/`_untaken` replay both
+engines' own recorded fixtures for a *named* `if` (`do.yml`'s own
+`then`/`else` both naming their one step `chosen`, so the taken
+side's own real station must still show, never hidden alongside
+the untaken side's identical name) and find the same `gate` fork,
+branch and untaken ghost on both; `flow_parity_if_unnamed` does the
+same for an *unnamed* one, both engines inferring the same branch
+with no `meta.branch` to read at all. `rail`'s own unit tests cover
+two unnamed `if`s sharing one host directly: neither anchored yet
+(both fall back to `by_host_after`, still getting distinct
+`.__if`/`.__if_1` paths) and the first one resolved while the
+second stays pending.
+
 **From the frames, not from the design text.** A few behaviours the
 design document's own prose never states, read off the frames
 themselves instead, so a later frame change could change them: the
@@ -2429,7 +2559,15 @@ row's own accent from the first glyph onward, through any gap to the
 next one, not just the glyphs themselves; and the Now pane has no
 deliberate blank row between the active loop's own summary and Last
 Burst, only the one unused row the panel's own height leaves after
-Next Signal.
+Next Signal. For the Flow: a loop forks into one lane per *pass*,
+never per `max_concurrency` slot -- §2.3's own prose reads "one lane
+per slot (`max_concurrency` or the pass count when unbounded)", but
+the frames draw a lane per pass throughout (a loop 3 passes wide, 2
+of them concurrent, still draws 3 lanes, not 2), and the folded
+band's own `● n run · m wait` reading only makes sense that way; and
+`↑↓ Lane` and `Following` both drop from the key bar and the title
+below 100 columns, the design's own prose naming only the Story
+pane's own drop there.
 
 **Not yet shipped.** §2.2's own "the step rows and the Now pane
 follow the cursor's column" (the scrubbed-cursor half of §6.3e's
@@ -2458,7 +2596,7 @@ figures.
   - the `--log` output.
 
   Cases cover every row of §2, including events-only, state-only and abort (no final snapshot).
-- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527; the Flow screen, issue #635).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osi watch` — at 100×24 (the two-pane layout: flow pane | selected pane, no story pane), since that is what most of these actually want to show. `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_state_pane` and `two_column_layout_at_100x30_shows_the_state_pane` cover the Flow screen's own three-size boundary: 80×24 is still two-pane (the story pane stays dropped), and 100×30 is the first size with all three panes, flow pane | (selected pane over story pane). `full_layout_with_state_pane_following`, at 120×40, is the most comfortable size, with every pane populated. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position. `folding_breadcrumbs_and_quick_steps` additionally covers a breadcrumb fold whose statuses agree staying folded (and one whose statuses differ staying apart), and three quick steps folding into one row with the right total. `flow_matrix_running`/`finished_at_120x40`/`100x30`/`80x24`/`70x20` cover the acceptance list's own matrix: a named decision taken with its untaken branch's dim summary, an unnamed decision inferred, a single-pass loop merged into one row, a quick-steps row, and a non-empty story, running and finished, at every required size.
+- **TUI render tests (shipped, issue #434; the new layout and panes, issue #527; the Flow screen, issue #635).** `ratatui::backend::TestBackend` buffers (`oscilloscope/src/tui.rs`'s own `golden_tests` module, `insta`), one per state the acceptance list named: pending plan, running chain, a running tree loop with `max_concurrency`, a loop with two of its passes already done, queued-under-concurrency, failed, failed and handled, cancelled, aborted (no final state) and `osi watch` — at 100×24 (the two-pane layout: flow pane | selected pane, no story pane), since that is what most of these actually want to show. `pending_plan` and `aborted_no_final_state` stay at 70×20 deliberately, as this suite's own one-column-fallback coverage. `fallback_at_80x24_drops_the_state_pane` and `two_column_layout_at_100x30_shows_the_state_pane` cover the Flow screen's own three-size boundary: 80×24 is still two-pane (the story pane stays dropped), and 100×30 is the first size with all three panes, flow pane | (selected pane over story pane). `full_layout_with_state_pane_following`, at 120×40, is the most comfortable size, with every pane populated. `follow_picks_the_running_row_not_a_hard_coded_one` builds its own `App` and drives the selection through `App::follow_target`, the same way `main.rs`'s own redraw loop does, rather than hard-coding `selected_path` to a row that happens to be running — every other golden here does the latter, which (correctly) also turns follow off, since setting `selected_path` directly bypasses the key handling a real manual selection goes through. `a_long_plan_scrolls_to_keep_a_followed_effect_below_the_fold_visible` is a synthetic 48-leaf chain with the 45th leaf running and followed, at 70×20: the first leaf scrolls out of view, the followed one stays visible, and the border shows a `45/49`-style position. `folding_breadcrumbs_and_quick_steps` additionally covers a breadcrumb fold whose statuses agree staying folded (and one whose statuses differ staying apart), and three quick steps folding into one row with the right total. `flow_matrix_running`/`finished_at_120x40`/`100x30`/`80x24`/`70x20` cover the acceptance list's own matrix: a named decision taken with its untaken branch's dim summary, an unnamed decision inferred, a single-pass loop merged into one row, a quick-steps row, and a non-empty story, running and finished, at every required size. (The Flow-specific parts of this paragraph -- its own layout, panes and the `flow_matrix_*`/`fallback_at_80x24_drops_the_state_pane`/`two_column_layout_at_100x30_shows_the_state_pane`/`folding_breadcrumbs_and_quick_steps` tests -- describe the tree screen issue #691 replaces, not the rail; §6.3e above and its own goldens are current. The non-Flow golden names this paragraph lists -- `pending_plan`, `running_chain`, the tree-loop and queued-under-concurrency cases, `failed`/`failed_and_handled`/cancelled/aborted, `osi_watch` -- are unchanged and still exercise the rail today, just not at the two/three-pane sizes this paragraph names for them.)
 - **Key handling (shipped, issue #434; the new navigation, issue #527).** Unit tests in `oscilloscope/src/keys.rs`: navigation, `PgUp`/`PgDn`/`Home`/`End`/`g`/`G` (against a ten-row synthetic plan, with an explicit `tree_viewport` standing in for `tui.rs`'s own last-rendered height), collapse/expand (with a trailing `.` so a same-prefix sibling is never hidden too), follow (on by default, and turned off by every manual move), errors-only, filter, `v`'s own prompt-first-then-cycle behaviour, both confirm dialogs (`c`, and `q` while a run is going), Ctrl-C's own action (checked before, and never merely dismissing, a dialog), the three-way `tab` cycle (including skipping straight past the state pane when it isn't drawn at all, `state_viewport == 0`), the state pane's own selection staying independent of the orchestration pane's, and the details pane's own scroll resetting whenever the orchestration selection changes — pure, with no real terminal. `tui.rs`'s own `scroll_tests` module unit-tests `clamp_scroll`/`scroll_indicator` and the state pane's line-aware `clamp_state_scroll` directly, beyond what the rendered goldens already exercise indirectly.
 - **The render model (`oscilloscope-core/src/render.rs`).** Unit tests for the loop-pass multiplier/lower-bound on "effects planned", and the stderr tail's own reading order; `oscilloscope-core/src/model.rs` and `plan.rs` cover an unnamed `if`/`else`'s own two branches (neither pollutes the other's earlier-siblings, and an untaken branch resolves once the taken one is observed, rather than blocking every chain sibling after it forever). The state pane's own order, abbreviation (including a multi-line error showing only its first line), container token sums over a loop, a tree dynamic and a `use` child, are covered on synthetic snapshots; the token rule is pinned against each engine's own real recorded state for a retried `prompt_type: json` prompt whose first reply fails to decode (`model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity`); the token bar's own running-prompt filter (`waiting_for` excludes a queued prompt) and estimate are unit-tested; and the 2,000-node redraw measurement above lives here too. A multi-step tree- and chain-flow loop pass's own status, derived from its leaf descendants rather than defaulting to pending, is covered for the running/failed/done cases, alongside a regression test that a single-step pass still derives the same way (`a_single_step_pass_still_derives_done_from_its_one_leaf`). The token bar's own count is tested against a row confirmed running by events alone, with no state node at all (a tree-loop pass's prompt; a lower bound, since there is no `prompt_sent` to estimate from) and against one that cannot be classified as a prompt at all from path and events alone (a `use: inline:` child's, pinning that known gap rather than silently assuming it). "Effects planned"/"done" are tested against a real compiled `use: inline:` and `use: path:` document each, at every discovery stage (nothing yet, one child, every child, and a declared-outputs style `use` whose children never appear even once it finishes), always with done never exceeding planned.
 - **The treemap (`oscilloscope-core/src/treemap.rs`).** Unit tests show that cell areas are proportional to totals within rounding, children stay inside their own parent's rect, a zero-weight key gets no cell (including a zero-total tree, which is empty, not an empty root cell), many tiny children merge into one `…` cell sized by their combined total (repeating the merge pass until nothing new needs folding in, for a survivor the second pass itself leaves too small), a container lays its own children out inside its own border, the same input always produces the same rectangles regardless of the order the caller happens to list it in (an input and a shuffled copy of it both tested against the same expected layout), and two equal-weight tiles in a rect wider than it is tall split by stacking rather than by columns once the terminal's own ~2:1 cell aspect is accounted for; `tile_aspect_ratios_stay_within_bound_across_distributions_and_pane_sizes` checks that bound itself holds across several weight distributions (equal, one dominant, a long tail) and several pane sizes at once, rather than one example at a time. Issue #632's own Cost screen additions: `build_tree_for_measure` reads `i`/`o`/`$`/total separately from the same node (`measure_switching_reads_in_out_and_cost_separately`), the same key toggling back to total (`measure_from_key_toggles_back_to_total_on_the_same_key`), a single-child chain folding into one breadcrumb tile when both ends are breadcrumb-eligible and their status agrees, staying unfolded when either isn't (including a loop container, which must survive zoomed-out even with a single pass, `chain_folding_follows_the_breadcrumb_eligibility_rule_not_status_agreement_alone`), a running store getting a placeholder cell instead of vanishing (and a running plain tool never getting one at all), a finished store with no value under the chosen measure being excluded and counted, a `while: mode: model` loop's own tokens getting a `check` leaf alongside its passes rather than being dropped, and a running leaf next to real-sized siblings still getting a drawable (non-merged) cell once boosted. `oscilloscope-core/src/cost.rs` covers the largest-stores table ranking by total tokens with a zero-gap footer, a gap when the run's own totals exceed the table (a declared-outputs `use` child's effects), the partial-cost label marking its own coverage once some but not all *finished* stores reported one (and having none at all once none have, no coverage note once every one has, and a still-running store never counted either way), the overview's own top store matching the table's first row, the tokens-over-time chart's own per-phase bucketing, and the stores' totals matching the run's totals on both engines' own recorded final state for a retried prompt (the same fixture `model::tests::subtree_tokens_matches_run_totals_for_a_retried_prompt_on_cof`/`_on_electricity` use). `oscilloscope-core/tests/cost_fixtures.rs` covers the same acceptance item against every recorded fixture with a `prompt` effect, loaded from its own `snapshots.jsonl` rather than hand-copied JSON, including that the retried-prompt fixtures' own `prime.ask` actually carries `retries_used == 1`, on both engines. `oscilloscope-core/src/format.rs` covers `midpoint_clock_time`'s own halving and its rejection of an unparseable timestamp. `oscilloscope/src/keys.rs` covers the Cost screen's own keys: `i`/`o`/`$` switching the measure and the same key returning to total, `↑`/`↓` selecting tiles in size order, `⏎` zooming into a store with children (and doing nothing on a leaf), `esc` zooming back out (and doing nothing at the top level), a stale zoom path that no longer resolves being dropped rather than sticking, and every Cost key being inert on any other screen. `tui.rs`'s own golden tests cover the Cost screen at 120×40, 100×30, 80×24 and 70×20, both running and finished, and the 2,000-node timing measurement (both building and drawing it, and that redrawing with nothing changed skips `squarify` by way of `CostLayoutCache`) covers it alongside the overview's own; further unit-level `tui.rs` tests cover the help overlay still fitting at 80×24, `header:tokens`/`tokenbar` tinting the cost card's own lines, the table alone (below the treemap's own minimum size) still reflecting a zoom and a selection already in effect, and an aborted leaf's own placeholder weight never reading back as a real token count.
