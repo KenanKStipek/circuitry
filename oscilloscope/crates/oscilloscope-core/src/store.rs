@@ -203,8 +203,9 @@ pub fn build_store_tree(
     model: &RunModel,
     now: &str,
     run_ended: bool,
+    state: Option<&Value>,
 ) -> Vec<StoreNode> {
-    build_children(root_path, flat, kinds, plan, header, model, now, run_ended)
+    build_children(root_path, flat, kinds, plan, header, model, now, run_ended, state)
 }
 
 /// `path`'s own direct children, each turned into a node (a pass, a
@@ -224,13 +225,14 @@ fn build_children(
     model: &RunModel,
     now: &str,
     run_ended: bool,
+    state: Option<&Value>,
 ) -> Vec<StoreNode> {
     let mut children = direct_children_of(path, flat);
     sort_in_plan_order(&mut children, plan);
     children
         .into_iter()
         .flat_map(|child| {
-            build_node_or_splice(&child, flat, kinds, plan, header, model, now, run_ended)
+            build_node_or_splice(&child, flat, kinds, plan, header, model, now, run_ended, state)
         })
         .collect()
 }
@@ -269,20 +271,23 @@ fn build_node_or_splice(
     model: &RunModel,
     now: &str,
     run_ended: bool,
+    state: Option<&Value>,
 ) -> Vec<StoreNode> {
     if is_pass_segment(path) {
-        return build_pass(path, flat, kinds, plan, header, model, now, run_ended)
+        return build_pass(path, flat, kinds, plan, header, model, now, run_ended, state)
             .into_iter()
             .collect();
     }
     let has_structural_children = !direct_children_of(path, flat).is_empty();
     if has_structural_children {
         if kinds.get(path).copied().is_some_and(is_container_kind) {
-            return build_container(path, flat, kinds, plan, header, model, now, run_ended, None)
-                .into_iter()
-                .collect();
+            return build_container(
+                path, flat, kinds, plan, header, model, now, run_ended, state, None,
+            )
+            .into_iter()
+            .collect();
         }
-        return build_children(path, flat, kinds, plan, header, model, now, run_ended);
+        return build_children(path, flat, kinds, plan, header, model, now, run_ended, state);
     }
     build_leaf(path, flat, plan, header, model, now)
         .map(StoreNode::Leaf)
@@ -300,14 +305,30 @@ fn build_container(
     model: &RunModel,
     now: &str,
     run_ended: bool,
+    state: Option<&Value>,
     label_override: Option<String>,
 ) -> Option<StoreNode> {
-    let children = build_children(path, flat, kinds, plan, header, model, now, run_ended);
+    let mut children =
+        build_children(path, flat, kinds, plan, header, model, now, run_ended, state);
+    // The plan's own `resolve_each_len` is a loop's planned pass
+    // count `m` (an `each` loop's own static array length); a loop
+    // with only 2 of 3 passes started so far must still read `2/3`,
+    // not `2/2`, so counting the children actually present in state
+    // (`direct_children_of`'s own count) only serves as a fallback
+    // for a `while` loop (no static count at all), a container whose
+    // own fan-out the plan can't know ahead of time, or any other
+    // container kind (never has a pass count to begin with).
+    let children_planned = state
+        .and_then(|root| plan.resolve_each_len(path, root))
+        .map(|t| t as usize)
+        .unwrap_or_else(|| direct_children_of(path, flat).len());
+    let children_with_tokens = direct_children_with_tokens(path, flat);
+    if let Some(own) = container_own_leaf(path, flat, plan, header) {
+        children.push(StoreNode::Leaf(own));
+    }
     if children.is_empty() {
         return None;
     }
-    let children_planned = direct_children_of(path, flat).len();
-    let children_with_tokens = children.len();
     let running = !run_ended && flat.get(path).is_some_and(|n| n.completed_at.is_none());
     let label =
         label_override.unwrap_or_else(|| path.rsplit('.').next().unwrap_or(path).to_string());
@@ -319,6 +340,40 @@ fn build_container(
         children_with_tokens,
         children_planned,
     }))
+}
+
+/// A decision's or loop's own tokens (issue #695: a model-mode `if`
+/// or `while` spends tokens evaluating its own condition, recorded
+/// on the container's own node rather than on any child -- `core/
+/// conditional.py`'s and `core/loop.py`'s `mode: model` branches),
+/// drawn as a `check` leaf alongside the container's real children,
+/// the same leaf the old Cost treemap's `container_own_value_node`
+/// drew for exactly this case.
+fn container_own_leaf(
+    path: &str,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &crate::plan::PlanTree,
+    header: &crate::render::Header,
+) -> Option<StoreLeaf> {
+    let node = flat.get(path)?;
+    let (tokens_sent, tokens_received) = node_tokens(&node.meta);
+    if tokens_sent == 0 && tokens_received == 0 {
+        return None;
+    }
+    let deviation_pct = {
+        let total = tokens_sent + tokens_received;
+        crate::screens::tape_row_usual_tokens(path, plan, header)
+            .filter(|&u| u > 0)
+            .map(|usual| (total as f64 - usual as f64) / usual as f64 * 100.0)
+    };
+    Some(StoreLeaf {
+        path: path.to_string(),
+        label: "check".to_string(),
+        tokens_sent,
+        tokens_received,
+        deviation_pct,
+        live: false,
+    })
 }
 
 /// A loop pass path, built as a container first (so any further
@@ -337,8 +392,9 @@ fn build_pass(
     model: &RunModel,
     now: &str,
     run_ended: bool,
+    state: Option<&Value>,
 ) -> Option<StoreNode> {
-    let children = build_children(path, flat, kinds, plan, header, model, now, run_ended);
+    let children = build_children(path, flat, kinds, plan, header, model, now, run_ended, state);
     if children.is_empty() {
         return None;
     }
@@ -355,7 +411,7 @@ fn build_pass(
         return Some(StoreNode::Leaf(StoreLeaf { label, ..leaf }));
     }
     let children_planned = direct_children_of(path, flat).len();
-    let children_with_tokens = children.len();
+    let children_with_tokens = direct_children_with_tokens(path, flat);
     let running = !run_ended && flat.get(path).is_some_and(|n| n.completed_at.is_none());
     let label = path.rsplit('.').next().unwrap_or(path).to_string();
     Some(StoreNode::Container(StoreContainer {
@@ -366,6 +422,22 @@ fn build_pass(
         children_with_tokens,
         children_planned,
     }))
+}
+
+/// How many of `path`'s own direct structural children have any
+/// tokens anywhere in their own subtree -- counted straight from
+/// state rather than from a container's own already-built
+/// `children`, which can hold more nodes than there are direct
+/// children at all once a wrapper with no tile of its own (a
+/// `try`/`finally` body) splices its grandchildren straight in.
+fn direct_children_with_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> usize {
+    direct_children_of(path, flat)
+        .into_iter()
+        .filter(|child| {
+            let (sent, received) = crate::model::subtree_tokens(child, flat);
+            sent > 0 || received > 0
+        })
+        .count()
 }
 
 /// A leaf step's own tile data, or `None` for a step with no tokens
@@ -524,6 +596,70 @@ fn gutters(n: usize) -> u16 {
     if n > 1 { (n - 1) as u16 } else { 0 }
 }
 
+/// Whether `kept`'s own weights would each reach [`MIN_TILE_WIDTH`]
+/// once `span` is apportioned across them, reserving `MIN_TILE_WIDTH`
+/// more of `span` for a trailing More tile when `has_more` is set --
+/// so a merged tile's own width is checked before it is ever built,
+/// rather than apportioned after the fact alongside the kept tiles'
+/// own weights, where a much larger kept tile's fractional remainder
+/// can starve it down to nothing.
+fn top_level_tiles_fit(kept: &[usize], has_more: bool, weights: &[u64], span: u16) -> bool {
+    if kept.is_empty() {
+        return !has_more;
+    }
+    let reserved = if has_more { MIN_TILE_WIDTH } else { 0 };
+    let gutter_count = gutters(kept.len() + usize::from(has_more));
+    let Some(available) = span
+        .checked_sub(gutter_count)
+        .and_then(|s| s.checked_sub(reserved))
+    else {
+        return false;
+    };
+    let kept_weights: Vec<u64> = kept.iter().map(|&i| weights[i]).collect();
+    apportion(&kept_weights, available)
+        .iter()
+        .all(|&s| s >= MIN_TILE_WIDTH)
+}
+
+/// Chooses which of the top level's own nodes keep a tile of their
+/// own and which fold into one trailing "… N more" tile (issue
+/// #695's rule 5): every node first, if the whole span already gives
+/// each one at least [`MIN_TILE_WIDTH`]; otherwise the largest
+/// (tokens descending, ties in plan order -- the index these
+/// `weights` already carry) are kept one at a time, for as long as
+/// the remaining span can still give every kept tile its own minimum
+/// width *and* leave at least that same minimum for everything else,
+/// merged into one trailing tile. At least one node is always kept,
+/// even if its own tile would still fall under the minimum, so the
+/// diagram is never left completely empty.
+fn top_level_fold(weights: &[u64], span: u16) -> (Vec<usize>, Vec<usize>) {
+    let n = weights.len();
+    let all: Vec<usize> = (0..n).collect();
+    if top_level_tiles_fit(&all, false, weights, span) {
+        return (all, Vec::new());
+    }
+    let mut ranked: Vec<usize> = (0..n).collect();
+    ranked.sort_by(|&a, &b| weights[b].cmp(&weights[a]).then(a.cmp(&b)));
+    let mut kept_ranked: Vec<usize> = Vec::new();
+    for &i in &ranked {
+        let mut candidate = kept_ranked.clone();
+        candidate.push(i);
+        let has_more = candidate.len() < n;
+        if top_level_tiles_fit(&candidate, has_more, weights, span) {
+            kept_ranked = candidate;
+        } else {
+            break;
+        }
+    }
+    if kept_ranked.is_empty() {
+        kept_ranked.push(ranked[0]);
+    }
+    let mut kept = kept_ranked;
+    kept.sort_unstable();
+    let merged: Vec<usize> = (0..n).filter(|i| !kept.contains(i)).collect();
+    (kept, merged)
+}
+
 /// The Store's own area diagram, laid out into `w`×`h` cells at
 /// `(x, y)` (issue #695's settled point 1): `nodes` in plan order,
 /// alternating columns (even depth) and rows (odd depth), areas by
@@ -549,38 +685,22 @@ fn layout_siblings(
     }
     let columns = depth % 2 == 0;
     let span = if columns { w } else { h };
-    let min_needed = if columns {
-        MIN_TILE_WIDTH
-    } else {
-        MIN_TILE_HEIGHT
-    };
     let weights: Vec<u64> = nodes.iter().map(StoreNode::tokens).collect();
 
-    if top_level {
-        let content_span = span.saturating_sub(gutters(nodes.len()));
-        let sizes = apportion(&weights, content_span);
-        let small: Vec<usize> = sizes
-            .iter()
-            .enumerate()
-            .filter(|&(_, &s)| s < min_needed)
-            .map(|(i, _)| i)
-            .collect();
-        if !small.is_empty() && small.len() < nodes.len() {
-            let kept: Vec<&StoreNode> = nodes
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| !small.contains(i))
-                .map(|(_, n)| n)
-                .collect();
-            let merged_tokens: u64 = small.iter().map(|&i| weights[i]).sum();
-            let merged_count = small.len();
-            let mut combined_weights: Vec<u64> = kept.iter().map(|n| n.tokens()).collect();
-            combined_weights.push(merged_tokens.max(1));
-            let combined_span = span.saturating_sub(gutters(kept.len() + 1));
-            let combined_sizes = apportion(&combined_weights, combined_span);
+    if top_level && nodes.len() > 1 {
+        let (kept, merged) = top_level_fold(&weights, span);
+        if !merged.is_empty() {
+            let kept_nodes: Vec<&StoreNode> = kept.iter().map(|&i| &nodes[i]).collect();
+            let merged_tokens: u64 = merged.iter().map(|&i| weights[i]).sum();
+            let merged_count = merged.len();
+            let gutter_count = gutters(kept_nodes.len() + 1);
+            let reserved = MIN_TILE_WIDTH.min(span.saturating_sub(gutter_count));
+            let kept_span = span.saturating_sub(gutter_count).saturating_sub(reserved);
+            let kept_weights: Vec<u64> = kept_nodes.iter().map(|n| n.tokens()).collect();
+            let kept_sizes = apportion(&kept_weights, kept_span);
             let mut out = Vec::new();
             let mut cursor = if columns { x } else { y };
-            for (node, &size) in kept.iter().zip(combined_sizes.iter()) {
+            for (node, &size) in kept_nodes.iter().zip(kept_sizes.iter()) {
                 let rect = if columns {
                     StoreRect {
                         x: cursor,
@@ -599,12 +719,11 @@ fn layout_siblings(
                 out.extend(layout_node(node, rect, depth));
                 cursor += size + 1;
             }
-            let more_size = combined_sizes[kept.len()];
             let more_rect = if columns {
                 StoreRect {
                     x: cursor,
                     y,
-                    w: more_size,
+                    w: reserved,
                     h,
                 }
             } else {
@@ -612,7 +731,7 @@ fn layout_siblings(
                     x,
                     y: cursor,
                     w,
-                    h: more_size,
+                    h: reserved,
                 }
             };
             out.push(StoreTile {
@@ -843,36 +962,33 @@ pub struct StoreReadings {
     pub loop_progress: Option<(String, usize, u64)>,
 }
 
-/// How many distinct loop passes (`iter_0`, `iter_1`, ...) under
-/// `container` have used tokens, however each one folds -- a folded
-/// pass's own child is a leaf several segments deeper than its own
-/// `iter_N`, an unfolded one's is the pass container itself, so both
-/// are counted from the first path segment past `container`'s own.
-fn passes_with_tokens(container: &StoreContainer) -> usize {
-    let prefix_len = container.path.len() + 1;
-    let mut passes = std::collections::BTreeSet::new();
-    for child in &container.children {
-        let path = child.path();
-        if path.len() <= prefix_len {
-            continue;
-        }
-        let rest = &path[prefix_len..];
-        let first_segment = rest.split('.').next().unwrap_or(rest);
-        if first_segment.starts_with("iter_") {
-            passes.insert(first_segment.to_string());
-        }
-    }
-    passes.len()
+/// How many distinct loop passes (`iter_0`, `iter_1`, ...) directly
+/// under `path` have used tokens anywhere in their own subtree, read
+/// straight from state rather than from the already-filtered Store
+/// tree -- a running loop whose passes have no tokens yet still has
+/// a container there in state even though [`build_store_tree`] draws
+/// no tile for it at all (nothing to show), so counting from the
+/// tree itself would always read `0 of m` as "no loop running"
+/// rather than "none of its passes have tokens yet".
+fn passes_with_tokens_in_state(path: &str, flat: &BTreeMap<String, NodeMeta>) -> usize {
+    direct_children_of(path, flat)
+        .into_iter()
+        .filter(|child| is_pass_segment(child))
+        .filter(|child| {
+            let (sent, received) = crate::model::subtree_tokens(child, flat);
+            sent > 0 || received > 0
+        })
+        .count()
 }
 
 /// Readings' own Loop line (issue #695's settled point 4): the
-/// running loop container, else the most recently run one, read
-/// straight off `rows` (so a loop whose every pass folded away still
-/// has a progress figure) -- `plan::resolve_each_len`/`Row::
-/// loop_progress` supplies the planned pass count `m`.
+/// running loop, else the most recently run one (any status but
+/// `Pending`, so a loop that ended `FailedHandled` still gets a
+/// figure) -- `plan::resolve_each_len`/`Row::loop_progress` supplies
+/// the planned pass count `m`.
 pub fn build_store_readings(
     table: &[StoreTableRow],
-    nodes: &[StoreNode],
+    flat: &BTreeMap<String, NodeMeta>,
     header: &crate::render::Header,
     rows: &[crate::render::Row],
 ) -> StoreReadings {
@@ -891,12 +1007,11 @@ pub fn build_store_readings(
     let chosen = running_loop.or_else(|| {
         loop_rows
             .iter()
-            .rfind(|r| r.status.kind == crate::model::StatusKind::Done)
+            .rfind(|r| r.status.kind != crate::model::StatusKind::Pending)
     });
     let loop_progress = chosen.and_then(|row| {
         let total = row.loop_progress.as_ref().and_then(|p| p.total)?;
-        let container = find_container(nodes, &row.path)?;
-        let with_tokens = passes_with_tokens(container);
+        let with_tokens = passes_with_tokens_in_state(&row.path, flat);
         Some((row.label.clone(), with_tokens, total))
     });
 
@@ -906,21 +1021,6 @@ pub fn build_store_readings(
         ratio,
         loop_progress,
     }
-}
-
-fn find_container<'a>(nodes: &'a [StoreNode], path: &str) -> Option<&'a StoreContainer> {
-    for node in nodes {
-        match node {
-            StoreNode::Container(c) if c.path == path => return Some(c),
-            StoreNode::Container(c) => {
-                if let Some(found) = find_container(&c.children, path) {
-                    return Some(found);
-                }
-            }
-            StoreNode::Leaf(_) => {}
-        }
-    }
-    None
 }
 
 /// Screen 3's own model (issue #695, design v1 part 4, replacing
@@ -967,7 +1067,7 @@ pub fn build_store(
     selected_path: Option<&str>,
 ) -> StoreScreen {
     let run_ended = header.status != crate::model::RunStatus::Running;
-    let tree = build_store_tree(root_path, flat, kinds, plan, header, model, now, run_ended);
+    let tree = build_store_tree(root_path, flat, kinds, plan, header, model, now, run_ended, state);
     let run_tokens = state
         .and_then(crate::model::run_totals)
         .map(|totals| {
@@ -982,7 +1082,7 @@ pub fn build_store(
         })
         .unwrap_or(header.tokens_sent + header.tokens_received);
     let table = build_store_table(&tree, root_path, run_tokens);
-    let readings = build_store_readings(&table, &tree, header, rows);
+    let readings = build_store_readings(&table, flat, header, rows);
     let largest_usual_step = header
         .history_step_usual
         .values()
@@ -1052,7 +1152,7 @@ mod tests {
         })
     }
 
-    /// The frames' own geometry (issue #695's R1): at 120x30 `kind`
+    /// The frames' own geometry (issue #695): at 120x30 `kind`
     /// x2-29, `gate` x31-81 (`reply` x32-80), `drafts` x83-116
     /// (children x84-115), tiles y2-16 (`iter_0` y3-8, gutter y9,
     /// `iter_1` y10-15).
@@ -1242,6 +1342,38 @@ mod tests {
         assert_eq!(apportion(&[], 10), Vec::<u16>::new());
     }
 
+    /// Issue #695's settled point 1: siblings alternate columns and
+    /// rows by depth, not just once -- three levels deep, depth 2's
+    /// own siblings sit in columns again, the same as depth 0's.
+    #[test]
+    fn layout_alternates_columns_and_rows_at_depth_two() {
+        let tree = vec![container(
+            "prime.a",
+            "a",
+            false,
+            vec![container(
+                "prime.a.b",
+                "b",
+                false,
+                vec![
+                    leaf("prime.a.b.c1", "c1", 10),
+                    leaf("prime.a.b.c2", "c2", 10),
+                ],
+            )],
+        )];
+        let tiles = layout_store(&tree, 0, 0, 40, 20);
+        let c1 = tiles.iter().find(|t| t.path == "prime.a.b.c1").unwrap();
+        let c2 = tiles.iter().find(|t| t.path == "prime.a.b.c2").unwrap();
+        assert_eq!(
+            c1.rect.y, c2.rect.y,
+            "depth 2 siblings sit in columns, sharing a row: {tiles:#?}"
+        );
+        assert_ne!(
+            c1.rect.x, c2.rect.x,
+            "depth 2 siblings sit in columns, each its own: {tiles:#?}"
+        );
+    }
+
     #[test]
     fn a_container_too_small_for_its_children_collapses_to_a_summary() {
         let tree = vec![container(
@@ -1287,6 +1419,10 @@ mod tests {
             .iter()
             .find(|t| matches!(t.kind, StoreTileKind::More { .. }))
             .expect("the two tiny stores merge into one More tile");
+        assert!(
+            more.rect.w >= MIN_TILE_WIDTH,
+            "the More tile must never be apportioned down below its own minimum width, got {more:?}"
+        );
         match &more.kind {
             StoreTileKind::More { count, tokens } => {
                 assert_eq!(*count, 2);
@@ -1295,6 +1431,35 @@ mod tests {
             _ => unreachable!(),
         }
         assert!(tiles.iter().any(|t| t.path == "prime.big"));
+    }
+
+    /// Issue #695's rule 5: when every top-level store is too small
+    /// for the full span (forty equal-weight stores at 80 columns,
+    /// each getting under two columns on its own), the largest ones
+    /// that fit keep a tile and the rest fold -- the diagram never
+    /// goes blank because every tile apportioned to zero.
+    #[test]
+    fn when_every_top_level_store_is_too_small_the_largest_still_keep_tiles() {
+        let tree: Vec<StoreNode> = (0..40)
+            .map(|i| leaf(&format!("prime.n{i}"), &format!("n{i}"), 1))
+            .collect();
+        let tiles = layout_store(&tree, 0, 0, 80, 10);
+        let more = tiles
+            .iter()
+            .find(|t| matches!(t.kind, StoreTileKind::More { .. }))
+            .expect("too many equal stores for 80 columns must still fold most of them");
+        assert!(more.rect.w >= MIN_TILE_WIDTH, "tiles were {tiles:#?}");
+        let kept: Vec<&StoreTile> = tiles
+            .iter()
+            .filter(|t| !matches!(t.kind, StoreTileKind::More { .. }))
+            .collect();
+        assert!(!kept.is_empty(), "at least one store must keep its own tile");
+        for tile in &kept {
+            assert!(tile.rect.w >= MIN_TILE_WIDTH, "tiles were {tiles:#?}");
+        }
+        if let StoreTileKind::More { count, .. } = more.kind {
+            assert_eq!(count + kept.len(), 40);
+        }
     }
 
     #[test]
@@ -1312,7 +1477,7 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
         assert_eq!(tree.len(), 1);
         assert_eq!(tree[0].path(), "prime.used");
     }
@@ -1337,7 +1502,7 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
         assert_eq!(tree.len(), 1);
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
@@ -1374,7 +1539,7 @@ mod tests {
         let plan = crate::plan::PlanTree::empty();
         let header = empty_header();
         let model = RunModel::new();
-        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
         let StoreNode::Container(drafts) = &tree[0] else {
             panic!("expected drafts to stay a container");
         };
@@ -1384,6 +1549,170 @@ mod tests {
         };
         assert_eq!(pass.label, "iter_0");
         assert_eq!(pass.children.len(), 2);
+    }
+
+    #[test]
+    fn a_model_mode_decisions_own_tokens_become_a_check_leaf() {
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": "t1"},
+                "gate": {"value": null, "meta": {
+                    "created_at": "t0", "completed_at": "t1",
+                    "tokens_sent_total": 20, "tokens_received_total": 4
+                },
+                    "reply": {"value": "y", "meta": {
+                        "created_at": "t0", "completed_at": "t1",
+                        "tokens_sent_total": 100, "tokens_received_total": 30
+                    }}
+                }
+            }
+        }));
+        let mut kinds = BTreeMap::new();
+        kinds.insert("prime.gate".to_string(), RowKind::If);
+        let plan = crate::plan::PlanTree::empty();
+        let header = empty_header();
+        let model = RunModel::new();
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let StoreNode::Container(gate) = &tree[0] else {
+            panic!("expected gate to stay a container");
+        };
+        assert_eq!(gate.children.len(), 2, "the gate's own tokens join `reply` as a second leaf");
+        let check = gate
+            .children
+            .iter()
+            .find_map(|c| match c {
+                StoreNode::Leaf(l) if l.label == "check" => Some(l),
+                _ => None,
+            })
+            .expect("the decision's own tokens must draw as a `check` leaf");
+        assert_eq!(check.path, "prime.gate");
+        assert_eq!(check.tokens(), 24);
+        let gate_tokens: u64 = gate.children.iter().map(StoreNode::tokens).sum();
+        assert_eq!(gate_tokens, 24 + 130, "the container's own area includes its own tokens");
+        // The check leaf is the container's own node, not a planned
+        // child, so it must not inflate "<n>/<m> with tokens".
+        assert_eq!(gate.children_with_tokens, 1);
+        assert_eq!(gate.children_planned, 1);
+    }
+
+    /// Issue #695's rule 5: a 3-pass loop with only 2 passes
+    /// started so far reads `2/3 with tokens`, from the plan's own
+    /// `resolve_each_len` (the loop's static `each:` array length),
+    /// not `2/2` from however many passes merely exist in state yet.
+    #[test]
+    fn children_planned_reads_the_loops_own_planned_pass_count_from_the_plan() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc_path = dir.path().join("do.yml");
+        std::fs::write(
+            &doc_path,
+            "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: drafts\n    type: loop\n    each: {in: input.topics, as: topic}\n    body:\n      - name: draft\n        type: prompt\n        template: \"{{topic}}\"\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&doc_path, None, &indexmap::IndexMap::new())
+            .unwrap_or_else(|e| panic!("test document doesn't compile: {e}"));
+        let plan = crate::plan::PlanTree::from_program(&program);
+
+        let state = serde_json::json!({
+            "input": {"topics": ["a", "b", "c"]},
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "drafts": {"value": null, "meta": {"created_at": "t0", "completed_at": null}},
+                "iter_0": {"draft": {"value": "y", "meta": {
+                    "created_at": "t0", "completed_at": "t1",
+                    "tokens_sent_total": 100, "tokens_received_total": 30
+                }}},
+                "iter_1": {"draft": {"value": "y", "meta": {
+                    "created_at": "t0", "completed_at": "t1",
+                    "tokens_sent_total": 10, "tokens_received_total": 3
+                }}}
+            }
+        });
+        // Deliberately not nested under `prime.drafts` -- a loop's own
+        // passes land as `prime.drafts.iter_N` in real state, but this
+        // test only needs `direct_children_of("prime.drafts", ..)` to
+        // disagree with `resolve_each_len`'s own count, not a
+        // byte-exact replica of the engine's own layout.
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "drafts": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                    "iter_0": {"draft": {"value": "y", "meta": {
+                        "created_at": "t0", "completed_at": "t1",
+                        "tokens_sent_total": 100, "tokens_received_total": 30
+                    }}},
+                    "iter_1": {"draft": {"value": "y", "meta": {
+                        "created_at": "t0", "completed_at": "t1",
+                        "tokens_sent_total": 10, "tokens_received_total": 3
+                    }}}
+                }
+            }
+        }));
+        let mut kinds = BTreeMap::new();
+        kinds.insert("prime.drafts".to_string(), RowKind::Loop);
+        let header = empty_header();
+        let model = RunModel::new();
+        let tree = build_store_tree(
+            "prime", &flat, &kinds, &plan, &header, &model, "t1", false, Some(&state),
+        );
+        let StoreNode::Container(drafts) = &tree[0] else {
+            panic!("expected drafts to stay a container");
+        };
+        assert_eq!(drafts.children_with_tokens, 2);
+        assert_eq!(drafts.children_planned, 3);
+    }
+
+    #[test]
+    fn a_nested_loop_builds_a_container_inside_a_container() {
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": "t1"},
+                "outer": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"},
+                    "iter_0": {
+                        "inner": {"value": null, "meta": {"created_at": "t0", "completed_at": "t1"},
+                            "iter_0": {
+                                "draft": {"value": "y", "meta": {
+                                    "created_at": "t0", "completed_at": "t1",
+                                    "tokens_sent_total": 10, "tokens_received_total": 2
+                                }},
+                                "critique": {"value": "y", "meta": {
+                                    "created_at": "t0", "completed_at": "t1",
+                                    "tokens_sent_total": 5, "tokens_received_total": 1
+                                }}
+                            }
+                        }
+                    }
+                }
+            }
+        }));
+        let mut kinds = BTreeMap::new();
+        kinds.insert("prime.outer".to_string(), RowKind::Loop);
+        kinds.insert("prime.outer.iter_0.inner".to_string(), RowKind::Loop);
+        let plan = crate::plan::PlanTree::empty();
+        let header = empty_header();
+        let model = RunModel::new();
+        let tree = build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
+        let StoreNode::Container(outer) = &tree[0] else {
+            panic!("expected outer to stay a container");
+        };
+        assert_eq!(outer.label, "outer");
+        assert_eq!(outer.children.len(), 1);
+        // Outer's own single pass holds exactly one structural child
+        // (`inner`), but `inner` itself carries two token-bearing
+        // leaves, so the pass never folds: it stays a container
+        // around `inner`'s own container.
+        let StoreNode::Container(outer_pass) = &outer.children[0] else {
+            panic!("outer's own pass must stay a container around `inner`");
+        };
+        assert_eq!(outer_pass.label, "iter_0");
+        assert_eq!(outer_pass.children.len(), 1);
+        let StoreNode::Container(inner) = &outer_pass.children[0] else {
+            panic!("expected the inner loop to be its own container");
+        };
+        assert_eq!(inner.label, "inner");
+        assert_eq!(inner.children.len(), 1);
+        let StoreNode::Container(pass) = &inner.children[0] else {
+            panic!("a pass with two token-bearing steps must stay a container");
+        };
+        assert_eq!(pass.label, "iter_0");
+        assert_eq!(pass.children.len(), 2);
+        let outer_tokens: u64 = outer.children.iter().map(StoreNode::tokens).sum();
+        assert_eq!(outer_tokens, 18);
     }
 
     #[test]
@@ -1413,6 +1742,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:05Z",
             false,
+            None,
         );
         assert_eq!(tree.len(), 1);
         let StoreNode::Leaf(ask) = &tree[0] else {
@@ -1420,6 +1750,50 @@ mod tests {
         };
         assert!(ask.live);
         assert_eq!(ask.tokens_sent, 40);
+    }
+
+    /// Issue #695's rule 13: an agent tool's own `meta.live` (no
+    /// `adapter` key, told apart from a streamed prompt's by
+    /// [`crate::model::AgentLive::from_value`]) gets a faint tile
+    /// from its own running totals too, the same as a streamed
+    /// prompt's estimate.
+    #[test]
+    fn an_agent_sessions_meta_live_gets_a_tile_from_its_own_running_totals() {
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "code": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "provider": "agent",
+                    "live": {
+                        "engine": "claude-code",
+                        "tokens_sent": 50,
+                        "tokens_received": 20
+                    }
+                }}
+            }
+        }));
+        let kinds = BTreeMap::new();
+        let plan = crate::plan::PlanTree::empty();
+        let header = empty_header();
+        let model = RunModel::new();
+        let tree = build_store_tree(
+            "prime",
+            &flat,
+            &kinds,
+            &plan,
+            &header,
+            &model,
+            "2026-01-01T00:00:05Z",
+            false,
+            None,
+        );
+        assert_eq!(tree.len(), 1);
+        let StoreNode::Leaf(code) = &tree[0] else {
+            panic!("expected a live leaf tile for the running agent session");
+        };
+        assert!(code.live);
+        assert_eq!(code.tokens_sent, 50);
+        assert_eq!(code.tokens_received, 20);
     }
 
     #[test]
@@ -1444,6 +1818,7 @@ mod tests {
             &model,
             "2026-01-01T00:00:05Z",
             false,
+            None,
         );
         assert!(tree.is_empty());
     }
@@ -1469,14 +1844,14 @@ mod tests {
         let model = RunModel::new();
 
         let running_tree =
-            build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", false);
+            build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", false, None);
         let StoreNode::Container(drafts) = &running_tree[0] else {
             panic!("expected a container");
         };
         assert!(drafts.running, "a running container carries the marker");
 
         let ended_tree =
-            build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true);
+            build_store_tree("prime", &flat, &kinds, &plan, &header, &model, "t1", true, None);
         let StoreNode::Container(drafts) = &ended_tree[0] else {
             panic!("expected a container");
         };
@@ -1518,6 +1893,13 @@ mod tests {
             vec!["prime.b", "prime.a", "prime.c"]
         );
         assert_eq!(table[0].share_pct.round() as i64, 60);
+    }
+
+    #[test]
+    fn table_row_deviation_is_none_without_history() {
+        let tree = vec![leaf("prime.kind", "kind", 215)];
+        let table = build_store_table(&tree, "prime", 215);
+        assert_eq!(table[0].deviation_pct, None);
     }
 
     #[test]
@@ -1566,18 +1948,70 @@ mod tests {
             dim: None,
             has_children: true,
         }];
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "drafts": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                    "iter_0": {"draft": {"value": "y", "meta": {
+                        "created_at": "t0", "completed_at": "t1",
+                        "tokens_sent_total": 100, "tokens_received_total": 30
+                    }}},
+                    "iter_1": {"draft": {"value": "y", "meta": {
+                        "created_at": "t0", "completed_at": "t1",
+                        "tokens_sent_total": 100, "tokens_received_total": 31
+                    }}}
+                }
+            }
+        }));
         let header = empty_header();
         let table = build_store_table(&tree, "prime", 261);
-        let readings = build_store_readings(&table, &tree, &header, &rows);
+        let readings = build_store_readings(&table, &flat, &header, &rows);
         assert_eq!(readings.loop_progress, Some(("drafts".to_string(), 2, 3)));
+    }
+
+    /// Issue #695: a running loop whose passes have no tokens yet
+    /// still gets a Loop line (`drafts · 0 of 3 passes have tokens`)
+    /// -- read from state, not from the tree [`build_store_tree`]
+    /// draws no container for at all while nothing in it has tokens.
+    #[test]
+    fn readings_report_zero_of_m_for_a_running_loop_with_no_tokens_yet() {
+        let tree: Vec<StoreNode> = Vec::new();
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "drafts": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+            }
+        }));
+        let rows = vec![crate::render::Row {
+            path: "prime.drafts".to_string(),
+            depth: 1,
+            label: "drafts".to_string(),
+            kind: RowKind::Loop,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: Some(crate::render::LoopProgress {
+                done: 0,
+                total: Some(3),
+                eta_s: None,
+            }),
+            dim: None,
+            has_children: true,
+        }];
+        let header = empty_header();
+        let table = build_store_table(&tree, "prime", 0);
+        let readings = build_store_readings(&table, &flat, &header, &rows);
+        assert_eq!(readings.loop_progress, Some(("drafts".to_string(), 0, 3)));
     }
 
     #[test]
     fn readings_absent_without_any_loop() {
         let tree = vec![leaf("prime.kind", "kind", 10)];
+        let flat: BTreeMap<String, NodeMeta> = BTreeMap::new();
         let header = empty_header();
         let table = build_store_table(&tree, "prime", 10);
-        let readings = build_store_readings(&table, &tree, &header, &[]);
+        let readings = build_store_readings(&table, &flat, &header, &[]);
         assert_eq!(readings.loop_progress, None);
     }
 
