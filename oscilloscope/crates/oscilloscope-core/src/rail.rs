@@ -1276,6 +1276,67 @@ pub fn is_pass_path(candidate: &str, loop_path: &str) -> bool {
         .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
 }
 
+/// Whether `path` is a loop pass's own path: its last segment is
+/// `iter_<digits>`. A pass row's *kind* is not reliable for this --
+/// when a pass's body is a single unnamed `if` (or any op without a
+/// path of its own), the renderer parks that op's own entry at the
+/// pass's path, so the pass row carries the op's kind and status.
+/// The template row `loop.iter_*` never matches (`*` is no digit).
+pub fn is_pass_row_path(path: &str) -> bool {
+    path.rsplit_once('.')
+        .and_then(|(_, last)| last.strip_prefix("iter_"))
+        .is_some_and(|digits| !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit()))
+}
+
+fn lane_has_status(items: &[RailItem], pred: &dyn Fn(StatusKind) -> bool) -> bool {
+    items.iter().any(|it| match it {
+        RailItem::Station(s) => pred(s.status),
+        RailItem::Fork(f) => f.lanes.iter().any(|l| lane_has_status(&l.items, pred)),
+    })
+}
+
+/// Caps each fork's running lanes at the loop's own dispatch bound
+/// (`max_concurrency`, else the branch count), the same way the
+/// Tape's slots rule reads `2 of 2 Slots Busy · 4 Pass Queued`: an
+/// engine lists every dispatched pass as running-or-queued before a
+/// slot is free for it, so without the cap a six-pass loop two wide
+/// would read `● 6 run · 0 wait` the instant it starts. Lanes whose
+/// stations are definitely running keep their place first; the
+/// remaining live lanes fill the bound in order; every live lane past
+/// it waits. Forks without a known bound are left as built.
+pub fn cap_running_lanes(items: &mut [RailItem], bound_for: &dyn Fn(&str) -> Option<u64>) {
+    for it in items.iter_mut() {
+        if let RailItem::Fork(fork) = it {
+            if let Some(bound) = bound_for(&fork.path) {
+                let definite = |items: &[RailItem]| {
+                    lane_has_status(items, &|k| {
+                        matches!(k, StatusKind::Running | StatusKind::LikelyRunning)
+                    })
+                };
+                let mut running = fork
+                    .lanes
+                    .iter()
+                    .filter(|l| l.running && definite(&l.items))
+                    .count() as u64;
+                for lane in fork.lanes.iter_mut() {
+                    if !lane.running || definite(&lane.items) {
+                        continue;
+                    }
+                    if running < bound {
+                        running += 1;
+                    } else {
+                        lane.running = false;
+                        lane.waiting = true;
+                    }
+                }
+            }
+            for lane in fork.lanes.iter_mut() {
+                cap_running_lanes(&mut lane.items, bound_for);
+            }
+        }
+    }
+}
+
 fn build_loop_fork(rows: &[Row], i: usize, ctx: &Ctx<'_>) -> (Fork, usize) {
     let row = &rows[i];
     let depth = row.depth;
@@ -1505,6 +1566,77 @@ pub fn fork_width(fork: &Fork) -> usize {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_pass_row_is_told_by_its_path_not_its_kind() {
+        assert!(super::is_pass_row_path("prime.loop_a.iter_0"));
+        assert!(super::is_pass_row_path("prime.outer.iter_3.inner.iter_12"));
+        assert!(!super::is_pass_row_path("prime.loop_a.iter_*"));
+        assert!(!super::is_pass_row_path("prime.loop_a.iter_"));
+        assert!(!super::is_pass_row_path("prime.loop_a"));
+        assert!(!super::is_pass_row_path("prime.loop_a.iter_0.step"));
+    }
+
+    fn live_lane(path: &str, kind: StatusKind) -> super::Lane {
+        super::Lane {
+            items: vec![super::RailItem::Station(super::Station {
+                path: format!("{path}.work"),
+                selectable: true,
+                is_edge: false,
+                row_kind: crate::render::RowKind::Tool,
+                status: kind,
+                name: "work".to_string(),
+                headline: super::Headline::Blank,
+                detail: super::Detail::Blank,
+            })],
+            ghost: None,
+            running: super::edge_style(kind) == super::EdgeStyle::Live,
+            waiting: false,
+            path: Some(path.to_string()),
+        }
+    }
+
+    /// Six dispatched passes two wide: the two definitely running
+    /// keep their place, the other four live-or-queued lanes wait
+    /// (`● 2 run · 4 wait`), never `● 6 run`.
+    #[test]
+    fn running_lanes_are_capped_at_the_loops_dispatch_bound() {
+        let lanes = vec![
+            live_lane("prime.fan.iter_0", StatusKind::RunningOrQueued),
+            live_lane("prime.fan.iter_1", StatusKind::Running),
+            live_lane("prime.fan.iter_2", StatusKind::RunningOrQueued),
+            live_lane("prime.fan.iter_3", StatusKind::Running),
+            live_lane("prime.fan.iter_4", StatusKind::RunningOrQueued),
+            live_lane("prime.fan.iter_5", StatusKind::RunningOrQueued),
+        ];
+        let mut items = vec![super::RailItem::Fork(super::Fork {
+            path: "prime.fan".to_string(),
+            kind: super::ForkKind::Loop,
+            source_status: StatusKind::Running,
+            lanes,
+        })];
+        super::cap_running_lanes(&mut items, &|path| (path == "prime.fan").then_some(2));
+        let super::RailItem::Fork(fork) = &items[0] else {
+            panic!("a fork")
+        };
+        let running: Vec<usize> = fork
+            .lanes
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.running)
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            running,
+            vec![1, 3],
+            "the definitely running lanes keep their place"
+        );
+        assert_eq!(fork.lanes.iter().filter(|l| l.waiting).count(), 4);
+        // no bound known: left as built
+        let mut again = items.clone();
+        super::cap_running_lanes(&mut again, &|_| None);
+        assert_eq!(again, items);
+    }
     use super::*;
 
     #[test]

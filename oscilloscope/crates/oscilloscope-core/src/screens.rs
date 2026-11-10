@@ -3556,13 +3556,30 @@ fn loop_story_lines(
         .collect()
 }
 
+/// The pass the Flow's Selected pane falls back to: the pass that is
+/// running (itself, or any step inside it), else the first pass. A
+/// pass is told by its path (`crate::rail::is_pass_row_path`), never
+/// by `RowKind::Pass`: a pass whose body is a single unnamed `if`
+/// carries that op's kind and a `Pending` status on its own row while
+/// its steps run underneath.
 pub(crate) fn default_pass_path(rows: &[Row]) -> Option<&str> {
-    let running = rows
-        .iter()
-        .find(|r| r.kind == RowKind::Pass && r.status.kind == StatusKind::Running);
-    running
-        .or_else(|| rows.iter().find(|r| r.kind == RowKind::Pass))
-        .map(|r| r.path.as_str())
+    let live = |r: &Row| {
+        matches!(
+            r.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        )
+    };
+    let passes = || {
+        rows.iter()
+            .filter(|r| crate::rail::is_pass_row_path(&r.path))
+    };
+    let running = passes().find(|p| {
+        live(p)
+            || rows
+                .iter()
+                .any(|c| c.path.starts_with(&format!("{}.", p.path)) && live(c))
+    });
+    running.or_else(|| passes().next()).map(|r| r.path.as_str())
 }
 
 fn capitalize(label: &str) -> String {
@@ -3609,7 +3626,7 @@ fn build_selected_pass(
         let siblings: Vec<&Row> = rows
             .iter()
             .filter(|r| {
-                r.kind == RowKind::Pass
+                crate::rail::is_pass_row_path(&r.path)
                     && r.path.starts_with(&format!("{loop_path}."))
                     && r.status.kind == StatusKind::Running
             })
@@ -3688,7 +3705,8 @@ pub fn build_flow(
     run_ended_at: Option<&str>,
     now: &str,
 ) -> FlowScreen {
-    let rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
+    let mut rail = crate::rail::build_rail(rows, flat, plan, header, state, zone);
+    crate::rail::cap_running_lanes(&mut rail.items, &|path| model.running_or_queued_bound(path));
     let largest_usual_step = header
         .history_step_usual
         .values()
@@ -3708,7 +3726,11 @@ pub fn build_flow(
     // unreachable).
     let pass_path = match selected_path {
         None => default_pass_path(rows).map(str::to_string),
-        Some(p) if rows.iter().any(|r| r.path == p && r.kind == RowKind::Pass) => {
+        Some(p)
+            if rows
+                .iter()
+                .any(|r| r.path == p && crate::rail::is_pass_row_path(&r.path)) =>
+        {
             Some(p.to_string())
         }
         Some(_) => None,
@@ -3826,6 +3848,65 @@ pub fn build_flow(
 
 #[cfg(test)]
 mod tests {
+
+    /// A pass whose body is a single unnamed `if` carries the `if`'s
+    /// kind and a `Pending` status on its own row; the default pass
+    /// is still that pass when a step under it runs, and never the
+    /// loop's `iter_*` template row.
+    #[test]
+    fn default_pass_is_told_by_path_shape_and_a_running_step_underneath() {
+        fn row(path: &str, kind: RowKind, status: StatusKind, depth: usize) -> Row {
+            Row {
+                path: path.to_string(),
+                depth,
+                label: path.rsplit('.').next().unwrap_or(path).to_string(),
+                kind,
+                status: RowStatus {
+                    kind: status,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            }
+        }
+        let rows = vec![
+            row("prime", RowKind::Root, StatusKind::Running, 0),
+            row("prime.loop_a", RowKind::Loop, StatusKind::Running, 1),
+            row("prime.loop_a.iter_0", RowKind::If, StatusKind::Pending, 2),
+            row(
+                "prime.loop_a.iter_0.step_a",
+                RowKind::Tool,
+                StatusKind::Done,
+                3,
+            ),
+            row("prime.loop_a.iter_*", RowKind::Pass, StatusKind::Pending, 2),
+            row("prime.loop_a.iter_1", RowKind::If, StatusKind::Pending, 2),
+            row(
+                "prime.loop_a.iter_1.step_a",
+                RowKind::Tool,
+                StatusKind::Running,
+                3,
+            ),
+        ];
+        assert_eq!(default_pass_path(&rows), Some("prime.loop_a.iter_1"));
+        let none_running: Vec<Row> = rows
+            .iter()
+            .cloned()
+            .map(|mut r| {
+                if r.status.kind == StatusKind::Running {
+                    r.status.kind = StatusKind::Done;
+                }
+                r
+            })
+            .collect();
+        assert_eq!(
+            default_pass_path(&none_running),
+            Some("prime.loop_a.iter_0")
+        );
+    }
     use super::*;
     use crate::model::ProcessState;
     use crate::plan::PlanTree;
