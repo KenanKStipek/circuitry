@@ -1603,13 +1603,16 @@ fn build_tape_selected_detail(
     let node = flat.get(&row.path);
     let finished_ts = node.and_then(|n| n.completed_at.clone());
     if !matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
-        let (sent, received) = node
-            .map(|n| crate::model::node_tokens(&n.meta))
-            .unwrap_or((0, 0));
+        // Issue #702: a running agent session's own `meta.live`
+        // tokens show here the same way a finished step's exact
+        // pair already does, fixing the detail pane's own "Share 0%
+        // of this run so far" while the step is still running.
+        let figures = crate::model::step_tokens_so_far(node, &row.path, model, now);
+        let has_tokens = figures.total().is_some_and(|t| t > 0);
         return TapeSelectedDetail {
             finished_ts,
-            tokens_sent: (sent + received > 0).then_some(sent),
-            tokens_received: (sent + received > 0).then_some(received),
+            tokens_sent: has_tokens.then(|| figures.tokens_sent.unwrap_or(0)),
+            tokens_received: has_tokens.then(|| figures.tokens_received.unwrap_or(0)),
             ..Default::default()
         };
     }
@@ -2340,12 +2343,35 @@ pub fn build_tape(
         .and_then(|key| header.history_step_usual.get(&key))
         .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
 
+    // Issue #702's rule 4 ("a share never exceeds 100%"): a running
+    // agent's own live tokens (unlike a running prompt's, always
+    // `null` until it finishes) are a real, nonzero figure, so this
+    // now reads it the same `step_tokens_so_far` way every other
+    // screen's shares do -- the denominator counts every running
+    // step's own live estimate too, or that nonzero figure could
+    // outrun it, the exact `19000%` this issue's own bug report
+    // found. A running prompt keeps its own exact prior rule
+    // (`node_tokens`, always `0`/`0` while running, so never shows a
+    // share until it finishes) -- its own Live block covers it
+    // instead, same as before this issue.
     let selected_share_pct = selected_path.and_then(|p| {
-        let node = flat.get(p)?;
-        let (sent, received) = crate::model::node_tokens(&node.meta);
-        let total = sent + received;
-        let run_total = header.tokens_sent + header.tokens_received;
-        (run_total > 0).then(|| ((total as f64 * 100.0) / run_total as f64).round() as u64)
+        let row = rows.iter().find(|r| r.path == p)?;
+        let node = flat.get(p);
+        let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
+            let (sent, received) = node
+                .map(|n| crate::model::node_tokens(&n.meta))
+                .unwrap_or((0, 0));
+            let total = sent + received;
+            (total > 0).then_some(total)?
+        } else {
+            crate::model::step_tokens_so_far(node, p, model, now).total()?
+        };
+        let run_total = header.tokens_sent
+            + header.tokens_received
+            + header.tokens_sent_live_estimate
+            + header.tokens_received_live_estimate;
+        (run_total > 0)
+            .then(|| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
     });
     let selected_row = selected_path.and_then(|p| rows.iter().find(|r| r.path == p));
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));

@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 
 use serde_json::Value;
 
-use crate::model::{NodeMeta, RunModel, node_tokens, prompt_live_figures};
+use crate::model::{NodeMeta, RunModel, node_tokens};
 use crate::render::RowKind;
 
 /// A container kind in the Store's area diagram (DESIGN.md §6.3e,
@@ -464,22 +464,15 @@ fn build_leaf(
 ) -> Option<StoreLeaf> {
     let node = flat.get(path)?;
     let label = path.rsplit('.').next().unwrap_or(path).to_string();
-    let (tokens_sent, tokens_received, live) = if node.completed_at.is_some() {
-        let (sent, received) = node_tokens(&node.meta);
-        (sent, received, false)
-    } else if let Some(agent_live) = &node.live {
-        (
-            agent_live.tokens_sent.unwrap_or(0),
-            agent_live.tokens_received.unwrap_or(0),
-            true,
-        )
-    } else if let Some(live) = prompt_live_figures(Some(node), path, model, now) {
-        let (sent, sent_live) = live.tokens_sent_or_estimate().unwrap_or((0, false));
-        let (received, received_live) = live.tokens_received_or_estimate().unwrap_or((0, false));
-        (sent, received, sent_live || received_live)
-    } else {
-        (0, 0, false)
-    };
+    // Issue #702: the same step-tokens-so-far rule every other
+    // screen's sums and shares now read -- in particular, a stale
+    // leftover `meta.live` (an interrupted agent session,
+    // `AgentLive::is_recent` false) still gives its last known
+    // figures here, just no longer drawn faint.
+    let figures = crate::model::step_tokens_so_far(Some(node), path, model, now);
+    let tokens_sent = figures.tokens_sent.unwrap_or(0);
+    let tokens_received = figures.tokens_received.unwrap_or(0);
+    let live = figures.live;
     if tokens_sent == 0 && tokens_received == 0 {
         return None;
     }
@@ -952,7 +945,10 @@ pub fn build_store_table(
     });
     for row in &mut rows {
         row.share_pct = if run_tokens > 0 {
-            row.tokens() as f64 / run_tokens as f64 * 100.0
+            // Issue #702's rule 4: never above 100%, even if a
+            // caller's own denominator and this leaf's own figure
+            // were read a redraw apart and briefly disagree.
+            (row.tokens() as f64 / run_tokens as f64 * 100.0).min(100.0)
         } else {
             0.0
         };
@@ -1086,6 +1082,11 @@ pub fn build_store(
     let tree = build_store_tree(
         root_path, flat, kinds, plan, header, model, now, run_ended, state,
     );
+    // Issue #702's rule 4 ("a share never exceeds 100%"): a running
+    // step's own live estimate (an agent's own `meta.live` tokens
+    // included) must count in this denominator too, or a leaf tile's
+    // own live-figure numerator can outrun it -- the exact `19000%`
+    // this issue's own bug report found on the Largest Stores table.
     let run_tokens = state
         .and_then(crate::model::run_totals)
         .map(|totals| {
@@ -1098,7 +1099,9 @@ pub fn build_store(
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
         })
-        .unwrap_or(header.tokens_sent + header.tokens_received);
+        .unwrap_or(header.tokens_sent + header.tokens_received)
+        + header.tokens_sent_live_estimate
+        + header.tokens_received_live_estimate;
     let table = build_store_table(&tree, root_path, run_tokens);
     let readings = build_store_readings(&table, flat, header, rows);
     let largest_usual_step = header
@@ -1813,6 +1816,7 @@ mod tests {
                     "provider": "agent",
                     "live": {
                         "engine": "claude-code",
+                        "updated_at": "2026-01-01T00:00:03Z",
                         "tokens_sent": 50,
                         "tokens_received": 20
                     }
@@ -1841,6 +1845,52 @@ mod tests {
         assert!(code.live);
         assert_eq!(code.tokens_sent, 50);
         assert_eq!(code.tokens_received, 20);
+    }
+
+    /// Issue #702's rule 1: a stale leftover `meta.live` (an
+    /// interrupted agent session, `updated_at` more than 5 seconds
+    /// behind `now`) still gets a tile from its own last known
+    /// figures, just drawn normally rather than faint -- never
+    /// dropped the way `a_running_step_with_no_live_figures_gets_no_
+    /// tile` below is.
+    #[test]
+    fn a_stale_leftover_agent_live_gets_a_tile_not_flagged_live() {
+        let flat: BTreeMap<String, NodeMeta> = crate::model::flatten_state(&serde_json::json!({
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "code": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "provider": "agent",
+                    "live": {
+                        "engine": "pi",
+                        "updated_at": "2026-01-01T00:00:00Z",
+                        "tokens_sent": 2100,
+                        "tokens_received": 40
+                    }
+                }}
+            }
+        }));
+        let kinds = BTreeMap::new();
+        let plan = crate::plan::PlanTree::empty();
+        let header = empty_header();
+        let model = RunModel::new();
+        let tree = build_store_tree(
+            "prime",
+            &flat,
+            &kinds,
+            &plan,
+            &header,
+            &model,
+            "2026-01-01T00:00:30Z",
+            false,
+            None,
+        );
+        assert_eq!(tree.len(), 1);
+        let StoreNode::Leaf(code) = &tree[0] else {
+            panic!("expected a tile for the stale leftover agent session");
+        };
+        assert!(!code.live);
+        assert_eq!(code.tokens_sent, 2100);
+        assert_eq!(code.tokens_received, 40);
     }
 
     #[test]
@@ -2062,6 +2112,70 @@ mod tests {
         let table = build_store_table(&tree, "prime", 10);
         let readings = build_store_readings(&table, &flat, &header, &[]);
         assert_eq!(readings.loop_progress, None);
+    }
+
+    /// Issue #702's rule 4: the Largest Stores table's own share
+    /// never exceeds 100% while an agent session is running, even
+    /// though its own live tokens aren't in `runtime.last_run.
+    /// totals` yet -- the exact `19000%` this issue's own bug report
+    /// found once the denominator didn't count a running step's own
+    /// live estimate at all.
+    #[test]
+    fn the_store_table_share_never_exceeds_100_percent_while_an_agent_runs() {
+        let plan = crate::plan::PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z", "completed_at": "2026-01-01T00:00:01Z",
+                "adapter": "scripted", "model": "m",
+                "tokens_sent_total": 20, "tokens_received_total": 15
+            }},
+            "fixer": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:01Z", "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-01-01T00:00:14Z",
+                    "tokens_sent": 6650, "tokens_received": 0}
+            }}
+        }});
+        let rendered = crate::render::build(
+            "do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            crate::model::ProcessState::Running,
+            14.0,
+            "2026-01-01T00:00:14Z",
+            &[],
+        );
+        let flat = crate::model::flatten_state(&state);
+        let kinds: BTreeMap<String, RowKind> = BTreeMap::new();
+        let screen = build_store(
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            "2026-01-01T00:00:14Z",
+            None,
+        );
+        assert!(!screen.table.is_empty());
+        for row in &screen.table {
+            assert!(
+                row.share_pct <= 100.0,
+                "{}: share {} exceeds 100%",
+                row.label,
+                row.share_pct
+            );
+        }
+        let fixer = screen
+            .table
+            .iter()
+            .find(|r| r.label.contains("fixer"))
+            .expect("a fixer row in the table");
+        assert!(fixer.share_pct > 99.0 && fixer.share_pct <= 100.0);
     }
 
     /// Issue #695: `build_store` over 2,000 flat, token-bearing

@@ -1583,6 +1583,33 @@ fn build_header(
             })
         });
 
+    // Issue #702's cancelled-run case: a leftover `meta.live` whose
+    // own node never got a `completed_at` at all (the run ended
+    // while the session was still mid-attempt) stops reading
+    // `Running` the instant `statuses` does, but its own last known
+    // tokens never land in `run_totals`/`node_tokens` either --
+    // both need a finished attempt. Counted into the exact total
+    // here, never the live estimate below, since nothing is still
+    // updating them (rule 1: "not as live").
+    let (leftover_sent, leftover_received) = flat
+        .iter()
+        .filter(|(path, node)| {
+            node.completed_at.is_none()
+                && node.live.is_some()
+                && !statuses
+                    .get(path.as_str())
+                    .is_some_and(|s| s.kind == StatusKind::Running)
+        })
+        .fold((0u64, 0u64), |(sent, recv), (_, node)| {
+            let live = node.live.as_ref().expect("filtered above");
+            (
+                sent + live.tokens_sent.unwrap_or(0),
+                recv + live.tokens_received.unwrap_or(0),
+            )
+        });
+    let tokens_sent = tokens_sent + leftover_sent;
+    let tokens_received = tokens_received + leftover_received;
+
     // Issue #675: every currently running prompt's own live
     // estimate, summed separately -- gated on `statuses` reading
     // `Running` for the path, not merely on `flat` still carrying a
@@ -1596,25 +1623,40 @@ fn build_header(
     // the Totals row gets an events-only estimate too; `is_running_
     // prompt` still gates a real node, so this never double-counts
     // one running a tool.
+    // Issue #702: a running agent session's own `meta.live` tokens
+    // count toward this same sum, exact rather than estimated (an
+    // agent's own CLI reports them directly, never from a character
+    // count) -- a path never carries both a running prompt's live
+    // record and an agent's own, so the two branches below are
+    // mutually exclusive per path, same as `node.live`/`node.
+    // prompt_live` already are.
     let (tokens_sent_live_estimate, tokens_received_live_estimate) = statuses
         .iter()
         .filter(|(_, status)| status.kind == StatusKind::Running)
-        .filter_map(|(path, _)| {
+        .fold((0u64, 0u64), |(sent, recv), (path, _)| {
             let node = flat.get(path.as_str());
             let is_prompt = match node {
                 Some(node) => crate::model::is_running_prompt(node),
                 None => model.progress_at(path).is_some(),
             };
-            is_prompt.then(|| crate::model::prompt_live_figures(node, path, model, now))
-        })
-        .flatten()
-        .fold((0u64, 0u64), |(sent, recv), live| {
+            if is_prompt {
+                let Some(live) = crate::model::prompt_live_figures(node, path, model, now) else {
+                    return (sent, recv);
+                };
+                return (
+                    sent + live.tokens_sent.or(live.tokens_sent_estimate).unwrap_or(0),
+                    recv + live
+                        .tokens_received
+                        .or(live.tokens_received_estimate)
+                        .unwrap_or(0),
+                );
+            }
+            let Some(agent_live) = node.and_then(|n| n.live.as_ref()) else {
+                return (sent, recv);
+            };
             (
-                sent + live.tokens_sent.or(live.tokens_sent_estimate).unwrap_or(0),
-                recv + live
-                    .tokens_received
-                    .or(live.tokens_received_estimate)
-                    .unwrap_or(0),
+                sent + agent_live.tokens_sent.unwrap_or(0),
+                recv + agent_live.tokens_received.unwrap_or(0),
             )
         });
 
@@ -5187,6 +5229,105 @@ mod tests {
         assert_eq!(finished.header.tokens_received, 12);
         assert_eq!(finished.header.tokens_sent_live_estimate, 0);
         assert_eq!(finished.header.tokens_received_live_estimate, 0);
+    }
+
+    /// Issue #702: a running agent session's own `meta.live` tokens
+    /// count toward the Totals row's own live estimate the same way a
+    /// running prompt's already do -- never both at once for the
+    /// same path.
+    #[test]
+    fn a_running_agents_meta_live_tokens_count_toward_the_live_estimate() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:50Z",
+                    "tokens_sent": 2100, "tokens_received": 40}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:51Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent, 0);
+        assert_eq!(rendered.header.tokens_received, 0);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 2100);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 40);
+    }
+
+    /// Claude Code never reports `tokens_received` live (`docs/
+    /// plugins/agent.md`) -- `null` there must add `0` to the live
+    /// estimate, never panic or poison the whole sum.
+    #[test]
+    fn a_running_agents_null_tokens_received_adds_zero_to_the_live_estimate() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "claude_code", "updated_at": "2026-10-08T11:46:50Z",
+                    "tokens_sent": 1600, "tokens_received": null}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:51Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 1600);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 0);
+    }
+
+    /// Issue #702's cancelled-run case: an interrupted run leaves
+    /// the agent's own node with no `completed_at` at all and
+    /// `runtime.last_run.totals` at `0`/`0` (no attempt ever
+    /// finished) -- its last known `meta.live` tokens still land in
+    /// the Totals row's own exact figure, since nothing is updating
+    /// them any more to call them "live".
+    #[test]
+    fn an_interrupted_agents_leftover_meta_live_tokens_land_in_the_exact_total() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"runtime": {"last_run": {"completed_at": "2026-10-08T11:46:51Z",
+                "totals": {"tokens_sent": 0, "tokens_received": 0}}},
+            "prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:51Z", "error": "Interrupted"},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:44Z",
+                    "tokens_sent": 2100, "tokens_received": 40}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited {
+                interrupted: true,
+                likely_failed: false,
+                has_failure_reason: false,
+                exited_at: None,
+            },
+            1.0,
+            "2026-10-08T11:46:55Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent, 2100);
+        assert_eq!(rendered.header.tokens_received, 40);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 0);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 0);
     }
 
     /// An interrupted run's own leftover `meta.live` (DESIGN.md) must

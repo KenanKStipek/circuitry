@@ -360,6 +360,87 @@ pub fn prompt_live_figures(
     })
 }
 
+/// A step's tokens so far (issue #702): exact, once it has finished
+/// ([`node_tokens`]'s own `_total`-first pair); while it runs, a
+/// prompt's own live figures ([`prompt_live_figures`], estimates
+/// read exact-or-estimate the same way the Tape row's own text
+/// already does) or an agent's `meta.live.tokens_sent`/
+/// `tokens_received` ([`AgentLive`], read exact even mid-turn, never
+/// an estimate). A leftover `meta.live` whose own session has gone
+/// quiet ([`AgentLive::is_recent`] false, issue #637) still gives its
+/// last known figures, just no longer flagged `live` -- the same
+/// rule a stale leftover's Store tile already follows. `tokens_sent`/
+/// `tokens_received` stay `None`, never `0`, for a figure neither
+/// source has ever reported (Claude Code's own `tokens_received:
+/// null` mid-turn); every caller that sums or shares this across
+/// steps reads a missing figure as `0` (`.unwrap_or(0)`), the same
+/// way a `None` already behaves everywhere else in this module.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StepTokensSoFar {
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+    /// Whether these are still a running figure, as opposed to a
+    /// finished step's exact total or a stale leftover's last known
+    /// one -- a front end draws only this case faint/`≈`.
+    pub live: bool,
+}
+
+impl StepTokensSoFar {
+    /// `None` with nothing known yet at all (a step ahead, or a
+    /// running step neither live source has anything for), else the
+    /// sum of whichever figures are known, a missing one treated as
+    /// `0` -- the same total a finished step's own `sent + received`
+    /// already is.
+    pub fn total(&self) -> Option<u64> {
+        match (self.tokens_sent, self.tokens_received) {
+            (None, None) => None,
+            (sent, received) => Some(sent.unwrap_or(0) + received.unwrap_or(0)),
+        }
+    }
+}
+
+/// [`StepTokensSoFar`] for `path` -- `node`'s own finished totals, or
+/// else whichever live source (an agent's `meta.live`, a prompt's own
+/// live record, or an events-only `progress` line) actually has
+/// something for it. `node` and `path` must name the same step; `path`
+/// alone carries the events-only fallback [`prompt_live_figures`]
+/// needs, since a step known only from `--events` (DESIGN.md §1.4) has
+/// no `node` at all yet.
+pub fn step_tokens_so_far(
+    node: Option<&NodeMeta>,
+    path: &str,
+    model: &RunModel,
+    now: &str,
+) -> StepTokensSoFar {
+    if let Some(node) = node {
+        if node.completed_at.is_some() {
+            let (sent, received) = node_tokens(&node.meta);
+            return StepTokensSoFar {
+                tokens_sent: Some(sent),
+                tokens_received: Some(received),
+                live: false,
+            };
+        }
+        if let Some(agent_live) = &node.live {
+            return StepTokensSoFar {
+                tokens_sent: agent_live.tokens_sent,
+                tokens_received: agent_live.tokens_received,
+                live: agent_live.is_recent(now),
+            };
+        }
+    }
+    if let Some(live) = prompt_live_figures(node, path, model, now) {
+        let sent = live.tokens_sent_or_estimate();
+        let received = live.tokens_received_or_estimate();
+        return StepTokensSoFar {
+            tokens_sent: sent.map(|(n, _)| n),
+            tokens_received: received.map(|(n, _)| n),
+            live: sent.is_some() || received.is_some(),
+        };
+    }
+    StepTokensSoFar::default()
+}
+
 /// One effect node's `{value, meta}` shape, flattened to its dotted
 /// state path (DESIGN.md §1.2-§1.3).
 #[derive(Debug, Clone)]
@@ -2174,6 +2255,188 @@ mod tests {
     fn is_recent_is_false_with_no_updated_at_at_all() {
         let live = AgentLive::default();
         assert!(!live.is_recent("2026-10-08T11:52:55Z"));
+    }
+
+    fn agent_node(meta_extra: Value) -> NodeMeta {
+        let mut meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": null, "provider": "agent"
+        });
+        for (k, v) in meta_extra.as_object().unwrap() {
+            meta.as_object_mut().unwrap().insert(k.clone(), v.clone());
+        }
+        NodeMeta::from_object(&Value::Null, &meta)
+    }
+
+    /// Issue #702's rule 1: a running agent's own `meta.live.
+    /// tokens_sent`/`tokens_received` are read exact, never an
+    /// estimate, and flagged `live`.
+    #[test]
+    fn step_tokens_so_far_reads_a_running_agents_live_totals_as_live() {
+        let node = agent_node(json!({"live": {
+            "engine": "pi", "updated_at": "2026-10-08T11:46:50Z",
+            "tokens_sent": 2100, "tokens_received": 40
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:51Z");
+        assert_eq!(figures.tokens_sent, Some(2100));
+        assert_eq!(figures.tokens_received, Some(40));
+        assert!(figures.live);
+        assert_eq!(figures.total(), Some(2140));
+    }
+
+    /// Claude Code never reports `tokens_received` live (`docs/
+    /// plugins/agent.md`) -- `step_tokens_so_far` must leave it
+    /// `None`, never `0`, while still totalling the known half.
+    #[test]
+    fn step_tokens_so_far_leaves_claude_codes_null_received_as_none() {
+        let node = agent_node(json!({"live": {
+            "engine": "claude_code", "updated_at": "2026-10-08T11:46:50Z",
+            "tokens_sent": 1600, "tokens_received": null
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:51Z");
+        assert_eq!(figures.tokens_sent, Some(1600));
+        assert_eq!(figures.tokens_received, None);
+        assert_eq!(figures.total(), Some(1600));
+    }
+
+    /// Issue #702's rule 1: a stale leftover `meta.live` (an
+    /// interrupted session, `updated_at` more than 5 seconds behind
+    /// `now`) still gives its own last known figures, just not
+    /// flagged `live` any more.
+    #[test]
+    fn step_tokens_so_far_gives_a_stale_leftovers_last_figures_not_live() {
+        let node = agent_node(json!({"live": {
+            "engine": "pi", "updated_at": "2026-10-08T11:46:44Z",
+            "tokens_sent": 2100, "tokens_received": 40
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:52:55Z");
+        assert_eq!(figures.tokens_sent, Some(2100));
+        assert_eq!(figures.tokens_received, Some(40));
+        assert!(!figures.live);
+    }
+
+    /// Once the step has finished, its exact `node_tokens` pair wins
+    /// over anything `meta.live` once said, and is never flagged
+    /// `live` any more.
+    #[test]
+    fn step_tokens_so_far_reads_a_finished_agents_exact_totals() {
+        let meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+            "provider": "agent", "tokens_sent_total": 11550, "tokens_received_total": 130
+        });
+        let node = NodeMeta::from_object(&Value::Null, &meta);
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:59Z");
+        assert_eq!(figures.tokens_sent, Some(11550));
+        assert_eq!(figures.tokens_received, Some(130));
+        assert!(!figures.live);
+    }
+
+    #[test]
+    fn step_tokens_so_far_is_default_for_a_step_with_nothing_at_all() {
+        let model = RunModel::new();
+        let figures = step_tokens_so_far(None, "prime.unseen", &model, "2026-10-08T11:46:59Z");
+        assert_eq!(figures, StepTokensSoFar::default());
+        assert_eq!(figures.total(), None);
+    }
+
+    fn agent_state(live_tokens_sent: u64, live_tokens_received: u64, updated_at: &str) -> Value {
+        json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {
+                "created_at": "2026-10-08T11:46:43Z", "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": updated_at,
+                    "tokens_sent": live_tokens_sent, "tokens_received": live_tokens_received}
+            }}
+        }})
+    }
+
+    /// Issue #702 rule 4's own Signal test: two live snapshots a
+    /// second apart give two sightings, each the increase since the
+    /// one before it, at its own observation time -- never a running
+    /// total.
+    #[test]
+    fn observe_turns_each_increase_in_an_agents_live_totals_into_its_own_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe(
+            &agent_state(2100, 40, "2026-10-08T11:46:44Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        model.observe(
+            &agent_state(4450, 90, "2026-10-08T11:46:45Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let sightings = model.agent_live_sightings();
+        assert_eq!(sightings.len(), 2);
+        assert_eq!(sightings[0].ts, "2026-10-08T11:46:44Z");
+        assert_eq!(sightings[0].tokens_sent, 2100);
+        assert_eq!(sightings[0].tokens_received, 40);
+        assert_eq!(sightings[1].ts, "2026-10-08T11:46:45Z");
+        assert_eq!(sightings[1].tokens_sent, 2350);
+        assert_eq!(sightings[1].tokens_received, 50);
+    }
+
+    /// A redraw that re-observes the exact same `meta.live` (nothing
+    /// written since the last poll, the same `updated_at`) must never
+    /// record a second, zero-delta sighting.
+    #[test]
+    fn observe_never_records_a_sighting_twice_for_an_unmoved_heartbeat() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = agent_state(2100, 40, "2026-10-08T11:46:44Z");
+        model.observe(&state, &plan, ProcessState::Running);
+        model.observe(&state, &plan, ProcessState::Running);
+        model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(model.agent_live_sightings().len(), 1);
+    }
+
+    /// Issue #702 rule 4: at the agent's end, only the remainder not
+    /// yet plotted is added, at its own end time -- the sum of every
+    /// sighting for the path equals its final tokens exactly, never
+    /// double-counted.
+    #[test]
+    fn observe_adds_only_the_remainder_at_the_agents_own_end() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe(
+            &agent_state(2100, 40, "2026-10-08T11:46:44Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        model.observe(
+            &agent_state(4450, 90, "2026-10-08T11:46:45Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+                "provider": "agent", "tokens_sent_total": 11550, "tokens_received_total": 130
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let sightings = model.agent_live_sightings();
+        assert_eq!(sightings.len(), 3);
+        assert_eq!(sightings[2].ts, "2026-10-08T11:46:58Z");
+        assert_eq!(sightings[2].tokens_sent, 11550 - 4450);
+        assert_eq!(sightings[2].tokens_received, 130 - 90);
+        let (total_sent, total_received) = sightings.iter().fold((0u64, 0u64), |(s, r), sig| {
+            (s + sig.tokens_sent, r + sig.tokens_received)
+        });
+        assert_eq!(total_sent, 11550);
+        assert_eq!(total_received, 130);
+        // A later redraw of the same finished state must never record
+        // the remainder a second time.
+        model.observe(&finished, &plan, ProcessState::Running);
+        assert_eq!(model.agent_live_sightings().len(), 3);
     }
 
     #[test]
