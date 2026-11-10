@@ -559,6 +559,11 @@ pub struct StoreTile {
 /// instead of drawing it (issue #695's rule 5: "fewer than 6
 /// columns").
 const MIN_TILE_WIDTH: u16 = 6;
+/// The top-level More tile's own minimum columns -- wider than
+/// MIN_TILE_WIDTH, since its own text needs room for the word
+/// "more" to survive the right-hand cut, not just a count and an
+/// ellipsis.
+const MORE_TILE_MIN_WIDTH: u16 = 12;
 /// A tile's own minimum rows before its container collapses instead
 /// of drawing it (issue #695's rule 5: "less than one text row").
 const MIN_TILE_HEIGHT: u16 = 1;
@@ -618,7 +623,7 @@ fn top_level_tiles_fit(kept: &[usize], has_more: bool, weights: &[u64], span: u1
     if kept.is_empty() {
         return !has_more;
     }
-    let reserved = if has_more { MIN_TILE_WIDTH } else { 0 };
+    let reserved = if has_more { MORE_TILE_MIN_WIDTH } else { 0 };
     let gutter_count = gutters(kept.len() + usize::from(has_more));
     let Some(available) = span
         .checked_sub(gutter_count)
@@ -705,7 +710,7 @@ fn layout_siblings(
             let merged_tokens: u64 = merged.iter().map(|&i| weights[i]).sum();
             let merged_count = merged.len();
             let gutter_count = gutters(kept_nodes.len() + 1);
-            let reserved = MIN_TILE_WIDTH.min(span.saturating_sub(gutter_count));
+            let reserved = MORE_TILE_MIN_WIDTH.min(span.saturating_sub(gutter_count));
             let kept_span = span.saturating_sub(gutter_count).saturating_sub(reserved);
             let kept_weights: Vec<u64> = kept_nodes.iter().map(|n| n.tokens()).collect();
             let kept_sizes = apportion(&kept_weights, kept_span);
@@ -1433,7 +1438,7 @@ mod tests {
             .find(|t| matches!(t.kind, StoreTileKind::More { .. }))
             .expect("the two tiny stores merge into one More tile");
         assert!(
-            more.rect.w >= MIN_TILE_WIDTH,
+            more.rect.w >= MORE_TILE_MIN_WIDTH,
             "the More tile must never be apportioned down below its own minimum width, got {more:?}"
         );
         match &more.kind {
@@ -1461,7 +1466,7 @@ mod tests {
             .iter()
             .find(|t| matches!(t.kind, StoreTileKind::More { .. }))
             .expect("too many equal stores for 80 columns must still fold most of them");
-        assert!(more.rect.w >= MIN_TILE_WIDTH, "tiles were {tiles:#?}");
+        assert!(more.rect.w >= MORE_TILE_MIN_WIDTH, "tiles were {tiles:#?}");
         let kept: Vec<&StoreTile> = tiles
             .iter()
             .filter(|t| !matches!(t.kind, StoreTileKind::More { .. }))
