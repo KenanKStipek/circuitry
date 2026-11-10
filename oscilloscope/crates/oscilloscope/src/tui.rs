@@ -9557,6 +9557,17 @@ fn draw_flow(
     // `flow_rows` already has.
     app.flow_lane_stations =
         oscilloscope_core::rail::lane_stations(&screen.rail, app.selected_path.as_deref());
+    // Issue #704 rule 3: what ←/→ step out to once the selection is
+    // already at the selected lane's own first/last station -- same
+    // lifecycle as `flow_lane_stations` above.
+    app.flow_step_out_before = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| oscilloscope_core::rail::step_out_of_lane(&screen.rail, p, false));
+    app.flow_step_out_after = app
+        .selected_path
+        .as_deref()
+        .and_then(|p| oscilloscope_core::rail::step_out_of_lane(&screen.rail, p, true));
     let sections = Layout::default()
         .direction(Direction::Vertical)
         .constraints([

@@ -494,7 +494,7 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
@@ -514,14 +514,18 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
     let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
     assert!(
-        screen.contains("alpha") && screen.contains("beta"),
-        "expected both rows on the ended Tape; screen:\n{screen}"
+        screen.contains("alpha") && screen.contains("beta") && screen.contains("gamma"),
+        "expected all three rows on the ended Tape; screen:\n{screen}"
     );
 
-    // The run's just ended: the selection starts on the Run End row
-    // (issue #704 rule 1) -- one ↓ lands it on a real row instead.
+    // The run's just ended: the selection starts on the last row the
+    // plan ran (issue #704 rule 1's own default target, "gamma"
+    // here) and the detail pane shows the run summary -- two ↑
+    // actually move the selection, landing on "alpha", never back on
+    // "gamma" itself (which would show the summary again, the same
+    // as any other selection landing back on that exact row does).
     std::thread::sleep(SIGNAL_DELAY);
-    send_bytes(&mut master, b"\x1b[B");
+    send_bytes(&mut master, b"\x1b[A\x1b[A");
     std::thread::sleep(SIGNAL_DELAY);
     send_bytes(&mut master, b"\r");
     let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
@@ -529,28 +533,23 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
         !screen.contains("Tape \u{b7} "),
         "expected enter to open the full-screen step; screen:\n{screen}"
     );
-    let opened_alpha = screen.contains("alpha \u{b7} Selected");
-    let opened_beta = screen.contains("beta \u{b7} Selected");
     assert!(
-        opened_alpha || opened_beta,
-        "expected alpha or beta's own full-screen step; screen:\n{screen}"
+        screen.contains("alpha \u{b7} Selected"),
+        "expected alpha's own full-screen step; screen:\n{screen}"
     );
 
-    // Step to the other effect, in whichever direction actually
-    // reaches it -- `]` from alpha (plan order's first effect) or
-    // `[` from beta (its last), the full-screen step's own ↑↓ across
-    // every effect the run recorded.
+    // `]` steps to the next effect in plan order -- "beta", never
+    // "gamma" (the run's own default end target, two steps further).
     std::thread::sleep(SIGNAL_DELAY);
-    let (step_key, other_title): (&[u8], &str) = if opened_alpha {
-        (b"]", "beta \u{b7} Selected")
-    } else {
-        (b"[", "alpha \u{b7} Selected")
-    };
-    send_bytes(&mut master, step_key);
-    let screen = wait_for_screen_text(&captured_buf, other_title, Duration::from_secs(10));
+    send_bytes(&mut master, b"]");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "beta \u{b7} Selected",
+        Duration::from_secs(10),
+    );
     assert!(
-        screen.contains(other_title),
-        "expected stepping to reach the other effect; screen:\n{screen}"
+        screen.contains("beta \u{b7} Selected"),
+        "expected stepping to reach the next effect; screen:\n{screen}"
     );
 
     send_bytes(&mut master, b"\x1b");
@@ -1255,7 +1254,7 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            screen.contains("Help") && screen.contains("scroll the rail"),
+            screen.contains("Help") && screen.contains("select a station"),
             "expected ? to open the Flow's own Help; screen:\n{screen}"
         );
     }

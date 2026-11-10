@@ -165,6 +165,15 @@ pub struct App {
     /// or the run ended; `tui::draw_flow` is the only thing that
     /// ever rebuilds it, the same lifecycle `flow_rows` already has.
     pub flow_lane_stations: Vec<String>,
+    /// Issue #704 rule 3: what `←` steps out to when the selection is
+    /// already at the selected lane's own first station (`rail::
+    /// step_out_of_lane`'s own output, `tui::draw_flow`'s own
+    /// lifecycle) -- `None` with no enclosing fork at all (already
+    /// at the rail's own top level).
+    pub flow_step_out_before: Option<String>,
+    /// `flow_step_out_before`'s own `→` counterpart, for the lane's
+    /// own last station.
+    pub flow_step_out_after: Option<String>,
     /// Per-fork lane-open overrides (issue #691's `+`/`-`), keyed by
     /// the fork's own path: `0` folds it into its own band, the
     /// fork's own lane count fully opens it, anything in between is
@@ -275,6 +284,8 @@ impl App {
             flow_manual_scroll: false,
             flow_rows: Vec::new(),
             flow_lane_stations: Vec::new(),
+            flow_step_out_before: None,
+            flow_step_out_after: None,
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_drawn_col: None,
@@ -428,6 +439,26 @@ impl App {
             .selected_path
             .as_deref()
             .and_then(|p| self.flow_lane_stations.iter().position(|q| q.as_str() == p));
+        // Issue #704 rule 3: already at the selected lane's own end
+        // in the direction of travel -- step out of it instead of
+        // clamping in place, so ←→ can always leave a lane.
+        if let Some(i) = idx {
+            let last = self.flow_lane_stations.len() - 1;
+            if delta < 0 && i == 0 {
+                if let Some(target) = self.flow_step_out_before.clone() {
+                    self.select_tree_path(Some(target));
+                    self.follow = false;
+                }
+                return;
+            }
+            if delta > 0 && i == last {
+                if let Some(target) = self.flow_step_out_after.clone() {
+                    self.select_tree_path(Some(target));
+                    self.follow = false;
+                }
+                return;
+            }
+        }
         let next = match idx {
             Some(i) => {
                 (i as i32 + delta).clamp(0, self.flow_lane_stations.len() as i32 - 1) as usize
