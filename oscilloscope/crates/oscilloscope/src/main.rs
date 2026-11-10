@@ -193,6 +193,14 @@ fn effective_log_mode(explicit: bool) -> bool {
     explicit || !std::io::stdout().is_terminal() || std::env::var_os("CI").is_some()
 }
 
+/// `OSI_PROCESS_SCAN=0`: list only the run registry, skipping the
+/// process scan and the current-directory source entirely -- for
+/// tests and a shared machine where a process scan would otherwise
+/// find orchestrations this osi never launched or watched.
+fn process_scan_enabled() -> bool {
+    std::env::var("OSI_PROCESS_SCAN").as_deref() != Ok("0")
+}
+
 /// Bare `osi` with no orchestration, without a TTY (or with
 /// `--log`): finds the runs on this machine (the registry plus a
 /// process scan plus a `state.live.json` scan of the current
@@ -200,12 +208,18 @@ fn effective_log_mode(explicit: bool) -> bool {
 /// script's own discovery answer, without reading the registry
 /// itself. Never opens a terminal, never blocks.
 fn print_discovered_runs() -> ExitCode {
+    let scan_enabled = process_scan_enabled();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let runs = oscilloscope_core::discovery::discover_runs(
         registry_io::resolve_runs_dir().as_deref(),
         &oscilloscope_core::registry::RealLiveness,
-        &oscilloscope_core::discovery::RealProcessScanner,
+        if scan_enabled {
+            &oscilloscope_core::discovery::RealProcessScanner
+        } else {
+            &oscilloscope_core::discovery::NullProcessScanner
+        },
         &oscilloscope_core::discovery::RealProcessCwd,
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        scan_enabled.then_some(cwd.as_path()),
         std::time::SystemTime::now(),
     );
     for run in &runs {
@@ -3364,6 +3378,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             spawn_event_reader(),
             false,
             true,
+            oscilloscope_core::screens::Screen::Tape,
         ) {
             WatchOutcome::Exited(code, _) => code,
             // `opened_from_select` is false here, so `run_tui_watch`
@@ -3466,6 +3481,7 @@ fn run_tui_watch(
     event_rx: EventReader,
     opened_from_select: bool,
     manage_terminal: bool,
+    starting_screen: oscilloscope_core::screens::Screen,
 ) -> WatchOutcome {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
@@ -3492,6 +3508,10 @@ fn run_tui_watch(
 
     let mut app = App::new(true);
     app.opened_from_select = opened_from_select;
+    // Issue #698, §4: opened from the All grid, this attach starts
+    // on whichever screen every tile was already showing there --
+    // never a bare `osi` or a Select attach's own Tape default.
+    app.screen = starting_screen;
 
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
@@ -4280,6 +4300,7 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             theme_name,
             no_history,
             spawn_event_reader(),
+            oscilloscope_core::screens::Screen::Tape,
         ) {
             WatchOutcome::Exited(code, _) => code,
             WatchOutcome::BackToSelect(_) => {
@@ -4315,9 +4336,15 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
         cursor = Some(last_cursor);
         let outcome = match action {
             SelectAction::Quit(code) => break (code, Vec::new()),
-            SelectAction::AttachRun(run) => {
-                attach_discovered_run(&run, true, no_animation, theme_name, no_history, reader)
-            }
+            SelectAction::AttachRun(run) => attach_discovered_run(
+                &run,
+                true,
+                no_animation,
+                theme_name,
+                no_history,
+                reader,
+                oscilloscope_core::screens::Screen::Tape,
+            ),
             SelectAction::AttachRecent(row) => {
                 attach_recent_run(&row, no_animation, theme_name, no_history, reader)
             }
@@ -4370,12 +4397,18 @@ fn history_signature(no_history: bool) -> Option<std::time::SystemTime> {
 /// [`print_discovered_runs`] prints, used here to decide which of
 /// the Select screen's own three shapes bare `osi` shows.
 fn discover_running() -> Vec<oscilloscope_core::discovery::DiscoveredRun> {
+    let scan_enabled = process_scan_enabled();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     oscilloscope_core::discovery::discover_runs(
         registry_io::resolve_runs_dir().as_deref(),
         &oscilloscope_core::registry::RealLiveness,
-        &oscilloscope_core::discovery::RealProcessScanner,
+        if scan_enabled {
+            &oscilloscope_core::discovery::RealProcessScanner
+        } else {
+            &oscilloscope_core::discovery::NullProcessScanner
+        },
         &oscilloscope_core::discovery::RealProcessCwd,
-        &std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
+        scan_enabled.then_some(cwd.as_path()),
         std::time::SystemTime::now(),
     )
 }
@@ -4606,6 +4639,7 @@ fn run_select_screen(
 /// (`opened_from_select` false, `esc` then does nothing) and for a
 /// row chosen on the Select screen (`opened_from_select` true, `esc`
 /// returns there).
+#[allow(clippy::too_many_arguments)]
 fn attach_discovered_run(
     run: &oscilloscope_core::discovery::DiscoveredRun,
     opened_from_select: bool,
@@ -4613,6 +4647,7 @@ fn attach_discovered_run(
     theme_name: theme::ThemeName,
     no_history: bool,
     event_rx: EventReader,
+    starting_screen: oscilloscope_core::screens::Screen,
 ) -> WatchOutcome {
     let Some(run_dir) = run.run_dir.clone() else {
         // Nothing `discover_runs` itself ever returns reaches this --
@@ -4674,6 +4709,7 @@ fn attach_discovered_run(
         // only a Select-opened attach shares the Select loop's own
         // `TerminalGuard` instead of managing one of its own.
         !opened_from_select,
+        starting_screen,
     )
 }
 
@@ -4730,6 +4766,7 @@ fn attach_recent_run(
         // Only reachable from the Select loop, which owns the real
         // `TerminalGuard` for the whole session.
         false,
+        oscilloscope_core::screens::Screen::Tape,
     )
 }
 
@@ -4906,6 +4943,7 @@ fn run_all_loop(
                     theme_name,
                     no_history,
                     event_rx,
+                    all_state.screen,
                 ) {
                     WatchOutcome::Exited(code, output) => {
                         return WatchOutcome::Exited(code, output);

@@ -693,6 +693,12 @@ pub fn spawn_osi_on_pty_with_env(
     cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
     // Issue #698: same discipline for the run registry.
     cmd.env("OSI_RUNS_DIR", home.path().join("runs"));
+    // A machine-wide `ps` scan would otherwise let a Select/All pty
+    // test see, and open or signal, an orchestration this test
+    // never started -- off here by default; the one test that
+    // exercises the scan itself overrides it back on through
+    // `extra_env` below.
+    cmd.env("OSI_PROCESS_SCAN", "0");
     for key in [
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",

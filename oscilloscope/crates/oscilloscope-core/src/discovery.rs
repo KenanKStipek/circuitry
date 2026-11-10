@@ -60,6 +60,17 @@ pub trait ProcessScanner {
     fn scan(&self) -> Vec<(u32, String)>;
 }
 
+/// A [`ProcessScanner`] that never finds anything -- `OSI_PROCESS_
+/// SCAN=0`'s own "no process scan" (and every test that must never
+/// let the real machine's own processes affect its outcome).
+pub struct NullProcessScanner;
+
+impl ProcessScanner for NullProcessScanner {
+    fn scan(&self) -> Vec<(u32, String)> {
+        Vec::new()
+    }
+}
+
 /// [`ProcessScanner`] backed by a real `ps -axo pid=,args=` call.
 pub struct RealProcessScanner;
 
@@ -322,14 +333,17 @@ pub fn format_plain_line(run: &DiscoveredRun) -> String {
 /// twice counts once (pid, then its `--live-state` path), and the
 /// result is ordered by `started_at` (oldest -- i.e. earliest launch
 /// -- first), runs with no known `started_at` (a bare scan match, or
-/// the cwd source) ordered after every run that has one.
+/// the cwd source) ordered after every run that has one. `cwd` is
+/// `None` to skip the third source entirely (`OSI_PROCESS_SCAN=0`'s
+/// own "no process scan, no current-directory source"); `scanner`
+/// answering an empty scan already does the same for the second.
 #[allow(clippy::too_many_arguments)]
 pub fn discover_runs(
     registry_dir: Option<&Path>,
     liveness: &dyn Liveness,
     scanner: &dyn ProcessScanner,
     process_cwd: &dyn ProcessCwd,
-    cwd: &Path,
+    cwd: Option<&Path>,
     now: SystemTime,
 ) -> Vec<DiscoveredRun> {
     let mut runs: Vec<DiscoveredRun> = Vec::new();
@@ -358,7 +372,10 @@ pub fn discover_runs(
         runs.push(discovered);
     }
 
-    for discovered in scan_live_state_in_cwd(cwd, now) {
+    for discovered in cwd
+        .map(|cwd| scan_live_state_in_cwd(cwd, now))
+        .unwrap_or_default()
+    {
         if runs.iter().any(|r| r.live_state == discovered.live_state) {
             continue;
         }
@@ -630,7 +647,7 @@ mod tests {
             &AllAlive,
             &scan,
             &NoCwd,
-            empty_cwd.path(),
+            Some(empty_cwd.path()),
             std::time::SystemTime::now(),
         );
         assert_eq!(runs.len(), 1);
@@ -659,7 +676,7 @@ mod tests {
             &AllAlive,
             &scan,
             &NoCwd,
-            empty_cwd.path(),
+            Some(empty_cwd.path()),
             std::time::SystemTime::now(),
         );
         assert_eq!(runs.len(), 1);
@@ -679,7 +696,7 @@ mod tests {
             &AllAlive,
             &scan,
             &NoCwd,
-            cwd.path(),
+            Some(cwd.path()),
             std::time::SystemTime::now(),
         );
         assert_eq!(runs.len(), 1);
@@ -706,7 +723,7 @@ mod tests {
             &AllAlive,
             &NoScan,
             &NoCwd,
-            empty_cwd.path(),
+            Some(empty_cwd.path()),
             std::time::SystemTime::now(),
         );
         assert_eq!(
@@ -751,7 +768,7 @@ mod tests {
             &AllAlive,
             &scan,
             &NoCwd,
-            empty_cwd.path(),
+            Some(empty_cwd.path()),
             std::time::SystemTime::now(),
         );
         assert_eq!(runs.len(), 2);
@@ -771,7 +788,7 @@ mod tests {
             &AllAlive,
             &scan,
             &FixedCwd(PathBuf::from("/work")),
-            empty_cwd.path(),
+            Some(empty_cwd.path()),
             std::time::SystemTime::now(),
         );
         assert_eq!(

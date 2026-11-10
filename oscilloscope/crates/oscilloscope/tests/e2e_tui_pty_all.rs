@@ -62,13 +62,17 @@ impl Drop for AutoKill {
     }
 }
 
-/// Issue #698, §4's own navigation path: with three live runs
-/// registered, bare `osi` on a TTY lists all three plus `All` on
-/// Select; `g` moves the cursor to `All`'s own row (row 0); `enter`
-/// opens the grid (the `ALL` chip); `enter` again opens whichever
-/// run the grid's own default focus (index 0) lands on; `esc`
-/// returns to the grid; a second `esc` returns to Select, with every
-/// run still listed; `q` from Select quits at once, with no confirm.
+/// Issue #698, §4's own navigation path: with two live runs
+/// registered (both fit on one page at this terminal's own width,
+/// so arrow focus has somewhere real to move to), bare `osi` on a
+/// TTY lists both plus `All` on Select; `g` moves the cursor to
+/// `All`'s own row (row 0); `enter` opens the grid (the `ALL` chip);
+/// `1` switches every tile to Signal; `→` moves the focus from the
+/// first tile to the second; `enter` opens whichever run is
+/// focused, proving the move really landed there, not just that the
+/// key was accepted; `esc` returns to the grid; a second `esc`
+/// returns to Select, with every run still listed; `q` from Select
+/// quits at once, with no confirm.
 #[test]
 fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     if !e2e_enabled() {
@@ -81,13 +85,10 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
 
     let doc_a = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
     let doc_b = write_doc(work.path(), "b.yml", SELECT_SLOW_DOC);
-    let doc_c = write_doc(work.path(), "c.yml", SELECT_SLOW_DOC);
     let config_a = write_doc(work.path(), "config-a.json", SCRIPTED_CONFIG);
     let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
-    let config_c = write_doc(work.path(), "config-c.json", SCRIPTED_CONFIG);
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
-    let out_c = tempfile::tempdir().unwrap();
     let child_a = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
@@ -102,15 +103,8 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         &config_b,
         out_b.path(),
     ));
-    let child_c = AutoKill::new(launch_osi_log(
-        &home,
-        work.path(),
-        &doc_c,
-        &config_c,
-        out_c.path(),
-    ));
 
-    for out in [&out_a, &out_b, &out_c] {
+    for out in [&out_a, &out_b] {
         wait_for_step_start(
             &out.path().join("events.jsonl"),
             "prime.slow",
@@ -118,7 +112,7 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         );
     }
     let runs_dir = home.path().join("runs");
-    wait_for_registry_entries(&runs_dir, 3, Duration::from_secs(10));
+    wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
 
     let (master, slave_path) = open_pty();
     let mut master = master;
@@ -139,17 +133,52 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         "expected enter on the All row to open the grid:\n{screen}"
     );
 
+    send_bytes(&mut master, b"1");
+    let screen = wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(20));
+    assert!(
+        screen.contains("SIGNAL"),
+        "expected 1 to switch every tile to Signal:\n{screen}"
+    );
+
+    // `enter` at the grid's own default focus (index 0, Settled
+    // point 6), to learn which of the two documents is at that
+    // position -- discovery's own launch-order tie-break between
+    // two runs started a moment apart is real timing, not something
+    // this test can assume either way.
     send_bytes(&mut master, b"\r");
-    // wait_for_screen_text's own "TAPE" would already match the
-    // grid's own "ALL . TAPE" chip on the very frame this enter
-    // leaves -- waiting for that whole chip to actually disappear is
-    // what tells the two apart (the opened run's own header reads
-    // "osi  <doc> . ...", never "osi  All").
     let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
     assert!(
-        screen.contains("TAPE") && !screen.contains("osi  All"),
-        "expected enter on the focused tile to open that run full-screen, \
-         leaving the All chip behind:\n{screen}"
+        screen.contains("SIGNAL") && !screen.contains("osi  All"),
+        "expected enter to open the focused run on the screen every tile was already showing \
+         (Signal), not back on Tape:\n{screen}"
+    );
+    let first_doc = if screen.contains("a.yml") {
+        "a.yml"
+    } else if screen.contains("b.yml") {
+        "b.yml"
+    } else {
+        panic!("expected the opened run's own header to name a.yml or b.yml:\n{screen}");
+    };
+
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "osi  All", Duration::from_secs(20));
+    assert!(
+        screen.contains("ALL"),
+        "expected esc from the opened run to return to the grid:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b[C"); // Right arrow: focus the other tile.
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
+    let second_doc = if first_doc == "a.yml" {
+        "b.yml"
+    } else {
+        "a.yml"
+    };
+    assert!(
+        screen.contains(second_doc) && !screen.contains(first_doc) && !screen.contains("osi  All"),
+        "expected the right arrow to move focus to the other tile, so this enter opens \
+         {second_doc}, not {first_doc} again:\n{screen}"
     );
 
     send_bytes(&mut master, b"\x1b");
@@ -166,7 +195,7 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         "expected esc from the grid to return to Select, not stay on All:\n{screen}"
     );
     assert!(
-        screen.contains("a.yml") && screen.contains("b.yml") && screen.contains("c.yml"),
+        screen.contains("a.yml") && screen.contains("b.yml"),
         "expected every run still listed on Select after the round trip:\n{screen}"
     );
 
@@ -179,10 +208,8 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
 
     drop(child_a);
     drop(child_b);
-    drop(child_c);
     // See `e2e_tui_pty_select.rs`'s own comment: the needle has to
     // be each run's own `out_dir`, not the shared `work` directory.
     assert_no_leftover_process(out_a.path());
     assert_no_leftover_process(out_b.path());
-    assert_no_leftover_process(out_c.path());
 }
