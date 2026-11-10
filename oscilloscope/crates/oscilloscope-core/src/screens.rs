@@ -1505,11 +1505,7 @@ fn tape_row_content(
                 } else {
                     format!(" · on_error: {mode}")
                 };
-                (
-                    format!("{exit}handled{mode_text}"),
-                    None,
-                    tokens,
-                )
+                (format!("{exit}handled{mode_text}"), None, tokens)
             } else {
                 (tape_tool_what(row, node), None, tokens)
             }
@@ -3291,8 +3287,8 @@ pub fn build_signal(
     let cursor_buckets = &buckets[..cursor.map(|c| (c + 1).min(buckets.len())).unwrap_or(0)];
     let sent_sum: u64 = cursor_buckets.iter().map(|b| b.sent).sum();
     let received_sum: u64 = cursor_buckets.iter().map(|b| b.received).sum();
-    let ratio = (received_sum > 0)
-        .then(|| (sent_sum as f64 / received_sum as f64 * 10.0).round() / 10.0);
+    let ratio =
+        (received_sum > 0).then(|| (sent_sum as f64 / received_sum as f64 * 10.0).round() / 10.0);
     let peak = cursor_buckets
         .iter()
         .filter(|b| b.sent > 0)
@@ -5642,7 +5638,10 @@ mod tests {
         // (2050ms).
         assert_eq!(signal.buckets[3].sent, 2100);
         assert_eq!(signal.buckets[3].received, 40);
-        assert!(!signal.buckets[3].sent_live, "an agent's own tokens are exact, never live");
+        assert!(
+            !signal.buckets[3].sent_live,
+            "an agent's own tokens are exact, never live"
+        );
         assert_eq!(signal.buckets[13].sent, 2350);
         assert_eq!(signal.buckets[13].received, 50);
         assert_eq!(signal.buckets[20].sent, 11550 - 4450);

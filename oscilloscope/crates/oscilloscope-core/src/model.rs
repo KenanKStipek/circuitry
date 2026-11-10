@@ -1797,7 +1797,10 @@ impl RunModel {
             self.agent_live_last_seen_at.remove(path);
         }
         if let Some(live) = &node.live {
-            let current = (live.tokens_sent.unwrap_or(0), live.tokens_received.unwrap_or(0));
+            let current = (
+                live.tokens_sent.unwrap_or(0),
+                live.tokens_received.unwrap_or(0),
+            );
             let last = self
                 .agent_live_last_totals
                 .get(path)
@@ -1814,7 +1817,8 @@ impl RunModel {
                         tokens_received: current.1.saturating_sub(last.1),
                     });
                 }
-                self.agent_live_last_totals.insert(path.to_string(), current);
+                self.agent_live_last_totals
+                    .insert(path.to_string(), current);
             }
             if let Some(updated_at) = &live.updated_at {
                 self.agent_live_last_seen_at
