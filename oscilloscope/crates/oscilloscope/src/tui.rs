@@ -2329,7 +2329,11 @@ fn focused_meta_lines(
 fn tape_normal_detail_lines(
     screen: &oscilloscope_core::screens::TapeScreen,
     width: usize,
-    height: usize,
+    // Kept for every caller's own symmetry with the full-screen
+    // step's own viewport-sized call, though nothing here still
+    // reads it: the Agent block's own transcript no longer caps to
+    // it (issue #704 rule 4, "nothing is cut").
+    _height: usize,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
     meta_unfolded: bool,
@@ -2554,9 +2558,11 @@ fn tape_normal_detail_lines(
                 | oscilloscope_core::model::StatusKind::LikelyRunning
                 | oscilloscope_core::model::StatusKind::RunningOrQueued
         );
-        let note_reserved = usize::from(live.is_none() && running);
-        let max_lines = height.saturating_sub(lines.len() + note_reserved);
-        for line in agent_block_lines(step, transcript_view, ctx, now, Some(max_lines)) {
+        // Issue #704 rule 4: the detail pane (the small one and the
+        // full-screen step alike, both scrollable) reads the whole
+        // transcript, never cut to this pane's own current height --
+        // nothing the run recorded is cut.
+        for line in agent_block_lines(step, transcript_view, ctx, now, None) {
             lines.push(tape_detail_line(line.spans, width));
         }
         if live.is_none() && running {
@@ -4747,9 +4753,12 @@ fn focused_step_full_lines(
             step.status.kind,
             StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
         );
-        let note_reserved = usize::from(live.is_none() && running);
-        let max_lines = Some(30usize.saturating_sub(lines.len() + note_reserved));
-        for line in agent_block_lines(step, transcript_view, ctx, now, max_lines) {
+        // Issue #704 rule 4: the full-screen view is scrollable (`App::
+        // details_scroll`/`scroll_details`), so the transcript reads
+        // in full here, never cut to fit a fixed line budget the way
+        // the Tape's own narrower, un-scrolled-by-section detail pane
+        // still is -- nothing the run recorded is cut.
+        for line in agent_block_lines(step, transcript_view, ctx, now, None) {
             lines.push(tape_detail_line(line.spans, width));
         }
         if live.is_none() && running {
@@ -9387,10 +9396,28 @@ fn draw_flow(
     // §5: the Story pane needs 100 columns and 30 rows both -- the
     // same tier the frames' own `flow--normal--80x24` drops it at.
     let wide = full_area.width >= 100 && full_area.height >= 30;
-    if app.tape_fullscreen_step
-        && (screen.selected_pass.is_some()
-            || screen.selected_step.is_some()
-            || screen.selected_decision.is_some())
+    // Issue #704 rule 4: a plain station's own full-screen step
+    // reads the same shared renderer the Signal's and Store's
+    // already do (every section, the transcript in full, never the
+    // Selected pane's own shorter `flow_selected_step_lines`, which
+    // stays exactly as it was for the small, non-full-screen pane
+    // below) -- a pass or a decision has no such step of its own
+    // (`FocusDetail::Loop`/`Decision` belong to the *host* row, not
+    // to one of a loop's own passes), so those two keep their own
+    // panes even in full screen.
+    if app.tape_fullscreen_step && screen.selected_step.is_some() {
+        draw_focused_step_detail(
+            frame,
+            body,
+            screen.selected_step.as_ref(),
+            transcript_view,
+            now,
+            app,
+            ctx,
+        );
+        return;
+    }
+    if app.tape_fullscreen_step && (screen.selected_pass.is_some() || screen.selected_decision.is_some())
     {
         draw_flow_selected_pane(frame, body, wide, screen, app, transcript_view, ctx, now);
         return;
