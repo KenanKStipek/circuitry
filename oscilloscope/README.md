@@ -289,6 +289,32 @@ the Flow (never the Store). The Signal, the Flow and the Store each
 have their own keys entirely (below). Below 60×24, every screen --
 not only the Tape -- shows the too-small notice instead.
 
+The selection is one, shared across all four screens: switching
+with `0`-`3` keeps the same effect selected, wherever it names a
+row each screen actually has (the Store's own table cursor lands on
+the nearest ancestor with tokens of its own when the effect itself
+has none; the Signal's own scrub cursor sits at the selected
+effect's own column, its end time once finished, its start while
+still running, until an actual `←→` scrub moves it, and the
+selection, to wherever the cursor then lands). Once a run has ended,
+the selection starts on the run's own most notable row (a handled
+failure, or else the last one), and the detail pane shows the run
+summary for as long as it stays there; moving the selection shows
+that row's own details instead, and `enter` opens it.
+
+The full-screen step (`enter`, shared by every screen) shows every
+section the run recorded for the selected effect, each only when
+there is one: Status, Asked (the prompt sent, in full, or a tool's
+own command line), Produced (the value in full), Error, Tokens
+(including the usual figure and the share), Attempts, Tool (exit
+code, stdout, stderr), Decision (condition, branch, the model's own
+answer), Loop (one line per pass), the Agent block, and Meta (every
+other key the run recorded, folded -- `m` unfolds it). `[`/`]` step
+to the previous/next effect that has started, in plan order;
+`↑↓`/`PageUp`/`PageDown`/`Home`/`End` scroll the step's own content
+instead of moving the selection; `esc` closes it, back on the
+screen it was opened from with the same effect still selected.
+
 ### `--glance`
 
 `osi <doc> --glance` and `osi watch <dir> --glance` show only the
@@ -341,16 +367,19 @@ scrub cursor, since the trace's own columns alone leave out
 anything with no column of its own (a model-mode decision's own
 tokens, say).
 
-`←`/`→` scrub a cursor along the axis, drawn distinctly from the Now
-sweep, turning follow off; `n` returns it to Now, and moves which
-column Readings' own Peak, Largest and Quiet read up to. `+`/`-`
-zoom the column width from 50 ms to 1 s (100 ms the default), and
-return a scrubbed cursor to Now. `⏎` opens the step under the
-cursor full-screen, in a plainer view than the Tape's own `⏎` --
-Status and, for a prompt, its own Reply in full, nothing else -- and
-only while there's a step under the cursor to show at all. A run
-longer than the pane is wide scrolls to keep the cursor (Now, while
-following it) on screen.
+With no explicit scrub, the cursor sits at the selected effect's own
+column instead of always at Now -- its end time once finished, its
+start while it is still running. `←`/`→` scrub it freely along the
+axis, drawn distinctly from the Now sweep, turning follow off; the
+selection then follows whichever step the cursor lands on. `n`
+returns it to Now, and moves which column Readings' own Peak,
+Largest and Quiet read up to. `+`/`-` zoom the column width from
+50 ms to 1 s (100 ms the default), and return a scrubbed cursor to
+Now. `⏎` opens the step under the cursor full-screen, the same
+shared full-screen step every other screen opens, and only while
+there's a step under the cursor to show at all. A run longer than
+the pane is wide scrolls to keep the cursor (Now, while following
+it) on screen.
 
 At 120 columns and 30 rows and up, the trace sits above the Now pane
 and Readings side by side; 80–119 columns, or rows 24–29 even at full
@@ -406,8 +435,9 @@ shows whichever pass, station or decision is selected: a pass as
 Status (its own currently active step, elapsed time and slot), one row
 per named step it ran with tokens and deviation, and Produced (the
 last such step's own output); a plain station the same asked/doing/
-produced shape the Tape's own full-screen step view already has, or,
-for an agent step, the same shared Agent block as the Tape's own
+produced shape the Tape's own full-screen step view already has,
+plus Attempts, Tool and Meta when the step has them, or, for an
+agent step, the same shared Agent block as the Tape's own
 detail pane and full-screen step -- Asked, Turn, Tool, Tools,
 Context, Files, Tests, Said and Cost, then the transcript tail -- a
 station inlined from a sequential container keeps its own ten-cell
@@ -432,7 +462,14 @@ Follow is on when the TUI starts: the rail scrolls to keep Now's own
 arrow on screen as the run moves, and `←`/`→` turn it off, scrolling
 manually -- only the rail itself, once redrawn, knows its own real
 width well enough to turn follow back on again, the moment a manual
-scroll lands Now back in view on its own. `↑`/`↓`/`j`/`k` move which
+scroll lands Now back in view on its own. With follow off, or once
+the run has ended, `←`/`→` instead move the selection between the
+selected lane's own stations, in plan order -- a plain station, a
+named or inferred decision and a fork's own host (a loop, a parallel
+`dynamic`) are all stations; a decision's own taken lane flattens
+right into the sequence (only one of its two lanes is ever real), a
+loop's or a `dynamic`'s own lanes stay their own separate zones,
+reached only by `↑`/`↓` first. `↑`/`↓`/`j`/`k` move which
 pass is selected, turning follow off the same way, and back on the
 moment the selection lands back on the pass the Selected pane would
 otherwise default to; `PageUp`/`PageDown`/`Home`/`End`/`g`/`G` are
@@ -447,7 +484,7 @@ exactly its own keys and the globals every key bar shares.
 
 | Key | Action |
 |---|---|
-| `←` / `→` | scroll the rail, turning follow off |
+| `←` / `→` | following a live run: scroll the rail, turning follow off; otherwise: move the selection between the selected lane's own stations |
 | `↑` / `↓` / `j` / `k` | select a pass |
 | `+` / `-` | open / fold the selected fork's own lanes, three at a time |
 | `⏎` | open the selection full-screen, and back |
@@ -555,11 +592,13 @@ does; every share here counts a running step's own live tokens too,
 so it never reads above 100%.
 
 `↑↓`/`j`/`k`/`PageUp`/`PageDown`/`Home`/`End`/`g`/`G` move the
-table's own cursor, sticking to its own path as the table's rows
-reorder; `enter` opens the selected store's own step full-screen, the
-same shared toggle the other three screens already use, and `esc`
-closes it. `i`/`o`/`$`, `Tab`, `z`, `v`, `e`, `/` and `←`/`→` are
-not Store keys at all.
+table's own cursor -- the one shared selection every screen reads,
+so it stays on the same effect switching to another screen and back,
+resolved to the nearest ancestor with tokens of its own when the
+effect itself has none; `enter` opens the selected store's own step
+full-screen, the same shared toggle the other three screens already
+use, and `esc` closes it. `i`/`o`/`$`, `Tab`, `z`, `v`, `e`, `/` and
+`←`/`→` are not Store keys at all.
 
 | Key | Action |
 |---|---|
