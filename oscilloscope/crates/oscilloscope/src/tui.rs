@@ -1288,7 +1288,7 @@ fn tape_loop_what(
 
 fn tape_what_text(what: &str, what_width: usize) -> String {
     let budget = what_width.saturating_sub(1);
-    if what.chars().count() < budget {
+    if what.chars().count() <= budget {
         what.to_string()
     } else if budget == 0 {
         String::new()
@@ -4271,7 +4271,10 @@ fn draw_all_status_line(
             format!("{document} · {} finished", last.label),
             Style::default().fg(ctx.theme.text),
         ),
-        Span::styled(format!("{age_text}{trailer}"), Style::default().fg(ctx.theme.dim)),
+        Span::styled(
+            format!("{age_text}{trailer}"),
+            Style::default().fg(ctx.theme.dim),
+        ),
     ];
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -5223,11 +5226,11 @@ fn signal_title(screen: &oscilloscope_core::screens::SignalScreen, wide: bool) -
 
 /// `frac` in `[0, 1]`: one of the eight lower-anchored block glyphs
 /// (a bar growing from this cell's own bottom edge, continuing the
-/// solid fill below it), rounded to the nearest eighth (`round(frac
-/// * 8)`, the eighths frames draw a partial bar at, never `round(
-/// frac * 7)`, which reads a whole level high at several fractions
-/// in the lower half, such as .26 (the frame's own `▂`, not `▃`)
-/// and .375 (`▃`, not `▄`)).
+/// solid fill below it), rounded to the nearest eighth -- `round(8
+/// times frac)`, the eighths frames draw a partial bar at, never
+/// `round(7 times frac)`, which reads a whole level high at several
+/// fractions in the lower half, such as .26 (the frame's own `▂`,
+/// not `▃`) and .375 (`▃`, not `▄`).
 fn signal_sent_partial_glyph(frac: f64) -> char {
     const GLYPHS: [char; 8] = [
         '\u{2581}', '\u{2582}', '\u{2583}', '\u{2584}', '\u{2585}', '\u{2586}', '\u{2587}',
@@ -15473,22 +15476,19 @@ mod tape_frame_goldens {
         // set of whole rows instead, each one still cell-exact.
         let classify_rows = 27..37u16;
         let classify_cols = 120..180u16;
-        // `iter_2 › label`'s own reply word, `question`, fills its
-        // field with one cell to spare -- the frame draws it in
-        // full, but the same column width elsewhere in a single-run
-        // Tape (`tape_what_text`'s own shared rule) always marks a
-        // one-cell-to-spare fit with `⋯` regardless. The two frames
-        // disagree with each other on this and the design text says
-        // nothing either way; kept on the single-run goldens' own
-        // rule, this one cell allowed here.
-        const CLASSIFY_SET_EXCEPTION_COLUMNS: &[u16] = &[160];
+        // `iter_2 › label`'s own reply word, `question`, exactly
+        // fills its field (`tape_what_text`'s own 18-character
+        // budget): drawn whole, uncut, the same as `tape_what_text`
+        // now draws any other exact fit (the off-by-one that used to
+        // cut it, `count < budget`, is fixed to `count <= budget`),
+        // so no exception column is needed here any more.
         assert_rows_match_as_a_set(
             terminal.backend().buffer(),
             &mock,
             "all--tape--180x48",
             classify_cols.clone(),
             classify_rows.clone(),
-            CLASSIFY_SET_EXCEPTION_COLUMNS,
+            &[],
         );
         let mut allowed: Vec<(u16, u16)> = Vec::new();
         for y in classify_rows {
@@ -15543,7 +15543,6 @@ mod tape_frame_goldens {
     /// rule, this column allow-listed here.
     const ALL_SIGNAL_AXIS_AHEAD_DASH_EDGE: &[(u16, u16)] =
         &[(58, 8), (118, 8), (178, 8), (58, 30), (118, 30), (178, 30)];
-
 
     /// The status line's own tie, the same real sub-millisecond
     /// precision disagreement `all--tape--180x48` already allows.
@@ -16593,6 +16592,18 @@ mod tape_frame_goldens {
         );
     }
 
+    /// `flaky`'s own ahead row: its plan text, `tool · ls
+    /// /nonexistent-osi-demo`, is exactly 31 characters in this
+    /// row's 31-character budget (`tape_what_text`'s `what_width -
+    /// 1`) -- an exact fit, the same shape as `all--tape--180x48`'s
+    /// own column-160 wildcard (`classify.yml`'s `question`, which
+    /// that frame draws whole, uncut). The two frames disagree at
+    /// this exact boundary: that one draws the exact fit whole, this
+    /// one still cuts it (`tool · ls /nonexistent-osi-dem⋯`). Kept
+    /// on the fix that drops the column-160 wildcard (`<=`, not
+    /// `<`); this one cell is allow-listed instead.
+    const FLAKY_AHEAD_ROW_EXACT_FIT: [(u16, u16); 1] = [(61, 15)];
+
     #[test]
     fn tape_normal_80x24_matches_the_frame() {
         let plan = demo_plan();
@@ -16612,6 +16623,11 @@ mod tape_frame_goldens {
         );
         // The status-line row (y=22) is allow-listed, same reason
         // as the 120x30 goldens' own.
+        let allowed = [
+            &STATUS_LINE_READS_AN_EARLIER_STEP_80X24[..],
+            &FLAKY_AHEAD_ROW_EXACT_FIT[..],
+        ]
+        .concat();
         assert_tape_frame(
             "tape--normal--80x24",
             80,
@@ -16621,7 +16637,7 @@ mod tape_frame_goldens {
             Some("prime.gate.reply"),
             |app| app.follow = false,
             now,
-            &STATUS_LINE_READS_AN_EARLIER_STEP_80X24,
+            &allowed,
         );
     }
 

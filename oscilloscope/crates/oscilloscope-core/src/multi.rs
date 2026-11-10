@@ -1083,6 +1083,7 @@ mod tests {
     /// drops to 0 there, unlike every other capacity, which still
     /// reserves one slot in the grid for `… n more`).
     #[test]
+    #[allow(clippy::type_complexity)]
     fn tile_grid_table_for_1_to_9_runs_at_every_size() {
         // (width, height, [(cols, rows, page_size); 9 for n=1..=9])
         let cases: [(u16, u16, [(usize, usize, usize); 9]); 4] = [
