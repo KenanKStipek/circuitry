@@ -1580,4 +1580,61 @@ mod tests {
         let readings = build_store_readings(&table, &tree, &header, &[]);
         assert_eq!(readings.loop_progress, None);
     }
+
+    /// Issue #695: `build_store` over 2,000 flat, token-bearing
+    /// leaves stays well under the redraw interval, the same bound
+    /// `render::build`'s own 2,000-node test polices -- catches an
+    /// accidental quadratic scan in `direct_children_of`/
+    /// `sort_in_plan_order`/the table's own sort, not a single
+    /// fixed budget.
+    #[test]
+    fn build_store_over_2000_leaves_stays_well_under_the_redraw_interval() {
+        let mut prime = serde_json::Map::new();
+        prime.insert("value".to_string(), Value::Null);
+        prime.insert(
+            "meta".to_string(),
+            serde_json::json!({"completed_at": null}),
+        );
+        for i in 0..2000 {
+            prime.insert(
+                format!("n{i}"),
+                serde_json::json!({
+                    "value": format!("ok{i}"),
+                    "meta": {
+                        "created_at": format!("t{i}"),
+                        "completed_at": format!("t{}", i + 1),
+                        "adapter": "scripted",
+                        "tokens_sent_total": 1,
+                        "tokens_received_total": 2
+                    }
+                }),
+            );
+        }
+        let state = serde_json::json!({"prime": serde_json::Value::Object(prime)});
+        let flat = crate::model::flatten_state(&state);
+        let kinds: BTreeMap<String, RowKind> = BTreeMap::new();
+        let plan = crate::plan::PlanTree::empty();
+        let header = empty_header();
+        let model = RunModel::new();
+        let start = std::time::Instant::now();
+        let screen = build_store(
+            &[],
+            &header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            "t2001",
+            None,
+        );
+        let elapsed = start.elapsed();
+        assert_eq!(screen.tree.len(), 2000);
+        assert_eq!(screen.table.len(), 2000);
+        assert!(
+            elapsed < std::time::Duration::from_millis(500),
+            "building the Store from 2,000 leaves took {elapsed:?}"
+        );
+    }
 }

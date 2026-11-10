@@ -12606,4 +12606,244 @@ mod tape_frame_goldens {
             "not the old tree-era list:\n{text}"
         );
     }
+
+    /// Issue #695: the Store's own Help lists exactly §4's own keys
+    /// (↑↓ and its aliases, `enter`), never `i`/`o`/`$` (Cost's own
+    /// measures, gone), or the generic tree-era keys (`Tab`,
+    /// `s`/`l`/`z`/`v`, `e`, `/`).
+    #[test]
+    fn the_store_help_overlay_lists_stores_own_keys() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.dialog = Dialog::Help;
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("Help") && text.contains("Store"), "{text}");
+        assert!(text.contains("select a row"), "{text}");
+        assert!(text.contains("open the selected store"), "{text}");
+        assert!(
+            !text.contains("measure"),
+            "not Cost's own i/o/$ measures:\n{text}"
+        );
+        assert!(
+            !text.contains("fold on/off"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("errors only"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("filter rows"),
+            "not the generic list:\n{text}"
+        );
+        assert!(
+            !text.contains("full value overlay"),
+            "not the generic list:\n{text}"
+        );
+    }
+
+    /// Issue #695's rule 10: the full title (`Tokens by Store`
+    /// included) only at 120 columns and up; 100-119 and 80-99 both
+    /// use the short title.
+    #[test]
+    fn store_title_drops_tokens_by_store_below_120_columns() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        for (width, expect_full) in [(119u16, false), (120u16, true), (100u16, false)] {
+            let mut app = crate::keys::App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Store;
+            let mut terminal = Terminal::new(TestBackend::new(width, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        None,
+                        Some(&store_screen),
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .unwrap();
+            let text = terminal.backend().to_string();
+            assert_eq!(
+                text.contains("Tokens by Store"),
+                expect_full,
+                "at {width} columns:\n{text}"
+            );
+        }
+    }
+
+    /// Issue #695's rule 11: Readings only at 100 columns and up
+    /// *and* 30 rows and up -- dropped at 100 columns but 24 rows,
+    /// and at 80 columns regardless of height.
+    #[test]
+    fn store_readings_drop_below_30_rows_or_80_columns() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        for (width, height, expect_readings) in [
+            (120u16, 30u16, true),
+            (120u16, 24u16, false),
+            (80u16, 30u16, false),
+        ] {
+            let mut app = crate::keys::App::new(false);
+            app.screen = oscilloscope_core::screens::Screen::Store;
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        None,
+                        Some(&store_screen),
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .unwrap();
+            let text = terminal.backend().to_string();
+            assert_eq!(
+                text.contains("Readings"),
+                expect_readings,
+                "at {width}x{height}:\n{text}"
+            );
+        }
+    }
+
+    /// Issue #695's rule 4: a leaf whose own `name · N t` doesn't fit
+    /// one line wraps the name and tokens onto their own lines
+    /// instead, dropping the arrows line first when the tile's own
+    /// height runs out too.
+    #[test]
+    fn store_leaf_wraps_name_and_tokens_in_a_narrow_tile() {
+        let leaf = oscilloscope_core::store::StoreLeaf {
+            path: "prime.drafts.iter_0.draft".to_string(),
+            label: "iter_0 \u{203a} draft".to_string(),
+            tokens_sent: 118,
+            tokens_received: 12,
+            deviation_pct: Some(-16.0),
+            live: false,
+        };
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let wide = store_leaf_lines(&leaf, 27, &theme);
+        let wide_text: String = wide[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            wide_text.contains("130 t") || wide_text.contains("iter_0"),
+            "{wide_text}"
+        );
+        assert!(
+            wide_text.contains("\u{b7}"),
+            "a wide enough tile keeps name and tokens on one line: {wide_text}"
+        );
+        let narrow = store_leaf_lines(&leaf, 20, &theme);
+        let line0: String = narrow[0].spans.iter().map(|s| s.content.as_ref()).collect();
+        let line1: String = narrow[1].spans.iter().map(|s| s.content.as_ref()).collect();
+        assert!(
+            line0.contains("iter_0") && !line0.contains("130"),
+            "the name alone on its own line: {line0:?}"
+        );
+        assert!(
+            line1.trim_start().starts_with("130 t"),
+            "tokens alone on the next line: {line1:?}"
+        );
+    }
 }
