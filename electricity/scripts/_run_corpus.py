@@ -196,9 +196,20 @@ _EVENT_KEYS: dict[str, str] = {
 #: always the installed `cof <version>` text, which doesn't match any of
 #: [`_looks_environment_dependent`]'s own shapes but would otherwise go
 #: stale on *any* `pyproject.toml` version bump, failing `--check` for a
-#: change this corpus has nothing to do with.
+#: change this corpus has nothing to do with. `config` is here for a
+#: different reason: this corpus always runs `cof` with no `--config` at
+#: all (`run_cof`'s own invocation), so its own `run_start.config` is
+#: always `null` -- but the Rust `run_corpus.rs` harness that compares
+#: this golden against a fresh `electricity::run_orchestration` call
+#: always gives *that* call a real (if empty) config file, config_path
+#: being required there, never optional. Placeholdered unconditionally
+#: on both sides (`tests/support/normalize.rs`'s own `normalize_event`)
+#: so that structural difference never fails this comparison -- the
+#: field's real cross-engine value is pinned by the Python conformance
+#: suite instead (issue #697's own `events-run-start-config` case).
 _UNCONDITIONAL_EVENT_KEYS: dict[str, str] = {
     "engine": "<ENGINE>",
+    "config": "<CONFIG>",
 }
 
 
