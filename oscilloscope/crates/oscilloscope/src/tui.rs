@@ -10068,6 +10068,67 @@ mod golden_tests {
         }
     }
 
+    /// Issue #704's own snapshot of the full-screen step view against
+    /// the recorded agent_live_pi fixture's own finished session, at
+    /// a given terminal size.
+    fn fullscreen_step_snapshot(width: u16, height: u16) -> String {
+        let states = agent_fixture_snapshots("agent_live_pi");
+        let state = states.last().expect("at least one snapshot").clone();
+        let now = state["prime"]["meta"]["completed_at"]
+            .as_str()
+            .expect("the run itself finished")
+            .to_string();
+        let (rendered, tape_screen) = fixture_tape_screen(
+            "agent_live_pi",
+            "prime.top_agent",
+            ProcessState::exited(false),
+            &now,
+        );
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.top_agent".to_string());
+        app.tape_fullscreen_step = true;
+        let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    &now,
+                    Some(&tape_screen),
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn fullscreen_step_view_matches_the_snapshot_at_120x30() {
+        insta::assert_snapshot!(fullscreen_step_snapshot(120, 30));
+    }
+
+    #[test]
+    fn fullscreen_step_view_matches_the_snapshot_at_80x24() {
+        insta::assert_snapshot!(fullscreen_step_snapshot(80, 24));
+    }
+
     /// Issue #703's rule 3, against the recorded `agent_live_claude_
     /// code` fixture mid-turn (`docs/plugins/agent.md`'s own "never
     /// reports `tokens_received`/`cost_usd` live" case for Claude
