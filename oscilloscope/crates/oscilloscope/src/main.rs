@@ -4321,6 +4321,9 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             SelectAction::AttachRecent(row) => {
                 attach_recent_run(&row, no_animation, theme_name, no_history, reader)
             }
+            SelectAction::OpenAll => {
+                run_all_loop(no_history, theme_name, no_animation, reader)
+            }
         };
         match outcome {
             WatchOutcome::Exited(code, output) => break (code, output),
@@ -4398,6 +4401,8 @@ enum SelectAction {
     Quit(ExitCode),
     AttachRun(oscilloscope_core::discovery::DiscoveredRun),
     AttachRecent(oscilloscope_core::select::RecentRow),
+    /// `enter` on the `All` row (issue #698's All screen).
+    OpenAll,
 }
 
 /// The list refreshes every two seconds while Select is open (§7.2).
@@ -4532,6 +4537,9 @@ fn run_select_screen(
                         ) {
                             keys::SelectKeyOutcome::Quit(code) => {
                                 break 'select SelectAction::Quit(ExitCode::from(code));
+                            }
+                            keys::SelectKeyOutcome::OpenAll => {
+                                break 'select SelectAction::OpenAll;
                             }
                             keys::SelectKeyOutcome::AttachRun(idx) => {
                                 if let Some(run) = runs.get(idx) {

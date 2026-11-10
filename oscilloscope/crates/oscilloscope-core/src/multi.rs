@@ -6,8 +6,16 @@
 //! is the only thing that ever turns a [`GridLayout`] into real
 //! [`ratatui`] rects, or a [`TapeTileLine`] into drawn cells.
 
-use crate::model::StatusKind;
-use crate::screens::TapeItem;
+use std::collections::BTreeMap;
+
+use serde_json::Value;
+
+use crate::format::ClockZone;
+use crate::model::{ProcessState, RunModel, StatusKind, flatten_state};
+use crate::plan::PlanTree;
+use crate::render::Header;
+use crate::screens::{Screen, TapeItem};
+use crate::store::StoreScreen;
 
 /// A tile's own minimum size (§5: "Tiles at least 56×20").
 pub const TILE_MIN_WIDTH: u16 = 56;
@@ -246,6 +254,129 @@ pub fn shared_signal_axis_top(largest_column: u64, floor: u64) -> u64 {
 /// role per run, never a full palette of its own).
 pub fn run_role_index(run_position: usize) -> usize {
     run_position % 6
+}
+
+/// One tile's own screen, the single one of the four the All
+/// screen's own shared `0`-`3` picked for every tile at once
+/// (issue #698, §2.6: "`0`-`3` switch the screen of every tile at
+/// once").
+pub enum TileScreen {
+    Tape(crate::screens::TapeScreen),
+    Signal(crate::screens::SignalScreen),
+    Flow(crate::screens::FlowScreen),
+    Store(StoreScreen),
+}
+
+/// One tile's own render (issue #698): the same [`Header`]/screen
+/// pair a single-run attach builds, from the same [`RunModel`]/
+/// [`PlanTree`]/state a tile's own run would otherwise be attached
+/// to directly -- shared by `tui.rs`'s own live All loop and its
+/// frame goldens, so the two can never drift apart.
+pub struct TileRender {
+    pub header: Header,
+    pub screen: TileScreen,
+}
+
+/// Builds one tile's own [`TileRender`] (issue #698): no row
+/// selection of its own (`selected_path: None` throughout -- a tile
+/// has no interactive cursor; `enter` opens the real, selectable
+/// screen instead) and no previews (there is no room for a second
+/// line per row at a tile's own width either way).
+pub fn build_tile(
+    document_label: &str,
+    engine_label: &str,
+    plan: &PlanTree,
+    model: &mut RunModel,
+    state: Option<&Value>,
+    screen_kind: Screen,
+    zone: &dyn ClockZone,
+    now: &str,
+) -> TileRender {
+    let rendered = crate::render::build_folded(
+        document_label,
+        engine_label,
+        plan,
+        model,
+        state,
+        ProcessState::Running,
+        0.0,
+        now,
+        &[],
+        true,
+        &Default::default(),
+    );
+    let empty = Value::Null;
+    let flat = flatten_state(state.unwrap_or(&empty));
+    let screen = match screen_kind {
+        Screen::Tape => TileScreen::Tape(crate::screens::build_tape(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            plan,
+            model,
+            state,
+            None,
+            false,
+            now,
+        )),
+        Screen::Signal => TileScreen::Signal(crate::screens::build_signal(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            plan,
+            model,
+            state,
+            100,
+            None,
+            None,
+            now,
+        )),
+        Screen::Flow => {
+            let root_path = rendered.unfolded_rows.first().map(|r| r.path.as_str());
+            let selected = crate::screens::default_follow_path(&rendered.unfolded_rows)
+                .map(str::to_string)
+                .or_else(|| root_path.map(str::to_string));
+            TileScreen::Flow(crate::screens::build_flow(
+                &rendered.unfolded_rows,
+                &rendered.rows,
+                &flat,
+                plan,
+                model,
+                &rendered.header,
+                state,
+                &[],
+                selected.as_deref(),
+                zone,
+                rendered.header.run_end_ts.as_deref(),
+                now,
+            ))
+        }
+        Screen::Store => {
+            let kinds: BTreeMap<String, crate::render::RowKind> = rendered
+                .unfolded_rows
+                .iter()
+                .map(|r| (r.path.clone(), r.kind))
+                .collect();
+            TileScreen::Store(crate::store::build_store(
+                &rendered.unfolded_rows,
+                &rendered.header,
+                &flat,
+                &kinds,
+                plan,
+                model,
+                state,
+                "prime",
+                now,
+                None,
+            ))
+        }
+    };
+    TileRender {
+        header: rendered.header,
+        screen,
+    }
 }
 
 #[cfg(test)]

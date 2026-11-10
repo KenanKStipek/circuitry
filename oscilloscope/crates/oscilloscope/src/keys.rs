@@ -1594,6 +1594,10 @@ pub enum SelectKeyOutcome {
     Quit(u8),
     AttachRun(usize),
     AttachRecent(usize),
+    /// `enter` on row 0 (`All`, issue #698's own All screen):
+    /// `runs_empty` is never true when this fires -- the empty
+    /// Select has no such row at all.
+    OpenAll,
 }
 
 impl SelectState {
@@ -1656,18 +1660,187 @@ impl SelectState {
                         SelectKeyOutcome::None
                     }
                 } else if self.cursor > 0 {
-                    // Row 0 is `All`, out of scope here (issue #698's
-                    // own acceptance): `enter` on it is inert, same
-                    // as `esc` everywhere on this screen.
                     SelectKeyOutcome::AttachRun(self.cursor - 1)
                 } else {
-                    SelectKeyOutcome::None
+                    // Row 0 is `All`: `enter` opens the All screen
+                    // (issue #698).
+                    SelectKeyOutcome::OpenAll
                 }
             }
             // `0`-`3` and `c` do nothing here (§5: no run attached to
             // switch a screen or cancel); `esc` likewise has nowhere
             // on this screen to go back to.
             _ => SelectKeyOutcome::None,
+        }
+    }
+}
+
+/// The All screen's own key/focus state (issue #698, §2.6/§4):
+/// `screen` is shared by every tile at once (`0`-`3`); `focus`
+/// indexes the *current page's* own real tiles, `[0, page_run_
+/// count)` -- never the grid's own slot count, which also counts a
+/// trailing `… n more` tile that nothing can focus. Pure, like
+/// [`SelectState`]: a caller resolves `focus` to an absolute run
+/// index (`page_offset + focus`) and page transitions on its own,
+/// so a test drives every key with no real grid or terminal
+/// involved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AllState {
+    pub screen: oscilloscope_core::screens::Screen,
+    pub focus: usize,
+    pub page: usize,
+    pub help_open: bool,
+}
+
+impl AllState {
+    pub fn new() -> Self {
+        AllState {
+            screen: oscilloscope_core::screens::Screen::Tape,
+            focus: 0,
+            page: 0,
+            help_open: false,
+        }
+    }
+}
+
+impl Default for AllState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// What [`AllState::handle_key`] decided.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AllKeyOutcome {
+    None,
+    Quit(u8),
+    /// `enter` on the focused tile -- the caller resolves this
+    /// page-relative index to an absolute run index.
+    Open(usize),
+    /// `esc`: back to Select.
+    BackToSelect,
+}
+
+impl AllState {
+    /// One key's worth of the All screen's own behaviour (issue
+    /// #698, §2.6/§4): `0`-`3` set `screen`; `←→↑↓` move `focus`
+    /// within the current page's own `columns` x rows grid, wrapping
+    /// at the page's own edges (never crossing a page -- that's
+    /// `PageUp`/`PageDown`'s own job, Settled point 5); `enter` opens
+    /// the focused tile; `u` is inert (the Combined Signal isn't
+    /// built yet); `esc` goes back to Select; `q` quits at once
+    /// (watching only, never a confirm); a raw Ctrl-C quits with
+    /// exit 130, checked first, same reasoning as everywhere else
+    /// this repository handles it. `page_run_count` is how many real
+    /// tiles the *current* page actually has (at most `columns *
+    /// rows`, fewer on a last page that doesn't fill it, or one
+    /// fewer still while a `… n more` tile takes the last slot).
+    pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        columns: usize,
+        page_run_count: usize,
+        page_count: usize,
+    ) -> AllKeyOutcome {
+        if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+            self.help_open = false;
+            return AllKeyOutcome::Quit(130);
+        }
+        if self.help_open {
+            self.help_open = false;
+            return AllKeyOutcome::None;
+        }
+        let columns = columns.max(1);
+        let max_focus = page_run_count.saturating_sub(1);
+        match code {
+            KeyCode::Char('q') => AllKeyOutcome::Quit(0),
+            KeyCode::Char('?') => {
+                self.help_open = true;
+                AllKeyOutcome::None
+            }
+            KeyCode::Esc => AllKeyOutcome::BackToSelect,
+            KeyCode::Char('0') => {
+                self.screen = oscilloscope_core::screens::Screen::Tape;
+                AllKeyOutcome::None
+            }
+            KeyCode::Char('1') => {
+                self.screen = oscilloscope_core::screens::Screen::Signal;
+                AllKeyOutcome::None
+            }
+            KeyCode::Char('2') => {
+                self.screen = oscilloscope_core::screens::Screen::Flow;
+                AllKeyOutcome::None
+            }
+            KeyCode::Char('3') => {
+                self.screen = oscilloscope_core::screens::Screen::Store;
+                AllKeyOutcome::None
+            }
+            KeyCode::PageDown => {
+                if page_count > 0 {
+                    self.page = (self.page + 1) % page_count;
+                    self.focus = 0;
+                }
+                AllKeyOutcome::None
+            }
+            KeyCode::PageUp => {
+                if page_count > 0 {
+                    self.page = (self.page + page_count - 1) % page_count;
+                    self.focus = 0;
+                }
+                AllKeyOutcome::None
+            }
+            KeyCode::Left => {
+                if page_run_count > 0 {
+                    let col = self.focus % columns;
+                    let row = self.focus / columns;
+                    let new_col = if col == 0 { columns - 1 } else { col - 1 };
+                    self.focus = (row * columns + new_col).min(max_focus);
+                }
+                AllKeyOutcome::None
+            }
+            KeyCode::Right => {
+                if page_run_count > 0 {
+                    let col = self.focus % columns;
+                    let row = self.focus / columns;
+                    let new_col = (col + 1) % columns;
+                    self.focus = (row * columns + new_col).min(max_focus);
+                }
+                AllKeyOutcome::None
+            }
+            KeyCode::Up => {
+                if page_run_count > 0 {
+                    let rows = page_run_count.div_ceil(columns).max(1);
+                    let col = self.focus % columns;
+                    let row = self.focus / columns;
+                    let new_row = if row == 0 { rows - 1 } else { row - 1 };
+                    self.focus = (new_row * columns + col).min(max_focus);
+                }
+                AllKeyOutcome::None
+            }
+            KeyCode::Down => {
+                if page_run_count > 0 {
+                    let rows = page_run_count.div_ceil(columns).max(1);
+                    let col = self.focus % columns;
+                    let row = self.focus / columns;
+                    let new_row = (row + 1) % rows;
+                    self.focus = (new_row * columns + col).min(max_focus);
+                }
+                AllKeyOutcome::None
+            }
+            KeyCode::Enter => {
+                if page_run_count > 0 {
+                    AllKeyOutcome::Open(self.focus.min(max_focus))
+                } else {
+                    AllKeyOutcome::None
+                }
+            }
+            // `u` (the Combined Signal) is inert until it ships;
+            // `c` is never offered here either (issue #698's own
+            // Settled point 3: only for a run this osi launched,
+            // and the focused run's own ownership is a question for
+            // the attached single-run screen, not this one).
+            _ => AllKeyOutcome::None,
         }
     }
 }
