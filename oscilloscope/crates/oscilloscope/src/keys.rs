@@ -410,6 +410,42 @@ impl App {
         self.follow = false;
     }
 
+    /// `[`/`]` on the full-screen step (issue #704 rule 4): the
+    /// previous/next effect in plan order, skipping a row that has
+    /// not started -- over `self.flow_rows` (`render::RenderState::
+    /// unfolded_rows`, refreshed every tick regardless of which
+    /// screen is on display, so every effect the run plans is here,
+    /// not just whichever screen opened the full-screen view).
+    pub fn fullscreen_step(&mut self, delta: i32) {
+        use oscilloscope_core::model::StatusKind;
+        use oscilloscope_core::render::RowKind;
+        let candidates: Vec<&str> = self
+            .flow_rows
+            .iter()
+            .filter(|r| {
+                !matches!(
+                    r.kind,
+                    RowKind::Root | RowKind::Pass | RowKind::QuickSteps | RowKind::Report
+                )
+            })
+            .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+            .map(|r| r.path.as_str())
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let idx = self
+            .selected_path
+            .as_deref()
+            .and_then(|p| candidates.iter().position(|q| *q == p));
+        let next = match idx {
+            Some(i) => (i as i32 + delta).clamp(0, candidates.len() as i32 - 1) as usize,
+            None if delta >= 0 => 0,
+            None => candidates.len() - 1,
+        };
+        self.select_tree_path(Some(candidates[next].to_string()));
+    }
+
     /// The fork `+`/`-` act on (issue #677 §9.3's "the selected
     /// fork's own lanes", issue #691's own follow-up): the nearest
     /// ancestor of the current selection that is itself a fork host
@@ -630,6 +666,57 @@ impl App {
         has_prompt_sent: bool,
         store_rows: &[String],
     ) -> Action {
+        // Issue #704 rule 4: while the full-screen step is open, its
+        // own keys take over first, before any screen's own bindings
+        // below (including the Store's own table navigation just
+        // below) -- `[`/`]` step to the previous/next effect in plan
+        // order (skipping rows that have not started), ↑↓/PgUp/PgDn/
+        // Home/End scroll its content, `esc` closes it. `0`-`3`, `?`,
+        // `c`/`q` and Ctrl-C still fall through to the match below
+        // unchanged, so switching screens or quitting still works.
+        if self.tape_fullscreen_step {
+            match key.code {
+                KeyCode::Esc => {
+                    self.tape_fullscreen_step = false;
+                    return Action::None;
+                }
+                KeyCode::Char('[') => {
+                    self.fullscreen_step(-1);
+                    return Action::None;
+                }
+                KeyCode::Char(']') => {
+                    self.fullscreen_step(1);
+                    return Action::None;
+                }
+                KeyCode::Up | KeyCode::Char('k') => {
+                    self.scroll_details(-1);
+                    return Action::None;
+                }
+                KeyCode::Down | KeyCode::Char('j') => {
+                    self.scroll_details(1);
+                    return Action::None;
+                }
+                KeyCode::PageUp => {
+                    let page = self.details_viewport.max(1) as i32;
+                    self.scroll_details(-page);
+                    return Action::None;
+                }
+                KeyCode::PageDown => {
+                    let page = self.details_viewport.max(1) as i32;
+                    self.scroll_details(page);
+                    return Action::None;
+                }
+                KeyCode::Home | KeyCode::Char('g') => {
+                    self.details_scroll = 0;
+                    return Action::None;
+                }
+                KeyCode::End | KeyCode::Char('G') => {
+                    self.details_scroll = usize::MAX;
+                    return Action::None;
+                }
+                _ => {}
+            }
+        }
         // Issue #695: the Store screen's own keys (↑↓ and aliases to
         // select a table row, `⏎` to open it) take over first, before
         // any of the generic panes' own bindings below -- `0`-`3`
@@ -734,9 +821,6 @@ impl App {
             }
             KeyCode::Enter if self.screen == Screen::Signal && self.signal_has_step => {
                 self.tape_fullscreen_step = !self.tape_fullscreen_step;
-            }
-            KeyCode::Esc if self.tape_fullscreen_step => {
-                self.tape_fullscreen_step = false;
             }
             // Issue #613: ⏎ on a quick-steps summary row expands it
             // in place -- recognised from the row's own `RowKind`,
@@ -1928,6 +2012,47 @@ mod tests {
         app.handle_key(key(KeyCode::Right), &[], &[], false, false, &[]);
         assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
         assert_eq!(app.flow_scroll, 0);
+    }
+
+    /// Issue #704 rule 4: `[`/`]` on the full-screen step move
+    /// between effects in plan order, skipping a row that has not
+    /// started (a container, or a row the run never reached) --
+    /// `↑↓`/PgUp/PgDn/Home/End scroll its content instead, taking
+    /// over before any screen's own bindings, and `esc` closes it.
+    #[test]
+    fn fullscreen_step_moves_between_started_effects_and_arrows_scroll_instead() {
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        app.flow_rows = vec![
+            row("prime", 0, StatusKind::Running),
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Pending),
+            row("prime.c", 1, StatusKind::Done),
+        ];
+        app.flow_rows[0].kind = oscilloscope_core::render::RowKind::Root;
+        app.selected_path = Some("prime.a".to_string());
+
+        app.handle_key(key(KeyCode::Char(']')), &[], &[], true, false, &[]);
+        assert_eq!(
+            app.selected_path.as_deref(),
+            Some("prime.c"),
+            "prime.b hasn't started, so ] skips it"
+        );
+        app.handle_key(key(KeyCode::Char('[')), &[], &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+
+        // ↑↓/PgUp/PgDn scroll the content, never the selection, while
+        // the full-screen step is open.
+        app.handle_key(key(KeyCode::Down), &[], &[], true, false, &[]);
+        assert_eq!(app.details_scroll, 1);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        app.handle_key(key(KeyCode::PageDown), &[], &[], true, false, &[]);
+        assert_eq!(app.details_scroll, 1 + app.details_viewport.max(1));
+        app.handle_key(key(KeyCode::Home), &[], &[], true, false, &[]);
+        assert_eq!(app.details_scroll, 0);
+
+        app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert!(!app.tape_fullscreen_step);
     }
 
     #[test]

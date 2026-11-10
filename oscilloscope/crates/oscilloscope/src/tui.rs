@@ -3044,7 +3044,7 @@ fn draw_tape_detail(
     frame: &mut Frame,
     area: Rect,
     screen: &oscilloscope_core::screens::TapeScreen,
-    app: &App,
+    app: &mut App,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     now: &str,
     ctx: &DrawCtx,
@@ -3126,7 +3126,17 @@ fn draw_tape_detail(
             .map(|d| tape_failed_detail_lines(d, width, ctx))
             .unwrap_or_default(),
     };
-    frame.render_widget(Paragraph::new(lines), content_area);
+    // Issue #704 rule 4: the full-screen step scrolls with ↑↓/PgUp/
+    // PgDn/Home/End (`App::scroll_details`, the same shared scroll
+    // position the Flow's own Selected pane already uses) -- a no-op
+    // in the ordinary detail pane, whose content already fits.
+    let viewport = content_area.height as usize;
+    app.details_viewport = viewport;
+    let total = lines.len();
+    app.details_scroll = app.details_scroll.min(total.saturating_sub(1));
+    let start = app.details_scroll.min(total);
+    let visible: Vec<Line> = lines.into_iter().skip(start).collect();
+    frame.render_widget(Paragraph::new(visible), content_area);
 }
 
 /// The too-small screen (§5): below 60×24, the minimum and
