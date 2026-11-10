@@ -167,16 +167,40 @@ impl Theme {
     /// #698): the frames' assignment, read off roles this theme
     /// already carries elsewhere -- a categorical palette
     /// (tui-design.md §9.5) is a change to this one list, not to
-    /// every theme's own fields.
+    /// every theme's own fields. On Terminal and Dracula,
+    /// `status_info` (`run.4`) is the same colour as `accent_primary`
+    /// (`run.1`) elsewhere in that same theme -- every run must read
+    /// as its own colour here, so a role that collides with an
+    /// earlier one in this same list falls back to the next
+    /// candidate in [`Self::run_color_fallbacks`] that doesn't, `run.
+    /// 4` landing on `error` for both.
     pub fn run_colors(&self) -> [Color; 6] {
-        [
+        let mut colors = [
             self.accent_primary,
             self.warning,
             self.accent_secondary,
             self.status_info,
             self.status_done,
             self.text,
-        ]
+        ];
+        for i in 0..colors.len() {
+            if colors[..i].contains(&colors[i]) {
+                if let Some(&distinct) = self
+                    .run_color_fallbacks()
+                    .iter()
+                    .find(|c| !colors[..i].contains(c))
+                {
+                    colors[i] = distinct;
+                }
+            }
+        }
+        colors
+    }
+
+    /// [`Self::run_colors`]'s own fallback candidates, in order, for
+    /// a role that collides with an earlier one.
+    fn run_color_fallbacks(&self) -> [Color; 3] {
+        [self.error, self.fg_muted, self.highlight]
     }
 
     pub fn for_name(name: ThemeName) -> Theme {
@@ -1061,6 +1085,38 @@ mod tests {
         ThemeName::TokyoNight,
         ThemeName::OneDark,
     ];
+
+    #[test]
+    fn run_colors_are_all_six_distinct_in_every_theme() {
+        for name in ThemeName::ALL {
+            let theme = Theme::for_name(name);
+            let colors = theme.run_colors();
+            for i in 0..colors.len() {
+                for j in (i + 1)..colors.len() {
+                    assert_ne!(
+                        colors[i],
+                        colors[j],
+                        "{name:?}: run.{} and run.{} are the same colour",
+                        i + 1,
+                        j + 1
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn run_colors_falls_back_to_error_where_status_info_collides_with_accent_primary() {
+        for name in [ThemeName::Terminal, ThemeName::Dracula] {
+            let theme = Theme::for_name(name);
+            assert_eq!(theme.accent_primary, theme.status_info, "{name:?} setup");
+            let colors = theme.run_colors();
+            assert_eq!(
+                colors[3], theme.error,
+                "{name:?}: run.4 should fall back to error"
+            );
+        }
+    }
 
     #[test]
     fn terminal_paints_no_background() {

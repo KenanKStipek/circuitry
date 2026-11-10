@@ -3284,8 +3284,14 @@ read off roles each theme already carries elsewhere --
 `accent_primary`, `warning`, `accent_secondary`, `status_info`,
 `status_done`, `text` -- so a later categorical palette, §9.5, is a
 change to that one list, not to every theme's own fields), by launch
-order, repeating past the sixth run. Nothing else on a tile --
-received bars, the running glyph, the axis sweep -- varies by run.
+order, repeating past the sixth run. On Terminal and Dracula,
+`status_info` is the same colour as `accent_primary` elsewhere in
+that same theme; `run_colors` falls back to the next of `error`,
+`fg_muted` or `highlight` that isn't already taken (`error`, for
+both), so all six always read as distinct colours in every theme
+(`run_colors_are_all_six_distinct_in_every_theme`). Nothing else on
+a tile -- received bars, the running glyph, the axis sweep -- varies
+by run.
 
 **The shared Signal scale:** one round top at or above 1.5× the
 largest 100 ms-bucketed sent or received column anywhere across
