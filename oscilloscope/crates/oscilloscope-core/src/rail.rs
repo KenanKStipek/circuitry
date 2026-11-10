@@ -1056,13 +1056,20 @@ pub(crate) fn pass_each_value(
 /// single real pass yet, so [`build_loop_fork`] has no observed
 /// lane of its own to shape the rest off instead.
 fn loop_body_template(loop_path: &str, ctx: &Ctx<'_>) -> Vec<RailItem> {
-    let prefix = format!("{loop_path}.iter_*.");
+    // `leaf_paths` keys every loop pass by the `iter_*` placeholder,
+    // never a concrete index -- `loop_path` is concrete (a nested
+    // loop inside another loop's own pass carries that outer pass's
+    // own real `iter_N`), so the prefix built from it must normalize
+    // every pass segment back to `iter_*` first, or it never matches
+    // anything here and previews an empty lane.
+    let normalized = crate::plan::normalize_pass_segments(loop_path);
+    let prefix = format!("{normalized}.iter_*.");
     ctx.plan
         .leaf_paths()
         .iter()
-        .filter(|p| p.starts_with(&prefix))
-        .map(|p| {
-            let path = p.replacen("iter_*", "iter_0", 1);
+        .filter_map(|p| p.strip_prefix(&prefix).map(|rest| (p, rest)))
+        .map(|(p, rest)| {
+            let path = format!("{loop_path}.iter_0.{rest}");
             // `match_path` resolves a real `iter_N` pass segment
             // through its own trie logic, never the literal `iter_*`
             // placeholder text `leaf_paths` itself uses -- resolved
@@ -1219,22 +1226,20 @@ fn ahead_fork_path(fork_path: &str, index: u64) -> String {
 /// ahead slot it's standing in for (DESIGN.md §2.3's own `birds`
 /// example: `usual 155`, iter_2's own history, not iter_0's).
 fn with_iter_index(path: &str, index: u64) -> String {
-    let mut replaced = false;
-    path.split('.')
-        .map(|part| {
-            if !replaced
-                && part
-                    .strip_prefix("iter_")
-                    .is_some_and(|n| n.parse::<u64>().is_ok())
-            {
-                replaced = true;
-                format!("iter_{index}")
-            } else {
-                part.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(".")
+    // The *innermost* (last) `iter_N` segment is this loop's own --
+    // a nested loop's own ahead lane previously rewrote the first
+    // one instead, which for a loop inside another loop's own pass
+    // is the *outer* pass's index, reading the wrong history slot
+    // entirely (and leaving the inner index, the one this call is
+    // actually about, untouched).
+    let mut parts: Vec<String> = path.split('.').map(str::to_string).collect();
+    if let Some(pos) = parts.iter().rposition(|part| {
+        part.strip_prefix("iter_")
+            .is_some_and(|n| n.parse::<u64>().is_ok())
+    }) {
+        parts[pos] = format!("iter_{index}");
+    }
+    parts.join(".")
 }
 
 /// A pass's own finished prompt reads the pass's own label standing
@@ -2031,6 +2036,62 @@ mod tests {
             !matches!(rail.items.get(fan_index + 1), Some(RailItem::Fork(_))),
             "no fork at all, with nothing to show in one: {:?}",
             rail.items
+        );
+    }
+
+    /// `with_iter_index` must rewrite the *innermost* `iter_N`
+    /// segment -- a nested loop's own ahead lane, not whichever
+    /// outer pass happens to come before it in the path.
+    #[test]
+    fn with_iter_index_rewrites_the_innermost_segment_not_an_outer_one() {
+        assert_eq!(
+            with_iter_index("prime.outer.iter_0.inner.iter_0.nap", 2),
+            "prime.outer.iter_0.inner.iter_2.nap"
+        );
+        // The ordinary, single-level case is unaffected.
+        assert_eq!(
+            with_iter_index("prime.fan.iter_0.nap", 3),
+            "prime.fan.iter_3.nap"
+        );
+    }
+
+    /// A loop nested inside another loop's own pass still previews
+    /// its own plan body once it starts the preview: `loop_path` is
+    /// concrete (the outer pass's own real `iter_0`), which must be
+    /// normalized back to `iter_*` before matching `leaf_paths`' own
+    /// placeholder form, or the prefix never matches anything and
+    /// the preview is empty.
+    #[test]
+    fn loop_body_template_previews_a_nested_loops_own_body_inside_a_concrete_outer_pass() {
+        let yaml = "effects:\n  - type: loop\n    name: outer\n    each:\n      in: input.items\n      as: item\n    body:\n      - type: loop\n        name: inner\n        each:\n          in: input.sub\n          as: s\n        body:\n          - name: nap\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"x\\\"\"}\n";
+        let plan = compile_doc(yaml);
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null}}});
+        let mut model = crate::model::RunModel::new();
+        let rendered = crate::render::build(
+            "do.yml",
+            "test",
+            &plan,
+            &mut model,
+            Some(&state),
+            crate::model::ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+        );
+        let flat = crate::model::flatten_state(&state);
+        let ctx = Ctx {
+            flat: &flat,
+            plan: &plan,
+            unfolded_rows: &rendered.unfolded_rows,
+            header: &rendered.header,
+            state: Some(&state),
+        };
+        let items = loop_body_template("prime.outer.iter_0.inner", &ctx);
+        assert!(
+            items
+                .iter()
+                .any(|it| matches!(it, RailItem::Station(s) if s.name == "nap")),
+            "the inner loop's own body must preview, not read empty: {items:?}"
         );
     }
 }
