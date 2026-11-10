@@ -4635,10 +4635,67 @@ fn store_table_deviation_style(pct: f64, theme: &Theme) -> Style {
     }
 }
 
+/// Issue #695's rules 4 and 8: unchanged under `width` columns;
+/// otherwise cut to `width - 2` plus a trailing `⋯`, always leaving
+/// at least one trailing space of its own (the frames cut a label
+/// that exactly fills its own field too, `drafts › iter_1 › draft`
+/// at 23 columns in a 23-wide field); nothing at all once `width`
+/// itself is under 2. The one cut rule the Largest Stores table's
+/// own plain-string labels (`store_cut_label`) and a tile's own
+/// styled lines (`store_cut_spans`) share.
+fn store_cut_keep_len(total_chars: usize, width: usize) -> Option<usize> {
+    if total_chars < width {
+        None
+    } else if width < 2 {
+        Some(0)
+    } else {
+        Some(width - 2)
+    }
+}
+
+/// Cuts `spans`' own combined text down to `width` columns, with a
+/// trailing `⋯` in the style of whichever span the cut falls in --
+/// a tile's own text is never wrapped, only clipped by its own rect
+/// otherwise, so a label wider than its tile needs this the same
+/// way the Largest Stores table's `store_cut_label` already cuts a
+/// plain string, through the one shared rule ([`store_cut_keep_len`])
+/// both follow.
+fn store_cut_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    let Some(mut remaining) = store_cut_keep_len(total, width) else {
+        return spans;
+    };
+    if remaining == 0 && width < 2 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut cut_style = spans.last().map(|s| s.style).unwrap_or_default();
+    for span in spans {
+        if remaining == 0 {
+            cut_style = span.style;
+            break;
+        }
+        let len = span.content.chars().count();
+        if len <= remaining {
+            remaining -= len;
+            out.push(span);
+        } else {
+            let cut: String = span.content.chars().take(remaining).collect();
+            cut_style = span.style;
+            out.push(Span::styled(cut, span.style));
+            remaining = 0;
+        }
+    }
+    out.push(Span::styled("\u{22ef}", cut_style));
+    out
+}
+
 /// A leaf tile's own content lines (issue #695's rule 4): `name · N
 /// t` on one line when it fits, else `name` then `N t` on the next;
 /// the deviation line (absent without history); the arrows line --
-/// as many as the tile's own height allows, dropped from the bottom.
+/// as many as the tile's own height allows, dropped from the bottom,
+/// each cut on the right with `⋯` when it overruns the tile's own
+/// width.
 fn store_leaf_lines(
     leaf: &oscilloscope_core::store::StoreLeaf,
     width: u16,
@@ -4660,41 +4717,56 @@ fn store_leaf_lines(
     let one_line = format!(" {} \u{b7} {tok_text}", leaf.label);
     if one_line.chars().count() <= width {
         lines.push(pad_line(
-            vec![
-                Span::styled(format!(" {} ", leaf.label), name_style),
-                Span::styled(format!("\u{b7} {tok_text}"), value_style),
-            ],
+            store_cut_spans(
+                vec![
+                    Span::styled(format!(" {} ", leaf.label), name_style),
+                    Span::styled(format!("\u{b7} {tok_text}"), value_style),
+                ],
+                width,
+            ),
             width,
         ));
     } else {
         lines.push(pad_line(
-            vec![Span::styled(format!(" {}", leaf.label), name_style)],
+            store_cut_spans(
+                vec![Span::styled(format!(" {}", leaf.label), name_style)],
+                width,
+            ),
             width,
         ));
         lines.push(pad_line(
-            vec![Span::styled(format!(" {tok_text}"), value_style)],
+            store_cut_spans(
+                vec![Span::styled(format!(" {tok_text}"), value_style)],
+                width,
+            ),
             width,
         ));
     }
     if let Some(pct) = leaf.deviation_pct {
         let dev_style = tape_deviation_style(pct, theme).add_modifier(Modifier::BOLD | faint);
         lines.push(pad_line(
-            vec![
-                Span::styled(format!(" {pct:+.0}% "), dev_style),
-                Span::styled("vs usual", muted_style),
-            ],
+            store_cut_spans(
+                vec![
+                    Span::styled(format!(" {pct:+.0}% "), dev_style),
+                    Span::styled("vs usual", muted_style),
+                ],
+                width,
+            ),
             width,
         ));
     }
     lines.push(pad_line(
-        vec![Span::styled(
-            format!(
-                " \u{2191}{} \u{2193}{}",
-                oscilloscope_core::format::format_tokens_thousands(leaf.tokens_sent),
-                oscilloscope_core::format::format_tokens_thousands(leaf.tokens_received)
-            ),
-            muted_style,
-        )],
+        store_cut_spans(
+            vec![Span::styled(
+                format!(
+                    " \u{2191}{} \u{2193}{}",
+                    oscilloscope_core::format::format_tokens_thousands(leaf.tokens_sent),
+                    oscilloscope_core::format::format_tokens_thousands(leaf.tokens_received)
+                ),
+                muted_style,
+            )],
+            width,
+        ),
         width,
     ));
     lines
@@ -4731,21 +4803,27 @@ fn store_container_lines(
         oscilloscope_core::format::format_tokens_t(tokens)
     );
     let mut lines = vec![pad_line(
-        vec![
-            Span::styled(name_text, name_style),
-            Span::styled(tok_text, Style::default().fg(theme.fg_muted)),
-        ],
+        store_cut_spans(
+            vec![
+                Span::styled(name_text, name_style),
+                Span::styled(tok_text, Style::default().fg(theme.fg_muted)),
+            ],
+            width,
+        ),
         width,
     )];
     if let Some(c) = collapsed {
         lines.push(pad_line(
-            vec![Span::styled(
-                format!(
-                    " {}/{} with tokens",
-                    c.children_with_tokens, c.children_planned
-                ),
-                Style::default().fg(theme.fg_muted),
-            )],
+            store_cut_spans(
+                vec![Span::styled(
+                    format!(
+                        " {}/{} with tokens",
+                        c.children_with_tokens, c.children_planned
+                    ),
+                    Style::default().fg(theme.fg_muted),
+                )],
+                width,
+            ),
             width,
         ));
     }
@@ -4811,7 +4889,10 @@ fn draw_store_tiles(
                     oscilloscope_core::format::format_tokens_t(*tokens)
                 );
                 let line = pad_line(
-                    vec![Span::styled(text, Style::default().fg(theme.fg_muted))],
+                    store_cut_spans(
+                        vec![Span::styled(text, Style::default().fg(theme.fg_muted))],
+                        rect.width as usize,
+                    ),
                     rect.width as usize,
                 );
                 render_tile_lines(frame, rect, vec![line]);
@@ -4914,22 +4995,11 @@ fn store_table_tail_widths(dev_text_len: usize, combined: usize) -> (usize, usiz
 }
 
 fn store_cut_label(label: &str, width: usize) -> String {
-    // Issue #695's rule 8: the frames cut a label that exactly
-    // fills its own field too (`drafts › iter_1 › draft`, 23 chars,
-    // in a 23-wide field at 80 columns), always leaving at least one
-    // trailing space of its own.
-    if label.chars().count() < width {
-        label.to_string()
-    } else if width < 2 {
-        String::new()
-    } else {
-        format!(
-            "{}\u{22ef}",
-            label
-                .chars()
-                .take(width.saturating_sub(2))
-                .collect::<String>()
-        )
+    let total = label.chars().count();
+    match store_cut_keep_len(total, width) {
+        None => label.to_string(),
+        Some(0) if width < 2 => String::new(),
+        Some(keep) => format!("{}\u{22ef}", label.chars().take(keep).collect::<String>()),
     }
 }
 
@@ -4978,7 +5048,29 @@ fn draw_store_table(
         )],
         content_width + 3,
     )];
-    for (i, row) in screen.table.iter().take(max_rows).enumerate() {
+    // Issue #695: the cursor can sit on a row past the first
+    // `max_rows`, once `↓`/`PgDn`/`End` moved it there -- the window
+    // scrolls to keep it in view, with the selected row at the
+    // window's own bottom edge the moment it would otherwise scroll
+    // off, rather than always starting at row 0 and letting the
+    // cursor itself disappear past the table's own bottom border.
+    let total_rows = screen.table.len();
+    let selected_index = app
+        .store_selected
+        .as_deref()
+        .and_then(|path| screen.table.iter().position(|r| r.path == path));
+    let max_start = total_rows.saturating_sub(max_rows);
+    let start = selected_index
+        .map(|idx| idx.saturating_sub(max_rows.saturating_sub(1)))
+        .unwrap_or(0)
+        .min(max_start);
+    for (i, row) in screen
+        .table
+        .iter()
+        .enumerate()
+        .skip(start)
+        .take(max_rows)
+    {
         let selected = app.store_selected.as_deref() == Some(row.path.as_str());
         let bg = selected.then_some(theme.selection_bg);
         let label_fg = if selected {
@@ -12807,6 +12899,75 @@ mod tape_frame_goldens {
                 "at {width}x{height}:\n{text}"
             );
         }
+    }
+
+    /// Issue #695: once `↓`/`PgDn`/`End` moves the cursor past the
+    /// table's own first page, the window scrolls to keep the
+    /// selected row visible rather than always showing rows 0..
+    /// `max_rows` and leaving the cursor nowhere on screen.
+    #[test]
+    fn store_table_scrolls_to_keep_the_cursor_in_view() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, mut store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            None,
+        );
+        store_screen.table = (0..6)
+            .map(|i| oscilloscope_core::store::StoreTableRow {
+                path: format!("prime.n{i}"),
+                label: format!("n{i}"),
+                tokens_sent: (6 - i) as u64,
+                tokens_received: 0,
+                share_pct: 0.0,
+                deviation_pct: None,
+            })
+            .collect();
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.store_selected = Some("prime.n5".to_string());
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains("n5"),
+            "the selected row must stay visible once it scrolls past the first page:\n{text}"
+        );
     }
 
     /// Issue #695's rule 4: a leaf whose own `name · N t` doesn't fit
