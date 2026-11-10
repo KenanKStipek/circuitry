@@ -80,7 +80,7 @@ fn basename_with_parent(path: &str) -> String {
 /// (§2.5): basenames for the document and config columns, except
 /// that a document whose (document, config) basename pair collides
 /// with another row's own gets its parent directory added too
-/// (issue #698 rule 9: "add the parent directory only when two rows
+/// (issue #698: "add the parent directory only when two rows
 /// would read identically") -- `runs` is already in launch order
 /// ([`crate::discovery::discover_runs`]'s own), kept unchanged here.
 /// A run with no document name known yet reads `—`, never blank.

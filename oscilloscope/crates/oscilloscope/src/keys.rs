@@ -1603,7 +1603,7 @@ impl SelectState {
     /// attaches (ignored on `All`, row 0, and on a Recent Runs row
     /// that isn't `openable`); `q` quits at once with exit 0; a raw
     /// Ctrl-C (`Char('c')` with the `CONTROL` modifier -- the same
-    /// finding `App::handle_key`'s own doc comment names: raw mode
+    /// reason `App::handle_key`'s own doc comment gives: raw mode
     /// turns a real Ctrl-C into this, never a distinct key code)
     /// quits with exit 130, checked before `help_open` gets a look at
     /// it, same as everywhere else this repository handles it; any
