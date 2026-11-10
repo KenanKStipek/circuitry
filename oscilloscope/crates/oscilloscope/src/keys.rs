@@ -1561,6 +1561,117 @@ fn matches_or_has_match(rows: &[Row], row: &Row, pred: &dyn Fn(&Row) -> bool) ->
     rows.iter().any(|r| r.path.starts_with(&prefix) && pred(r))
 }
 
+/// The Select screen's own key/cursor state (issue #698, §2.5/§4):
+/// `cursor` indexes `Row::All` + every running row when something's
+/// running, or [`oscilloscope_core::select::RecentRow`] otherwise --
+/// the same index space [`crate::main`]'s own loop already built the
+/// two lists in, never mixed across a refresh that switches between
+/// them. Pure: [`Self::handle_key`] takes every list-shaped fact it
+/// needs as a plain argument, so a test drives it with no real
+/// terminal and no real [`oscilloscope_core::discovery::DiscoveredRun`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SelectState {
+    pub cursor: usize,
+    pub help_open: bool,
+}
+
+impl SelectState {
+    pub fn new(cursor: usize) -> Self {
+        SelectState {
+            cursor,
+            help_open: false,
+        }
+    }
+}
+
+/// What [`SelectState::handle_key`] decided, for `main.rs`'s own loop
+/// to act on -- `AttachRun`/`AttachRecent` carry the chosen row's
+/// index into whichever list is current, never the row itself (this
+/// module holds neither list, only the cursor into one).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectKeyOutcome {
+    None,
+    Quit(u8),
+    AttachRun(usize),
+    AttachRecent(usize),
+}
+
+impl SelectState {
+    /// One key's worth of the Select screen's own behaviour (issue
+    /// #698 §4, Settled points 3/6/7/8): `↑↓`/`j`/`k`/`Home`/`End`/
+    /// `g`/`G` move and clamp `cursor` at `[0, max_index]`; `enter`
+    /// attaches (ignored on `All`, row 0, and on a Recent Runs row
+    /// that isn't `openable`); `q` quits at once with exit 0; a raw
+    /// Ctrl-C (`Char('c')` with the `CONTROL` modifier -- the same
+    /// finding `App::handle_key`'s own doc comment names: raw mode
+    /// turns a real Ctrl-C into this, never a distinct key code)
+    /// quits with exit 130, checked before `help_open` gets a look at
+    /// it, same as everywhere else this repository handles it; any
+    /// other key while `help_open` merely closes it. `0`-`3` and a
+    /// plain `c` do nothing here (Select attaches nothing of its own
+    /// to switch a screen or cancel).
+    pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        runs_empty: bool,
+        max_index: usize,
+        cursor_recent_openable: bool,
+    ) -> SelectKeyOutcome {
+        if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+            self.help_open = false;
+            return SelectKeyOutcome::Quit(130);
+        }
+        if self.help_open {
+            self.help_open = false;
+            return SelectKeyOutcome::None;
+        }
+        match code {
+            KeyCode::Char('q') => SelectKeyOutcome::Quit(0),
+            KeyCode::Char('?') => {
+                self.help_open = true;
+                SelectKeyOutcome::None
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                self.cursor = self.cursor.saturating_sub(1);
+                SelectKeyOutcome::None
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                self.cursor = (self.cursor + 1).min(max_index);
+                SelectKeyOutcome::None
+            }
+            KeyCode::Home | KeyCode::Char('g') => {
+                self.cursor = 0;
+                SelectKeyOutcome::None
+            }
+            KeyCode::End | KeyCode::Char('G') => {
+                self.cursor = max_index;
+                SelectKeyOutcome::None
+            }
+            KeyCode::Enter => {
+                if runs_empty {
+                    if cursor_recent_openable {
+                        SelectKeyOutcome::AttachRecent(self.cursor)
+                    } else {
+                        SelectKeyOutcome::None
+                    }
+                } else if self.cursor > 0 {
+                    // Row 0 is `All`, out of scope here (issue #698's
+                    // own acceptance): `enter` on it is inert, same
+                    // as `esc` everywhere on this screen.
+                    SelectKeyOutcome::AttachRun(self.cursor - 1)
+                } else {
+                    SelectKeyOutcome::None
+                }
+            }
+            // `0`-`3` and `c` do nothing here (§5: no run attached to
+            // switch a screen or cancel); `esc` likewise has nowhere
+            // on this screen to go back to.
+            _ => SelectKeyOutcome::None,
+        }
+    }
+}
+
 /// Everything currently visible in the state pane (issue #535): a
 /// collapsed row's own descendants are dropped, same rule `visible_
 /// rows` uses for the orchestration pane's own `app.collapsed` — but
@@ -2947,5 +3058,123 @@ mod tests {
         app.handle_key(key(KeyCode::Char('0')), &[], &[], true, false, &[]);
         assert_eq!(app.screen, Screen::Tape);
         assert_eq!(app.details_scroll, 0);
+    }
+
+    fn select_key(code: KeyCode) -> (KeyCode, KeyModifiers) {
+        (code, KeyModifiers::NONE)
+    }
+
+    #[test]
+    fn select_cursor_clamps_at_both_ends() {
+        let mut state = SelectState::new(1);
+        let (code, modifiers) = select_key(KeyCode::Up);
+        state.handle_key(code, modifiers, false, 2, false);
+        assert_eq!(state.cursor, 0);
+        let (code, modifiers) = select_key(KeyCode::Up);
+        state.handle_key(code, modifiers, false, 2, false);
+        assert_eq!(state.cursor, 0, "cursor must not go below 0");
+        let (code, modifiers) = select_key(KeyCode::End);
+        state.handle_key(code, modifiers, false, 2, false);
+        assert_eq!(state.cursor, 2);
+        let (code, modifiers) = select_key(KeyCode::Down);
+        state.handle_key(code, modifiers, false, 2, false);
+        assert_eq!(state.cursor, 2, "cursor must not go past max_index");
+    }
+
+    #[test]
+    fn select_enter_on_all_is_inert() {
+        let mut state = SelectState::new(0);
+        let (code, modifiers) = select_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, false, 2, false),
+            SelectKeyOutcome::None
+        );
+    }
+
+    #[test]
+    fn select_enter_on_a_run_row_attaches_it() {
+        let mut state = SelectState::new(1);
+        let (code, modifiers) = select_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, false, 2, false),
+            SelectKeyOutcome::AttachRun(0)
+        );
+    }
+
+    #[test]
+    fn select_enter_on_an_open_recent_row_attaches_it() {
+        let mut state = SelectState::new(0);
+        let (code, modifiers) = select_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, true, 0, true),
+            SelectKeyOutcome::AttachRecent(0)
+        );
+    }
+
+    #[test]
+    fn select_enter_on_a_recent_row_that_cannot_be_opened_is_inert() {
+        let mut state = SelectState::new(0);
+        let (code, modifiers) = select_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, true, 0, false),
+            SelectKeyOutcome::None
+        );
+    }
+
+    #[test]
+    fn select_q_quits_at_once_with_exit_0() {
+        let mut state = SelectState::new(1);
+        let (code, modifiers) = select_key(KeyCode::Char('q'));
+        assert_eq!(
+            state.handle_key(code, modifiers, false, 2, false),
+            SelectKeyOutcome::Quit(0)
+        );
+    }
+
+    #[test]
+    fn select_ctrl_c_quits_with_exit_130_even_with_help_open() {
+        let mut state = SelectState::new(1);
+        state.help_open = true;
+        assert_eq!(
+            state.handle_key(KeyCode::Char('c'), KeyModifiers::CONTROL, false, 2, false),
+            SelectKeyOutcome::Quit(130)
+        );
+        assert!(!state.help_open, "Ctrl-C must not merely dismiss Help");
+    }
+
+    #[test]
+    fn select_a_plain_c_and_number_keys_do_nothing() {
+        let mut state = SelectState::new(1);
+        for code in [
+            KeyCode::Char('c'),
+            KeyCode::Char('0'),
+            KeyCode::Char('1'),
+            KeyCode::Char('2'),
+            KeyCode::Char('3'),
+        ] {
+            assert_eq!(
+                state.handle_key(code, KeyModifiers::NONE, false, 2, false),
+                SelectKeyOutcome::None
+            );
+        }
+        assert_eq!(
+            state.cursor, 1,
+            "none of these keys may move the cursor either"
+        );
+    }
+
+    #[test]
+    fn select_any_other_key_closes_help_without_acting_on_it() {
+        let mut state = SelectState::new(1);
+        state.help_open = true;
+        assert_eq!(
+            state.handle_key(KeyCode::Enter, KeyModifiers::NONE, false, 2, false),
+            SelectKeyOutcome::None
+        );
+        assert!(!state.help_open);
+        assert_eq!(
+            state.cursor, 1,
+            "the key that closed Help must not also act"
+        );
     }
 }
