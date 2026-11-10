@@ -2454,6 +2454,9 @@ pub struct SignalBucket {
     /// How many distinct prompts contributed to this column (the Now
     /// pane's own "3 prompts in one step").
     pub prompt_count: u64,
+    /// How many distinct agent sessions contributed to this column --
+    /// an agent's tokens arrive as sightings, not as a prompt's end.
+    pub agent_count: u64,
     /// The latest timestamp among this column's own contributors --
     /// Peak's own clock and "time since the last burst" both read
     /// this directly, rather than re-deriving a clock from the
@@ -2897,6 +2900,7 @@ pub fn build_signal(
     // exact, so every sighting lands at its own column, never only
     // at `now_col`, and never marked `live` (an agent's own tokens
     // are the provider's exact count, never a character-count guess).
+    let mut agents_by_col: BTreeMap<usize, std::collections::BTreeSet<&str>> = BTreeMap::new();
     for sighting in model.agent_live_sightings() {
         let Some(offset) = elapsed_offset(&sighting.ts) else {
             continue;
@@ -2907,6 +2911,10 @@ pub fn build_signal(
         b.sent += sighting.tokens_sent;
         b.received += sighting.tokens_received;
         b.last_ts = Some(sighting.ts.clone());
+        let agents = agents_by_col.entry(col).or_default();
+        if agents.insert(sighting.path.as_str()) {
+            b.agent_count = agents.len() as u64;
+        }
         let fixed = fixed_cols.entry(col_of_100(offset)).or_default();
         fixed.0 += sighting.tokens_sent;
         fixed.1 += sighting.tokens_received;
@@ -3240,13 +3248,23 @@ pub fn build_signal(
         let b = &buckets[i];
         let ts = b.last_ts.as_deref()?;
         let age = duration_seconds(ts, now)?;
+        let plural = |n: u64, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+        // An agent's tokens arrive as sightings rather than a prompt's
+        // end, so a burst names what it was made of.
+        let what = match (b.prompt_count, b.agent_count) {
+            (_, 0) => plural(b.prompt_count, "prompt"),
+            (0, agents) => plural(agents, "agent"),
+            (prompts, agents) => format!(
+                "{} and {}",
+                plural(prompts, "prompt"),
+                plural(agents, "agent")
+            ),
+        };
         Some(format!(
-            "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {} prompt{} in one step",
+            "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {what} in one step",
             crate::format::format_duration(age),
             crate::format::format_tokens_thousands(b.sent),
             crate::format::format_tokens_thousands(b.received),
-            b.prompt_count,
-            if b.prompt_count == 1 { "" } else { "s" },
         ))
     });
     // An undispatched pass's own leaf (an `extra_rows` entry)
@@ -5672,6 +5690,14 @@ mod tests {
             .fold((0u64, 0u64), |(s, r), b| (s + b.sent, r + b.received));
         assert_eq!(total_sent, 11550);
         assert_eq!(total_received, 130);
+        assert_eq!(signal.buckets[20].agent_count, 1);
+        assert_eq!(signal.buckets[20].prompt_count, 0);
+        // The burst names what it was made of: an agent, not "0 prompts".
+        let burst = signal.now_pane.last_burst.as_deref().unwrap_or("");
+        assert!(
+            burst.ends_with("1 agent in one step"),
+            "the last burst came from the agent alone: {burst:?}"
+        );
     }
 
     /// The agent's own sightings and a real prompt row's own
