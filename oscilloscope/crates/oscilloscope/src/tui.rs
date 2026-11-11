@@ -4923,6 +4923,7 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("enter", "Open the focused run"),
         row("PageUp PageDown", "Turn the page"),
         row("u", "Combined Signal (coming soon)"),
+        row("c", "Inert here (no run attached to cancel)"),
         row("esc", "Back to Select"),
         row("?", "This help"),
         row("q", "Quit"),
@@ -15774,6 +15775,26 @@ mod tape_frame_goldens {
     /// A Now pane name over 17 characters is cut with `⋯`, never run
     /// straight into the `what` text that follows it with no space
     /// at all.
+    /// `c` is inert on the All screen (no run of this osi's own is
+    /// attached from the grid to cancel) -- the Help overlay says so
+    /// the same way Select's own already does for the same reason.
+    #[test]
+    fn all_help_lists_c_as_inert() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw_all_help(f, &ctx)).unwrap();
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains('c'), "{screen}");
+        assert!(screen.contains("Inert"), "{screen}");
+    }
+
     #[test]
     fn signal_tile_now_pane_cuts_a_long_name_and_keeps_a_space() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
