@@ -69,38 +69,60 @@ fn format_unit_value(value: f64) -> Option<String> {
     }
 }
 
-/// `369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`, `412 kt`. Rounding carries
-/// into the next unit (999,960 tokens -> `1.0 Mt`, not `1000 kt`).
-pub fn format_tokens(n: u64) -> String {
-    const UNITS: [(f64, &str); 3] = [(1e9, "Gt"), (1e6, "Mt"), (1e3, "kt")];
+/// Letters for 1,000-token scaling (issue #715), shared by every
+/// count that carries a unit (`kt`/`Mt`/`Gt`/`Tt`, [`format_tokens`])
+/// and by the arrows' own unit-less form (`k`/`M`/`G`/`T`,
+/// [`format_tokens_arrow`]) -- lower `k` for kilo, as SI has it,
+/// upper for the rest.
+const TOKEN_SCALE: [(f64, &str); 4] = [(1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "k")];
+
+/// The value and scale letter both [`format_tokens`] and
+/// [`format_tokens_arrow`] print, so the two can never round or
+/// carry differently -- `None` for the letter means `n` is under
+/// 1,000 and prints plain.
+fn scale_tokens(n: u64) -> (String, &'static str) {
     let value = n as f64;
-    for (i, &(scale, suffix)) in UNITS.iter().enumerate() {
+    for (i, &(scale, letter)) in TOKEN_SCALE.iter().enumerate() {
         if value < scale {
             continue;
         }
-        match format_unit_value(value / scale) {
-            Some(formatted) => return format!("{formatted} {suffix}"),
-            None => {
-                // Carried past this unit's own top -- one unit up
-                // from here always exists when this branch can be
-                // reached (`i == 0`, Gt, never overflows `u64` into
-                // a fourth unit at any token count worth showing).
-                let (up_scale, up_suffix) = UNITS[i.saturating_sub(1)];
-                let up = format_unit_value(value / up_scale)
-                    .unwrap_or_else(|| format!("{:.0}", value / up_scale));
-                return format!("{up} {up_suffix}");
-            }
+        if let Some(formatted) = format_unit_value(value / scale) {
+            return (formatted, letter);
         }
+        // Carried past this unit's own top -- one unit up from here
+        // always exists when this branch can be reached (`i == 0`,
+        // `Tt`, which no real token count ever reaches: it would
+        // take over a quadrillion tokens).
+        let (up_scale, up_letter) = TOKEN_SCALE[i.saturating_sub(1)];
+        let up = format_unit_value(value / up_scale)
+            .unwrap_or_else(|| format!("{:.0}", value / up_scale));
+        return (up, up_letter);
     }
-    format!("{n} t")
+    (n.to_string(), "")
 }
 
-/// Thousands-separated, no unit suffix (`design/tui-design.md` §3.8:
-/// "tokens with thousands separators and a space before `t`") --
-/// the Tape's own scale, never [`format_tokens`]'s `kt`/`Mt`
-/// abbreviation, which the screens built before this design still
-/// use.
-pub fn format_tokens_thousands(n: u64) -> String {
+/// `369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`, `412 kt`, `1.0 Tt`.
+/// Rounding carries into the next unit (999,960 tokens -> `1.0 Mt`,
+/// not `1000 kt`).
+pub fn format_tokens(n: u64) -> String {
+    let (value, letter) = scale_tokens(n);
+    if letter.is_empty() {
+        format!("{value} t")
+    } else {
+        format!("{value} {letter}t")
+    }
+}
+
+/// The arrows' own unit-less form (issue #715, `design/tui-design.md`
+/// §3.5's "Arrows carry no unit"): `212`, `1.2k`, `35.4M`, `1.2G` --
+/// the same scale and rounding as [`format_tokens`], just without
+/// its trailing ` t`/` kt`/... unit.
+pub fn format_tokens_arrow(n: u64) -> String {
+    let (value, letter) = scale_tokens(n);
+    format!("{value}{letter}")
+}
+
+fn thousands_grouped(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
     for (i, ch) in digits.chars().enumerate() {
@@ -112,10 +134,12 @@ pub fn format_tokens_thousands(n: u64) -> String {
     out
 }
 
-/// [`format_tokens_thousands`], with the Tape's own ` t` unit
-/// suffix: `215 t`, `1,902 t`.
+/// Thousands-separated, with a trailing ` t` (`215 t`, `1,902 t`) --
+/// kept only for the single-run Signal screen's own fixed axis label,
+/// which issue #715 leaves unchanged. Every other display path scales
+/// through [`format_tokens`] instead.
 pub fn format_tokens_t(n: u64) -> String {
-    format!("{} t", format_tokens_thousands(n))
+    format!("{} t", thousands_grouped(n))
 }
 
 /// `41k`, `200k`, `900` -- the agent block's own compact context
@@ -318,6 +342,38 @@ mod tests {
         assert_eq!(format_tokens(1_000), "1.0 kt");
         assert_eq!(format_tokens(1_000_000), "1.0 Mt");
         assert_eq!(format_tokens(1_000_000_000), "1.0 Gt");
+        assert_eq!(format_tokens(1_000_000_000_000), "1.0 Tt");
+    }
+
+    #[test]
+    fn tokens_scale_into_tt() {
+        assert_eq!(format_tokens(2_100_000_000_000), "2.1 Tt");
+        assert_eq!(format_tokens(142_000_000_000_000), "142 Tt");
+    }
+
+    #[test]
+    fn tokens_tt_carries_from_gt() {
+        assert_eq!(format_tokens(999_960_000_000), "1.0 Tt");
+    }
+
+    /// Issue #715's own arrow examples: no unit at all below 1,000,
+    /// then the same scale and rounding as `format_tokens` with a
+    /// one-letter suffix and no space.
+    #[test]
+    fn arrow_tokens_carry_no_unit() {
+        assert_eq!(format_tokens_arrow(212), "212");
+        assert_eq!(format_tokens_arrow(3), "3");
+        assert_eq!(format_tokens_arrow(1_200), "1.2k");
+        assert_eq!(format_tokens_arrow(56), "56");
+        assert_eq!(format_tokens_arrow(35_400_000), "35.4M");
+        assert_eq!(format_tokens_arrow(203_000), "203k");
+        assert_eq!(format_tokens_arrow(1_200_000_000), "1.2G");
+        assert_eq!(format_tokens_arrow(98_800), "98.8k");
+    }
+
+    #[test]
+    fn arrow_tokens_carry_into_the_next_unit() {
+        assert_eq!(format_tokens_arrow(999_960), "1.0M");
     }
 
     #[test]

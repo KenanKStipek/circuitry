@@ -1561,8 +1561,8 @@ fn tape_on_error_word(plan: &PlanTree, path: &str) -> &'static str {
 fn tape_prompt_what(sent: u64, received: u64, reply_first_words: Option<&str>) -> String {
     let arrows = format!(
         "↑{} ↓{}",
-        crate::format::format_tokens_thousands(sent),
-        crate::format::format_tokens_thousands(received)
+        crate::format::format_tokens_arrow(sent),
+        crate::format::format_tokens_arrow(received)
     );
     match reply_first_words {
         Some(words) if !words.is_empty() => format!("{arrows} · {words}"),
@@ -1611,11 +1611,11 @@ fn tape_running_prompt_what(
         let marker = if is_estimate { "≈" } else { "" };
         let rate = live
             .tokens_per_second
-            .map(|r| format!(" · {} t/s", r.round() as i64))
+            .map(|r| format!(" · {}/s", crate::format::format_tokens(r.round() as u64)))
             .unwrap_or_default();
         what.push_str(&format!(
-            " · ↓{marker}{} t{rate}",
-            crate::format::format_tokens_thousands(n)
+            " · ↓{marker}{}{rate}",
+            crate::format::format_tokens(n)
         ));
     }
     what
@@ -3660,10 +3660,7 @@ pub fn build_signal(
                     .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
                 let reply_words = crate::render::display_value(&node.value);
                 let reply_words = (!reply_words.is_empty()).then(|| first_words(&reply_words, 24));
-                let mut parts = vec![format!(
-                    "{} t",
-                    crate::format::format_tokens_thousands(total)
-                )];
+                let mut parts = vec![format!("{}", crate::format::format_tokens(total))];
                 if let Some(dev) = dev {
                     parts.push(format!("{dev:+.0}%"));
                 }
@@ -3714,9 +3711,9 @@ pub fn build_signal(
                     .map(|r| {
                         let (tokens, count) = signal_loop_pass_tokens(&r.path, flat);
                         format!(
-                            "\u{b7} {} \u{d7}{count} \u{b7} {} t",
+                            "\u{b7} {} \u{d7}{count} \u{b7} {}",
                             tape_row_label(r, flat, plan),
-                            crate::format::format_tokens_thousands(tokens)
+                            crate::format::format_tokens(tokens)
                         )
                     })
                     .unwrap_or_default();
@@ -3947,8 +3944,8 @@ pub fn build_signal(
         Some(format!(
             "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {what} in one step",
             crate::format::format_duration(age),
-            crate::format::format_tokens_thousands(b.sent),
-            crate::format::format_tokens_thousands(b.received),
+            crate::format::format_tokens_arrow(b.sent),
+            crate::format::format_tokens_arrow(b.received),
         ))
     });
     // An undispatched pass's own leaf (an `extra_rows` entry)
@@ -3975,12 +3972,7 @@ pub fn build_signal(
         let qualifier = if queued { "next slot" } else { "queued" };
         let usual = tape_row_usual_tokens(&r.path, plan, header);
         let usual_text = usual
-            .map(|u| {
-                format!(
-                    " \u{b7} usually {} t",
-                    crate::format::format_tokens_thousands(u)
-                )
-            })
+            .map(|u| format!(" \u{b7} usually {}", crate::format::format_tokens(u)))
             .unwrap_or_default();
         format!(
             "{} \u{b7} {qualifier}{usual_text}",
