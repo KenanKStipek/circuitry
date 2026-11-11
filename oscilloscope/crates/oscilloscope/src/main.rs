@@ -5644,13 +5644,12 @@ fn run_combined_signal_leg(
 
         if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
             let term_size = terminal.size().unwrap_or_default();
-            if term_size.width < tui::COMBINED_MIN_WIDTH
-                || term_size.height < tui::COMBINED_MIN_HEIGHT
-            {
+            let min_height = tui::combined_min_height(slots.len());
+            if term_size.width < tui::COMBINED_MIN_WIDTH || term_size.height < min_height {
                 all_state.combined_too_small_note = Some(format!(
                     "Combined Signal needs {}x{} · this terminal is {}x{}",
                     tui::COMBINED_MIN_WIDTH,
-                    tui::COMBINED_MIN_HEIGHT,
+                    min_height,
                     term_size.width,
                     term_size.height
                 ));

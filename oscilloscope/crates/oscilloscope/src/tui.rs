@@ -5242,28 +5242,25 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
     );
 }
 
-/// The Combined Signal's own 100 ms columns above the axis:
-/// taller than a single run's own [`SIGNAL_SENT_ROWS`] since every
-/// run's own bars stack into one trace here.
-const COMBINED_SENT_ROWS: usize = 14;
-const COMBINED_RECEIVED_ROWS: usize = 4;
-/// The chart's own floor: its 19 fixed trace/axis rows, one
-/// seconds row, at least one legend row, a separator and the
-/// Totals row, plus the two rows its own border takes -- the Per
-/// Run table and Readings give up rows to stay above this, never
-/// the other way around.
-const CHART_AREA_MIN_HEIGHT: u16 =
-    (COMBINED_SENT_ROWS + 1 + COMBINED_RECEIVED_ROWS + 1 + 1 + 1 + 1) as u16 + 2;
-/// The Combined Signal's own floor (`design/tui-design.md` §5
-/// names no narrower rule of its own for this screen): the chart's
-/// own `CHART_AREA_MIN_HEIGHT` plus the three chrome rows every
-/// screen already carries. The caller checks this before ever
-/// entering the screen (`u` bounces straight back to the tiles
-/// below it, with a status note); [`draw_combined_signal`] itself
-/// only ever falls back as far as the shared [`MIN_WIDTH`]/
+/// The three chrome rows every leg of this screen carries
+/// outside the body (the header band, the status line and the key
+/// bar) -- the Combined Signal's own floor is this plus however
+/// many body rows `oscilloscope_core::combined::combined_body_
+/// rows_min` needs for `run_count` runs.
+const COMBINED_CHROME_ROWS: u16 = 3;
+/// The Combined Signal's own floor at `run_count` runs
+/// (`design/tui-design.md` §5 names no narrower rule of its own
+/// for this screen): grows with every run past what the chart's
+/// own legend can fit without growing (issue #713) since each one
+/// always keeps its own legend row. The caller checks this before
+/// ever entering the screen (`u` bounces straight back to the
+/// tiles below it, with a status note); [`draw_combined_signal`]
+/// itself only ever falls back as far as the shared [`MIN_WIDTH`]/
 /// [`MIN_HEIGHT`] floor every screen has.
 pub(crate) const COMBINED_MIN_WIDTH: u16 = 120;
-pub(crate) const COMBINED_MIN_HEIGHT: u16 = CHART_AREA_MIN_HEIGHT + 3;
+pub(crate) fn combined_min_height(run_count: usize) -> u16 {
+    oscilloscope_core::combined::combined_body_rows_min(run_count) as u16 + COMBINED_CHROME_ROWS
+}
 
 fn combined_key_bar_items() -> Vec<(&'static str, &'static str)> {
     vec![
@@ -5428,14 +5425,24 @@ pub fn draw_combined_signal(
     draw_key_bar(frame, sections[3], &combined_key_bar_items(), ctx);
 
     let body = sections[1];
-    // The chart (with its own legend and Totals) always keeps its
-    // own floor (`CHART_AREA_MIN_HEIGHT`, enough for every one of
-    // its own fixed rows plus at least one legend row); the Per Run
-    // table and Readings take whatever is left, up to the frame's
-    // own 180x48 split (13 of 45 body rows) -- the chart only ever
-    // gives up rows to the table, never the other way around.
-    let per_run_height = body.height.saturating_sub(CHART_AREA_MIN_HEIGHT).min(13);
-    let chart_height = body.height.saturating_sub(per_run_height);
+    // The chart (with its own legend and Totals) and the bottom
+    // block (Per Run and Readings) split the body between them by
+    // `oscilloscope_core::combined::combined_vertical_split`
+    // (issue #713): the chart only ever gives up rows to the
+    // table, never the other way around, down to the chart's own
+    // floor (every run's own legend row, the trace at its own
+    // floor). Below that floor the caller already bounced back to
+    // the tiles before ever drawing this screen; reaching `None`
+    // here falls back the same way the shared floor does.
+    let Some(split) = oscilloscope_core::combined::combined_vertical_split(
+        body.height as usize,
+        screen.runs.len(),
+    ) else {
+        draw_too_small_with_min_width(frame, full_area, ctx, COMBINED_MIN_WIDTH);
+        return;
+    };
+    let chart_height = split.chart_rows() as u16;
+    let lower_height = split.lower_rows as u16;
     let chart_area = Rect {
         x: body.x,
         y: body.y,
@@ -5446,9 +5453,9 @@ pub fn draw_combined_signal(
         x: body.x,
         y: body.y + chart_height,
         width: body.width,
-        height: per_run_height,
+        height: lower_height,
     };
-    draw_combined_chart(frame, chart_area, screen, scrub_col, now, ctx);
+    draw_combined_chart(frame, chart_area, screen, scrub_col, now, ctx, &split);
     // The frame's own 180-wide split is 136/44, not a round
     // percentage -- kept as that exact ratio rather than one that
     // only coincidentally rounds the same way at this one width.
@@ -5487,6 +5494,7 @@ fn draw_combined_chart(
     scrub_col: Option<usize>,
     now: &str,
     ctx: &DrawCtx,
+    split: &oscilloscope_core::combined::CombinedVerticalSplit,
 ) {
     let title = combined_chart_title();
     let border_color = ctx.theme.border_focused;
@@ -5502,8 +5510,10 @@ fn draw_combined_chart(
     }
     fill_border_rows(frame, inner, border_color);
 
-    let chart_rows = COMBINED_SENT_ROWS + 1 + COMBINED_RECEIVED_ROWS;
-    if inner.height < chart_rows as u16 + 2 {
+    let sent_rows = split.sent_rows;
+    let received_rows = split.received_rows;
+    let chart_rows = split.trace_rows();
+    if inner.height < chart_rows as u16 {
         return;
     }
 
@@ -5527,7 +5537,7 @@ fn draw_combined_chart(
 
     let dim = Style::default().fg(ctx.theme.dim);
     let border_style = Style::default().fg(border_color);
-    let axis_row_y = inner.y + COMBINED_SENT_ROWS as u16;
+    let axis_row_y = inner.y + sent_rows as u16;
     {
         let buf = frame.buffer_mut();
         let axis_label = |buf: &mut ratatui::buffer::Buffer, y: u16, text: &str| {
@@ -5542,11 +5552,7 @@ fn draw_combined_chart(
         let received_top_label =
             oscilloscope_core::multi::format_shared_axis_label(screen.received_axis_top);
         axis_label(buf, inner.y, &sent_top_label);
-        axis_label(
-            buf,
-            inner.y + COMBINED_SENT_ROWS as u16 / 2,
-            &sent_half_label,
-        );
+        axis_label(buf, inner.y + sent_rows as u16 / 2, &sent_half_label);
         axis_label(buf, axis_row_y, "0");
         buf.set_string(data_x - 1, axis_row_y, " ", dim);
         axis_label(buf, inner.y + chart_rows as u16 - 1, &received_top_label);
@@ -5583,7 +5589,7 @@ fn draw_combined_chart(
         let sent_cells = oscilloscope_core::combined::stack_column(
             &sent_values,
             screen.sent_axis_top,
-            COMBINED_SENT_ROWS,
+            sent_rows,
             oscilloscope_core::combined::sent_partial_glyph,
         );
         for (row_idx, cell) in sent_cells.iter().enumerate() {
@@ -5607,7 +5613,7 @@ fn draw_combined_chart(
         let mut received_cells = oscilloscope_core::combined::stack_column(
             &received_values,
             screen.received_axis_top,
-            COMBINED_RECEIVED_ROWS,
+            received_rows,
             oscilloscope_core::combined::received_partial_glyph,
         );
         received_cells.reverse();
@@ -5651,21 +5657,27 @@ fn draw_combined_chart(
         }
     }
 
+    let seconds_row_y = axis_row_y + 1 + received_rows as u16;
     draw_combined_seconds_row(
-        frame, inner, data_x, data_width, start_col, screen, now, ctx,
+        frame,
+        inner,
+        seconds_row_y,
+        data_x,
+        data_width,
+        start_col,
+        screen,
+        now,
+        ctx,
     );
 
-    let legend_y = axis_row_y + 1 + COMBINED_RECEIVED_ROWS as u16 + 1;
-    let legend_available = (inner.y + inner.height)
-        .saturating_sub(legend_y)
-        .saturating_sub(2);
+    let legend_y = seconds_row_y + 1;
     draw_combined_legend(
         frame,
         Rect {
             x: inner.x,
             y: legend_y,
             width: inner.width,
-            height: legend_available,
+            height: split.legend_rows as u16,
         },
         screen,
         data_x,
@@ -5675,13 +5687,15 @@ fn draw_combined_chart(
     );
 
     let totals_y = inner.y + inner.height - 1;
-    let sep_y = totals_y - 1;
-    frame.buffer_mut().set_string(
-        inner.x,
-        sep_y,
-        "\u{2500}".repeat(inner.width as usize),
-        Style::default().fg(ctx.theme.border),
-    );
+    if split.separator_rows > 0 {
+        let sep_y = totals_y - 1;
+        frame.buffer_mut().set_string(
+            inner.x,
+            sep_y,
+            "\u{2500}".repeat(inner.width as usize),
+            Style::default().fg(ctx.theme.border),
+        );
+    }
     draw_combined_totals_row(
         frame,
         Rect {
@@ -5726,6 +5740,7 @@ fn draw_combined_chart_cell(
 fn draw_combined_seconds_row(
     frame: &mut Frame,
     inner: Rect,
+    y: u16,
     data_x: u16,
     data_width: usize,
     start_col: usize,
@@ -5733,7 +5748,6 @@ fn draw_combined_seconds_row(
     now: &str,
     ctx: &DrawCtx,
 ) {
-    let y = inner.y + COMBINED_SENT_ROWS as u16 + 1 + COMBINED_RECEIVED_ROWS as u16;
     let dim = Style::default().fg(ctx.theme.dim);
     frame.buffer_mut().set_string(
         inner.x,
@@ -6230,7 +6244,12 @@ fn draw_combined_readings(
         ),
     ]));
     frame.render_widget(
-        Paragraph::new(lines),
+        // A narrower panel than the golden's own (below 180 columns)
+        // wraps a line too long for it rather than truncating it --
+        // the panel has rows to spare for a wrapped line long before
+        // it runs out of the four lines themselves (issue #713), and
+        // the golden's own width never wraps any of them.
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
         Rect {
             x: inner.x + 1,
             y: inner.y,

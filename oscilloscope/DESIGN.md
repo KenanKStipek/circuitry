@@ -3511,26 +3511,39 @@ Combined leg runs; `q` quits at once everywhere on this screen
 (watching only, never a confirm); `?` shows this screen's own
 Help, which lists `c` as inert, the same as the grid's.
 
-**Sizes**: below 120 columns, or below the 28 rows the chart's own
-fixed-height trace, one seconds row, one legend row, a separator
-and Totals need alongside the three chrome rows every screen
-already carries, the shared too-small notice shows naming 120
-columns -- `design/tui-design.md` §5 names no narrower rule of its
-own for this screen, and falling back to the grid outright (as
-§5's own text for the screen in general suggests) is not yet
-implemented; this is reported as a residual gap, not bent into a
-redirect this pull request doesn't build. The chart's own floor
-always comes first: the Per Run table and Readings give up rows to
-it, down to as little as none visible, rather than the other way
-around, so even the narrowest height that still clears the floor
-keeps the chart whole. At 180x48 (the golden's own size) the chart
-and the Per Run table split 32/13 rows; past that the chart keeps
-growing with the extra height, and the lower row's own panels with
-the extra width. TOKENS/SHARE/DONE stay right-aligned to the Per
-Run table's own right edge at any width, so they move further right
-as the table widens; NOW takes whatever gap that leaves before
-them, capped at the golden's own 40 columns. RUN/CONFIG/ENGINE/NOW's
-own start columns stay pinned at the same offsets regardless.
+**Sizes** (issue #713): below 120 columns, or below the height
+`oscilloscope_core::combined::combined_body_rows_min` needs for the
+current run count (plus the three chrome rows every screen already
+carries), the shared too-small notice shows naming 120 columns --
+`design/tui-design.md` §5 names no narrower rule of its own for
+this screen. Above that floor, the chart panel (the trace, the
+legend and Totals) and the bottom block (Per Run and Readings)
+split the body's own rows by `combined::combined_vertical_split`,
+restoring each piece in the reverse of the order it gives them up
+in as the height shrinks: the bottom block's own blank rows
+first, up to its own 180x48 size (13 of 45 body rows, a header row
+plus up to 10 blank/scrollable table rows); then the legend's own
+blank rows, up to its own 180x48 size (8, enough for up to 8 runs
+without the chart growing for them); then the trace itself, up to
+its own 180x48 size (19 rows: 14 above the axis, the axis, 4
+below). Shrinking past all of that, the trace still has a floor
+of its own (9 rows: 5 above the axis, the axis, 3 below) below
+which every run's own legend row and the bottom block's own floor
+(a header row plus up to 3 scrollable rows, or Readings' own 4
+lines, whichever needs more) are still the last things given up --
+only the separator row above Totals goes first, the one row this
+floor never needs. Past the golden's own 180x48 size, every extra
+row goes to the trace alone; the legend only grows past its own 8
+rows for a run count that itself needs more than 8, and the bottom
+block never grows past its own 180x48 size at all. TOKENS/SHARE/DONE
+stay right-aligned to the Per Run table's own right edge at any
+width, so they move further right as the table widens; NOW takes
+whatever gap that leaves before them, capped at the golden's own 40
+columns. RUN/CONFIG/ENGINE/NOW's own start columns stay pinned at
+the same offsets regardless. A Readings line too long for a
+narrower-than-golden panel wraps rather than truncates, since the
+panel almost always has rows to spare for it well before its own
+floor.
 
 Goldens: `all--combined-signal--180x48`
 (`tui::tape_frame_goldens::all_combined_signal_180x48_matches_the_

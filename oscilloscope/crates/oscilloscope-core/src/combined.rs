@@ -26,6 +26,141 @@ pub fn column_of(offset_s: f64) -> usize {
     (offset_s / COLUMN_S).floor().max(0.0) as usize
 }
 
+/// The trace's own floor (issue #713): 5 rows above the axis, the
+/// axis itself, 3 below -- the smallest split that still keeps
+/// both sides legible.
+pub const TRACE_SENT_ROWS_MIN: usize = 5;
+pub const TRACE_RECEIVED_ROWS_MIN: usize = 3;
+/// The trace's own size at the frame's own 180x48 golden, and the
+/// most the legend and bottom block ever leave it before it must
+/// grow into extra height instead (issue #713 rule 3).
+pub const TRACE_SENT_ROWS_BASE: usize = 14;
+pub const TRACE_RECEIVED_ROWS_BASE: usize = 4;
+/// The legend's own block at the golden, enough for up to 8 runs
+/// without the chart needing to grow for it; past 8 runs the block
+/// grows one row per run beyond it instead.
+pub const LEGEND_ROWS_BASE: usize = 8;
+/// The bottom block's (Per Run and Readings') own floor -- Per
+/// Run's own header plus up to 3 scrollable rows, or Readings' own
+/// 4 lines, each with its own border, whichever needs more (always
+/// 6: Readings never needs fewer) -- and the most it ever grows to
+/// (the golden's own size): rule 3 keeps it there even with more
+/// height than the golden, all of which goes to the trace instead.
+pub const LOWER_ROWS_MIN: usize = 6;
+pub const LOWER_ROWS_MAX: usize = 13;
+/// The chart panel's own rows that never shrink or grow with any
+/// of the above: the seconds row, the Totals row itself, and the
+/// panel's own two border rows. The separator row above Totals is
+/// one more than this, but not required to fit at all -- the one
+/// row [`combined_vertical_split`] drops first, before the trace
+/// ever shrinks past its own base, so a run count large enough to
+/// leave no other slack still keeps every legend row and Totals
+/// itself, just with the divider between them gone.
+const CHART_FIXED_ROWS: usize = 4;
+
+/// One way to split the Combined Signal's own vertical space
+/// (issue #713): how many rows the trace's own sent/received
+/// sides and the legend get inside the chart panel, how many of
+/// those are the separator row above Totals (0 or 1), and how
+/// many rows the bottom block (Per Run and Readings) gets below
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CombinedVerticalSplit {
+    pub sent_rows: usize,
+    pub received_rows: usize,
+    pub legend_rows: usize,
+    pub separator_rows: usize,
+    pub lower_rows: usize,
+}
+
+impl CombinedVerticalSplit {
+    /// The trace's own total rows, axis included.
+    pub fn trace_rows(&self) -> usize {
+        self.sent_rows + 1 + self.received_rows
+    }
+
+    /// The whole chart panel's own rows: the trace, the seconds
+    /// row, the legend, the separator (if any), Totals, and the
+    /// panel's own two border rows.
+    pub fn chart_rows(&self) -> usize {
+        self.trace_rows() + self.legend_rows + self.separator_rows + CHART_FIXED_ROWS
+    }
+}
+
+/// The chart panel's own floor at `run_count` runs: the trace at
+/// its own floor, every run's own legend row (never fewer), and
+/// the panel's own fixed rows -- without the separator, the one
+/// row this floor never needs.
+pub fn combined_chart_rows_min(run_count: usize) -> usize {
+    TRACE_SENT_ROWS_MIN + 1 + TRACE_RECEIVED_ROWS_MIN + CHART_FIXED_ROWS + run_count
+}
+
+/// The Combined Signal's own floor at `run_count` runs: the chart
+/// panel's own floor plus the bottom block's own floor -- the rows
+/// [`combined_vertical_split`] needs to return anything at all.
+pub fn combined_body_rows_min(run_count: usize) -> usize {
+    combined_chart_rows_min(run_count) + LOWER_ROWS_MIN
+}
+
+/// Splits `body_rows` (the chart panel and the bottom block
+/// together, with no gap between them) between them at
+/// `run_count` runs, following issue #713's own shrink order in
+/// reverse (each one restored in the order the frame's own shrink
+/// rule gives it up last): the separator row first (the one row
+/// dropped before anything else in the list below), then the
+/// bottom block's own blank rows (up to [`LOWER_ROWS_MAX`]), then
+/// the legend's own blank rows (up to [`LEGEND_ROWS_BASE`], or
+/// straight to `run_count` once that's already past it), then the
+/// trace (up to its own [`TRACE_SENT_ROWS_BASE`]/
+/// [`TRACE_RECEIVED_ROWS_BASE`], and past them with no further
+/// cap). `None` below [`combined_body_rows_min`], the caller's own
+/// too-small bounce.
+pub fn combined_vertical_split(
+    body_rows: usize,
+    run_count: usize,
+) -> Option<CombinedVerticalSplit> {
+    let min_total = combined_body_rows_min(run_count);
+    if body_rows < min_total {
+        return None;
+    }
+    let mut slack = body_rows - min_total;
+
+    let separator_rows = slack.min(1);
+    slack -= separator_rows;
+
+    let lower_room = LOWER_ROWS_MAX - LOWER_ROWS_MIN;
+    let lower_grow = slack.min(lower_room);
+    slack -= lower_grow;
+    let lower_rows = LOWER_ROWS_MIN + lower_grow;
+
+    let legend_base = run_count.max(LEGEND_ROWS_BASE);
+    let legend_room = legend_base - run_count;
+    let legend_grow = slack.min(legend_room);
+    slack -= legend_grow;
+    let legend_rows = run_count + legend_grow;
+
+    let received_room = TRACE_RECEIVED_ROWS_BASE - TRACE_RECEIVED_ROWS_MIN;
+    let sent_room = TRACE_SENT_ROWS_BASE - TRACE_SENT_ROWS_MIN;
+    let trace_room = received_room + sent_room;
+    let trace_grow = slack.min(trace_room);
+    slack -= trace_grow;
+    let received_grow = trace_grow.min(received_room);
+    let sent_grow = (trace_grow - received_grow).min(sent_room);
+    // Any slack past both the trace's own 180x48 bases (only once
+    // `body_rows` is taller than the golden) goes entirely to the
+    // sent side, the one side this screen has no fixed ceiling for.
+    let sent_rows = TRACE_SENT_ROWS_MIN + sent_grow + slack;
+    let received_rows = TRACE_RECEIVED_ROWS_MIN + received_grow;
+
+    Some(CombinedVerticalSplit {
+        sent_rows,
+        received_rows,
+        legend_rows,
+        separator_rows,
+        lower_rows,
+    })
+}
+
 /// One run's own sent/received totals, bucketed by the *shared*
 /// column (every run's own columns anchored to the earliest run's
 /// own start, not each run's own) -- built once per redraw from the
@@ -685,6 +820,65 @@ pub fn finished_legend_text(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combined_vertical_split_at_120x30_with_3_runs_gives_every_legend_row_and_a_header_plus_three_table_rows()
+     {
+        // 120x30: 30 rows total, less the header band, status line
+        // and key bar leaves 27 body rows.
+        let split = combined_vertical_split(27, 3).expect("fits above the floor");
+        assert_eq!(split.legend_rows, 3);
+        assert_eq!(split.separator_rows, 1);
+        // The bottom block's own floor (6) plus whatever slack is
+        // left once the trace stays at its own floor and the
+        // legend has no blanks to give up: a header row plus up to
+        // 3 scrollable rows always fit inside it.
+        assert!(split.lower_rows >= 6);
+        assert_eq!(split.trace_rows(), 9);
+    }
+
+    #[test]
+    fn combined_vertical_split_at_120x30_with_8_runs_keeps_every_legend_row_and_scrolls_the_table()
+    {
+        let split = combined_vertical_split(27, 8).expect("fits above the floor");
+        assert_eq!(split.legend_rows, 8);
+        // The bottom block stays at its own floor (6: a header row
+        // plus 3 scrollable rows) -- fewer than the 8 runs, so the
+        // Per Run table must scroll to keep the cursor in view.
+        assert_eq!(split.lower_rows, 6);
+        assert!(split.lower_rows - 3 < 8);
+        // No slack left for the separator above Totals once every
+        // run has its own legend row at this height.
+        assert_eq!(split.separator_rows, 0);
+    }
+
+    #[test]
+    fn combined_vertical_split_at_180x48_with_6_runs_matches_the_frame() {
+        // 180x48: 45 body rows, the golden's own size.
+        let split = combined_vertical_split(45, 6).expect("fits above the floor");
+        assert_eq!(split.separator_rows, 1);
+        assert_eq!(split.sent_rows, TRACE_SENT_ROWS_BASE);
+        assert_eq!(split.received_rows, TRACE_RECEIVED_ROWS_BASE);
+        assert_eq!(split.legend_rows, LEGEND_ROWS_BASE);
+        assert_eq!(split.lower_rows, LOWER_ROWS_MAX);
+        assert_eq!(split.chart_rows(), 32);
+    }
+
+    #[test]
+    fn combined_vertical_split_at_187x61_grows_only_the_trace() {
+        // 187x61: 58 body rows, more than the golden's own 45.
+        let split = combined_vertical_split(58, 3).expect("fits above the floor");
+        assert!(split.trace_rows() > 19);
+        assert_eq!(split.legend_rows, LEGEND_ROWS_BASE);
+        assert_eq!(split.lower_rows, LOWER_ROWS_MAX);
+    }
+
+    #[test]
+    fn combined_vertical_split_fits_at_the_floor_and_falls_back_one_row_below_it() {
+        let min = combined_body_rows_min(3);
+        assert!(combined_vertical_split(min, 3).is_some());
+        assert!(combined_vertical_split(min - 1, 3).is_none());
+    }
 
     #[test]
     fn stack_column_puts_the_first_run_at_the_axis() {
