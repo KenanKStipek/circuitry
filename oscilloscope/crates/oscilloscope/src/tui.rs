@@ -4045,6 +4045,10 @@ fn select_row_spans(
                     .add_modifier(Modifier::BOLD),
             ),
             Span::styled(format!("{doc_text:<15}"), doc_style),
+            Span::styled(
+                format!("{name_text:<nw$}", nw = SELECT_NAME_COL_WIDTH),
+                Style::default().fg(ctx.theme.text),
+            ),
             Span::styled(tail, Style::default().fg(ctx.theme.fg_muted)),
         ]
     }
