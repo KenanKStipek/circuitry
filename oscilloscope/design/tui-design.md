@@ -66,7 +66,7 @@ model and the metadata around each step. Four screens look at one run; two more 
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
-│         ■ Run End            usually 1,324 t · 5.0s      ETA 12:50:52    ││                                          │
+│         ■ Run End            usually 1.3 kt · 5.0s      ETA 12:50:52     ││                                          │
 │──────────────────────────────────────────────────────────────────────────││                                          │
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
@@ -90,8 +90,8 @@ and duration, and the ETA in the token column. The Now area's own middle row sit
 finished rows fill upward from it, newest closest, the oldest scrolling off the top; rows ahead fill downward, the
 latest scrolling off the bottom; blank above when the past is short, blank below when the plan is short.
 
-**Token column** (16 cells). `▰▰▰▰▱▱▱▱   215 t`: eight bar cells at a fixed 50 tokens each, then the count,
-thousands separated, `t` as the unit. The largest step so far has the only bold number. A loop row shows a
+**Token column** (16 cells). `▰▰▰▰▱▱▱▱   215 t`: eight bar cells at a fixed 50 tokens each, then the count in
+t, kt, Mt (§3.5). The largest step so far has the only bold number. A loop row shows a
 sparkline of its finished passes and the per-pass average, `▃▃   130 t/p`. Pressing `t` swaps the column for
 each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a baseline tick with up to four cells per side at
 12.5 % each, coloured by the deviation (§3.6):
@@ -121,7 +121,7 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
-│         ■ Run End            usually 1,324 t · 5.0s      ETA 12:50:52    ││                                          │
+│         ■ Run End            usually 1.3 kt · 5.0s      ETA 12:50:52     ││                                          │
 │──────────────────────────────────────────────────────────────────────────││                                          │
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
@@ -171,7 +171,7 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 │         · iter_2 › pause     tool · sleep 1 · queued                         │
 │         · flaky              tool · ls /nonexistent-osi-dem⋯                 │
 │         · summary            prompt                          usually 402 t   │
-│         ■ Run End            usually 1,324 t · ETA 12:50:52                  │
+│         ■ Run End            usually 1.3 kt · ETA 12:50:52                   │
 │                                                                              │
 │──────────────────────────────────────────────────────────────────────────────│
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —      │
@@ -462,10 +462,10 @@ the three ways to start one:
 │                                                                              │
 │ Recent Runs · open read-only                                                 │
 │      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME                  │
-│  ❯ ✓ demo.yml config-h3.json 14:14:09  5.0s 1,296 t ok · 1 handled failure   │
-│    ✓ demo.yml config-h2.json 14:14:03  5.1s 1,386 t ok · 1 handled failure   │
-│    ✓ demo.yml config-h1.json 14:13:57  5.0s 1,324 t ok · 1 handled failure   │
-│    ✓ demo.yml config.json    12:50:47  5.1s 1,410 t ok · 1 handled failure   │
+│  ❯ ✓ demo.yml config-h3.json 14:14:09  5.0s  1.3 kt ok · 1 handled failure   │
+│    ✓ demo.yml config-h2.json 14:14:03  5.1s  1.4 kt ok · 1 handled failure   │
+│    ✓ demo.yml config-h1.json 14:13:57  5.0s  1.3 kt ok · 1 handled failure   │
+│    ✓ demo.yml config.json    12:50:47  5.1s  1.4 kt ok · 1 handled failure   │
 │    ✗ demo.yml config.json    12:48:49  0.0s   215 t failed · tests           │
 │                                                                              │
 │ Start One                                                                    │
