@@ -342,7 +342,11 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
 
     // nord -> solarized-dark, on the Store.
     send_bytes(&mut master, b"T");
-    wait_for_screen_text(&captured_buf, "theme: solarized-dark", Duration::from_secs(10));
+    wait_for_screen_text(
+        &captured_buf,
+        "theme: solarized-dark",
+        Duration::from_secs(10),
+    );
 
     // esc back to Select: solarized-dark must still be the theme.
     send_bytes(&mut master, b"\x1b");
