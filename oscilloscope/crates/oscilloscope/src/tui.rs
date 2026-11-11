@@ -2428,7 +2428,10 @@ fn focused_attempts_lines(
         Some(n) => format!("Attempts · {n} retried"),
         None => "Attempts".to_string(),
     };
-    let mut lines = vec![Line::from(""), detail_section_rule(&title, width, title_bold)];
+    let mut lines = vec![
+        Line::from(""),
+        detail_section_rule(&title, width, title_bold),
+    ];
     for (i, attempt) in step.attempts.iter().enumerate() {
         let mut text = format!("{}. ", i + 1);
         let mut parts = Vec::new();
@@ -2475,74 +2478,88 @@ fn focused_attempts_lines(
 /// selected_step_lines`'s own `asked` match), but the Tape's own
 /// detail pane never had an Asked section for anything but a
 /// prompt's own "Prompt Sent" at all.
-fn focused_tool_asked_lines(
+fn tool_detail_fields(
     step: &oscilloscope_core::screens::FocusedStep,
-    width: usize,
     ctx: &DrawCtx,
-) -> Vec<Line<'static>> {
+) -> DetailFields {
     use oscilloscope_core::screens::FocusDetail;
     let FocusDetail::Tool {
-        command: Some(command),
-        ..
+        command, exit_code, ..
     } = &step.detail
     else {
         return Vec::new();
     };
     let default = Style::default().fg(ctx.theme.text);
-    let title_bold = Style::default()
-        .fg(ctx.theme.text)
-        .add_modifier(Modifier::BOLD);
-    let mut lines = vec![Line::from(""), detail_section_rule("Asked", width, title_bold)];
-    for line in tape_word_wrap(command, width.saturating_sub(1)) {
-        lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+    let mut fields = Vec::new();
+    if let Some(command) = command {
+        fields.push(("Command", vec![Span::styled(command.clone(), default)]));
     }
-    lines
+    if let Some(code) = exit_code {
+        let style = if *code == 0 {
+            Style::default().fg(ctx.theme.status_done)
+        } else {
+            Style::default().fg(ctx.theme.status_failed)
+        };
+        fields.push(("Exit", vec![Span::styled(code.to_string(), style)]));
+    }
+    fields
 }
 
-/// Issue #704 rule 4's own Tool section, shared by every screen: the
-/// exit code and full stdout/stderr -- the command line itself is
-/// each screen's own Asked section already, never repeated here.
-fn focused_tool_lines(
+/// Issue #716: a running tool's own elapsed time against its usual
+/// busy time from history ("1m54s · usual 30.2s") -- appended to the
+/// Status field's own value, `None` once the step has finished (its
+/// own real duration already said everything worth saying) or
+/// without the 3-run threshold history needs.
+fn tool_usual_busy_suffix(step: &oscilloscope_core::screens::FocusedStep) -> Option<String> {
+    use oscilloscope_core::model::StatusKind;
+    if !matches!(
+        step.detail,
+        oscilloscope_core::screens::FocusDetail::Tool { .. }
+    ) {
+        return None;
+    }
+    let running = matches!(
+        step.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
+    if !running {
+        return None;
+    }
+    step.usual_busy_p50_s
+        .map(|s| format!("usual {}", oscilloscope_core::format::format_duration(s)))
+}
+
+/// Issue #704 rule 4's own Tool section, shared by every screen,
+/// renamed and reshaped by issue #716: the command and exit code are
+/// now fields in the pane's own aligned column
+/// ([`tool_detail_fields`]); this is only the full stdout and
+/// stderr, each the run's own last 20 lines, under its own titled
+/// rule -- a running tool has neither yet, since neither engine
+/// publishes one before the tool finishes.
+fn tool_output_sections(
     step: &oscilloscope_core::screens::FocusedStep,
     width: usize,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
-    let FocusDetail::Tool {
-        exit_code,
-        stdout,
-        stderr,
-        ..
-    } = &step.detail
-    else {
+    let FocusDetail::Tool { stdout, stderr, .. } = &step.detail else {
         return Vec::new();
     };
-    if exit_code.is_none() && stdout.is_none() && stderr.is_none() {
-        return Vec::new();
-    }
-    let muted = Style::default().fg(ctx.theme.fg_muted);
     let default = Style::default().fg(ctx.theme.text);
     let title_bold = Style::default()
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
-    let mut lines = vec![Line::from(""), detail_section_rule("Tool", width, title_bold)];
-    if let Some(code) = exit_code {
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("exit ", muted),
-                Span::styled(code.to_string(), default),
-            ],
-            width,
-        ));
-    }
+    let mut lines = Vec::new();
     if let Some(stdout) = stdout {
-        lines.push(tape_detail_line(vec![Span::styled("stdout", muted)], width));
+        lines.push(Line::from(""));
+        lines.push(detail_section_rule("Output", width, title_bold));
         for line in tape_word_wrap(stdout, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
     }
     if let Some(stderr) = stderr {
-        lines.push(tape_detail_line(vec![Span::styled("stderr", muted)], width));
+        lines.push(Line::from(""));
+        lines.push(detail_section_rule("Errors", width, title_bold));
         for line in tape_word_wrap(stderr, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
@@ -2568,7 +2585,10 @@ fn focused_decision_lines(
     let title_bold = Style::default()
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
-    let mut lines = vec![Line::from(""), detail_section_rule("Decision", width, title_bold)];
+    let mut lines = vec![
+        Line::from(""),
+        detail_section_rule("Decision", width, title_bold),
+    ];
     if let Some(condition) = &decision.condition {
         for line in tape_word_wrap(&condition.text, width.saturating_sub("condition ".len())) {
             lines.push(tape_detail_line(
@@ -2629,7 +2649,10 @@ fn focused_loop_lines(
     let title_bold = Style::default()
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
-    let mut lines = vec![Line::from(""), detail_section_rule("Loop", width, title_bold)];
+    let mut lines = vec![
+        Line::from(""),
+        detail_section_rule("Loop", width, title_bold),
+    ];
     for pass in passes {
         let (glyph, word, glyph_style) = tape_status_glyph_word_style(pass.status.kind, ctx.theme);
         let tokens_text = pass
@@ -2699,7 +2722,10 @@ fn focused_meta_lines(
     } else {
         format!("Meta · {} keys · m to unfold", step.meta_extra.len())
     };
-    let mut lines = vec![Line::from(""), detail_section_rule(&title, width, title_bold)];
+    let mut lines = vec![
+        Line::from(""),
+        detail_section_rule(&title, width, title_bold),
+    ];
     if unfolded {
         for (key, value) in &step.meta_extra {
             for (i, line) in tape_word_wrap(value, width.saturating_sub(key.len() + 2))
@@ -2729,6 +2755,11 @@ fn focused_meta_lines(
 /// foreground; the dim modifier, not a colour, is what actually
 /// tells them apart there, so every theme gets it, not only
 /// `terminal`.
+/// A detail pane's own field pairs (D1): a key, right-aligned to
+/// whichever other keys share its column, and the value spans
+/// `wrap_detail_value` wraps under it.
+type DetailFields = Vec<(&'static str, Vec<Span<'static>>)>;
+
 fn detail_key_style(ctx: &DrawCtx) -> Style {
     Style::default()
         .fg(ctx.theme.fg_muted)
@@ -2770,10 +2801,12 @@ fn wrap_detail_value(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'s
         return vec![Vec::new()];
     }
     if width == 0 {
-        return vec![words
-            .into_iter()
-            .map(|(text, style)| Span::styled(text, style))
-            .collect()];
+        return vec![
+            words
+                .into_iter()
+                .map(|(text, style)| Span::styled(text, style))
+                .collect(),
+        ];
     }
     let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
     let mut current: Vec<Span<'static>> = Vec::new();
@@ -2818,12 +2851,16 @@ fn wrap_detail_value(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'s
 /// widest key actually present in `fields`, followed by exactly two
 /// spaces (D1); a value wraps under its own column with a hanging
 /// indent of the same width.
-fn detail_field_key_width(fields: &[(&str, Vec<Span<'static>>)]) -> usize {
-    fields.iter().map(|(k, _)| k.chars().count()).max().unwrap_or(0)
+fn detail_field_key_width(fields: &[(&'static str, Vec<Span<'static>>)]) -> usize {
+    fields
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0)
 }
 
 fn detail_field_lines(
-    fields: &[(&str, Vec<Span<'static>>)],
+    fields: &[(&'static str, Vec<Span<'static>>)],
     key_width: usize,
     width: usize,
     ctx: &DrawCtx,
@@ -2879,6 +2916,247 @@ fn tape_detail_scroll_follow(
     (scroll, bottom)
 }
 
+#[cfg(test)]
+mod detail_renderer_tests {
+    use super::*;
+    use crate::theme::ThemeName;
+
+    fn ctx<'a>(theme: &'a Theme, zone: &'a chrono::FixedOffset) -> DrawCtx<'a> {
+        DrawCtx {
+            theme,
+            theme_banner: None,
+            zone,
+            no_animation: true,
+        }
+    }
+
+    /// Issue #716 ruling D1: keys right-aligned to the widest one
+    /// present, followed by exactly two spaces, a value wrapping
+    /// under its own column with a hanging indent.
+    #[test]
+    fn detail_field_lines_right_aligns_keys_and_wraps_values_with_a_hanging_indent() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let c = ctx(&theme, &zone);
+        let default = Style::default().fg(theme.text);
+        let fields: DetailFields = vec![
+            ("Status", vec![Span::styled("Done", default)]),
+            (
+                "Type",
+                vec![Span::styled(
+                    "a value long enough to wrap under its own column",
+                    default,
+                )],
+            ),
+        ];
+        let key_width = detail_field_key_width(&fields);
+        assert_eq!(key_width, "Status".len());
+        let lines = detail_field_lines(&fields, key_width, 30, &c);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[0].trim_end(), "Status  Done");
+        assert!(text[1].starts_with("  Type  "), "{:?}", text[1]);
+        // The wrapped continuation line hangs under the value
+        // column, not under the key.
+        assert!(text[2].starts_with("        "), "{:?}", text[2]);
+        assert!(!text[2].trim_start().is_empty());
+    }
+
+    /// A value wider than the pane still wraps (hard-cut), rather
+    /// than running off it.
+    #[test]
+    fn wrap_detail_value_hard_cuts_a_word_wider_than_the_pane() {
+        let default = Style::default();
+        let spans = vec![Span::styled("supercalifragilisticexpialidocious", default)];
+        let wrapped = wrap_detail_value(spans, 10);
+        assert!(wrapped.len() > 1, "{wrapped:?}");
+        for line in &wrapped {
+            let len: usize = line.iter().map(|s| s.content.chars().count()).sum();
+            assert!(len <= 10, "{line:?}");
+        }
+    }
+
+    /// Issue #716 ruling D1: a section's own titled rule fills the
+    /// width with dashes, in the panel-title style end to end.
+    #[test]
+    fn detail_section_rule_fills_the_width_with_dashes_in_the_title_style() {
+        let title_style = Style::default().add_modifier(Modifier::BOLD);
+        let line = detail_section_rule("Reply · 41 t", 30, title_style);
+        let text = line.to_string();
+        assert_eq!(text.chars().count(), 30);
+        assert!(text.starts_with("── Reply · 41 t ─"), "{text}");
+        assert!(line.spans.iter().all(|s| s.style == title_style));
+    }
+
+    /// Issue #716 ruling D2: the key style differs from the value
+    /// style in every theme, including `terminal`, where `fg_muted`
+    /// alone would read the same as the default foreground.
+    #[test]
+    fn detail_key_style_differs_from_the_value_style_in_every_theme() {
+        use clap::ValueEnum;
+        let value_style = Style::default().fg(Color::Reset);
+        let zone = test_zone();
+        for name in ThemeName::value_variants() {
+            let theme = Theme::for_name(*name);
+            let key_style = detail_key_style(&ctx(&theme, &zone));
+            assert_ne!(
+                key_style,
+                Style::default().fg(theme.text),
+                "{name:?}: the key style must differ from the default text style"
+            );
+            assert_ne!(key_style, value_style, "{name:?}");
+        }
+    }
+
+    /// Issue #716 ruling D3: scroll clamping, resetting on a fresh
+    /// selection (`usize::MAX`, D3's own "never already at the
+    /// bottom") and following a live step's growing content only
+    /// while the pane was already scrolled to the bottom.
+    #[test]
+    fn tape_detail_scroll_follow_clamps_resets_and_follows_only_from_the_bottom() {
+        // A fresh selection's own `details_scroll = 0` never reads as
+        // already at the bottom against `tape_detail_bottom`'s own
+        // `usize::MAX` reset -- it stays at the top even though the
+        // content overflows the viewport.
+        let (scroll, bottom) = tape_detail_scroll_follow(0, usize::MAX, 50, 10);
+        assert_eq!((scroll, bottom), (0, 40));
+        // Jumping to the end (`usize::MAX`, the same sentinel `End`/
+        // `G` already use) lands on the real bottom.
+        let (scroll, bottom) = tape_detail_scroll_follow(usize::MAX, bottom, 50, 10);
+        assert_eq!((scroll, bottom), (40, 40));
+        // Already at the bottom, and the content grows: the pane
+        // follows it to the new bottom.
+        let (scroll, bottom) = tape_detail_scroll_follow(scroll, bottom, 60, 10);
+        assert_eq!((scroll, bottom), (50, 50));
+        // A manual scroll up and away from the bottom...
+        let scroll = scroll - 1;
+        // ... stops the pane from following further growth.
+        let (scroll, bottom) = tape_detail_scroll_follow(scroll, bottom, 70, 10);
+        assert_eq!((scroll, bottom), (49, 60));
+    }
+
+    fn long_reply_tape_screen() -> oscilloscope_core::screens::TapeScreen {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{
+            FocusDetail, FocusedStep, TapeHead, TapeScreen, TapeSelectedDetail,
+        };
+        let step = FocusedStep {
+            path: "prime.ask".to_string(),
+            breadcrumb: "ask".to_string(),
+            kind_label: "prompt",
+            provider_or_model: None,
+            since_ts: None,
+            finished_ts: Some("2026-01-01T00:00:05Z".to_string()),
+            elapsed_s: Some(5.0),
+            detail: FocusDetail::Plain,
+            status: RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: Vec::new(),
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+            usual_busy_count: None,
+            description: None,
+        };
+        TapeScreen {
+            unit: 50,
+            items: Vec::new(),
+            done: 0,
+            running: 0,
+            ahead: 0,
+            head: TapeHead::Normal,
+            selected_breadcrumb: Some(step.breadcrumb.clone()),
+            selected: Some(step),
+            selected_usual: None,
+            selected_share_pct: None,
+            selected_detail: Some(TapeSelectedDetail {
+                reply: Some(
+                    (1..=40)
+                        .map(|n| format!("Line {n} of the reply."))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                reply_tokens: Some(200),
+                ..Default::default()
+            }),
+            starting_detail: None,
+            ended_detail: None,
+            failed_detail: None,
+            usual_so_far_tokens: None,
+        }
+    }
+
+    /// Issue #716 ruling D3: the pane's own bottom border reads `↓ n
+    /// more` once its content overflows it, `Tab` gives it the
+    /// accent border, and scrolling it down (the list selection
+    /// untouched) makes the top border read `↑ n above`.
+    #[test]
+    fn draw_tape_detail_shows_the_overflow_borders_once_focused_and_scrolled() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let screen = long_reply_tape_screen();
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.ask".to_string());
+        let backend = ratatui::backend::TestBackend::new(60, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_tape_detail(
+                    f,
+                    f.area(),
+                    &screen,
+                    &mut app,
+                    None,
+                    "2026-01-01T00:00:05Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let unfocused = terminal.backend().to_string();
+        assert!(unfocused.contains("↓"), "{unfocused}");
+        assert!(unfocused.contains("more"), "{unfocused}");
+        assert!(!unfocused.contains("above"), "{unfocused}");
+
+        app.pane = Pane::Details;
+        app.details_scroll = 3;
+        terminal
+            .draw(|f| {
+                draw_tape_detail(
+                    f,
+                    f.area(),
+                    &screen,
+                    &mut app,
+                    None,
+                    "2026-01-01T00:00:05Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let focused = terminal.backend().to_string();
+        assert!(focused.contains("above"), "{focused}");
+        assert_eq!(app.selected_path.as_deref(), Some("prime.ask"));
+    }
+}
+
 /// The Normal/Usual states' own detail pane (§2.1): the selected
 /// row's own description in full, then its Status, Type, Tokens,
 /// Usual, Share, then the prompt sent and the reply in full, each
@@ -2921,7 +3199,7 @@ fn tape_normal_detail_lines(
         lines.push(Line::from(""));
     }
 
-    let mut fields: Vec<(&'static str, Vec<Span<'static>>)> = Vec::new();
+    let mut fields: DetailFields = Vec::new();
 
     let (glyph, word, glyph_style) = tape_status_glyph_word_style(step.status.kind, ctx.theme);
     let finished_clock = detail
@@ -2938,6 +3216,12 @@ fn tape_normal_detail_lines(
         }
         status_value.push_str(&clock);
     }
+    if let Some(usual_busy) = tool_usual_busy_suffix(step) {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(&usual_busy);
+    }
     fields.push((
         "Status",
         vec![
@@ -2951,6 +3235,10 @@ fn tape_normal_detail_lines(
         None => step.kind_label.to_string(),
     };
     fields.push(("Type", vec![Span::styled(type_text, default)]));
+    // Issue #716: a tool step's own Command and (once finished) Exit
+    // fields, right after Type -- a shell step shows what it does,
+    // not only that it ran.
+    fields.extend(tool_detail_fields(step, ctx));
 
     // Issue #675's Live block: a running prompt shows its own live
     // figures here, in place of the Tokens line below (never both --
@@ -3007,7 +3295,10 @@ fn tape_normal_detail_lines(
         if live.attempt.is_some_and(|a| a > 0) {
             fields.push((
                 "Attempt",
-                vec![Span::styled(format!("{}", live.attempt.unwrap() + 1), default)],
+                vec![Span::styled(
+                    format!("{}", live.attempt.unwrap() + 1),
+                    default,
+                )],
             ));
         }
     }
@@ -3071,7 +3362,10 @@ fn tape_normal_detail_lines(
     // are already `None` for a non-prompt row, so they never draw
     // here.
     let mut context_bar = None;
-    if matches!(step.detail, oscilloscope_core::screens::FocusDetail::Agent { .. }) {
+    if matches!(
+        step.detail,
+        oscilloscope_core::screens::FocusDetail::Agent { .. }
+    ) {
         let (agent_fields, bar) = agent_detail_fields(step, transcript_view, ctx);
         fields.extend(agent_fields);
         context_bar = bar;
@@ -3091,7 +3385,12 @@ fn tape_normal_detail_lines(
                 ],
                 width,
             ));
-            lines.extend(detail_field_lines(&fields[idx + 1..], key_width, width, ctx));
+            lines.extend(detail_field_lines(
+                &fields[idx + 1..],
+                key_width,
+                width,
+                ctx,
+            ));
         }
         _ => lines.extend(detail_field_lines(&fields, key_width, width, ctx)),
     }
@@ -3141,7 +3440,10 @@ fn tape_normal_detail_lines(
         // print a bogus `0 t`.
         let title = match detail.prompt_sent_tokens {
             Some(tokens) => {
-                format!("Prompt Sent · {}", oscilloscope_core::format::format_tokens(tokens))
+                format!(
+                    "Prompt Sent · {}",
+                    oscilloscope_core::format::format_tokens(tokens)
+                )
             }
             None => "Prompt Sent".to_string(),
         };
@@ -3189,9 +3491,8 @@ fn tape_normal_detail_lines(
             ));
         }
     }
-    lines.extend(focused_tool_asked_lines(step, width, ctx));
     lines.extend(focused_attempts_lines(step, width, ctx));
-    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(tool_output_sections(step, width, ctx));
     lines.extend(focused_decision_lines(step, width, ctx));
     lines.extend(focused_loop_lines(step, width, ctx));
     lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
@@ -8118,6 +8419,12 @@ fn focused_step_full_lines(
             status_value.push_str(end);
         }
     }
+    if let Some(usual_busy) = tool_usual_busy_suffix(step) {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(&usual_busy);
+    }
     let mut lines = Vec::new();
     // Issue #716: the step's own `description:` in full, ahead of
     // the Status field below -- `None` for a step with none set.
@@ -8127,22 +8434,21 @@ fn focused_step_full_lines(
         }
         lines.push(Line::from(""));
     }
-    lines.extend(detail_field_lines(
-        &[(
-            "Status",
-            vec![
-                Span::styled(format!("{glyph} {word} "), glyph_style),
-                Span::styled(status_value, default),
-            ],
-        )],
-        "Status".len(),
-        width,
-        ctx,
-    ));
+    let mut top_fields = vec![(
+        "Status",
+        vec![
+            Span::styled(format!("{glyph} {word} "), glyph_style),
+            Span::styled(status_value, default),
+        ],
+    )];
+    // Issue #716: a tool step's own Command and (once finished) Exit
+    // fields, right after Status.
+    top_fields.extend(tool_detail_fields(step, ctx));
+    let top_key_width = detail_field_key_width(&top_fields);
+    lines.extend(detail_field_lines(&top_fields, top_key_width, width, ctx));
 
     let asked = match &step.detail {
         FocusDetail::Prompt { .. } => step.prompt_sent_full.clone(),
-        FocusDetail::Tool { command, .. } => command.clone(),
         _ => None,
     };
     if asked.is_some() || step.params_rendered_full.is_some() {
@@ -8186,7 +8492,10 @@ fn focused_step_full_lines(
             lines.push(Line::from(""));
             let title = match received.tokens {
                 Some(tokens) => {
-                    format!("Produced · {}", oscilloscope_core::format::format_tokens(tokens))
+                    format!(
+                        "Produced · {}",
+                        oscilloscope_core::format::format_tokens(tokens)
+                    )
                 }
                 None => "Produced".to_string(),
             };
@@ -8212,7 +8521,7 @@ fn focused_step_full_lines(
     // the whole Agent block's own fields (Asked/Turn/.../Said/Cost)
     // share one right-aligned column -- the same merge `tape_normal_
     // detail_lines` does, since both panes use the same renderer.
-    let mut fields: Vec<(&'static str, Vec<Span<'static>>)> = Vec::new();
+    let mut fields: DetailFields = Vec::new();
     if step.tokens.is_some() || step.usual_tokens.is_some() {
         let mut spans = Vec::new();
         if let Some(total) = step.tokens {
@@ -8253,7 +8562,10 @@ fn focused_step_full_lines(
     if !fields.is_empty() {
         lines.push(Line::from(""));
         let key_width = detail_field_key_width(&fields);
-        match (context_bar, fields.iter().position(|(k, _)| *k == "Context")) {
+        match (
+            context_bar,
+            fields.iter().position(|(k, _)| *k == "Context"),
+        ) {
             (Some((tokens, window)), Some(idx)) => {
                 lines.extend(detail_field_lines(&fields[..=idx], key_width, width, ctx));
                 lines.push(tape_detail_line(
@@ -8263,7 +8575,12 @@ fn focused_step_full_lines(
                     ],
                     width,
                 ));
-                lines.extend(detail_field_lines(&fields[idx + 1..], key_width, width, ctx));
+                lines.extend(detail_field_lines(
+                    &fields[idx + 1..],
+                    key_width,
+                    width,
+                    ctx,
+                ));
             }
             _ => lines.extend(detail_field_lines(&fields, key_width, width, ctx)),
         }
@@ -8331,7 +8648,7 @@ fn focused_step_full_lines(
     }
 
     lines.extend(focused_attempts_lines(step, width, ctx));
-    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(tool_output_sections(step, width, ctx));
     lines.extend(focused_decision_lines(step, width, ctx));
     lines.extend(focused_loop_lines(step, width, ctx));
     lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
@@ -8382,10 +8699,7 @@ fn agent_block_lines(
     let (fields, context_bar) = agent_detail_fields(step, transcript_view, ctx);
     let mut lines = Vec::new();
     for (key, value) in &fields {
-        let text = value
-            .iter()
-            .map(|s| s.content.as_ref())
-            .collect::<String>();
+        let text = value.iter().map(|s| s.content.as_ref()).collect::<String>();
         lines.push(agent_field_line(key, text, muted, default));
         if *key == "Context" {
             if let Some((tokens, window)) = context_bar {
@@ -8429,7 +8743,7 @@ fn agent_detail_fields(
     step: &oscilloscope_core::screens::FocusedStep,
     transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
     ctx: &DrawCtx,
-) -> (Vec<(&'static str, Vec<Span<'static>>)>, Option<(u64, u64)>) {
+) -> (DetailFields, Option<(u64, u64)>) {
     use oscilloscope_core::format::{format_duration, format_tokens_k};
     use oscilloscope_core::screens::FocusDetail;
     let FocusDetail::Agent {
@@ -8450,7 +8764,7 @@ fn agent_detail_fields(
         return (Vec::new(), None);
     };
     let default = Style::default().fg(ctx.theme.text);
-    let mut fields: Vec<(&'static str, Vec<Span<'static>>)> = Vec::new();
+    let mut fields: DetailFields = Vec::new();
 
     if let Some(asked) = asked {
         fields.push(("Asked", vec![Span::styled(asked.clone(), default)]));
@@ -10705,6 +11019,13 @@ fn flow_selected_step_lines(
                 }
             }
         }
+        if let FocusDetail::Tool {
+            exit_code: Some(code),
+            ..
+        } = &step.detail
+        {
+            produced.push(Line::from(format!("exit {code}")));
+        }
         if let Some(tokens) = step.tokens {
             produced.push(Line::from(format!(
                 "tokens {}",
@@ -10733,7 +11054,7 @@ fn flow_selected_step_lines(
     // tool's own command and value, so only the data they don't
     // reach is new here.
     lines.extend(focused_attempts_lines(step, content_width, ctx));
-    lines.extend(focused_tool_lines(step, content_width, ctx));
+    lines.extend(tool_output_sections(step, content_width, ctx));
     lines.extend(focused_decision_lines(step, content_width, ctx));
     lines.extend(focused_loop_lines(step, content_width, ctx));
     lines.extend(focused_meta_lines(step, content_width, ctx, meta_unfolded));
@@ -13537,8 +13858,182 @@ mod golden_tests {
             meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
+            usual_busy_count: None,
             description: None,
         }
+    }
+
+    /// Issue #716: a shell tool step's own `FocusedStep`, running or
+    /// finished -- every field this module's own tests don't read
+    /// stays at a value that would otherwise never show (`None`/
+    /// empty), the same convention `agent_focused_step` already
+    /// uses.
+    fn tool_focused_step(running: bool) -> oscilloscope_core::screens::FocusedStep {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{FocusDetail, FocusedStep};
+        FocusedStep {
+            path: "prime.build".to_string(),
+            breadcrumb: "build".to_string(),
+            kind_label: "tool",
+            provider_or_model: Some("shell".to_string()),
+            since_ts: None,
+            finished_ts: (!running).then(|| "2026-01-01T00:02:00Z".to_string()),
+            elapsed_s: Some(114.0),
+            detail: FocusDetail::Tool {
+                command: Some("make build --release".to_string()),
+                exit_code: (!running).then_some(0),
+                stdout: (!running).then(|| "compiling\nlinking\ndone".to_string()),
+                stderr: None,
+            },
+            status: RowStatus {
+                kind: if running {
+                    StatusKind::Running
+                } else {
+                    StatusKind::Done
+                },
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: Vec::new(),
+            usual_busy_p50_s: running.then_some(30.2),
+            usual_busy_p90_s: None,
+            usual_busy_count: running.then_some(5),
+            description: None,
+        }
+    }
+
+    /// `tool_focused_step`'s own minimal [`oscilloscope_core::
+    /// screens::TapeScreen`], with it selected -- every field `tape_
+    /// normal_detail_lines` doesn't read stays empty/`None`.
+    fn tool_tape_screen(
+        step: oscilloscope_core::screens::FocusedStep,
+    ) -> oscilloscope_core::screens::TapeScreen {
+        use oscilloscope_core::screens::{TapeHead, TapeScreen, TapeSelectedDetail};
+        TapeScreen {
+            unit: 50,
+            items: Vec::new(),
+            done: 0,
+            running: 0,
+            ahead: 0,
+            head: TapeHead::Normal,
+            selected_breadcrumb: Some(step.breadcrumb.clone()),
+            selected: Some(step),
+            selected_usual: None,
+            selected_share_pct: None,
+            selected_detail: Some(TapeSelectedDetail::default()),
+            starting_detail: None,
+            ended_detail: None,
+            failed_detail: None,
+            usual_so_far_tokens: None,
+        }
+    }
+
+    /// Issue #716: a running shell step's own detail pane shows its
+    /// full command and its elapsed time against its usual busy
+    /// time, but nothing of its output yet -- neither engine
+    /// publishes one before the tool finishes.
+    #[test]
+    fn tool_detail_pane_shows_the_command_and_usual_busy_time_while_running() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let screen = tool_tape_screen(tool_focused_step(true));
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Command"), "{text}");
+        assert!(text.contains("make build --release"), "{text}");
+        assert!(text.contains("1m54s"), "{text}");
+        assert!(text.contains("usual 30.2s"), "{text}");
+        assert!(!text.contains("Exit"), "{text}");
+        assert!(!text.contains("Output"), "{text}");
+        assert!(!text.contains("compiling"), "{text}");
+    }
+
+    /// Issue #716: a finished shell step's own detail pane adds its
+    /// exit code and an `── Output ───` section with its stdout.
+    #[test]
+    fn tool_detail_pane_shows_the_exit_code_and_output_once_finished() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let screen = tool_tape_screen(tool_focused_step(false));
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:02:30Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Command"), "{text}");
+        assert!(text.contains("make build --release"), "{text}");
+        assert!(text.contains("Exit"), "{text}");
+        assert!(text.contains("── Output"), "{text}",);
+        assert!(text.contains("compiling"), "{text}");
+        assert!(text.contains("linking"), "{text}");
+        assert!(!text.contains("usual"), "{text}");
+    }
+
+    /// Issue #716: the selected effect's own `description:` comes
+    /// first, wrapped in full, ahead of every field.
+    #[test]
+    fn tape_normal_detail_lines_shows_the_description_first() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut screen = tool_tape_screen(tool_focused_step(true));
+        screen.selected_detail = Some(oscilloscope_core::screens::TapeSelectedDetail {
+            description: Some("Builds the release binary.".to_string()),
+            ..Default::default()
+        });
+        let lines =
+            tape_normal_detail_lines(&screen, 80, 40, None, "2026-01-01T00:01:54Z", false, &ctx);
+        let first_text = lines[0].to_string();
+        assert!(
+            first_text
+                .trim_start()
+                .starts_with("Builds the release binary."),
+            "{first_text}"
+        );
+        let text = agent_block_lines_text(&lines);
+        let description_pos = text.find("Builds the release binary.").unwrap();
+        let status_pos = text.find("Status").unwrap();
+        assert!(description_pos < status_pos, "{text}");
     }
 
     /// Issue #703's rules 1/2: a running or finished agent row's
@@ -14041,6 +14536,7 @@ mod golden_tests {
             meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
+            usual_busy_count: None,
             description: None,
         };
         let text = agent_block_lines_text(&focused_step_full_lines(
@@ -14116,7 +14612,7 @@ mod golden_tests {
             false,
             &ctx,
         ));
-        assert!(text.contains("Asked"), "{text}");
+        assert!(text.contains("Command"), "{text}");
         let oscilloscope_core::screens::FocusDetail::Tool {
             command: Some(command),
             ..
@@ -14356,6 +14852,7 @@ mod golden_tests {
                 .collect(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
+            usual_busy_count: None,
             description: None,
         };
         let mut app = crate::keys::App::new(false);
