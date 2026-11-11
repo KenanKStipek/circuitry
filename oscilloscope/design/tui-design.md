@@ -86,8 +86,9 @@ on (`p`). The **Now band**, `━━ Now 12:50:50 · 3.6s ━━`, a full-width r
 rows, bold, with how long they have run. A second rule while a loop runs: `━━ 2 of 2 Slots Busy · 1 Pass Queued ━━`.
 Then the rows ahead, faint, with their type first (`prompt · queued`, `tool · sleep 1 · queued`) and
 `usually 155 t` in the token column when history knows the step. `■ Run End` closes the list with the usual total
-and duration, and the ETA in the token column. The list keeps the Now band in view as it grows: finished rows
-scroll up and away, rows ahead come up to meet it.
+and duration, and the ETA in the token column. The Now area's own middle row sits on the list's own middle row:
+finished rows fill upward from it, newest closest, the oldest scrolling off the top; rows ahead fill downward, the
+latest scrolling off the bottom; blank above when the past is short, blank below when the plan is short.
 
 **Token column** (16 cells). `▰▰▰▰▱▱▱▱   215 t`: eight bar cells at a fixed 50 tokens each, then the count,
 thousands separated, `t` as the unit. The largest step so far has the only bold number. A loop row shows a

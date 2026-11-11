@@ -283,9 +283,9 @@ shipped of it.
 
 One time axis: finished rows in the order they finished, each
 prompt followed by its own faint preview line when previews are on
-(`p`); the Now band, holding its place as the list grows; the rows
-currently running, bold, with how long they've run; a slots rule while
-a loop is dispatching passes concurrently; the rows still ahead, faint,
+(`p`); the Now band; the rows currently running, bold, with how long
+they've run; a slots rule while a loop is dispatching passes
+concurrently; the rows still ahead, faint,
 with what they'll do and (once there are three or more finished runs of
 the same document) `usually N t` from history; Run End. Every row's
 token column is a fixed-scale bar (`▰ = 50 t`, or finer once a run's
@@ -295,7 +295,13 @@ selected row's status, type, tokens, its usual tokens and how this run
 compares, its share of the run's tokens so far, and the prompt sent and
 the reply in full; `enter` opens the same content full-screen. A
 Totals row (tokens, the run's own deviation from usual, effects done,
-ETA, cost) is pinned above the list's own bottom border.
+ETA, cost) is pinned above the list's own bottom border. While the
+run is starting or live, the Now area sits at the list's own vertical
+middle, finished rows above it and the plan below, each padded with
+blank rows when its own side is short; moving the selection off Now
+scrolls only as far as the selection needs, and following Now again
+re-centres it. Once the run has ended or failed, the list fills from
+the top as before.
 
 A running prompt's own row reads its own live figures while a
 streaming adapter answers, elapsed time and (on a retry) attempt
