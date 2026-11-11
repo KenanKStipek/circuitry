@@ -475,6 +475,12 @@ pub struct Differ {
     /// whether or not the event has arrived by then (it hasn't, or
     /// `report_paths` would already have made it `report_only` above).
     held_once: BTreeSet<String>,
+    /// The run id a `run_start` event announced, kept only so
+    /// [`Differ::finish`] can name the run in the exit summary
+    /// (issue #717) the same way the `■ run started` line already
+    /// does -- `diff_event`'s own `Event::RunStart` arm is the only
+    /// thing that ever sets it.
+    run_id: Option<String>,
 }
 
 impl Differ {
@@ -490,6 +496,7 @@ impl Differ {
             pending_ends: Vec::new(),
             report_paths: BTreeSet::new(),
             held_once: BTreeSet::new(),
+            run_id: None,
         }
     }
 
@@ -770,12 +777,18 @@ impl Differ {
                     path: Some(path.clone()),
                 }]
             }
-            Event::RunStart { ts, run_id, .. } => vec![LogLine {
-                ts: Some(ts.clone()),
-                text: format!("■ run started  {run_id}"),
-                kind: LogKind::RunStart,
-                path: None,
-            }],
+            Event::RunStart { ts, run_id, .. } => {
+                self.run_id = Some(run_id.clone());
+                vec![LogLine {
+                    ts: Some(ts.clone()),
+                    text: format!(
+                        "■ run started  {}  {run_id}",
+                        crate::names::run_name(run_id)
+                    ),
+                    kind: LogKind::RunStart,
+                    path: None,
+                }]
+            }
             Event::RunEnd { .. } => Vec::new(),
             _ => Vec::new(),
         }
@@ -847,9 +860,14 @@ impl Differ {
             .pointer("/runtime/last_run/completed_at")
             .and_then(Value::as_str)
             .map(str::to_string);
+        let name_prefix = self
+            .run_id
+            .as_deref()
+            .map(|id| format!("{}  ", crate::names::run_name(id)))
+            .unwrap_or_default();
         Some(LogLine {
             ts: run_ts,
-            text: format!("■ run {status_text}{totals_text}"),
+            text: format!("■ run {name_prefix}{status_text}{totals_text}"),
             kind: LogKind::RunEnd,
             path: None,
         })
@@ -1282,7 +1300,7 @@ mod tests {
             lines,
             vec![LogLine {
                 ts: Some("t".to_string()),
-                text: "■ run started  abc123".to_string(),
+                text: "■ run started  modest-fern  abc123".to_string(),
                 kind: LogKind::RunStart,
                 path: None,
             }]

@@ -275,8 +275,13 @@ fn assert_story_has_run_start_decision_and_run_end(screen: &FlowScreen, case: &s
         texts.iter().any(|t| t.contains(&decision_text)),
         "{case}: no decision line in the story: {texts:?}"
     );
+    // Issue #717: the exit summary now carries the run's own name
+    // between "run" and "ok" (`■ run swift-jasper  ok  0.0s`), so this
+    // checks for both words rather than the literal "run ok".
     assert!(
-        texts.iter().any(|t| t.contains("run ok")),
+        texts
+            .iter()
+            .any(|t| t.contains("■ run ") && t.contains("ok  ")),
         "{case}: no run-end line in the story: {texts:?}"
     );
 }

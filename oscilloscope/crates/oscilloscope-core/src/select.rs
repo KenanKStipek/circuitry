@@ -31,6 +31,11 @@ pub enum Row {
         /// all -- the running list's own row shows `—` for it
         /// (`tui.rs`'s own `select_row_spans`), never blank.
         config_label: Option<String>,
+        /// This run's own short name (issue #717), already
+        /// disambiguated against every other row on this same
+        /// screen -- `None` for a run whose `run_start` hasn't
+        /// arrived yet.
+        name: Option<String>,
     },
 }
 
@@ -90,6 +95,8 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
         .map(|r| r.config.as_deref().map(basename))
         .collect();
     let document_labels = disambiguated_document_labels(runs, &config_labels);
+    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
+    let names = crate::names::disambiguated_names(&run_ids);
 
     let mut rows = Vec::with_capacity(runs.len() + 1);
     rows.push(Row::All {
@@ -100,6 +107,7 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
             run: Box::new(run.clone()),
             document_label: document_labels[i].clone(),
             config_label: config_labels[i].clone(),
+            name: names[i].clone(),
         });
     }
     rows
@@ -205,6 +213,11 @@ pub struct RecentRow {
     /// record's own `run_dir` no longer exists on disk.
     pub outcome_label: String,
     pub run_dir: Option<String>,
+    /// This run's own short name (issue #717), the same name it had
+    /// while running, derived from `run_id` (every [`HistoryRecord`]
+    /// has one) -- already disambiguated against every other row in
+    /// this same table.
+    pub name: String,
     /// The record's own `run_dir` existed once but no longer does --
     /// distinct from [`Self::openable`] being false for a record with
     /// no `run_dir` recorded at all (an older, pre-#700 record), which
@@ -226,9 +239,12 @@ pub fn build_recent_rows(
     records: &[HistoryRecord],
     run_dir_exists: &dyn Fn(&str) -> bool,
 ) -> Vec<RecentRow> {
+    let run_ids: Vec<Option<&str>> = records.iter().map(|r| Some(r.run_id.as_str())).collect();
+    let names = crate::names::disambiguated_names(&run_ids);
     let mut rows: Vec<RecentRow> = records
         .iter()
-        .map(|record| {
+        .zip(names)
+        .map(|(record, name)| {
             let gone = match &record.run_dir {
                 Some(dir) => !run_dir_exists(dir),
                 None => false,
@@ -248,6 +264,7 @@ pub fn build_recent_rows(
                     outcome_label(record)
                 },
                 run_dir: record.run_dir.clone(),
+                name: name.expect("every HistoryRecord has a run_id"),
                 gone,
                 openable,
             }

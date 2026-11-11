@@ -524,6 +524,10 @@ pub struct CombinedRun {
     pub role: usize,
     pub document_label: String,
     pub config_label: Option<String>,
+    /// This run's own short name (issue #717), already
+    /// disambiguated against every other run in this same Combined
+    /// Signal -- `None` for a run whose `run_id` isn't known yet.
+    pub name: Option<String>,
     pub engine_label: String,
     pub tokens_sent: u64,
     pub tokens_received: u64,
@@ -629,6 +633,8 @@ pub fn build_combined_signal(
     // stops reading its own Readings at once scrubbed away from Now.
     let view_col = cursor_col.unwrap_or(now_col);
 
+    let run_ids: Vec<Option<&str>> = inputs.iter().map(|i| i.header.run_id.as_deref()).collect();
+    let names = crate::names::disambiguated_names(&run_ids);
     let mut runs: Vec<CombinedRun> = Vec::with_capacity(inputs.len());
     let mut engines: BTreeSet<String> = BTreeSet::new();
     let mut steps_running = 0usize;
@@ -662,6 +668,7 @@ pub fn build_combined_signal(
             role,
             document_label: input.document_label.clone(),
             config_label: input.config_label.clone(),
+            name: names[role].clone(),
             engine_label: input.engine_label.clone(),
             tokens_sent,
             tokens_received,
