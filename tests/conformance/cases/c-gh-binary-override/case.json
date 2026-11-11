@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`runtime.plugins.gh.binary` points both engines at the same fake `gh`, by absolute path, with nothing named `gh` on `PATH` at all -- proves the configured override is what resolves the call, not a PATH lookup.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json"
+}

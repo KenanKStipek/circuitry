@@ -1,0 +1,8 @@
+name: c-gh-issue-view-json
+effects:
+  - type: tool
+    name: ticket
+    provider: gh
+    params:
+      args: ["issue", "view", "42", "--json", "number,title,body", "--jq", "."]
+      parse: json

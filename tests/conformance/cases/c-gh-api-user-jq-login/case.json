@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`gh api user --jq .login`, no `parse: json` -- the result's `value` is the plain trimmed-by-`gh`-itself text `gh --jq` already produced, not re-parsed by circuitry.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
