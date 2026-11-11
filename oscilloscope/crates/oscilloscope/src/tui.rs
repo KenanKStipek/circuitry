@@ -534,7 +534,9 @@ fn fullscreen_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
         .iter()
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
-    for _ in 0..7 {
+    // Issue #714: `T` cycles the theme here too.
+    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
+    for _ in 0..6 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -3812,6 +3814,7 @@ pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("↑↓ j k", "Select"),
         row("Home End g G", "Jump to the ends"),
         row("enter", "Open the selected run"),
+        row("T", "Colour theme"),
         row("?", "This help"),
         row("q", "Quit"),
         row("c", "Inert here (no run attached to cancel)"),
@@ -5231,6 +5234,7 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("enter", "Open the focused run"),
         row("PageUp PageDown", "Turn the page"),
         row("u", "Combined Signal"),
+        row("T", "Colour theme"),
         row("c", "Inert here (no run attached to cancel)"),
         row("esc", "Back to Select"),
         row("?", "This help"),
@@ -6303,6 +6307,7 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("n", "Back to Now"),
         row("\u{2191}\u{2193}", "Select a run"),
         row("enter", "Open the selected run on its Signal"),
+        row("T", "Colour theme"),
         row("c", "Inert here (no run attached to cancel)"),
         row("esc", "Back to the tiles"),
         row("?", "This help"),
@@ -8519,14 +8524,15 @@ const HELP_LEGEND_ROWS: &[(&str, &str, &str, &str)] = &[(
     "decision · loop · run",
 )];
 
-// §4 also names `j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`, `/`,
-// `e`, `T` and `f` as Tape keys, and says the Help overlay lists
-// all of it -- but every `tape--help` frame leaves its own six
-// rows here blank (`design/frames/tape--help--120x30.mock`, rows
-// 15-20), so adding them would stop matching the frame on over 300
-// cells at once, past the point an allow-list still documents a
-// design ambiguity rather than papering over one. Left for the
-// frame to settle; see the PR's own design-questions note.
+// §4 also names `j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`, `/`
+// and `e` as Tape keys, and says the Help overlay lists all of it
+// -- but every `tape--help` frame leaves five of its own six rows
+// here blank (`design/frames/tape--help--120x30.mock`, rows
+// 16-20; row 15 is `T`'s own, issue #714), so adding the rest
+// would stop matching the frame on over 300 cells at once, past
+// the point an allow-list still documents a design ambiguity
+// rather than papering over one. Left for the frame to settle; see
+// the PR's own design-questions note.
 
 fn tape_help_row(key1: &str, desc1: &str, key2: &str, desc2: &str, ctx: &DrawCtx) -> Line<'static> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
@@ -8570,7 +8576,10 @@ fn tape_help_lines(ctx: &DrawCtx, unit: u64, history_runs: Option<usize>) -> Vec
             .iter()
             .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx)),
     );
-    for _ in 0..6 {
+    // Issue #714: `T` (colour theme) in the first of what the
+    // frame's own blank rows above otherwise still leave open.
+    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
+    for _ in 0..5 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -8628,7 +8637,9 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
         .chain(quit_rows.iter())
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
-    for _ in 0..7 {
+    // Issue #714: `T` cycles the theme here too.
+    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
+    for _ in 0..6 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -8671,7 +8682,9 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
         .chain(std::iter::once(&quit_row))
         .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
         .collect();
-    for _ in 0..7 {
+    // Issue #714: `T` cycles the theme here too.
+    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
+    for _ in 0..6 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -8718,7 +8731,9 @@ fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool) -> Vec<Line<'stati
         "",
         ctx,
     ));
-    for _ in 0..4 {
+    // Issue #714: `T` cycles the theme here too.
+    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
+    for _ in 0..3 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -9039,6 +9054,28 @@ fn store_rect_to_ratatui(rect: oscilloscope_core::store::StoreRect) -> Rect {
     }
 }
 
+/// A container tile's own bounds in the `terminal` theme (issue
+/// #714): `bg_inset` paints nothing there (`Color::Reset`, same as
+/// the unfilled pane -- no ANSI colour reads as a safe "recessed"
+/// fill against every terminal's own background, the way bright
+/// black safely reads as a leaf's own fill), so a container differs
+/// from both a leaf's solid fill and the pane itself by this guide
+/// line alone, drawn over the tile's own already-painted left edge
+/// after its text (`store_container_lines`'s own leading space on
+/// every row, never a character worth keeping). A no-op for every
+/// named theme, whose own `bg_inset` already is a real fill.
+fn mark_inset_frame(frame: &mut Frame, rect: Rect, theme: &Theme) {
+    if theme.background.is_some() {
+        return;
+    }
+    let style = Style::default().fg(theme.border_focused);
+    for y in rect.y..rect.y.saturating_add(rect.height) {
+        if let Some(cell) = frame.buffer_mut().cell_mut((rect.x, y)) {
+            cell.set_symbol("\u{2502}").set_style(style);
+        }
+    }
+}
+
 /// The area diagram's own tiles (issue #695's rule 2): a container's
 /// own rect fills with `bg.inset`, a leaf's with `bg.surface`,
 /// painted in the order [`oscilloscope_core::store::layout_store`]
@@ -9073,11 +9110,15 @@ fn draw_store_tiles(
                     theme,
                 );
                 render_tile_lines(frame, rect, lines);
+                mark_inset_frame(frame, rect, theme);
             }
             StoreTileKind::More { count, tokens } => {
                 fill_rect(frame, rect, theme.bg_inset);
+                // The leading space (never cut, like every other
+                // tile's own first column) keeps column 0 blank for
+                // `mark_inset_frame` to mark, below.
                 let text = format!(
-                    "\u{2026} {count} more \u{b7} {}",
+                    " \u{2026} {count} more \u{b7} {}",
                     oscilloscope_core::format::format_tokens_t(*tokens)
                 );
                 let line = pad_line(
@@ -9088,6 +9129,7 @@ fn draw_store_tiles(
                     rect.width as usize,
                 );
                 render_tile_lines(frame, rect, vec![line]);
+                mark_inset_frame(frame, rect, theme);
             }
         }
     }
@@ -9174,12 +9216,25 @@ fn draw_store_chart(
 /// either frame shows, but never below the frames' own 27 cells
 /// (`wide`) or 23 (not), reserving the same share/deviation width
 /// the two frames pin (24/34 cells) for anything beyond that.
-fn store_table_columns(wide: bool, content_width: usize) -> (usize, usize, usize) {
-    let (min_label, bar_w, tokens_w, reserved_combined) = if wide {
+/// `widest_tokens_len` is the widest `TOKENS` text the table
+/// actually draws (issue #714): the column is sized for it, with
+/// room for at least one trailing space before `SHARE` -- `format!
+/// ("{:<width$}", ...)` never truncates, so a fixed 8-column floor
+/// (every frame's own figures stay well under it, so the floor
+/// alone still sizes those) ran an eight-digit count's own trailing
+/// `t` straight into `SHARE` once a real run's totals reached one
+/// (`35,396,916 t66%`, the issue's own example).
+fn store_table_columns(
+    wide: bool,
+    content_width: usize,
+    widest_tokens_len: usize,
+) -> (usize, usize, usize) {
+    let (min_label, bar_w, min_tokens_w, reserved_combined) = if wide {
         (27usize, 10usize, 8usize, 24usize)
     } else {
         (23usize, 10usize, 8usize, 34usize)
     };
+    let tokens_w = min_tokens_w.max(widest_tokens_len + 1);
     let label_w = content_width
         .saturating_sub(bar_w + tokens_w + reserved_combined)
         .max(min_label);
@@ -9232,7 +9287,17 @@ fn draw_store_table(
     }
     fill_border_rows(frame, inner, border_color);
     let content_width = (inner.width - 3) as usize;
-    let (label_w, bar_w, tokens_w) = store_table_columns(wide, content_width);
+    let widest_tokens_len = screen
+        .table
+        .iter()
+        .map(|row| {
+            oscilloscope_core::format::format_tokens_t(row.tokens())
+                .chars()
+                .count()
+        })
+        .max()
+        .unwrap_or(0);
+    let (label_w, bar_w, tokens_w) = store_table_columns(wide, content_width, widest_tokens_len);
     let combined = content_width.saturating_sub(label_w + bar_w + tokens_w);
     let theme = ctx.theme;
     // "From the frames": the header's own `TOKENS` lands one column
@@ -19920,6 +19985,82 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #714: in `terminal`, a leaf tile's own fill differs
+    /// from the pane (`bg_surface`, bright black, not `Color::
+    /// Reset`), and a container's own bounds carry a guide line the
+    /// pane has none of (`mark_inset_frame`) -- the two kinds, and
+    /// the pane around them, all read as visually distinct without
+    /// any theme painting a background at all.
+    #[test]
+    fn terminal_theme_store_tiles_differ_from_the_pane_and_each_other() {
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let leaf = oscilloscope_core::store::StoreTile {
+            path: "prime.leaf".to_string(),
+            label: "leaf".to_string(),
+            rect: oscilloscope_core::store::StoreRect {
+                x: 2,
+                y: 1,
+                w: 10,
+                h: 2,
+            },
+            tokens: 100,
+            kind: oscilloscope_core::store::StoreTileKind::Leaf(
+                oscilloscope_core::store::StoreLeaf {
+                    path: "prime.leaf".to_string(),
+                    label: "leaf".to_string(),
+                    tokens_sent: 100,
+                    tokens_received: 0,
+                    tokens_sent_unknown: false,
+                    tokens_received_unknown: false,
+                    deviation_pct: None,
+                    live: false,
+                },
+            ),
+        };
+        let container = oscilloscope_core::store::StoreTile {
+            path: "prime.box".to_string(),
+            label: "box".to_string(),
+            rect: oscilloscope_core::store::StoreRect {
+                x: 14,
+                y: 1,
+                w: 10,
+                h: 2,
+            },
+            tokens: 200,
+            kind: oscilloscope_core::store::StoreTileKind::Container {
+                running: false,
+                collapsed: None,
+            },
+        };
+        let backend = TestBackend::new(30, 5);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_store_tiles(f, &[leaf, container], &theme))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(
+            buffer.cell((2, 1)).unwrap().bg,
+            Color::DarkGray,
+            "a leaf tile fills with bright black, not the unfilled pane"
+        );
+        assert_eq!(
+            buffer.cell((14, 1)).unwrap().symbol(),
+            "\u{2502}",
+            "a container tile's own left edge carries a guide line"
+        );
+        assert_eq!(buffer.cell((14, 1)).unwrap().fg, Color::Cyan);
+        assert_eq!(
+            buffer.cell((14, 1)).unwrap().bg,
+            Color::Reset,
+            "a container tile paints no fill of its own in this theme"
+        );
+        // Column 12, between the two tiles, is the pane itself --
+        // neither a leaf's fill nor a container's own guide line.
+        let pane_cell = buffer.cell((12, 1)).unwrap();
+        assert_eq!(pane_cell.bg, Color::Reset);
+        assert_ne!(pane_cell.symbol(), "\u{2502}");
+    }
+
     fn empty_header() -> oscilloscope_core::render::Header {
         let plan = oscilloscope_core::plan::PlanTree::empty();
         let mut model = oscilloscope_core::model::RunModel::new();
@@ -20843,6 +20984,77 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #714: an eight-digit TOKENS figure keeps a space
+    /// before SHARE in the real table (`35,396,916 t66%`, the
+    /// issue's own example) rather than running the two together.
+    #[test]
+    fn store_table_row_keeps_a_space_before_share_at_eight_digits() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, mut store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            None,
+        );
+        store_screen.table = vec![oscilloscope_core::store::StoreTableRow {
+            path: "prime.big".to_string(),
+            label: "big".to_string(),
+            tokens_sent: 35_396_916,
+            tokens_received: 0,
+            share_pct: 66.0,
+            deviation_pct: None,
+        }];
+        store_screen.cursor_path = Some("prime.big".to_string());
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Store;
+        app.selected_path = Some("prime.big".to_string());
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    Some(&store_screen),
+                    None,
+                    None,
+                    None,
+                )
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(
+            text.contains("35,396,916 t 66%"),
+            "the TOKENS figure must keep a space before SHARE:\n{text}"
+        );
+        assert!(
+            !text.contains("35,396,916 t66%"),
+            "the TOKENS figure must never run straight into SHARE:\n{text}"
+        );
+    }
+
     /// Issue #695's rule 4: a leaf whose own `name · N t` doesn't fit
     /// The label column grows past the frames' own 27/23 cells on a
     /// pane wider than either frame shows, rather than sitting fixed
@@ -20850,12 +21062,31 @@ mod tape_frame_goldens {
     /// frames' own content width it never shrinks under them either.
     #[test]
     fn store_table_label_column_grows_with_a_wider_pane_never_below_the_frames() {
-        assert_eq!(store_table_columns(true, 69).0, 27);
-        assert_eq!(store_table_columns(false, 75).0, 23);
-        assert_eq!(store_table_columns(true, 69 + 20).0, 27 + 20);
-        assert_eq!(store_table_columns(false, 75 + 20).0, 23 + 20);
-        assert_eq!(store_table_columns(true, 10).0, 27);
-        assert_eq!(store_table_columns(false, 10).0, 23);
+        assert_eq!(store_table_columns(true, 69, 0).0, 27);
+        assert_eq!(store_table_columns(false, 75, 0).0, 23);
+        assert_eq!(store_table_columns(true, 69 + 20, 0).0, 27 + 20);
+        assert_eq!(store_table_columns(false, 75 + 20, 0).0, 23 + 20);
+        assert_eq!(store_table_columns(true, 10, 0).0, 27);
+        assert_eq!(store_table_columns(false, 10, 0).0, 23);
+    }
+
+    /// Issue #714: the TOKENS column fits the widest figure the
+    /// table actually draws, with room for at least one trailing
+    /// space before SHARE -- `"35,396,916 t"` (12 chars) needs a
+    /// 13-wide column, past the frames' own 8-column floor, which
+    /// keeps sizing every smaller figure exactly as before.
+    #[test]
+    fn store_table_tokens_column_fits_the_widest_figure_with_a_trailing_space() {
+        let (_, _, tokens_w) = store_table_columns(true, 69, 5);
+        assert_eq!(
+            tokens_w, 8,
+            "a small figure keeps the frames' own 8-column floor"
+        );
+        let (_, _, tokens_w) = store_table_columns(true, 69, 12);
+        assert_eq!(
+            tokens_w, 13,
+            "an eight-digit figure needs 12 + 1 trailing space"
+        );
     }
 
     /// one line wraps the name and tokens onto their own lines

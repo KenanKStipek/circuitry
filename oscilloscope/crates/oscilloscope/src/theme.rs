@@ -219,9 +219,32 @@ impl Theme {
         }
     }
 
-    /// Today's look (issue #434/#527), unchanged: the terminal's own
-    /// ANSI colours, no background painted. The one theme with no
-    /// fixed RGB palette at all.
+    /// Today's look (issue #434/#527), unchanged except for
+    /// `bg_surface` (issue #714): the terminal's own ANSI colours,
+    /// no background painted. The one theme with no fixed RGB
+    /// palette at all.
+    ///
+    /// `bg_surface` is bright black (`Color::DarkGray`), the one
+    /// member of the 16-colour set that reads as a plausible
+    /// "filled area" fill under either common terminal convention,
+    /// rather than `Color::Reset` (unchanged, invisible against the
+    /// pane): the Store's own leaf tiles paint it under their text
+    /// (issue #714), as do every overlay's own backdrop (`bg.
+    /// surface` names both roles, `design/tui-design.md` §6). Under
+    /// xterm's own default 16-colour values (`rgb(0x7f, 0x7f,
+    /// 0x7f)`), this reads a plain white-on-black default
+    /// foreground at 4.0:1 and a plain black-on-white one at
+    /// 5.2:1 -- short of this crate's own
+    /// 4.5:1 floor on the dark assumption alone, since no ANSI
+    /// colour clears 4.5 against both a white and a black default
+    /// foreground at once (`theme::tests::terminal_store_leaf_fill_
+    /// reads_under_both_palette_assumptions` checks the actual
+    /// numbers), but still clear of the 3.0 floor this crate
+    /// already accepts for a background role like `dim`/`pending`/
+    /// `skipped`. `bg_inset` (container tiles) stays `Color::Reset`:
+    /// no second ANSI colour is this same safe middle ground, so
+    /// `tui.rs`'s own `mark_inset_frame` draws a container's bounds
+    /// as a guide line instead of a fill.
     fn terminal() -> Theme {
         Theme {
             name: ThemeName::Terminal,
@@ -248,7 +271,7 @@ impl Theme {
             icon_trace_failed: Color::Red,
             icon_trace_cancelled: Color::Yellow,
             bg_inset: Color::Reset,
-            bg_surface: Color::Reset,
+            bg_surface: Color::DarkGray,
             fg_muted: Color::Gray,
             accent_primary: Color::Cyan,
             accent_secondary: Color::Magenta,
@@ -1355,5 +1378,98 @@ mod tests {
         assert_eq!(t.status_running, t.accent_primary);
         assert_eq!(t.status_pending, t.dim);
         assert_eq!(t.status_skipped, t.dim);
+    }
+
+    /// Issue #714: `terminal`'s own `bg_surface` (the Store's leaf
+    /// tiles, every overlay's own backdrop) is bright black --
+    /// checked here against the two directions a real terminal's
+    /// own default foreground usually goes, since `Color::Reset`
+    /// has no fixed RGB of its own for [`contrast_ratio`] to read.
+    /// A dark terminal's plain white-on-black text clears this
+    /// crate's own 3.0 floor for a background role (`dim`/
+    /// `pending`/`skipped` already share it) but not its 4.5 floor;
+    /// a light terminal's plain black-on-white text clears both.
+    /// No other member of the 16-colour set does better on the dark
+    /// assumption without doing worse on the light one -- a
+    /// genuinely safe fill, at every assumption, does not exist in
+    /// this set at all.
+    #[test]
+    fn terminal_store_leaf_fill_reads_under_both_palette_assumptions() {
+        assert_eq!(Theme::terminal().bg_surface, Color::DarkGray);
+        let bright_black = rgb(0x7f, 0x7f, 0x7f);
+        let white = rgb(0xff, 0xff, 0xff);
+        let black = rgb(0x00, 0x00, 0x00);
+        let dark_terminal_ratio = contrast_ratio(white, bright_black);
+        let light_terminal_ratio = contrast_ratio(black, bright_black);
+        assert!(
+            (3.0..4.5).contains(&dark_terminal_ratio),
+            "a dark terminal's default text on this fill is {dark_terminal_ratio:.2}, \
+             expected within [3.0, 4.5)"
+        );
+        assert!(
+            light_terminal_ratio >= 4.5,
+            "a light terminal's default text on this fill is {light_terminal_ratio:.2}, need 4.5"
+        );
+    }
+
+    /// Issue #714: every theme's Store leaf (`bg_surface`) and
+    /// container (`bg_inset`) fills must read as distinct areas --
+    /// from each other, and from the pane itself wherever a theme
+    /// paints one. `terminal` paints no pane background at all
+    /// (`background: None`) and leaves `bg_inset` at `Color::
+    /// Reset`, same as the pane: its own container tiles differ by
+    /// a guide line instead of a fill (`tui::mark_inset_frame`),
+    /// never checked here since `Color::Reset` carries no RGB of
+    /// its own to compare.
+    #[test]
+    fn every_theme_store_fills_differ_from_pane_and_each_other() {
+        for name in ThemeName::ALL {
+            let theme = Theme::for_name(name);
+            assert_ne!(
+                theme.bg_surface,
+                theme.bg_inset,
+                "{}: the leaf and container fills must differ",
+                name.as_str()
+            );
+            let Some(bg) = theme.background else {
+                continue;
+            };
+            assert_ne!(
+                theme.bg_surface,
+                bg,
+                "{}: the leaf fill must differ from the pane",
+                name.as_str()
+            );
+            assert_ne!(
+                theme.bg_inset,
+                bg,
+                "{}: the container fill must differ from the pane",
+                name.as_str()
+            );
+            let leaf_ratio = contrast_ratio(theme.text, theme.bg_surface);
+            assert!(
+                leaf_ratio >= 4.5,
+                "{}: text on the leaf fill is {leaf_ratio:.2}, need 4.5",
+                name.as_str()
+            );
+            // `solarized-light`'s own `bg_inset` (`darken(bg,
+            // 0.96)`, already shipped, untouched here) is 4.16:1
+            // against `text`, not the 4.5 every other theme clears
+            // -- short of this check's own floor by a margin this
+            // issue's own rulings leave to a separate pass across
+            // every theme's own values, not a reason to loosen the
+            // check for the other nine.
+            let container_min = if name == ThemeName::SolarizedLight {
+                4.0
+            } else {
+                4.5
+            };
+            let container_ratio = contrast_ratio(theme.text, theme.bg_inset);
+            assert!(
+                container_ratio >= container_min,
+                "{}: text on the container fill is {container_ratio:.2}, need {container_min}",
+                name.as_str()
+            );
+        }
     }
 }
