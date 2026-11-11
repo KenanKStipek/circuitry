@@ -15,8 +15,8 @@ use crate::plan::PlanTree;
 use crate::render::{Header, Row, RowKind};
 use crate::screens::{SignalLastFinished, last_finished_row, tape_row_label};
 
-/// The Combined Signal's own fixed column width (K1: "100 ms per
-/// Column"), never zoomed (its own key bar has no `+`/`-`).
+/// The Combined Signal's own fixed column width, 100 ms, never
+/// zoomed (its own key bar has no `+`/`-`).
 pub const COLUMN_S: f64 = 0.1;
 
 /// `offset_s` (seconds since the shared anchor) to its own 100 ms
@@ -37,6 +37,11 @@ pub fn column_of(offset_s: f64) -> usize {
 pub struct CombinedBuckets {
     pub sent: BTreeMap<usize, u64>,
     pub received: BTreeMap<usize, u64>,
+    /// The column and real timestamp of whichever addition to
+    /// `sent`/`received` landed furthest to the right -- Quiet
+    /// reads the exact elapsed time to this, rather than rounding
+    /// it to whole 100 ms columns the way the chart itself does.
+    pub latest_activity: Option<(usize, String)>,
 }
 
 fn add(map: &mut BTreeMap<usize, u64>, col: usize, value: u64) {
@@ -44,6 +49,12 @@ fn add(map: &mut BTreeMap<usize, u64>, col: usize, value: u64) {
         return;
     }
     *map.entry(col).or_insert(0) += value;
+}
+
+fn note_activity(latest: &mut Option<(usize, String)>, col: usize, ts: &str) {
+    if latest.as_ref().is_none_or(|(c, _)| col >= *c) {
+        *latest = Some((col, ts.to_string()));
+    }
 }
 
 /// [`CombinedBuckets`] for one run, anchored to `anchor_ts` (the
@@ -77,11 +88,17 @@ pub fn combined_run_buckets(
                 continue;
             };
             let col = column_of(offset);
+            let mut had_any = false;
             if let Some((sent, _)) = live.tokens_sent_or_estimate() {
                 add(&mut out.sent, col, sent);
+                had_any = sent > 0;
             }
             if let Some((received, _)) = live.tokens_received_or_estimate() {
                 add(&mut out.received, col, received);
+                had_any = had_any || received > 0;
+            }
+            if had_any {
+                note_activity(&mut out.latest_activity, col, now);
             }
         } else if matches!(
             row.status.kind,
@@ -98,6 +115,9 @@ pub fn combined_run_buckets(
             let (sent, received) = crate::model::node_tokens(&node.meta);
             add(&mut out.sent, col, sent);
             add(&mut out.received, col, received);
+            if sent + received > 0 {
+                note_activity(&mut out.latest_activity, col, ts);
+            }
         }
     }
     for sighting in model.agent_live_sightings() {
@@ -107,12 +127,15 @@ pub fn combined_run_buckets(
         let col = column_of(offset);
         add(&mut out.sent, col, sighting.tokens_sent);
         add(&mut out.received, col, sighting.tokens_received);
+        if sighting.tokens_sent + sighting.tokens_received > 0 {
+            note_activity(&mut out.latest_activity, col, &sighting.ts);
+        }
     }
     out
 }
 
 /// The largest stacked column across every run's own `buckets`
-/// (K2: the shared scale is sized off this, sent and received
+/// (the shared scale is sized off this, sent and received
 /// separately) -- every column any run has ever touched, not only
 /// the columns a single run happens to have.
 pub fn largest_stacked_column(buckets: &[&BTreeMap<usize, u64>]) -> u64 {
@@ -164,15 +187,15 @@ pub struct StackedCell {
     pub glyph: char,
 }
 
-/// A stacked column's own `rows` cells, drawn from the axis upward
-/// (K1: "stacked by run"), in `values`' own order (the callers'
-/// launch order, bottom to top): each run's own cumulative share
-/// fills whole rows first, the row a run's own cumulative total
-/// first reaches credited to that run; the final, possibly partial,
-/// row (K2's round-top rule already keeps `axis_top` from ever
-/// being 0) goes to the last run with a nonzero value at all.
-/// `partial_glyph` picks `sent_partial_glyph`/`received_partial_
-/// glyph` for the caller's own side of the axis.
+/// A stacked column's own `rows` cells, drawn from the axis upward,
+/// in `values`' own order (the callers' launch order, bottom to
+/// top): each run's own cumulative share fills whole rows first,
+/// the row a run's own cumulative total first reaches credited to
+/// that run; the final, possibly partial, row goes to whichever run
+/// contributes the largest share of it, never simply the last one
+/// processed (the full-row loop below reasons the same way, not
+/// just this one row). `partial_glyph` picks `sent_partial_glyph`/
+/// `received_partial_glyph` for the caller's own side of the axis.
 pub fn stack_column(
     values: &[u64],
     axis_top: u64,
@@ -192,13 +215,23 @@ pub fn stack_column(
             continue;
         }
         last_nonzero = Some(run_index);
+        let carry = (cumulative as f64) % unit;
         cumulative += value;
         let full_total = ((cumulative as f64 / unit).floor() as usize).min(rows);
+        // The first row this run's own addition newly completes,
+        // when the cumulative total just before it wasn't itself an
+        // exact multiple of the row unit, is shared with whatever
+        // an earlier run already left in it -- drawn one eighth
+        // short of solid to mark that blend, rather than solid as
+        // every row after it (completed by this run alone) is.
+        let mixed_first_row = filled < full_total && carry > 0.0001;
         for j in filled..full_total {
-            out[rows - 1 - j] = Some(StackedCell {
-                run_index,
-                glyph: '\u{2588}',
-            });
+            let glyph = if mixed_first_row && j == filled {
+                partial_glyph(7.0 / 8.0)
+            } else {
+                '\u{2588}'
+            };
+            out[rows - 1 - j] = Some(StackedCell { run_index, glyph });
         }
         filled = full_total;
     }
@@ -238,9 +271,9 @@ pub fn stack_column(
     out
 }
 
-/// Every running leaf's own label, in plan order (K3/K5: the Per Run
+/// Every running leaf's own label, in plan order -- the Per Run
 /// table's own NOW column and the legend's own running label both
-/// read this list, joined and cut differently for the room each has).
+/// read this list, joined and cut differently for the room each has.
 pub fn running_step_labels(
     rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
@@ -259,10 +292,10 @@ pub fn running_step_labels(
 }
 
 /// `steps` joined by ` · `, cut to the widest prefix that fits
-/// `max_width` columns with a trailing `+N` for the rest (K5's NOW
-/// column, K3's running legend label) -- never cuts a step's own
-/// text short, only drops whole steps from the end. Every step
-/// shown when they all fit, with no `+0`.
+/// `max_width` columns with a trailing `+N` for the rest (the Per
+/// Run table's own NOW column, the legend's own running label) --
+/// never cuts a step's own text short, only drops whole steps from
+/// the end. Every step shown when they all fit, with no `+0`.
 pub fn join_steps_with_overflow(steps: &[String], max_width: usize) -> String {
     if steps.is_empty() {
         return String::new();
@@ -300,28 +333,47 @@ pub fn join_steps_with_overflow(steps: &[String], max_width: usize) -> String {
 }
 
 /// The first finished prompt or reflector by its own real finish
-/// time (K3: "first finished"), how many more have finished, and its
-/// own combined column (for the legend's own placement) -- `None`
-/// with nothing finished yet.
+/// time, how many more have finished, and its own combined column
+/// (for the legend's own placement) -- `None` with nothing finished
+/// yet.
 pub fn finished_prompt_first_and_extra(
     rows: &[Row],
     flat: &BTreeMap<String, NodeMeta>,
     plan: &PlanTree,
     anchor_ts: &str,
 ) -> Option<(String, usize, usize)> {
-    let mut finishes: Vec<(i64, usize, &Row)> = rows
-        .iter()
-        .filter(|r| matches!(r.kind, RowKind::Prompt | RowKind::Reflector))
-        .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
-        .filter_map(|r| {
-            let node = flat.get(&r.path)?;
-            let ts = node.completed_at.as_deref()?;
-            let parsed = crate::diff::parse_instant(ts)?.timestamp_millis();
-            let offset = duration_seconds(anchor_ts, ts)?;
-            Some((parsed, column_of(offset), r))
-        })
-        .collect();
-    finishes.sort_by_key(|(ts, _, _)| *ts);
+    let gather = |kinds: &[RowKind]| -> Vec<(i64, usize, &Row)> {
+        let mut finishes: Vec<(i64, usize, &Row)> = rows
+            .iter()
+            .filter(|r| kinds.contains(&r.kind))
+            .filter(|r| matches!(r.status.kind, StatusKind::Done | StatusKind::FailedHandled))
+            .filter_map(|r| {
+                let node = flat.get(&r.path)?;
+                let ts = node.completed_at.as_deref()?;
+                let parsed = crate::diff::parse_instant(ts)?.timestamp_millis();
+                let offset = duration_seconds(anchor_ts, ts)?;
+                Some((parsed, column_of(offset), r))
+            })
+            .collect();
+        finishes.sort_by_key(|(ts, _, _)| *ts);
+        finishes
+    };
+    // A run with no finished prompt or reflector at all -- every
+    // one of its own effects a tool step -- falls back to its
+    // finished tool steps instead, the same widening issue #702
+    // already gave the single-run Signal's own Largest reading, so
+    // such a run still shows something finished here. A run with
+    // any finished prompt or reflector keeps reading only those, so
+    // a tool step that finishes earlier never pre-empts the frame's
+    // own choice.
+    let finishes = {
+        let prompts = gather(&[RowKind::Prompt, RowKind::Reflector]);
+        if prompts.is_empty() {
+            gather(&[RowKind::Tool])
+        } else {
+            prompts
+        }
+    };
     let total = finishes.len();
     if total == 0 {
         return None;
@@ -349,10 +401,10 @@ pub struct CombinedRun {
     pub finished_col: Option<usize>,
     pub buckets: CombinedBuckets,
     pub last_finished: Option<SignalLastFinished>,
-    /// This run's own share of every run's tokens (K5's SHARE
-    /// column, K6's Largest reading) -- filled in once every run's
-    /// own total is known, so `0.0` until [`build_combined_signal`]
-    /// has computed it.
+    /// This run's own share of every run's tokens (the Per Run
+    /// table's own SHARE column, the Readings' own Largest line) --
+    /// filled in once every run's own total is known, so `0.0`
+    /// until [`build_combined_signal`] has computed it.
     pub share_pct: f64,
 }
 
@@ -366,10 +418,10 @@ pub struct CombinedRunInput<'a> {
     pub document_label: String,
     pub config_label: Option<String>,
     pub engine_label: String,
-    /// Unfolded (issue #704 rule 4's own reasoning, extended here):
-    /// a loop with several passes folds into one `QuickSteps`
-    /// summary row in `rows`, dropping the individual rows this
-    /// screen's own finished-prompt and running-step scans need.
+    /// Unfolded: a loop with several passes folds into one
+    /// `QuickSteps` summary row in `rows`, dropping the individual
+    /// rows this screen's own finished-prompt and running-step
+    /// scans need.
     pub rows: &'a [Row],
     pub flat: &'a BTreeMap<String, NodeMeta>,
     pub plan: &'a PlanTree,
@@ -410,7 +462,7 @@ pub struct CombinedSignalScreen {
 }
 
 /// Every run's own `run_start_ts`'s earliest -- the Combined
-/// Signal's own shared time anchor (K1: the trace's own column 0).
+/// Signal's own shared time anchor, the trace's own column 0.
 /// `None` with no run started yet (never actually reached: the All
 /// screen only ever enters this screen with at least one running
 /// run already known).
@@ -433,14 +485,18 @@ pub fn build_combined_signal(
     floor_sent: u64,
     floor_received: u64,
     now: &str,
+    cursor_col: Option<usize>,
 ) -> CombinedSignalScreen {
     let now_offset = duration_seconds(anchor_ts, now).unwrap_or(0.0);
     let now_col = column_of(now_offset);
+    // Peak and Quiet read only up to the cursor's own column (Now's,
+    // when not scrubbed), the same moment a single run's own Signal
+    // stops reading its own Readings at once scrubbed away from Now.
+    let view_col = cursor_col.unwrap_or(now_col);
 
     let mut runs: Vec<CombinedRun> = Vec::with_capacity(inputs.len());
     let mut engines: BTreeSet<String> = BTreeSet::new();
     let mut steps_running = 0usize;
-    let mut last_finished_entries: Vec<(String, Option<SignalLastFinished>)> = Vec::new();
     for (role, input) in inputs.iter().enumerate() {
         let buckets = combined_run_buckets(input.rows, input.flat, input.model, anchor_ts, now);
         let running = running_step_labels(input.rows, input.flat, input.plan);
@@ -459,7 +515,6 @@ pub fn build_combined_signal(
             input.plan,
             input.header.run_start_ts.as_deref(),
         );
-        last_finished_entries.push((input.document_label.clone(), last_finished.clone()));
         engines.insert(
             input
                 .engine_label
@@ -514,7 +569,7 @@ pub fn build_combined_signal(
     for b in sent_buckets.iter().chain(received_buckets.iter()) {
         all_cols.extend(b.keys().copied());
     }
-    for &col in &all_cols {
+    for &col in all_cols.iter().filter(|&&col| col <= view_col) {
         let sent_here: u64 = sent_buckets
             .iter()
             .map(|b| b.get(&col).copied().unwrap_or(0))
@@ -540,9 +595,17 @@ pub fn build_combined_signal(
     } else {
         0.0
     };
-    let quiet_s = crate::multi::newest_finished_across_runs(&last_finished_entries)
-        .and_then(|(_, lf)| lf.ts)
-        .and_then(|ts| duration_seconds(&ts, now));
+    // Quiet is the time since the newest column with anything in
+    // it, up to the cursor -- it follows the scrub cursor the same
+    // way Peak does, rather than the newest *finished step* across
+    // every run (which a tool step with no tokens at all could move
+    // without anything showing on the trace itself).
+    let quiet_s = runs
+        .iter()
+        .filter_map(|r| r.buckets.latest_activity.as_ref())
+        .filter(|(col, _)| *col <= view_col)
+        .max_by_key(|(col, ts)| (*col, ts.clone()))
+        .and_then(|(_, ts)| duration_seconds(ts, now));
 
     let totals = CombinedTotals {
         sent: sent_total,
@@ -555,7 +618,15 @@ pub fn build_combined_signal(
         quiet_s,
     };
 
-    let largest_run = runs.iter().max_by_key(|r| r.tokens_total);
+    // A tie goes to the first in launch order, not whichever
+    // `Iterator::max_by_key` happens to keep last among equal
+    // values.
+    let largest_run = runs
+        .iter()
+        .fold(None, |best: Option<&CombinedRun>, r| match best {
+            Some(b) if r.tokens_total <= b.tokens_total => best,
+            _ => Some(r),
+        });
     let readings = CombinedReadings {
         run_count: runs.len(),
         engine_count: engines.len(),
@@ -576,13 +647,14 @@ pub fn build_combined_signal(
     }
 }
 
-/// K5's SHARE column/K6's Largest reading, `<1%` below one point
-/// (§3.3's own rounding, reused rather than a second copy of it).
+/// The Per Run table's own SHARE column and the Readings' own
+/// Largest line, `<1%` below one point (§3.3's own rounding, reused
+/// rather than a second copy of it).
 pub fn format_share(share_pct: f64) -> String {
     format_share_pct(share_pct)
 }
 
-/// A legend row's own finished-prompt label (K3): `label`/`extra`
+/// A legend row's own finished-prompt label: `label`/`extra`
 /// first, the run's own tokens so far appended only while the
 /// whole thing still ends strictly before `limit_col` (the running
 /// label's own column, or the panel's own right edge with nothing
@@ -638,6 +710,39 @@ mod tests {
         assert_eq!(
             cells[2].map(|c| (c.run_index, c.glyph)),
             Some((1, '\u{2587}'))
+        );
+    }
+
+    #[test]
+    fn stack_column_marks_a_shared_full_row_one_eighth_short_of_solid() {
+        // run0's own 600 doesn't reach row index0's own threshold
+        // (1000) by itself; run1's addition completes it, so that
+        // row holds both runs' tokens, not run1's alone -- drawn
+        // one eighth short of solid to mark the blend, unlike a row
+        // a single run completes entirely on its own.
+        let cells = stack_column(&[600, 1300], 4000, 4, sent_partial_glyph);
+        assert_eq!(cells[3].map(|c| c.glyph), Some('\u{2587}'));
+    }
+
+    #[test]
+    fn stack_column_never_marks_a_runs_own_first_row_as_shared() {
+        // run0 starts the stack from the axis itself (nothing below
+        // it to share with), so even though its own 1300 crosses
+        // one row boundary, that row reads solid.
+        let cells = stack_column(&[1300, 0], 4000, 4, sent_partial_glyph);
+        assert_eq!(cells[3].map(|c| c.glyph), Some('\u{2588}'));
+    }
+
+    #[test]
+    fn stack_column_credits_the_partial_cap_to_the_larger_share_even_when_processed_first() {
+        // run0 (1300) is processed before run1 (100), and run0's
+        // own 300 remaining after row index0 is larger than run1's
+        // own 100 -- the cap goes to run0 even though run1 was the
+        // last one added, not simply the last run processed.
+        let cells = stack_column(&[1300, 100], 4000, 4, sent_partial_glyph);
+        assert_eq!(
+            cells[2].map(|c| (c.run_index, c.glyph)),
+            Some((0, '\u{2583}'))
         );
     }
 
@@ -797,7 +902,7 @@ mod tests {
                 &model_b,
             ),
         ];
-        let screen = build_combined_signal(&inputs, anchor, 0, 0, now);
+        let screen = build_combined_signal(&inputs, anchor, 0, 0, now, None);
         // a's 1,000 t at col10 (1.0s) is the peak; b's 500 t at
         // col20 (2.0s) isn't.
         assert_eq!(screen.totals.peak_tokens, 1_000);
@@ -810,5 +915,307 @@ mod tests {
         assert!((screen.runs[0].share_pct - 66.666_66).abs() < 0.01);
         assert!((screen.runs[1].share_pct - 33.333_33).abs() < 0.01);
         assert_eq!(format_share(screen.runs[0].share_pct), "67%");
+    }
+
+    #[test]
+    fn build_combined_signal_follows_the_scrub_cursor_for_peak_and_quiet() {
+        // Same two runs as above (a finishes 1,000 t at 1.0s, b
+        // finishes 500 t at 2.0s), but scrubbed back to a's own
+        // column: b's finish is past the cursor, so it moves
+        // neither Peak nor Quiet, the same as it would if it simply
+        // hadn't happened yet.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("do.yml");
+        std::fs::write(
+            &path,
+            "effects:\n  - name: step\n    type: prompt\n    template: hi\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new()).unwrap();
+        let plan = PlanTree::from_program(&program);
+        let now = "2026-01-01T00:00:03Z";
+        let anchor = "2026-01-01T00:00:00Z";
+
+        let state_a = finished_prompt_state(1_000, 0, "2026-01-01T00:00:01Z");
+        let flat_a = crate::model::flatten_state(&state_a);
+        let rendered_a = crate::render::build_folded(
+            "a.yml",
+            "cof",
+            &plan,
+            &mut RunModel::new(),
+            Some(&state_a),
+            crate::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let model_a = RunModel::new();
+
+        let state_b = finished_prompt_state(500, 0, "2026-01-01T00:00:02Z");
+        let flat_b = crate::model::flatten_state(&state_b);
+        let rendered_b = crate::render::build_folded(
+            "b.yml",
+            "cof",
+            &plan,
+            &mut RunModel::new(),
+            Some(&state_b),
+            crate::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let model_b = RunModel::new();
+
+        let inputs = vec![
+            combined_run_input(
+                "a.yml",
+                &rendered_a.header,
+                &rendered_a.unfolded_rows,
+                &flat_a,
+                &plan,
+                &model_a,
+            ),
+            combined_run_input(
+                "b.yml",
+                &rendered_b.header,
+                &rendered_b.unfolded_rows,
+                &flat_b,
+                &plan,
+                &model_b,
+            ),
+        ];
+        let cursor_col = column_of(1.0); // a's own column (1.0s)
+        let screen = build_combined_signal(&inputs, anchor, 0, 0, now, Some(cursor_col));
+        assert_eq!(screen.totals.peak_tokens, 1_000);
+        assert_eq!(screen.totals.peak_time_s, 1.0);
+        // Quiet: a's own finish (1.0s) is 2.0s before now (3.0s),
+        // not b's later one (which the cursor hides).
+        assert!((screen.totals.quiet_s.unwrap() - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_combined_signal_grows_the_shared_scale_and_never_shrinks_it() {
+        // a alone stacks 1,000 t into one column: 1.5 x 1,000 =
+        // 1,500, so the smallest round top at or above that is
+        // 2,000.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("do.yml");
+        std::fs::write(
+            &path,
+            "effects:\n  - name: step\n    type: prompt\n    template: hi\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new()).unwrap();
+        let plan = PlanTree::from_program(&program);
+        let now = "2026-01-01T00:00:03Z";
+        let anchor = "2026-01-01T00:00:00Z";
+        let state_a = finished_prompt_state(1_000, 0, "2026-01-01T00:00:01Z");
+        let flat_a = crate::model::flatten_state(&state_a);
+        let rendered_a = crate::render::build_folded(
+            "a.yml",
+            "cof",
+            &plan,
+            &mut RunModel::new(),
+            Some(&state_a),
+            crate::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let model_a = RunModel::new();
+        let inputs = vec![combined_run_input(
+            "a.yml",
+            &rendered_a.header,
+            &rendered_a.unfolded_rows,
+            &flat_a,
+            &plan,
+            &model_a,
+        )];
+
+        let first = build_combined_signal(&inputs, anchor, 0, 0, now, None);
+        assert_eq!(first.sent_axis_top, 2_000);
+
+        // Fed back as the floor (the way `keys::AllState`'s own
+        // `combined_sent_top` carries it from one redraw to the
+        // next), the same data keeps the same top rather than
+        // recomputing a smaller one from scratch.
+        let second = build_combined_signal(&inputs, anchor, first.sent_axis_top, 0, now, None);
+        assert_eq!(second.sent_axis_top, 2_000);
+
+        // A floor from a larger column seen earlier persists even
+        // though this data alone wouldn't justify it.
+        let third = build_combined_signal(&inputs, anchor, 50_000, 0, now, None);
+        assert_eq!(third.sent_axis_top, 50_000);
+    }
+
+    fn combined_tool_row(path: &str, label: &str, status: StatusKind) -> Row {
+        Row {
+            path: path.to_string(),
+            depth: 1,
+            label: label.to_string(),
+            kind: RowKind::Tool,
+            status: crate::model::RowStatus {
+                kind: status,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        }
+    }
+
+    fn combined_tool_node(created_at: &str, completed_at: Option<&str>) -> NodeMeta {
+        NodeMeta {
+            created_at: Some(created_at.to_string()),
+            completed_at: completed_at.map(str::to_string),
+            error: None,
+            branch: None,
+            progress_done: None,
+            progress_total: None,
+            progress_eta_s: None,
+            live: None,
+            prompt_live: None,
+            value: serde_json::Value::Null,
+            meta: serde_json::json!({}),
+        }
+    }
+
+    #[test]
+    fn finished_prompt_first_and_extra_falls_back_to_a_finished_tool_with_no_prompt_at_all() {
+        let plan = PlanTree::empty();
+        let rows = vec![combined_tool_row(
+            "prime.warmup",
+            "warmup",
+            StatusKind::Done,
+        )];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.warmup".to_string(),
+            combined_tool_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        let (label, extra, _col) =
+            finished_prompt_first_and_extra(&rows, &flat, &plan, "2026-01-01T00:00:00Z")
+                .expect("a finished tool step, with no prompt to prefer");
+        assert_eq!(label, "warmup");
+        assert_eq!(extra, 0);
+    }
+
+    #[test]
+    fn finished_prompt_first_and_extra_prefers_a_finished_prompt_over_an_earlier_tool() {
+        let plan = PlanTree::empty();
+        let rows = vec![
+            combined_tool_row("prime.warmup", "warmup", StatusKind::Done),
+            Row {
+                path: "prime.step".to_string(),
+                depth: 1,
+                label: "step".to_string(),
+                kind: RowKind::Prompt,
+                status: crate::model::RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                duration_s: None,
+                loop_progress: None,
+                dim: None,
+                has_children: false,
+            },
+        ];
+        let mut flat = BTreeMap::new();
+        // The tool finishes first, but a run with any finished
+        // prompt or reflector at all reads only those, so the frame's
+        // own prompt-only choice never loses to a tool that merely
+        // happened to finish earlier.
+        flat.insert(
+            "prime.warmup".to_string(),
+            combined_tool_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        flat.insert(
+            "prime.step".to_string(),
+            combined_tool_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:05Z")),
+        );
+        let (label, _extra, _col) =
+            finished_prompt_first_and_extra(&rows, &flat, &plan, "2026-01-01T00:00:00Z")
+                .expect("a finished prompt");
+        assert_eq!(label, "step");
+    }
+
+    #[test]
+    fn build_combined_signal_breaks_a_largest_tie_by_launch_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("do.yml");
+        std::fs::write(
+            &path,
+            "effects:\n  - name: step\n    type: prompt\n    template: hi\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new()).unwrap();
+        let plan = PlanTree::from_program(&program);
+        let now = "2026-01-01T00:00:03Z";
+        let anchor = "2026-01-01T00:00:00Z";
+
+        // Three runs, tied at the same total -- the first launched
+        // (ra, read first from `inputs`) wins the tie, not whichever
+        // `Iterator::max_by_key` would otherwise keep last.
+        let make = |doc: &str, model: &mut RunModel, state: &serde_json::Value| {
+            crate::render::build_folded(
+                doc,
+                "cof",
+                &plan,
+                model,
+                Some(state),
+                crate::model::ProcessState::Running,
+                0.0,
+                now,
+                &[],
+                true,
+                &Default::default(),
+            )
+        };
+        let state = finished_prompt_state(124, 0, "2026-01-01T00:00:01Z");
+        let flat = crate::model::flatten_state(&state);
+        let mut model_a = RunModel::new();
+        let rendered_a = make("ra.yml", &mut model_a, &state);
+        let mut model_b = RunModel::new();
+        let rendered_b = make("rb.yml", &mut model_b, &state);
+        let mut model_c = RunModel::new();
+        let rendered_c = make("rc.yml", &mut model_c, &state);
+
+        let inputs = vec![
+            combined_run_input(
+                "ra.yml",
+                &rendered_a.header,
+                &rendered_a.unfolded_rows,
+                &flat,
+                &plan,
+                &model_a,
+            ),
+            combined_run_input(
+                "rb.yml",
+                &rendered_b.header,
+                &rendered_b.unfolded_rows,
+                &flat,
+                &plan,
+                &model_b,
+            ),
+            combined_run_input(
+                "rc.yml",
+                &rendered_c.header,
+                &rendered_c.unfolded_rows,
+                &flat,
+                &plan,
+                &model_c,
+            ),
+        ];
+        let screen = build_combined_signal(&inputs, anchor, 0, 0, now, None);
+        assert_eq!(screen.readings.largest_doc, Some("ra.yml".to_string()));
     }
 }
