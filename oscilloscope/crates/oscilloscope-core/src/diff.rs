@@ -237,8 +237,8 @@ fn result_summary(node: &NodeMeta) -> String {
             .unwrap_or(0);
         return format!(
             "↑{} ↓{}",
-            crate::format::format_tokens(tokens_sent),
-            crate::format::format_tokens(received)
+            crate::format::format_tokens_arrow(tokens_sent),
+            crate::format::format_tokens_arrow(received)
         );
     }
     "ok".to_string()
@@ -2882,7 +2882,7 @@ mod tests {
 
         let settled = differ.settle_pending_ends(Instant::now());
         assert_eq!(settled.len(), 1);
-        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert_eq!(settled[0].ts.as_deref(), Some("t1"));
         assert!(!differ.has_pending_ends());
     }
@@ -2944,7 +2944,7 @@ mod tests {
 
         let settled = differ.settle_pending_ends(Instant::now());
         assert_eq!(settled.len(), 1);
-        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert!(!differ.has_pending_ends());
     }
 
@@ -2996,7 +2996,7 @@ mod tests {
             &model,
         );
         assert_eq!(end.len(), 1, "{end:?}");
-        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert!(!differ.has_pending_ends());
     }
 
@@ -3077,7 +3077,7 @@ mod tests {
             &model,
         );
         assert_eq!(end.len(), 1, "{end:?}");
-        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert!(!differ.has_pending_ends());
     }
 
@@ -3121,7 +3121,7 @@ mod tests {
         );
         assert_eq!(end.len(), 1);
         assert!(
-            end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 t ↓5 t"),
+            end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 ↓5"),
             "{end:?}"
         );
         assert!(!differ.has_pending_ends());

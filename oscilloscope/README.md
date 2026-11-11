@@ -315,8 +315,8 @@ colours; `T` cycles through them live, on every screen osi draws
 (issue #714: a single run's own four screens, Select, All, the
 Combined Signal and the full-screen step), sharing one theme across
 an attach, never persisted past this one session. `--no-animation`
-turns the
-scope icon's own trace off, on both `osi <doc>` and `osi watch`.
+turns the scope icon's own trace off, on both `osi <doc>` and
+`osi watch`.
 
 ### The Tape (`0`)
 

@@ -282,8 +282,8 @@ fn shared_run_chrome_status_spans(
                 Span::styled(format!(" {glyph} "), glyph_style),
                 Span::styled(
                     format!(
-                        "run {word} · {} t · {} ",
-                        oscilloscope_core::format::format_tokens_thousands(total),
+                        "run {word} · {} · {} ",
+                        oscilloscope_core::format::format_tokens(total),
                         oscilloscope_core::format::format_duration(*duration_s)
                     ),
                     Style::default().fg(ctx.theme.text),
@@ -380,10 +380,8 @@ fn draw_tape_status_line(
         .map(|_| {
             format!(
                 " · ↑{} ↓{}",
-                oscilloscope_core::format::format_tokens_thousands(row.tokens.sent.unwrap_or(0)),
-                oscilloscope_core::format::format_tokens_thousands(
-                    row.tokens.received.unwrap_or(0)
-                )
+                oscilloscope_core::format::format_tokens_arrow(row.tokens.sent.unwrap_or(0)),
+                oscilloscope_core::format::format_tokens_arrow(row.tokens.received.unwrap_or(0))
             )
         })
         .unwrap_or_default();
@@ -576,7 +574,7 @@ fn tape_token_bar(
     live: bool,
     ctx: &DrawCtx,
 ) -> Vec<Span<'static>> {
-    let count_text = oscilloscope_core::format::format_tokens_t(total);
+    let count_text = oscilloscope_core::format::format_tokens(total);
     let count_len = count_text.chars().count();
     // The gap before the count shrinks as the count itself widens (the
     // same column-sizing `tape_token_column` already does for a loop's
@@ -687,7 +685,7 @@ mod tape_token_bar_tests {
                 "a live total of {total} printed {width} cells, over the 16-cell column"
             );
             let full: String = spans.iter().map(|s| s.content.as_ref()).collect();
-            let expected_count = oscilloscope_core::format::format_tokens_t(total);
+            let expected_count = oscilloscope_core::format::format_tokens(total);
             assert!(
                 full.ends_with(&expected_count),
                 "the count itself must never be cut: {full:?}"
@@ -757,7 +755,7 @@ mod tape_token_bar_tests {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(text.contains("↑1,600"), "{text}");
+        assert!(text.contains("↑1.6k"), "{text}");
         assert!(
             text.contains("↓—"),
             "a never-reported received figure must draw as a dash: {text}"
@@ -1046,10 +1044,7 @@ fn tape_token_column(
             .collect();
         let avg =
             tokens.loop_pass_tokens.iter().sum::<u64>() / tokens.loop_pass_tokens.len() as u64;
-        let suffix = format!(
-            "{} t/p",
-            oscilloscope_core::format::format_tokens_thousands(avg)
-        );
+        let suffix = format!("{}/p", oscilloscope_core::format::format_tokens(avg));
         // The same 16-column token column the bar fills, with the
         // suffix right-aligned in it rather than a fixed 3-space gap
         // -- a run with more passes (a wider sparkline) needs a
@@ -1092,8 +1087,8 @@ fn tape_token_column(
         None => tokens.usual.map(|usual| {
             Line::from(Span::styled(
                 format!(
-                    "usually {} t",
-                    oscilloscope_core::format::format_tokens_thousands(usual)
+                    "usually {}",
+                    oscilloscope_core::format::format_tokens(usual)
                 ),
                 Style::default().fg(ctx.theme.dim),
             ))
@@ -1931,8 +1926,8 @@ fn draw_tape_list(
                     match usual_total_tokens {
                         Some(usual) => {
                             text.push_str(&format!(
-                                "usually {} t",
-                                oscilloscope_core::format::format_tokens_thousands(*usual)
+                                "usually {}",
+                                oscilloscope_core::format::format_tokens(*usual)
                             ));
                             // 80-119 columns drops just the duration
                             // (the row still carries its own usual
@@ -2143,9 +2138,9 @@ fn draw_totals_row(
             ),
         ];
         let mut headline = if live {
-            format!("≈{}", oscilloscope_core::format::format_tokens_t(total))
+            format!("≈{}", oscilloscope_core::format::format_tokens(total))
         } else {
-            oscilloscope_core::format::format_tokens_t(total)
+            oscilloscope_core::format::format_tokens(total)
         };
         if let Some(pct) = usual_pct {
             headline.push_str(&format!(" {pct:+.0}%"));
@@ -2209,8 +2204,8 @@ fn draw_totals_row(
             format!(
                 "{}↑{} ↓{} · ",
                 if live { "≈" } else { "" },
-                oscilloscope_core::format::format_tokens_thousands(sent_total),
-                oscilloscope_core::format::format_tokens_thousands(received_total)
+                oscilloscope_core::format::format_tokens_arrow(sent_total),
+                oscilloscope_core::format::format_tokens_arrow(received_total)
             ),
             if live {
                 Style::default().fg(ctx.theme.dim)
@@ -2219,10 +2214,7 @@ fn draw_totals_row(
             },
         ),
         Span::styled(
-            format!(
-                "{} t",
-                oscilloscope_core::format::format_tokens_thousands(sent_total + received_total)
-            ),
+            oscilloscope_core::format::format_tokens(sent_total + received_total),
             if live {
                 Style::default().fg(ctx.theme.dim)
             } else {
@@ -2436,11 +2428,11 @@ fn focused_attempts_lines(
                 "↑{} ↓{}",
                 attempt
                     .tokens_sent
-                    .map(oscilloscope_core::format::format_tokens_thousands)
+                    .map(oscilloscope_core::format::format_tokens_arrow)
                     .unwrap_or_else(|| "—".to_string()),
                 attempt
                     .tokens_received
-                    .map(oscilloscope_core::format::format_tokens_thousands)
+                    .map(oscilloscope_core::format::format_tokens_arrow)
                     .unwrap_or_else(|| "—".to_string())
             ));
         }
@@ -2636,7 +2628,7 @@ fn focused_loop_lines(
         let (glyph, word, glyph_style) = tape_status_glyph_word_style(pass.status.kind, ctx.theme);
         let tokens_text = pass
             .tokens
-            .map(oscilloscope_core::format::format_tokens_t)
+            .map(oscilloscope_core::format::format_tokens)
             .unwrap_or_else(|| "—".to_string());
         lines.push(tape_detail_line(
             vec![
@@ -2831,12 +2823,13 @@ fn tape_normal_detail_lines(
             ));
             if let Some((n, is_estimate)) = live.tokens_received_or_estimate() {
                 let marker = if is_estimate { "≈" } else { "" };
-                let mut received_text = format!(
-                    "{marker}{} t",
-                    oscilloscope_core::format::format_tokens_thousands(n)
-                );
+                let mut received_text =
+                    format!("{marker}{}", oscilloscope_core::format::format_tokens(n));
                 if let Some(rate) = live.tokens_per_second {
-                    received_text.push_str(&format!(" · {} t/s", rate.round() as i64));
+                    received_text.push_str(&format!(
+                        " · {}/s",
+                        oscilloscope_core::format::format_tokens(rate.round() as u64)
+                    ));
                 }
                 lines.push(tape_detail_line(
                     vec![
@@ -2848,15 +2841,9 @@ fn tape_normal_detail_lines(
             }
             if let Some((n, is_estimate)) = live.tokens_sent_or_estimate() {
                 let sent_text = if is_estimate {
-                    format!(
-                        "≈{} t",
-                        oscilloscope_core::format::format_tokens_thousands(n)
-                    )
+                    format!("≈{}", oscilloscope_core::format::format_tokens(n))
                 } else {
-                    format!(
-                        "↑{} t",
-                        oscilloscope_core::format::format_tokens_thousands(n)
-                    )
+                    format!("↑{}", oscilloscope_core::format::format_tokens(n))
                 };
                 lines.push(tape_detail_line(
                     vec![
@@ -2884,11 +2871,11 @@ fn tape_normal_detail_lines(
         // is still unknown reads `—`, never a false `0`.
         let sent_text = detail
             .tokens_sent
-            .map(oscilloscope_core::format::format_tokens_thousands)
+            .map(oscilloscope_core::format::format_tokens_arrow)
             .unwrap_or_else(|| "—".to_string());
         let received_text = detail
             .tokens_received
-            .map(oscilloscope_core::format::format_tokens_thousands)
+            .map(oscilloscope_core::format::format_tokens_arrow)
             .unwrap_or_else(|| "—".to_string());
         let total = detail.tokens_sent.unwrap_or(0) + detail.tokens_received.unwrap_or(0);
         lines.push(tape_detail_line(
@@ -2897,7 +2884,7 @@ fn tape_normal_detail_lines(
                 Span::styled(format!("↑{sent_text} ↓{received_text} "), default),
                 Span::styled("· ", muted),
                 Span::styled(
-                    oscilloscope_core::format::format_tokens_t(total),
+                    oscilloscope_core::format::format_tokens(total),
                     default.add_modifier(Modifier::BOLD),
                 ),
             ],
@@ -2913,10 +2900,7 @@ fn tape_normal_detail_lines(
         let mut spans = vec![
             Span::styled("Usual   ", muted),
             Span::styled(
-                format!(
-                    "{} t  ",
-                    oscilloscope_core::format::format_tokens_thousands(usual)
-                ),
+                format!("{}  ", oscilloscope_core::format::format_tokens(usual)),
                 default,
             ),
         ];
@@ -2983,10 +2967,7 @@ fn tape_normal_detail_lines(
         let mut heading = vec![Span::styled("Prompt Sent ", title_bold)];
         if let Some(tokens) = detail.prompt_sent_tokens {
             heading.push(Span::styled(
-                format!(
-                    "· {} t",
-                    oscilloscope_core::format::format_tokens_thousands(tokens)
-                ),
+                format!("· {}", oscilloscope_core::format::format_tokens(tokens)),
                 muted,
             ));
         }
@@ -3003,10 +2984,8 @@ fn tape_normal_detail_lines(
                 Span::styled("Reply ", title_bold),
                 Span::styled(
                     format!(
-                        "· {} t",
-                        oscilloscope_core::format::format_tokens_thousands(
-                            detail.reply_tokens.unwrap_or(0)
-                        )
+                        "· {}",
+                        oscilloscope_core::format::format_tokens(detail.reply_tokens.unwrap_or(0))
                     ),
                     muted,
                 ),
@@ -3103,10 +3082,7 @@ fn tape_starting_detail_lines(
     ) {
         (Some(tokens), Some(wall_s), Some(count)) => {
             usual_spans.push(Span::styled(
-                format!(
-                    "{} t ",
-                    oscilloscope_core::format::format_tokens_thousands(tokens)
-                ),
+                format!("{} ", oscilloscope_core::format::format_tokens(tokens)),
                 default.add_modifier(Modifier::BOLD),
             ));
             usual_spans.push(Span::styled(
@@ -3153,8 +3129,8 @@ fn tape_starting_detail_lines(
         lines.push(tape_detail_line(
             vec![Span::styled(
                 format!(
-                    "usually {} t",
-                    oscilloscope_core::format::format_tokens_thousands(usual)
+                    "usually {}",
+                    oscilloscope_core::format::format_tokens(usual)
                 ),
                 muted,
             )],
@@ -3237,13 +3213,13 @@ fn tape_ended_detail_lines(
                 Span::styled(
                     format!(
                         "↑{} ↓{} · ",
-                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_sent),
-                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_received)
+                        oscilloscope_core::format::format_tokens_arrow(detail.tokens_sent),
+                        oscilloscope_core::format::format_tokens_arrow(detail.tokens_received)
                     ),
                     default,
                 ),
                 Span::styled(
-                    oscilloscope_core::format::format_tokens_t(
+                    oscilloscope_core::format::format_tokens(
                         detail.tokens_sent + detail.tokens_received,
                     ),
                     default.add_modifier(Modifier::BOLD),
@@ -3256,10 +3232,7 @@ fn tape_ended_detail_lines(
     match (detail.usual_total_tokens, detail.usual_dev_pct) {
         (Some(tokens), Some(dev)) => {
             usual_spans.push(Span::styled(
-                format!(
-                    "{} t ",
-                    oscilloscope_core::format::format_tokens_thousands(tokens)
-                ),
+                format!("{} ", oscilloscope_core::format::format_tokens(tokens)),
                 default,
             ));
             usual_spans.push(Span::styled(
@@ -3309,7 +3282,7 @@ fn tape_ended_detail_lines(
                 Span::styled("Largest  ", muted),
                 Span::styled(format!("{label} "), default),
                 Span::styled(
-                    oscilloscope_core::format::format_tokens_t(tokens),
+                    oscilloscope_core::format::format_tokens(tokens),
                     default.add_modifier(Modifier::BOLD),
                 ),
             ],
@@ -3406,13 +3379,13 @@ fn tape_failed_detail_lines(
                 Span::styled(
                     format!(
                         "↑{} ↓{} · ",
-                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_sent),
-                        oscilloscope_core::format::format_tokens_thousands(detail.tokens_received)
+                        oscilloscope_core::format::format_tokens_arrow(detail.tokens_sent),
+                        oscilloscope_core::format::format_tokens_arrow(detail.tokens_received)
                     ),
                     default,
                 ),
                 Span::styled(
-                    oscilloscope_core::format::format_tokens_t(
+                    oscilloscope_core::format::format_tokens(
                         detail.tokens_sent + detail.tokens_received,
                     ),
                     default.add_modifier(Modifier::BOLD),
@@ -3425,10 +3398,7 @@ fn tape_failed_detail_lines(
     match (detail.usual_tokens, detail.usual_dev_pct) {
         (Some(tokens), Some(dev)) => {
             usual_spans.push(Span::styled(
-                format!(
-                    "{} t ",
-                    oscilloscope_core::format::format_tokens_thousands(tokens)
-                ),
+                format!("{} ", oscilloscope_core::format::format_tokens(tokens)),
                 default,
             ));
             usual_spans.push(Span::styled(
@@ -4247,7 +4217,7 @@ fn render_line(frame: &mut Frame, rect: Rect, spans: Vec<Span<'static>>) {
 }
 
 /// One Recent Runs row's own spans (issue #698): DOC(9) CONFIG(15)
-/// STARTED(10) then TOOK+TOKENS combined (13, `{:<5}{:>5} t `) and
+/// STARTED(10) then TOOK+TOKENS combined (13, `{:<5}{:>7} `) and
 /// OUTCOME -- field widths measured from `design/frames/select--
 /// empty--80x24`.
 fn recent_row_spans(
@@ -4269,9 +4239,9 @@ fn recent_row_spans(
     let doc_field = format!("{:<9}", row.document_label);
     let config_field = format!("{config_text:<15}");
     let started_field = format!("{started:<10}");
-    let tokens_text = oscilloscope_core::format::format_tokens_thousands(row.tokens);
+    let tokens_text = oscilloscope_core::format::format_tokens(row.tokens);
     let duration_text = oscilloscope_core::format::format_duration(row.took_s);
-    let took_tokens_field = format!("{duration_text:<5}{tokens_text:>5} t ");
+    let took_tokens_field = format!("{duration_text:<5}{tokens_text:>7} ");
     if selected {
         // The frame's own first and last content columns stay
         // border-coloured even on the selected row (`design/frames/
@@ -5940,13 +5910,12 @@ fn draw_combined_totals_row(
         .quiet_s
         .map(|q| format!("{}s", format_seconds_1(q)))
         .unwrap_or_else(|| "\u{2014}".to_string());
-    let sent_text = oscilloscope_core::format::format_tokens_thousands(t.sent);
-    let received_text = oscilloscope_core::format::format_tokens_thousands(t.received);
-    let total_text = oscilloscope_core::format::format_tokens_t(t.total);
-    let peak_text = oscilloscope_core::format::format_tokens_t(t.peak_tokens);
+    let sent_text = oscilloscope_core::format::format_tokens_arrow(t.sent);
+    let received_text = oscilloscope_core::format::format_tokens_arrow(t.received);
+    let total_text = oscilloscope_core::format::format_tokens(t.total);
+    let peak_text = oscilloscope_core::format::format_tokens(t.peak_tokens);
     let peak_time_text = format_seconds_1(t.peak_time_s);
-    let rate_text =
-        oscilloscope_core::format::format_tokens_thousands(t.rate_tokens_per_s.round() as u64);
+    let rate_text = oscilloscope_core::format::format_tokens(t.rate_tokens_per_s.round() as u64);
     let spans = vec![
         Span::styled(" ", Style::default().fg(ctx.theme.text)),
         Span::styled(
@@ -5975,7 +5944,7 @@ fn draw_combined_totals_row(
             Style::default().fg(ctx.theme.fg_muted),
         ),
         Span::styled(
-            format!("{rate_text} t/s  "),
+            format!("{rate_text}/s  "),
             Style::default().fg(ctx.theme.text),
         ),
         Span::styled("Quiet ", Style::default().fg(ctx.theme.fg_muted)),
@@ -6191,7 +6160,7 @@ fn draw_combined_per_run_table(
             &now_text,
             row_style(ctx.theme.text),
         );
-        let tokens_text = oscilloscope_core::format::format_tokens_t(run.tokens_total);
+        let tokens_text = oscilloscope_core::format::format_tokens(run.tokens_total);
         set_right_aligned(
             buf,
             per_run_right_x(inner, PER_RUN_TOKENS_RIGHT_OF_EDGE),
@@ -6223,8 +6192,8 @@ fn draw_combined_per_run_table(
 
 /// Readings: Runs, Steps, Largest, Scale -- the label field
 /// always leaves one real space before the value, even when the
-/// label itself is exactly 6 characters (`Largest`), unlike the
-/// frame's own `Largestsummarize.yml`, allow-listed as a frame typo.
+/// label itself is longer than the padding width (`Largest`, seven
+/// characters against a width of six).
 fn draw_combined_readings(
     frame: &mut Frame,
     area: Rect,
@@ -6269,7 +6238,7 @@ fn draw_combined_readings(
     ];
     if let Some(doc) = &r.largest_doc {
         let share_text = oscilloscope_core::combined::format_share(r.largest_share_pct);
-        let tokens_text = oscilloscope_core::format::format_tokens_t(r.largest_tokens);
+        let tokens_text = oscilloscope_core::format::format_tokens(r.largest_tokens);
         lines.push(Line::from(vec![
             Span::styled(format!("{:<6} ", "Largest"), muted),
             Span::styled(format!("{doc} "), text_style),
@@ -6543,7 +6512,7 @@ fn draw_signal(
         wide,
         ctx.theme.border_focused,
         None,
-        oscilloscope_core::format::format_tokens_t,
+        oscilloscope_core::multi::format_shared_axis_label,
         ctx.theme.accent_primary,
         ctx,
     );
@@ -6601,8 +6570,8 @@ fn draw_signal_status_line(
         .map(|(sent, received)| {
             format!(
                 " \u{b7} \u{2191}{} \u{2193}{}",
-                oscilloscope_core::format::format_tokens_thousands(sent),
-                oscilloscope_core::format::format_tokens_thousands(received)
+                oscilloscope_core::format::format_tokens_arrow(sent),
+                oscilloscope_core::format::format_tokens_arrow(received)
             )
         })
         .unwrap_or_default();
@@ -6791,7 +6760,7 @@ fn draw_signal_chart(
     let axis_row_y = inner.y + SIGNAL_SENT_ROWS as u16;
 
     // The label field's own width: wide enough for the widest of the
-    // four axis labels (`1,200 t`, past three digits on a long or
+    // four axis labels (`1.2k`, past three digits on a long or
     // history-heavy run, not just `600 t`), plus the one blank
     // gutter column before the trace itself starts.
     let sent_top_label = axis_label_format(screen.sent_axis_top);
@@ -6804,7 +6773,7 @@ fn draw_signal_chart(
     // four cells, so it overflows its own gutter rather than
     // widening it, same as `saturating_sub` already lets it. A
     // single-run Signal's own received label, with history, can
-    // still be wider than its sent ones (`5,120 t` against `300 t`),
+    // still be wider than its sent ones (`5.1k` against `300 t`),
     // so it stays in this computation there.
     let label_width = ["0", sent_top_label.as_str(), sent_half_label.as_str()]
         .iter()
@@ -6817,10 +6786,9 @@ fn draw_signal_chart(
         .max()
         .unwrap_or(1) as u16;
     // A tile's own axis labels (identified by its own title
-    // override, the shared scale's `k`-style formatting) leave one
-    // more blank column before the data starts than a single run's
-    // own longer, comma-separated labels ever needed (the frames'
-    // own `all--signal--180x48`: the axis row's `0` sits one column
+    // override) leave one more blank column before the data starts
+    // than a single run's own axis ever needed (the frames' own
+    // `all--signal--180x48`: the axis row's `0` sits one column
     // further left than its own dashes' start would otherwise put
     // it).
     let gutter = label_width + 1 + u16::from(title_override.is_some());
@@ -7265,10 +7233,7 @@ fn signal_step_row_spans(
                 spans.push((format!("{} ", item.label), default));
                 if let Some(tokens) = item.tokens {
                     spans.push((
-                        format!(
-                            "{} t ",
-                            oscilloscope_core::format::format_tokens_thousands(tokens)
-                        ),
+                        format!("{} ", oscilloscope_core::format::format_tokens(tokens)),
                         bold,
                     ));
                 }
@@ -7357,7 +7322,7 @@ fn draw_signal_tile_finished_labels(
         };
         let tokens_text = format!(
             " \u{b7} {}",
-            oscilloscope_core::format::format_tokens_t(g.tokens)
+            oscilloscope_core::format::format_tokens(g.tokens)
         );
         let label_x = data_x + (g.col - start_col) as u16;
         if label_x >= right_edge {
@@ -7751,8 +7716,8 @@ fn draw_signal_readings(
                 Span::styled("Sent     ", muted),
                 Span::styled(
                     format!(
-                        "{sent_marker}{} t",
-                        oscilloscope_core::format::format_tokens_thousands(readings.sent)
+                        "{sent_marker}{}",
+                        oscilloscope_core::format::format_tokens(readings.sent)
                     ),
                     sent_style,
                 ),
@@ -7764,8 +7729,8 @@ fn draw_signal_readings(
                 Span::styled("Received ", muted),
                 Span::styled(
                     format!(
-                        "{received_marker}{} t",
-                        oscilloscope_core::format::format_tokens_thousands(readings.received)
+                        "{received_marker}{}",
+                        oscilloscope_core::format::format_tokens(readings.received)
                     ),
                     received_style,
                 ),
@@ -7791,10 +7756,7 @@ fn draw_signal_readings(
             Some((tokens, ts)) => vec![
                 Span::styled("Peak     ", muted),
                 Span::styled(
-                    format!(
-                        "{} t ",
-                        oscilloscope_core::format::format_tokens_thousands(*tokens)
-                    ),
+                    format!("{} ", oscilloscope_core::format::format_tokens(*tokens)),
                     bold,
                 ),
                 Span::styled(
@@ -7819,8 +7781,8 @@ fn draw_signal_readings(
                 Span::styled("Largest  ", muted),
                 Span::styled(
                     format!(
-                        "{label} {} t",
-                        oscilloscope_core::format::format_tokens_thousands(*tokens)
+                        "{label} {}",
+                        oscilloscope_core::format::format_tokens(*tokens)
                     ),
                     default,
                 ),
@@ -8037,12 +7999,7 @@ fn focused_step_full_lines(
                     Span::styled(
                         received
                             .tokens
-                            .map(|t| {
-                                format!(
-                                    "· {} t",
-                                    oscilloscope_core::format::format_tokens_thousands(t)
-                                )
-                            })
+                            .map(|t| format!("· {}", oscilloscope_core::format::format_tokens(t)))
                             .unwrap_or_default(),
                         muted,
                     ),
@@ -8074,7 +8031,7 @@ fn focused_step_full_lines(
         let mut spans = vec![Span::styled("Tokens  ", muted)];
         if let Some(total) = step.tokens {
             spans.push(Span::styled(
-                oscilloscope_core::format::format_tokens_t(total),
+                oscilloscope_core::format::format_tokens(total),
                 default.add_modifier(Modifier::BOLD),
             ));
         }
@@ -8097,7 +8054,7 @@ fn focused_step_full_lines(
                 vec![
                     Span::styled("        ", muted),
                     Span::styled(
-                        oscilloscope_core::format::format_tokens_t(attempts_total),
+                        oscilloscope_core::format::format_tokens(attempts_total),
                         default,
                     ),
                     Span::styled(
@@ -8116,10 +8073,7 @@ fn focused_step_full_lines(
             let mut spans = vec![
                 Span::styled("Usual   ", muted),
                 Span::styled(
-                    format!(
-                        "{} t  ",
-                        oscilloscope_core::format::format_tokens_thousands(usual)
-                    ),
+                    format!("{}  ", oscilloscope_core::format::format_tokens(usual)),
                     default,
                 ),
             ];
@@ -8830,8 +8784,8 @@ fn draw_store_status_line(
         .map(|(sent, received)| {
             format!(
                 " \u{b7} \u{2191}{} \u{2193}{}",
-                oscilloscope_core::format::format_tokens_thousands(sent),
-                oscilloscope_core::format::format_tokens_thousands(received)
+                oscilloscope_core::format::format_tokens_arrow(sent),
+                oscilloscope_core::format::format_tokens_arrow(received)
             )
         })
         .unwrap_or_default();
@@ -8945,17 +8899,23 @@ fn store_leaf_lines(
     theme: &Theme,
 ) -> Vec<Line<'static>> {
     let width = width as usize;
-    let faint = if leaf.live {
-        Modifier::DIM
-    } else {
+    // A live leaf reads faint; in a theme that paints no background
+    // (`terminal`), dim text on the leaf's bright-black fill would be
+    // the hardest text in the diagram to read, so it is set in italic
+    // there instead.
+    let faint = if !leaf.live {
         Modifier::empty()
+    } else if theme.background.is_none() {
+        Modifier::ITALIC
+    } else {
+        Modifier::DIM
     };
     let name_style = Style::default()
         .fg(theme.text)
         .add_modifier(Modifier::BOLD | faint);
     let value_style = Style::default().fg(theme.text).add_modifier(faint);
     let muted_style = Style::default().fg(theme.fg_muted).add_modifier(faint);
-    let tok_text = oscilloscope_core::format::format_tokens_t(leaf.tokens());
+    let tok_text = oscilloscope_core::format::format_tokens(leaf.tokens());
     let mut lines = Vec::new();
     let one_line = format!(" {} \u{b7} {tok_text}", leaf.label);
     if one_line.chars().count() <= width {
@@ -9001,12 +8961,12 @@ fn store_leaf_lines(
     let sent_text = if leaf.tokens_sent_unknown {
         "\u{2014}".to_string()
     } else {
-        oscilloscope_core::format::format_tokens_thousands(leaf.tokens_sent)
+        oscilloscope_core::format::format_tokens_arrow(leaf.tokens_sent)
     };
     let received_text = if leaf.tokens_received_unknown {
         "\u{2014}".to_string()
     } else {
-        oscilloscope_core::format::format_tokens_thousands(leaf.tokens_received)
+        oscilloscope_core::format::format_tokens_arrow(leaf.tokens_received)
     };
     lines.push(pad_line(
         store_cut_spans(
@@ -9049,7 +9009,7 @@ fn store_container_lines(
     };
     let tok_text = format!(
         "\u{b7} {}",
-        oscilloscope_core::format::format_tokens_t(tokens)
+        oscilloscope_core::format::format_tokens(tokens)
     );
     let mut lines = vec![pad_line(
         store_cut_spans(
@@ -9161,7 +9121,7 @@ fn draw_store_tiles(
                 // `mark_inset_frame` to mark, below.
                 let text = format!(
                     " \u{2026} {count} more \u{b7} {}",
-                    oscilloscope_core::format::format_tokens_t(*tokens)
+                    oscilloscope_core::format::format_tokens(*tokens)
                 );
                 let line = pad_line(
                     store_cut_spans(
@@ -9333,7 +9293,7 @@ fn draw_store_table(
         .table
         .iter()
         .map(|row| {
-            oscilloscope_core::format::format_tokens_t(row.tokens())
+            oscilloscope_core::format::format_tokens(row.tokens())
                 .chars()
                 .count()
         })
@@ -9436,7 +9396,7 @@ fn draw_store_table(
         spans.push(Span::styled(
             format!(
                 "{:<1$}",
-                oscilloscope_core::format::format_tokens_t(row.tokens()),
+                oscilloscope_core::format::format_tokens(row.tokens()),
                 tokens_w
             ),
             tokens_style,
@@ -9501,7 +9461,7 @@ fn draw_store_readings(
                 Span::styled("Largest ", muted),
                 Span::styled(format!("{label} "), default),
                 Span::styled(
-                    format!("{} ", oscilloscope_core::format::format_tokens_t(*tokens)),
+                    format!("{} ", oscilloscope_core::format::format_tokens(*tokens)),
                     bold,
                 ),
                 Span::styled(
@@ -10289,13 +10249,13 @@ fn selected_pass_lines(
             spans.push(Span::styled(
                 format!(
                     "↑{} ↓{} · ",
-                    oscilloscope_core::format::format_tokens_thousands(step.sent),
-                    oscilloscope_core::format::format_tokens_thousands(step.received)
+                    oscilloscope_core::format::format_tokens_arrow(step.sent),
+                    oscilloscope_core::format::format_tokens_arrow(step.received)
                 ),
                 Style::default().fg(ctx.theme.text),
             ));
             spans.push(Span::styled(
-                format!("{}  ", oscilloscope_core::format::format_tokens_t(total)),
+                format!("{}  ", oscilloscope_core::format::format_tokens(total)),
                 Style::default()
                     .fg(ctx.theme.text)
                     .add_modifier(Modifier::BOLD),
@@ -10308,7 +10268,10 @@ fn selected_pass_lines(
                 ));
                 if wide {
                     spans.push(Span::styled(
-                        format!("vs usual {usual} t"),
+                        format!(
+                            "vs usual {}",
+                            oscilloscope_core::format::format_tokens(usual)
+                        ),
                         Style::default().fg(ctx.theme.fg_muted),
                     ));
                 }
@@ -11132,7 +11095,7 @@ fn flow_headline_spans(
         Headline::Clock(c) => vec![(c.clone(), faint)],
         Headline::Tokens { total, usual } => {
             let mut spans = vec![(
-                format!("{} ", oscilloscope_core::format::format_tokens_t(*total)),
+                format!("{} ", oscilloscope_core::format::format_tokens(*total)),
                 muted,
             )];
             if let Some(usual) = usual {
@@ -11143,8 +11106,8 @@ fn flow_headline_spans(
         }
         Headline::PassTokens { label, total } => vec![(
             format!(
-                "{label} {} t",
-                oscilloscope_core::format::format_tokens_thousands(*total)
+                "{label} {}",
+                oscilloscope_core::format::format_tokens(*total)
             ),
             muted,
         )],
@@ -11185,7 +11148,10 @@ fn flow_headline_spans(
         Headline::ContainerAhead(kind) => vec![(kind.clone(), faint)],
         Headline::UsualTokens(usual) => {
             let text = match usual {
-                Some(u) => format!("usual {u}"),
+                Some(u) => format!(
+                    "usual {}",
+                    oscilloscope_core::format::format_tokens_arrow(*u)
+                ),
                 None => "usual —".to_string(),
             };
             vec![(text, faint)]
@@ -11195,8 +11161,8 @@ fn flow_headline_spans(
             let marker = if *estimated { "≈" } else { "" };
             vec![(
                 format!(
-                    "↓{marker}{} t",
-                    oscilloscope_core::format::format_tokens_thousands(*tokens)
+                    "↓{marker}{}",
+                    oscilloscope_core::format::format_tokens(*tokens)
                 ),
                 default_text,
             )]
@@ -11239,22 +11205,25 @@ fn flow_detail_spans(
             vec![(cmd.clone(), style)]
         }
         Detail::Condition(c) => vec![(c.clone(), faint)],
-        Detail::Tokens(t) => vec![(
-            format!(
-                "{} t",
-                oscilloscope_core::format::format_tokens_thousands(*t)
-            ),
-            muted,
-        )],
+        Detail::Tokens(t) => vec![(oscilloscope_core::format::format_tokens(*t), muted)],
         Detail::UsualTokens(u) => {
             let text = match u {
-                Some(v) => format!("usual {v}"),
+                Some(v) => format!(
+                    "usual {}",
+                    oscilloscope_core::format::format_tokens_arrow(*v)
+                ),
                 None => "usual —".to_string(),
             };
             vec![(text, faint)]
         }
         Detail::Queued => vec![("queued".to_string(), faint)],
-        Detail::Rate(rate) => vec![(format!("{} t/s", rate.round() as i64), faint)],
+        Detail::Rate(rate) => vec![(
+            format!(
+                "{}/s",
+                oscilloscope_core::format::format_tokens(rate.round() as u64)
+            ),
+            faint,
+        )],
         Detail::Waiting => vec![("waiting".to_string(), faint)],
         Detail::Attempt(attempt) => vec![(format!("attempt {attempt}"), faint)],
         Detail::AgentActivity(text) => vec![(text.clone(), muted)],
@@ -11910,8 +11879,8 @@ fn draw_flow_status_line(
         .map(|(sent, received)| {
             format!(
                 " · ↑{} ↓{}",
-                oscilloscope_core::format::format_tokens_thousands(sent),
-                oscilloscope_core::format::format_tokens_thousands(received)
+                oscilloscope_core::format::format_tokens_arrow(sent),
+                oscilloscope_core::format::format_tokens_arrow(received)
             )
         })
         .unwrap_or_default();
@@ -12501,6 +12470,49 @@ mod flow_layout_tests {
         let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
         assert!(text.contains("Start"));
         assert!(text.contains("End"));
+    }
+
+    #[test]
+    fn selected_pass_lines_scales_its_own_vs_usual_figure() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let pass = oscilloscope_core::screens::SelectedPass {
+            index: 0,
+            label: "iter_0".to_string(),
+            active_label: "Draft".to_string(),
+            active_status: oscilloscope_core::model::RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            active_elapsed_s: None,
+            slot: None,
+            steps: vec![oscilloscope_core::screens::SelectedPassStep {
+                label: "Draft".to_string(),
+                status: oscilloscope_core::model::RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                sent: 1_200,
+                received: 100,
+                usual: Some(1_500_000),
+                produced: None,
+            }],
+        };
+        let lines = selected_pass_lines(&pass, true, &ctx);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("vs usual 1.5 Mt"), "{text}");
     }
 
     #[test]
@@ -16011,11 +16023,11 @@ mod tape_frame_goldens {
     /// The Normal/Usual goldens' own status-line row (y=28 at
     /// 120x30): `gate.reply` finishes 2 ms before two loop passes
     /// do, but §3.2 reads the newest finished step regardless, same
-    /// as the frame -- `(51, 21)` is the unrelated Run End rounding
+    /// as the frame -- `(50, 21)` is the unrelated Run End rounding
     /// cell both goldens already carry, at its own centred window's
     /// row (issue #710).
     const STATUS_LINE_READS_AN_EARLIER_STEP_120X30: [(u16, u16); 43] = [
-        (51, 21),
+        (50, 21),
         (3, 28),
         (4, 28),
         (5, 28),
@@ -17014,7 +17026,7 @@ mod tape_frame_goldens {
     /// count exactly (run2 at 3.62s: 6 real ends → `6/14`). Reported
     /// here rather than bent to match the frame's own extra one.
     const ALL_TAPE_EFFECTS_DONE_COUNTER: &[(u16, u16)] =
-        &[(26, 21), (86, 21), (151, 21), (32, 44), (91, 44), (152, 44)];
+        &[(26, 21), (86, 21), (149, 21), (30, 44), (89, 44), (150, 44)];
 
     /// `review.yml`'s own loop sparkline (`labels`'s is similarly
     /// scaled) draws each pass's own level at the panel's own
@@ -17138,7 +17150,7 @@ mod tape_frame_goldens {
     /// `N/M Effects`, the same frame-counts-one-more-than-real cause
     /// as `ALL_TAPE_EFFECTS_DONE_COUNTER`.
     const ALL_SIGNAL_EFFECTS_DONE_COUNTER: &[(u16, u16)] =
-        &[(26, 15), (86, 15), (151, 15), (32, 37), (91, 37), (152, 37)];
+        &[(26, 15), (86, 15), (149, 15), (30, 37), (89, 37), (150, 37)];
 
     /// The axis row's own `✓` mark: the design text says "a `✓` on
     /// the axis marks a finished prompt", and these tiles are the
@@ -17327,38 +17339,6 @@ mod tape_frame_goldens {
     const COMBINED_SIGNAL_STATUS_LINE_PRECISION: &[(u16, u16)] =
         &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
 
-    /// The frame's own `Largest` reading lost the one space its
-    /// label field always leaves before the value everywhere else
-    /// (`Runs`, `Steps`, `Scale`) -- kept here, not bent to match.
-    const COMBINED_SIGNAL_READINGS_LABEL_GUTTER: &[(u16, u16)] = &[
-        (145, 36),
-        (146, 36),
-        (147, 36),
-        (149, 36),
-        (150, 36),
-        (151, 36),
-        (152, 36),
-        (153, 36),
-        (154, 36),
-        (155, 36),
-        (156, 36),
-        (157, 36),
-        (158, 36),
-        (159, 36),
-        (160, 36),
-        (161, 36),
-        (162, 36),
-        (163, 36),
-        (164, 36),
-        (165, 36),
-        (166, 36),
-        (167, 36),
-        (168, 36),
-        (169, 36),
-        (171, 36),
-        (172, 36),
-    ];
-
     /// The fixture's own arithmetic behind the frame's Totals row,
     /// worked out rather than only matched pixel for pixel: Peak is
     /// the largest stacked column (4,912 t, 0.5s after the
@@ -17436,7 +17416,6 @@ mod tape_frame_goldens {
             COMBINED_SIGNAL_RECEIVED_PARTIAL_ROUNDING,
             COMBINED_SIGNAL_EFFECTS_DONE_COUNTER,
             COMBINED_SIGNAL_STATUS_LINE_PRECISION,
-            COMBINED_SIGNAL_READINGS_LABEL_GUTTER,
         ]
         .concat();
         assert_matches_mock(
@@ -18841,7 +18820,7 @@ mod tape_frame_goldens {
         // switching osi's own history to the event clock instead of
         // `last_run`'s own fields, which is a data-source decision
         // the design never asked for, not a bug this golden found.
-        let allowed_cells = [(97, 5), (51, 16)];
+        let allowed_cells = [(96, 5), (51, 16)];
         assert_tape_frame(
             "tape--starting--120x30",
             120,
@@ -18898,7 +18877,7 @@ mod tape_frame_goldens {
             // actually moves away from it.
             |app| app.tape_run_end_target = Some("prime.flaky".to_string()),
             &now,
-            &[(103, 4)],
+            &[(102, 4)],
         );
     }
 
@@ -20155,7 +20134,7 @@ mod tape_frame_goldens {
                     wide,
                     theme.border_focused,
                     None,
-                    oscilloscope_core::format::format_tokens_t,
+                    oscilloscope_core::multi::format_shared_axis_label,
                     theme.accent_primary,
                     &ctx,
                 );
@@ -20260,9 +20239,9 @@ mod tape_frame_goldens {
         );
     }
 
-    /// An axis top of 1,200 or more still fits its own label field,
-    /// with the thousands separator §3.8 asks for -- not cut down to
-    /// `1200` the way a fixed five-character field would.
+    /// An axis top of 1,200 or more reads in the same compact `k`
+    /// scale the axis label always has (issue #715): `1.2k`, never
+    /// `1,200 t`'s own thousands separator.
     #[test]
     fn an_axis_top_in_the_thousands_is_never_cut() {
         let screen = oscilloscope_core::screens::SignalScreen {
@@ -20274,19 +20253,20 @@ mod tape_frame_goldens {
             ..Default::default()
         };
         let buffer = draw_chart_only(&screen, 120, 12, true);
-        let row: String = (0..7)
+        let row: String = (0..5)
             .map(|i| {
                 buffer[(buffer.area.x + 1 + i, buffer.area.y + 1)]
                     .symbol()
                     .to_string()
             })
             .collect();
-        assert_eq!(row, "1,200 t");
+        assert_eq!(row, " 1.2k");
     }
 
-    /// A single-run Signal's own received label, wider than its own
-    /// sent labels (`5,120 t` with history, against a plain `300 t`
-    /// sent top) still fits its own field whole -- only a tile
+    /// A single-run Signal's own received label, narrower than its
+    /// own sent labels now that both scale through the same compact
+    /// `k` form (`5.1k` against a plain `300 t` sent top) still fits
+    /// its own field, right-aligned within it -- only a tile
     /// (`title_override.is_some()`) ever lets the received label
     /// overflow the gutter the sent side alone sized.
     #[test]
@@ -20301,10 +20281,10 @@ mod tape_frame_goldens {
         };
         let buffer = draw_chart_only(&screen, 120, 12, true);
         let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + SIGNAL_RECEIVED_ROWS as u16;
-        let row: String = (0..7)
+        let row: String = (0..5)
             .map(|i| buffer[(buffer.area.x + 1 + i, y)].symbol().to_string())
             .collect();
-        assert_eq!(row, "5,120 t");
+        assert_eq!(row, " 5.1k");
     }
 
     /// At a coarse zoom (1 s per column here), second marks keep at
@@ -21032,9 +21012,9 @@ mod tape_frame_goldens {
         );
     }
 
-    /// Issue #714: an eight-digit TOKENS figure keeps a space
-    /// before SHARE in the real table (`35,396,916 t66%`, the
-    /// issue's own example) rather than running the two together.
+    /// Issue #714: a large TOKENS figure keeps a space before SHARE
+    /// in the real table (the issue's own example, `35,396,916 t66%`,
+    /// now reads `35.4 Mt 66%`) rather than running the two together.
     #[test]
     fn store_table_row_keeps_a_space_before_share_at_eight_digits() {
         let plan = demo_plan();
@@ -21094,23 +21074,18 @@ mod tape_frame_goldens {
             .unwrap();
         let text = terminal.backend().to_string();
         assert!(
-            text.contains("35,396,916 t 66%"),
+            text.contains("35.4 Mt") && !text.contains("Mt66%"),
             "the TOKENS figure must keep a space before SHARE:\n{text}"
         );
         assert!(
             !text.contains("35,396,916 t66%"),
             "the TOKENS figure must never run straight into SHARE:\n{text}"
         );
-        // `tokens_w` is 13 here (the eight-digit figure plus a
-        // trailing space): the header's own `TOKENS` widens to fill
-        // 12 columns (`tokens_w - 1`, the frames' own one-column
-        // offset before `SHARE`), six spaces past the word itself,
-        // rather than the fixed single space the 8-column floor
-        // uses.
+        // With figures in kt/Mt/Gt no figure outgrows the column's
+        // 8-cell floor, so the header keeps the frames' single space.
         assert!(
-            text.contains("TOKENS      SHARE"),
-            "the header's own TOKENS must widen with the column instead of \
-             leaving SHARE stranded to its left:\n{text}"
+            text.contains("TOKENS SHARE"),
+            "the header's own TOKENS must stay one space before SHARE:\n{text}"
         );
     }
 
@@ -21146,6 +21121,29 @@ mod tape_frame_goldens {
             tokens_w, 13,
             "an eight-digit figure needs 12 + 1 trailing space"
         );
+    }
+
+    /// A live leaf is dim on a painted background, but italic in the
+    /// `terminal` theme, where dim text on the bright-black fill would
+    /// be hard to read.
+    #[test]
+    fn a_live_store_leaf_is_italic_not_dim_in_the_terminal_theme() {
+        let leaf = oscilloscope_core::store::StoreLeaf {
+            path: "prime.agent".to_string(),
+            label: "agent".to_string(),
+            tokens_sent: 1_200,
+            tokens_received: 40,
+            tokens_sent_unknown: false,
+            tokens_received_unknown: false,
+            deviation_pct: None,
+            live: true,
+        };
+        let name_style = |theme: &Theme| store_leaf_lines(&leaf, 40, theme)[0].spans[0].style;
+        let terminal = name_style(&Theme::for_name(ThemeName::Terminal));
+        assert!(terminal.add_modifier.contains(Modifier::ITALIC));
+        assert!(!terminal.add_modifier.contains(Modifier::DIM));
+        let mocha = name_style(&Theme::for_name(ThemeName::CatppuccinMocha));
+        assert!(mocha.add_modifier.contains(Modifier::DIM));
     }
 
     /// one line wraps the name and tokens onto their own lines

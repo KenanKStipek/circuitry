@@ -301,7 +301,7 @@ pub struct Header {
     pub history_usual_total_s: Option<f64>,
     /// The usual (p50) whole-run tokens, over the same pool
     /// `history_usual_total_s` comes from (issue #678's Totals row
-    /// `+12% Usual` and the Tape's own Run End `usually 1,324 t`).
+    /// `+12% Usual` and the Tape's own Run End `usually 1.3 kt`).
     /// `None` below the same threshold.
     pub history_usual_total_tokens: Option<u64>,
     /// How many ok runs of the current document hash history has,

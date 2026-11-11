@@ -3673,3 +3673,86 @@ fn the_totals_row_grows_while_an_agent_session_runs() {
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
 }
+
+/// Issue #715: a count of 1,000 or more never shows a thousands
+/// separator, on any screen -- three scripted prompts total 1,234,
+/// 35,000,000 and 1,200,000,000 tokens between sent and received, so
+/// the Tape, Signal, Flow and Store all draw at least one figure deep
+/// in `kt`/`Mt`/`Gt` territory.
+#[test]
+fn large_token_figures_never_show_thousands_separators_on_any_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.small:\n  - text: \"ok\"\n    tokens_sent: 234\n    tokens_received: 1000\nprime.million:\n  - text: \"ok\"\n    tokens_sent: 5000000\n    tokens_received: 30000000\nprime.billion:\n  - text: \"ok\"\n    tokens_sent: 200000000\n    tokens_received: 1000000000\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: small\n    type: prompt\n    template: \"hi\"\n  - name: million\n    type: prompt\n    template: \"hi\"\n  - name: billion\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let tape = wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(10));
+    assert_no_thousands_separator(&tape, "Tape");
+
+    send_bytes(&mut master, b"1");
+    let signal = wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(10));
+    assert_no_thousands_separator(&signal, "Signal");
+
+    send_bytes(&mut master, b"2");
+    let flow = wait_for_screen_text(&captured_buf, "FLOW", Duration::from_secs(10));
+    assert_no_thousands_separator(&flow, "Flow");
+
+    send_bytes(&mut master, b"3");
+    let store = wait_for_screen_text(&captured_buf, "STORE", Duration::from_secs(10));
+    assert_no_thousands_separator(&store, "Store");
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// A comma with a digit on both sides is a thousands separator in
+/// every token figure this screen ever draws -- nothing else in the
+/// chrome puts a digit directly against a comma, and no axis label
+/// ever carries one either (`format_shared_axis_label` only ever
+/// prints a plain count or a `k`-scaled one, never a comma).
+fn assert_no_thousands_separator(screen: &str, screen_name: &str) {
+    let chars: Vec<char> = screen.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if c != ',' || i == 0 || i + 1 >= chars.len() {
+            continue;
+        }
+        assert!(
+            !(chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit()),
+            "expected no thousands-separated token figure on the {screen_name} screen; screen:\n{screen}"
+        );
+    }
+}

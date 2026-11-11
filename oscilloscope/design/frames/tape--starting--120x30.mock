@@ -18,7 +18,7 @@
 {border.focus}│                                                                          │{/}{border.default}│ {/}{fg.muted}Engine {/}{fg.default}cof 0.1.0 · launching             {/}{border.default}│{/}
 {border.focus}│                                                                          │{/}{border.default}│ {/}{fg.muted}Plan   {/}{fg.default}14 effects · 6 prompts · 5 tools  {/}{border.default}│{/}
 {border.focus}│                                                                          │{/}{border.default}│ {/}{fg.muted}Shape  {/}{fg.default}1 decision · 3-pass loop · 2 wide {/}{border.default}│{/}
-{border.focus}│                                                                          │{/}{border.default}│ {/}{fg.muted}Usual  {/}{fg.default bold}1,324 t {/}{fg.muted}· 5.0s · median of 3 runs {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│ {/}{fg.muted}Usual  {/}{fg.default bold}1.3 kt {/}{fg.muted}· 5.0s · median of 3 runs  {/}{border.default}│{/}
 {border.focus}│                                                                          │{/}{border.default}│ {/}{fg.muted}ETA    {/}{fg.default bold}12:50:52 {/}{fg.muted}if usual                 {/}{border.default}│{/}
 {border.focus}│                                                                          │{/}{border.default}│                                          │{/}
 {border.focus}│                                                                          │{/}{border.default}│ {/}{fg.title bold}First Step                               {/}{border.default}│{/}
