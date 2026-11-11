@@ -46,6 +46,37 @@ pub fn format_duration(secs: f64) -> String {
     format!("{}d{:02}h", hours_total / 24, hours_total % 24)
 }
 
+/// A Signal chart's own second mark, and the Combined Totals' own
+/// `Peak … at` (issue #734): every second shown, never a raw count
+/// past a minute -- `0s`/`0.5s` (a decimal only when `secs` itself
+/// isn't a whole second, the same as `format_duration` already
+/// shows under a minute), `13m33s` from a minute, `1h02m03s` from an
+/// hour, with the hour count never padded or rolled into a further
+/// day unit the way `format_duration` does. Rounds `secs` to whole
+/// seconds once, directly, the same "never round an already-rounded
+/// value again" rule `format_duration` follows.
+pub fn format_signal_elapsed(secs: f64) -> String {
+    let secs = secs.max(0.0);
+    let tenths = (secs * 10.0).round() as u64;
+    if tenths < 600 {
+        return if tenths % 10 == 0 {
+            format!("{}s", tenths / 10)
+        } else {
+            format!("{}.{}s", tenths / 10, tenths % 10)
+        };
+    }
+    let total_seconds = secs.round() as u64;
+    if total_seconds < 3600 {
+        let minutes = total_seconds / 60;
+        let seconds = total_seconds % 60;
+        return format!("{minutes}m{seconds:02}s");
+    }
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    format!("{hours}h{minutes:02}m{seconds:02}s")
+}
+
 /// One unit's own value, formatted by the "below 100: one decimal,
 /// 100 or more: no decimal" rule -- `None` means the rounded value
 /// crossed 1000 in this unit and belongs one unit up instead (a
@@ -134,6 +165,27 @@ pub fn format_tokens_k(n: u64) -> String {
     } else {
         n.to_string()
     }
+}
+
+/// The step, in seconds, between a Signal chart's own second marks
+/// (issue #734) -- the smallest of `1, 2, 5, 10, 30, 60, 300, 600,
+/// 1800, 3600` wide enough that two consecutive marks' own labels
+/// (`format_signal_elapsed`'s own text, at its widest for the
+/// farthest mark this row will ever draw) never run into each
+/// other at `cols_per_second` columns per second -- tried in
+/// increasing order since a finer step always reads better once it
+/// fits. `max_elapsed_s` is the farthest mark's own time, not the
+/// one about to be drawn: a label only grows wider as the run goes
+/// on, so the step has to fit the widest one the row will ever show,
+/// not just the current one, or a later, wider label would overlap
+/// a step chosen for an earlier, narrower one.
+pub fn signal_mark_step_s(cols_per_second: u64, max_elapsed_s: f64) -> u64 {
+    let label_len = format_signal_elapsed(max_elapsed_s).chars().count() as u64;
+    const CANDIDATES: [u64; 10] = [1, 2, 5, 10, 30, 60, 300, 600, 1800, 3600];
+    CANDIDATES
+        .into_iter()
+        .find(|&step| step * cols_per_second.max(1) > label_len)
+        .unwrap_or(3600)
 }
 
 /// A store's own share of a total, as a percentage (issue #641):
@@ -378,5 +430,52 @@ mod tests {
     fn clock_time_rejects_unparseable_timestamps() {
         let utc = chrono::FixedOffset::east_opt(0).unwrap();
         assert_eq!(format_clock_time("not a timestamp", &utc), None);
+    }
+
+    /// Issue #734's own pinned boundaries: `0`, `59`, `59.5`, `60`,
+    /// `3599` and `3600` seconds.
+    #[test]
+    fn signal_elapsed_pinned_boundaries() {
+        assert_eq!(format_signal_elapsed(0.0), "0s");
+        assert_eq!(format_signal_elapsed(59.0), "59s");
+        assert_eq!(format_signal_elapsed(59.5), "59.5s");
+        assert_eq!(format_signal_elapsed(60.0), "1m00s");
+        assert_eq!(format_signal_elapsed(3599.0), "59m59s");
+        assert_eq!(format_signal_elapsed(3600.0), "1h00m00s");
+    }
+
+    #[test]
+    fn signal_elapsed_keeps_a_decimal_under_a_minute_only_when_fractional() {
+        assert_eq!(format_signal_elapsed(0.5), "0.5s");
+        assert_eq!(format_signal_elapsed(42.0), "42s");
+    }
+
+    #[test]
+    fn signal_elapsed_past_an_hour_always_shows_its_own_seconds() {
+        assert_eq!(format_signal_elapsed(3723.0), "1h02m03s");
+    }
+
+    /// At the default 100 ms per column (ten columns a second), an
+    /// 8-cell label like `1h02m03s` still fits a mark every second
+    /// -- the ruling's own worked example.
+    #[test]
+    fn signal_mark_step_fits_every_second_at_100ms_per_column() {
+        assert_eq!(signal_mark_step_s(10, 3723.0), 1);
+    }
+
+    /// A one-second-per-column zoom can't fit even a short label
+    /// (`16s`) every second, so the step widens to the next
+    /// candidate that does.
+    #[test]
+    fn signal_mark_step_widens_at_a_coarse_zoom() {
+        assert_eq!(signal_mark_step_s(1, 16.0), 5);
+    }
+
+    /// A long elapsed time's own wider label (`100h00m00s`, ten
+    /// cells) still resolves to a step that fits it, never panics
+    /// or loops forever.
+    #[test]
+    fn signal_mark_step_widens_further_for_a_very_long_run() {
+        assert_eq!(signal_mark_step_s(1, 360_000.0), 30);
     }
 }

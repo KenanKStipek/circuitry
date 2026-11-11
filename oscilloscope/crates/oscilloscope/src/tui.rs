@@ -5103,6 +5103,9 @@ fn draw_all_signal_tile(
         Some("Signal · Sent Above · Received Below · Shared Scale"),
         oscilloscope_core::multi::format_shared_axis_label,
         sent_color,
+        // A tile has no scrub of its own: its window always follows
+        // Now (issue #734).
+        None,
         ctx,
     );
     draw_signal_tile_now_pane(frame, sections[1], screen, ctx);
@@ -5580,8 +5583,10 @@ fn draw_combined_chart(
     // past three quarters of the way across it; once it would, the
     // window scrolls to keep the focus column pinned there instead
     // (so a run past a few seconds in keeps Now, or the scrub
-    // cursor, in view rather than running off the right edge).
-    let start_col = focus_col.saturating_sub(data_width * 3 / 4);
+    // cursor, in view rather than running off the right edge) --
+    // the same rule the single-run Signal and its tiles already use
+    // ([`trace_window_start`]).
+    let start_col = trace_window_start(focus_col, data_width);
     let sweep_col = now_col_abs
         .checked_sub(start_col)
         .filter(|&c| c < data_width);
@@ -6514,6 +6519,10 @@ fn draw_signal(
         None,
         oscilloscope_core::multi::format_shared_axis_label,
         ctx.theme.accent_primary,
+        // The real scrub cursor (issue #734): `None` while following
+        // Now, never `screen.cursor_col`, which the shared tree
+        // selection can hold onto long after the trace has moved on.
+        app.signal_cursor_col,
         ctx,
     );
     if wide {
@@ -6712,13 +6721,15 @@ fn signal_received_column(value: u64, axis_top: u64, rows: usize) -> Vec<Option<
 const SIGNAL_SENT_ROWS: usize = 5;
 const SIGNAL_RECEIVED_ROWS: usize = 2;
 
-/// The visible window's own leftmost column: `focus_col` (the scrub
+/// The visible window's own leftmost column (issue #734: shared by
+/// the single-run Signal, its tiles and the Combined Signal, rather
+/// than each copying its own version): `focus_col` (the scrub
 /// cursor, or Now while following it) stays on screen, with up to a
 /// quarter of `data_width` still ahead of it once the trace has run
 /// longer than the pane is wide -- a run that still fits inside
 /// `data_width` columns never scrolls at all, column 0 stays the
 /// left edge.
-fn signal_window_start(focus_col: usize, data_width: usize) -> usize {
+fn trace_window_start(focus_col: usize, data_width: usize) -> usize {
     focus_col.saturating_sub(data_width * 3 / 4)
 }
 
@@ -6736,6 +6747,13 @@ fn draw_signal_chart(
     // `ctx.theme.accent_primary`, a single-run Signal's own fixed
     // colour, everywhere else.
     sent_color: Color,
+    // The real scrub cursor (issue #734), never the shared tree
+    // selection's own column (`screen.cursor_col`, which may follow
+    // a long-finished step instead): `None` while following Now, so
+    // the window keeps the Now sweep in view even when the shared
+    // selection sits somewhere the trace long since scrolled past.
+    // Always `None` for a tile, which has no scrub of its own.
+    scrub_col: Option<usize>,
     ctx: &DrawCtx,
 ) {
     let title = title_override
@@ -6825,10 +6843,15 @@ fn draw_signal_chart(
     // own width keeps scrolling so the scrub cursor (or Now, while
     // following it) never runs off the right edge -- every bucket,
     // mark, step row and seconds label below reads at `start_col +
-    // col`, never the bare column index on its own.
+    // col`, never the bare column index on its own. Issue #734: the
+    // real scrub cursor, never `screen.cursor_col` (which, with no
+    // scrub of its own, falls back to the shared tree selection's
+    // own column -- a long-finished step's, say), or an old
+    // selection parks the window there forever while Now sweeps on
+    // off screen.
     let now_col_abs = screen.now_col.unwrap_or(0);
-    let focus_col = screen.cursor_col.unwrap_or(now_col_abs);
-    let start_col = signal_window_start(focus_col, data_width);
+    let focus_col = scrub_col.unwrap_or(now_col_abs);
+    let start_col = trace_window_start(focus_col, data_width);
     // `None` (no run started yet) must stay sweep-less, never fall
     // back to column 0 the way `now_col_abs`'s own window-math
     // default does.
@@ -20113,6 +20136,16 @@ mod tape_frame_goldens {
         height: u16,
         wide: bool,
     ) -> ratatui::buffer::Buffer {
+        draw_chart_only_scrubbed(screen, width, height, wide, screen.cursor_col)
+    }
+
+    fn draw_chart_only_scrubbed(
+        screen: &oscilloscope_core::screens::SignalScreen,
+        width: u16,
+        height: u16,
+        wide: bool,
+        scrub_col: Option<usize>,
+    ) -> ratatui::buffer::Buffer {
         let header = empty_header();
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
         let ctx = DrawCtx {
@@ -20136,6 +20169,7 @@ mod tape_frame_goldens {
                     None,
                     oscilloscope_core::multi::format_shared_axis_label,
                     theme.accent_primary,
+                    scrub_col,
                     &ctx,
                 );
             })
@@ -20206,6 +20240,36 @@ mod tape_frame_goldens {
         assert!(
             has_sweep,
             "Now's own sweep must still be drawn somewhere on screen"
+        );
+    }
+
+    /// Issue #734: the shared tree selection can sit on a step that
+    /// finished long ago (`screen.cursor_col`, with no scrub of its
+    /// own in play) while the run keeps going -- the window must
+    /// still follow Now, never park on that stale column, as long as
+    /// nothing is actually being scrubbed (`scrub_col` itself
+    /// `None`).
+    #[test]
+    fn the_window_follows_now_not_a_stale_selection_while_following() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(21_000), // 35 minutes at 100ms/column
+            // The shared selection's own column, parked on a step
+            // that finished in the run's first second -- exactly
+            // the stale value `screen.cursor_col` can hold with no
+            // scrub of the user's own.
+            cursor_col: Some(10),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 21_001],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only_scrubbed(&screen, 120, 12, true, None);
+        let axis_row_y = buffer.area.y + SIGNAL_SENT_ROWS as u16;
+        let has_sweep =
+            (0..buffer.area.width).any(|x| buffer[(x, axis_row_y)].symbol() == "\u{2503}");
+        assert!(
+            has_sweep,
+            "the window must follow Now, not the shared selection's stale column"
         );
     }
 
