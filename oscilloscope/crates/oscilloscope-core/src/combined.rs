@@ -33,7 +33,7 @@ pub const TRACE_SENT_ROWS_MIN: usize = 5;
 pub const TRACE_RECEIVED_ROWS_MIN: usize = 3;
 /// The trace's own size at the frame's own 180x48 golden, and the
 /// most the legend and bottom block ever leave it before it must
-/// grow into extra height instead (issue #713 rule 3).
+/// grow into extra height instead (extra height goes to the trace).
 pub const TRACE_SENT_ROWS_BASE: usize = 14;
 pub const TRACE_RECEIVED_ROWS_BASE: usize = 4;
 /// The legend's own block at the golden, enough for up to 8 runs
@@ -44,8 +44,8 @@ pub const LEGEND_ROWS_BASE: usize = 8;
 /// Run's own header plus up to 3 scrollable rows, or Readings' own
 /// 4 lines, each with its own border, whichever needs more (always
 /// 6: Readings never needs fewer) -- and the most it ever grows to
-/// (the golden's own size): rule 3 keeps it there even with more
-/// height than the golden, all of which goes to the trace instead.
+/// (the golden's own size): it stays there even with more height
+/// than the golden, all of which goes to the trace instead.
 pub const LOWER_ROWS_MIN: usize = 6;
 pub const LOWER_ROWS_MAX: usize = 13;
 /// The chart panel's own rows that never shrink or grow with any
