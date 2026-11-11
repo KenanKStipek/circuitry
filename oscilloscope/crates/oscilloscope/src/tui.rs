@@ -5847,12 +5847,22 @@ fn draw_combined_legend(
                 } else {
                     String::new()
                 };
-                frame.buffer_mut().set_string(
-                    running_col as u16,
-                    y,
-                    format!("\u{25cf} {first}{suffix}"),
-                    running_style,
-                );
+                // Cut at the legend's own right edge, so a long step
+                // name never runs over the panel's border.
+                let right = area.x as usize + area.width as usize;
+                if running_col < right {
+                    let room = right - running_col;
+                    let full = format!("\u{25cf} {first}{suffix}");
+                    let text = if full.chars().count() <= room {
+                        full
+                    } else {
+                        let cut: String = full.chars().take(room.saturating_sub(1)).collect();
+                        format!("{cut}\u{22ef}")
+                    };
+                    frame
+                        .buffer_mut()
+                        .set_string(running_col as u16, y, text, running_style);
+                }
             }
         }
     }
@@ -17164,10 +17174,10 @@ mod tape_frame_goldens {
     const COMBINED_SIGNAL_RECEIVED_PARTIAL_ROUNDING: &[(u16, u16)] =
         &[(27, 17), (32, 17), (37, 17), (22, 19)];
 
-    /// Same reason as `ALL_TAPE_EFFECTS_DONE_COUNTER`: the shipped
-    /// effects counter used unchanged reads one more finished effect
-    /// than this osi's own walk of the fixture's real state and
-    /// events finds, for every run.
+    /// Same reason as `ALL_TAPE_EFFECTS_DONE_COUNTER`: the frame's
+    /// DONE column counts one more finished effect than the fixture's
+    /// real state and events hold, for every run; the shipped
+    /// counter, used unchanged, counts exactly the finished effects.
     const COMBINED_SIGNAL_EFFECTS_DONE_COUNTER: &[(u16, u16)] = &[
         (130, 35),
         (130, 36),
@@ -17753,6 +17763,56 @@ mod tape_frame_goldens {
         assert!(
             finished_at < running_at,
             "expected the finished label (column 2) before the running one (Now's column 5): {legend_row:?}"
+        );
+    }
+
+    /// A running step whose name runs past the panel is cut with `⋯`
+    /// at the legend's own right edge, so the panel's border stays.
+    #[test]
+    fn combined_signal_legend_cuts_a_long_running_label_at_the_border() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let mut run = synthetic_combined_run(0);
+        run.running = vec!["a_very_long_step_name".repeat(12)];
+        let screen = oscilloscope_core::combined::CombinedSignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            runs: vec![run],
+            now_col: 30,
+            now_elapsed_s: 3.0,
+            totals: Default::default(),
+            readings: Default::default(),
+        };
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_combined_signal(f, f.area(), &screen, 0, None, "2026-01-01T00:00:03Z", &ctx)
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let legend_row: Vec<char> = (0..48)
+            .map(|y| -> Vec<char> {
+                buffer_row_cells(buf, y, 0..180)
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect()
+            })
+            .find(|row| row.iter().collect::<String>().contains("run0.yml"))
+            .expect("expected a legend row for run0");
+        let text: String = legend_row.iter().collect();
+        assert_eq!(
+            legend_row[179], '\u{2502}',
+            "the panel's right border must stay: {text:?}"
+        );
+        assert_eq!(
+            legend_row[178], '\u{22ef}',
+            "the running label must end in ⋯ at the edge: {text:?}"
         );
     }
 
