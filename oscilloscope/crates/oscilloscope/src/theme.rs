@@ -1461,9 +1461,8 @@ mod tests {
             // `solarized-light`'s own `bg_inset` (`darken(bg,
             // 0.96)`, already shipped, untouched here) is 4.16:1
             // against `text`, not the 4.5 every other theme clears
-            // -- short of this check's own floor by a margin this
-            // issue's own rulings leave to a separate pass across
-            // every theme's own values, not a reason to loosen the
+            // -- short of this check's own floor; fixing it is
+            // tracked in #730, and it is no reason to loosen the
             // check for the other nine.
             let container_min = if name == ThemeName::SolarizedLight {
                 4.0
