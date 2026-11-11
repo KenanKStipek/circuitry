@@ -547,12 +547,17 @@ second rule reads `2 of 2 Slots Busy · 1 Pass Queued` while a loop runs. The he
 
 ### 3.5 Tokens
 
-- **Unit bar.** `▰ = 50 t`, eight cells, so a bar is full at 400 tokens; the count is always printed,
-  `215 t`, `1,902 t`. The legend states the unit in every panel title that has bars. The unit is a constant per
-  run, shown in the title; deriving it from history (the smallest of 10, 20, 50, 100, 200, 500 that keeps the usual
-  largest step inside eight cells) is an open decision (§9).
-- **Arrows carry no unit.** `↑212 ↓3` is sent and received; the total carries the `t`.
-- **Loop rows** show a sparkline of finished passes and the per-pass average, `130 t/p`.
+- **Counts with their unit** use one formatter: below 1,000 the count is exact (`215 t`); from 1,000 it shows one
+  decimal below 100 of its unit and none from 100, scaling through `kt`, `Mt`, `Gt` and `Tt` (`1.9 kt`, `18.0 kt`,
+  `142 kt`, `35.4 Mt`, `1.2 Gt`, `1.0 Tt`), carrying into the next unit on rounding (`999,960` -> `1.0 Mt`).
+- **Unit bar.** `▰ = 50 t`, eight cells, so a bar is full at 400 tokens; the count is always printed, `215 t`,
+  `1.9 kt`. The legend states the unit in every panel title that has bars. The unit is a constant per run, shown
+  in the title; deriving it from history (the smallest of 10, 20, 50, 100, 200, 500 that keeps the usual largest
+  step inside eight cells) is an open decision (§9).
+- **Arrows carry no unit**, scaling with the same rounding and a one-letter suffix instead: `↑212 ↓3`,
+  `↑1.2k ↓56`, `↑35.4M ↓203k`, `↑1.2G ↓98.8k` is sent and received; the total carries the full unit (`t`/`kt`/...).
+- **Loop rows** show a sparkline of finished passes and the per-pass average, `130 t/p`, scaling the same way
+  (`5.2 kt/p`).
 - **Usual** is the median of the document's finished runs in history, per step and for the whole run:
   `usually 155 t` on rows ahead, `+47%` next to a finished step, `+12% Usual` in the totals, `ETA` = run start +
   usual wall time. Three runs are enough to show it; with fewer, `usually` and the deviation are absent and the
@@ -592,7 +597,7 @@ second rule reads `2 of 2 Slots Busy · 1 Pass Queued` while a loop runs. The he
 
 ### 3.8 Numbers, times and truncation
 
-Tokens with thousands separators and a space before `t`; durations `3.0s`, `5.1s`; ages `0.6s ago`; clocks
+Tokens scaled through `t`/`kt`/`Mt`/`Gt`/`Tt` (§3.5); durations `3.0s`, `5.1s`; ages `0.6s ago`; clocks
 `12:50:50` in local time, the same instant on the whole frame; percentages `+47%`, `-16%`, `45%`. Text that does
 not fit is cut with `⋯`, never wrapped in a row; panel titles are shortened before they overflow (`Signal · Sent
 Above · Received Below · Fixed Scale`). Counts in chrome are `6 Done · 2 Running · 4 Ahead` and `6/14 Effects`.

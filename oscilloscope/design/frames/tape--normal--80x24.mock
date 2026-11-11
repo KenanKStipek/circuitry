@@ -28,7 +28,7 @@
 {border.focus}│         {/}{fg.faint}· iter_2 › pause     tool · sleep 1 · queued                         {/}{border.focus}│{/}
 {border.focus}│         {/}{fg.faint}· flaky              tool · ls /nonexistent-osi-dem⋯                 {/}{border.focus}│{/}
 {border.focus}│         {/}{fg.faint}· summary            prompt                          usually 402 t   {/}{border.focus}│{/}
-{border.focus}│         {/}{fg.muted}■ {/}{fg.faint}Run End            usually 1,324 t · ETA 12:50:52                  {/}{border.focus}│{/}
+{border.focus}│         {/}{fg.muted}■ {/}{fg.faint}Run End            usually 1.3 kt · ETA 12:50:52                   {/}{border.focus}│{/}
 {border.focus}│                                                                              │{/}
 {border.focus}│                                                                              │{/}
 {border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}
