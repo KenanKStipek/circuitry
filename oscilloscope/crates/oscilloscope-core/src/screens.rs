@@ -630,6 +630,9 @@ pub struct FocusedStep {
     /// folded by default, `m` unfolds. Already formatted the same
     /// way [`crate::render::Details::meta_summary`] is.
     pub meta_extra: Vec<(String, String)>,
+    /// The step's own `description:` (issue #716) -- `None` for a
+    /// container or a step with none set.
+    pub description: Option<String>,
 }
 
 /// One line of [`FocusDetail::Loop`] (issue #704's own Loop section):
@@ -876,6 +879,7 @@ pub(crate) fn build_focused_step(
         meta_extra,
         usual_busy_p50_s: None,
         usual_busy_p90_s: None,
+        description: plan.description(&row.path),
     }
 }
 
@@ -1276,6 +1280,9 @@ pub struct TapeSelectedDetail {
     /// carry its final figures instead by then) or when it never had
     /// any live record at all (shown as today, never a crash).
     pub live: Option<crate::model::PromptLiveFigures>,
+    /// The step's own `description:` (issue #716) -- `None` for a
+    /// container or a step with none set.
+    pub description: Option<String>,
 }
 
 /// The Starting state's own detail pane content (§2.1: "the detail
@@ -2197,9 +2204,11 @@ fn build_tape_selected_detail(
     flat: &BTreeMap<String, NodeMeta>,
     model: &RunModel,
     now: &str,
+    plan: &PlanTree,
 ) -> TapeSelectedDetail {
     let node = flat.get(&row.path);
     let finished_ts = node.and_then(|n| n.completed_at.clone());
+    let description = plan.description(&row.path);
     if !matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
         // Issue #702: a running agent session's own `meta.live`
         // tokens show here the same way a finished step's exact
@@ -2215,6 +2224,7 @@ fn build_tape_selected_detail(
             finished_ts,
             tokens_sent: has_tokens.then_some(figures.tokens_sent).flatten(),
             tokens_received: has_tokens.then_some(figures.tokens_received).flatten(),
+            description,
             ..Default::default()
         };
     }
@@ -2255,6 +2265,7 @@ fn build_tape_selected_detail(
         live,
         reply,
         reply_tokens: received,
+        description,
     }
 }
 
@@ -2993,7 +3004,8 @@ pub fn build_tape(
     });
     let selected_row = selected_path.and_then(find_selected_row);
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
-    let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat, model, now));
+    let selected_detail =
+        selected_row.map(|row| build_tape_selected_detail(row, flat, model, now, plan));
 
     let starting_detail = matches!(head, TapeHead::Starting)
         .then(|| build_tape_starting_detail(rows, flat, plan, header, state));
