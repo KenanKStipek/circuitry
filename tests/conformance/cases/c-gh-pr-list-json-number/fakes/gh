@@ -23,6 +23,12 @@ def main() -> int:
         sys.stdout.write("octocat\n")
         return 0
     if argv[:2] == ["api", "graphql"]:
+        if len(argv) != 4 or "\n" not in argv[3]:
+            sys.stderr.write(
+                f"fake gh: expected argv length 4 with a newline in argv[3] "
+                f"(the multi-line query must travel as one argv element), got: {argv}\n"
+            )
+            return 1
         sys.stdout.write('{"data": {"viewer": {"login": "octocat"}}}\n')
         return 0
     if len(argv) >= 2 and argv[0] == "api" and argv[1].endswith("/timeline"):
