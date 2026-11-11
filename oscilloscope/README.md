@@ -191,11 +191,13 @@ does, and shows one of three screens:
 
 Keys: `↑↓`/`j k`/`Home End`/`g G` move the cursor (kept across every
 attach and `esc` back, not reset to the first run each time), `enter`
-attaches (or opens, on the empty screen), `?` shows Select's own Help
-(which lists `c` as inert here), `q` quits at once -- leaving Select, or
-an attached run, only ever stops watching, never cancels anything, so
-there is nothing to confirm. `0`-`3` and a plain `c` do nothing on Select
-itself (no run is attached from here to switch a screen on or cancel); a
+attaches (or opens, on the empty screen), `T` cycles the colour theme
+(issue #714: the same one value every other screen shares, surviving
+an attach and `esc` back), `?` shows Select's own Help (which lists `c`
+as inert here), `q` quits at once -- leaving Select, or an attached run,
+only ever stops watching, never cancels anything, so there is nothing to
+confirm. `0`-`3` and a plain `c` do nothing on Select itself (no run is
+attached from here to switch a screen on or cancel); a
 raw Ctrl-C quits with exit 130, same as a forwarded SIGINT would, and a
 forwarded SIGTERM/SIGHUP quits with 143/129. Select needs at least 80
 columns (every screen's own shared 60-column floor is higher here, since
@@ -232,8 +234,9 @@ full osi per run:
   border); `enter` opens the focused run full-screen on whichever screen
   every tile was already showing, the same attach a Select row opens --
   `esc` from it returns to the grid, not to Select; `esc` on the grid
-  itself returns to Select; `q` quits at once everywhere here, the same
-  as Select.
+  itself returns to Select; `T` cycles the colour theme, the same shared
+  value Select and the Combined Signal carry; `q` quits at once
+  everywhere here, the same as Select.
 
 ## The Combined Signal
 
@@ -262,8 +265,9 @@ what's running now, tokens, share, done) with a cursor, and Readings.
   outgrow it; `enter` opens the selected run full-screen on its Signal
   screen -- `esc` from it returns to the Combined Signal, not the grid;
   `esc` on the Combined Signal returns to the grid, with its own focus
-  and page unchanged; `q` quits at once; `?` shows this screen's own
-  Help, which lists `c` as inert, the same as the grid's.
+  and page unchanged; `T` cycles the colour theme; `q` quits at once;
+  `?` shows this screen's own Help, which lists `c` as inert, the same
+  as the grid's.
 - **Sizes:** below 120 columns, or below the height the chart and its
   own legend row need, the shared too-small notice shows naming 120
   columns.
@@ -294,7 +298,10 @@ that screen's own keys; and a Totals row (tokens sent/received and
 the total, the run's own deviation from its usual tokens once
 history has one, effects done of planned, the ETA and the run's own
 cost). `osi watch` names the document from the run's own
-`runtime.last_run.orchestration_path`.
+`runtime.last_run.orchestration_path`, its own file name alone (issue
+#714: `--plan /path/to/ticket.yml` once showed the whole path; two
+runs on the same file name are already told apart by the parent
+directory on Select and All).
 
 A `report` effect's own events show up in several places: once the
 run's first report arrives, the header shows its message (a warning
@@ -304,7 +311,11 @@ the story. `--theme <name>` (or `OSI_THEME`) paints the whole screen
 in one of ten named colour themes (`dracula`, `nord`, `solarized-
 dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
 `tokyo-night`, `one-dark`) instead of the terminal's own default
-colours; `T` cycles through them live. `--no-animation` turns the
+colours; `T` cycles through them live, on every screen osi draws
+(issue #714: a single run's own four screens, Select, All, the
+Combined Signal and the full-screen step), sharing one theme across
+an attach, never persisted past this one session. `--no-animation`
+turns the
 scope icon's own trace off, on both `osi <doc>` and `osi watch`.
 
 ### The Tape (`0`)
@@ -678,7 +689,11 @@ An area diagram of filled tiles, one per store (a leaf step) that has
 used tokens so far, drawn self-contained the same way the Tape, the
 Signal and the Flow are: a decision, loop, `dynamic` or `use` step is
 always a container, a darker surface holding its own children's
-tiles; a loop pass folds into its own single token-bearing step when
+tiles (in the `terminal` theme, issue #714: a leaf tile fills with
+bright black instead, and a container marks its own bounds with a
+guide line along its left edge, since no second ANSI colour reads as
+a safe fill against every terminal's own background); a loop pass
+folds into its own single token-bearing step when
 it has exactly one (`drafts › iter_0` reads as `iter_0 › draft`),
 staying a plain container, named `iter_N`, once it has more than one.
 Nothing is drawn for a store, or a whole container, that has not used
