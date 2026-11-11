@@ -25,8 +25,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use cel::objects::{Key, Map as CelMap};
-use chrono::{FixedOffset, TimeZone};
-use electricity_value::{IntValue, Value};
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use electricity_value::{Dict, IntValue, Value};
 
 /// Why [`to_cel`] could not convert a `Value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -195,6 +195,162 @@ fn to_cel_key(key: &Value) -> Result<Option<Key>, ConvertError> {
         // divergence (`lib.rs`'s crate docs).
         _ => Ok(None),
     }
+}
+
+/// Converts *value* -- a `cel` tool expression's own result -- into JSON,
+/// `plugins/cel.py::cel_to_json` ported to Rust (issue #723). `Err` is the
+/// Python `ValueError`'s own message text, for the caller
+/// ([`crate::evaluate_value`]) to wrap the way `evaluate_cel_value` does.
+///
+/// A timestamp becomes an ISO 8601 UTC string
+/// (`2026-01-02T03:04:05Z`, with a fraction only when it has one) and a
+/// duration an ISO 8601 duration (`PT1H30M`, `PT0.5S`, `-PT1M30S`),
+/// matching [`cel_to_json`]'s own `_iso_timestamp`/`_iso_duration`. Bytes,
+/// a non-finite double, and a `Struct`/`Opaque`/`Function` value (none of
+/// which a `cel` tool expression evaluating against JSON-shaped `state`
+/// can actually produce) have no JSON form and are `Err`, matching
+/// `cel_to_json` exactly.
+///
+/// A map's own keys are sorted by their own JSON text rather than kept in
+/// authoring/insertion order: unlike `celtypes.MapType` (a Python `dict`,
+/// insertion-ordered), `cel::objects::Map` is backed by a plain
+/// `std::collections::HashMap`, whose iteration order is not just
+/// different from Python's but unspecified *within* a single process --
+/// carrying it through unsorted would make a multi-key map result
+/// non-reproducible from one electricity run to the next, not just
+/// disagree with `cof` in a fixed, documented way. A known, deliberate
+/// divergence from `cof` (`DESIGN.md` §13), not a parity bug: every
+/// *value* a map's own keys/values carry still round-trips exactly, only
+/// the authored order does not.
+pub fn to_json(value: cel::Value) -> Result<Value, String> {
+    Ok(match value {
+        cel::Value::Null => Value::None,
+        cel::Value::Bool(b) => Value::Bool(b),
+        cel::Value::Int(n) => Value::from(n),
+        cel::Value::UInt(n) => uint_to_value(n),
+        cel::Value::Float(f) => {
+            if f.is_finite() {
+                Value::Float(f)
+            } else {
+                return Err(format!("{} is not a finite number", py_float_token(f)));
+            }
+        }
+        cel::Value::String(s) => Value::Str((*s).clone()),
+        cel::Value::Bytes(_) => {
+            return Err("bytes have no JSON form; convert them with string()".to_string());
+        }
+        cel::Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items.iter() {
+                out.push(to_json(item.clone())?);
+            }
+            Value::List(out)
+        }
+        cel::Value::Map(map) => {
+            let mut entries: Vec<(String, &cel::Value)> = map
+                .map
+                .iter()
+                .map(|(key, item)| (json_key_text(key), item))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let mut dict = Dict::new();
+            for (key_text, item) in entries {
+                dict.insert(Value::Str(key_text), to_json(item.clone())?);
+            }
+            Value::Dict(dict)
+        }
+        cel::Value::Timestamp(ts) => Value::Str(iso_timestamp(ts)),
+        cel::Value::Duration(d) => Value::Str(iso_duration(d)),
+        cel::Value::Struct(_) => return Err("a Struct has no JSON form".to_string()),
+        cel::Value::Opaque(_) => return Err("an Opaque has no JSON form".to_string()),
+        cel::Value::Function(..) => return Err("a Function has no JSON form".to_string()),
+    })
+}
+
+/// `_json_key`: `"true"`/`"false"` for a bool key, else `str(int(key))` --
+/// `celtypes.IntType`/`UintType` both subclass `int`, so a uint key
+/// stringifies the same way an int one does.
+fn json_key_text(key: &Key) -> String {
+    match key {
+        Key::Bool(b) => if *b { "true" } else { "false" }.to_string(),
+        Key::Int(i) => i.to_string(),
+        Key::Uint(u) => u.to_string(),
+        Key::String(s) => (**s).clone(),
+    }
+}
+
+/// `u64` -> JSON int, matching Python's plain `int(value)` on a
+/// `celtypes.UintType` (which has no upper bound of its own beyond `u64`
+/// here, since `cel::Value::UInt` already is one).
+fn uint_to_value(n: u64) -> Value {
+    match i64::try_from(n) {
+        Ok(small) => Value::from(small),
+        Err(_) => Value::from(
+            IntValue::parse_decimal(&n.to_string()).expect("decimal digits always parse"),
+        ),
+    }
+}
+
+/// `nan`/`inf`/`-inf` -- Python's own `str(float("nan"))`/`str(float("inf"))`
+/// text, used only inside [`to_json`]'s own non-finite error message
+/// (`f"{number} is not a finite number"`); never reached for a finite
+/// value, which [`to_json`] renders through [`Value::Float`] instead.
+fn py_float_token(f: f64) -> String {
+    if f.is_nan() {
+        "nan".to_string()
+    } else if f > 0.0 {
+        "inf".to_string()
+    } else {
+        "-inf".to_string()
+    }
+}
+
+/// `_iso_timestamp`: always converted to UTC first -- a `cel::Value::
+/// Timestamp` is never naive (unlike `Value::DateTime`, which can be),
+/// matching that every `celtypes.TimestampType` a CEL evaluation can
+/// produce already carries `tzinfo` (`to_cel`'s own doc comment), so
+/// Python's own `if value.tzinfo is not None` is always true by the time
+/// `cel_to_json` reaches one.
+fn iso_timestamp(ts: DateTime<FixedOffset>) -> String {
+    use chrono::Timelike;
+    let utc = ts.with_timezone(&Utc);
+    let mut text = utc.format("%Y-%m-%dT%H:%M:%S").to_string();
+    let micro = utc.nanosecond() / 1_000;
+    if micro != 0 {
+        let frac = format!(".{micro:06}");
+        text.push_str(frac.trim_end_matches('0'));
+    }
+    text.push('Z');
+    text
+}
+
+/// `_iso_duration`.
+fn iso_duration(d: chrono::Duration) -> String {
+    let total_micros = d.num_microseconds().unwrap_or(i64::MAX);
+    let sign = if total_micros < 0 { "-" } else { "" };
+    let mut micros = total_micros.unsigned_abs();
+    let hours = micros / (3_600 * 1_000_000);
+    micros %= 3_600 * 1_000_000;
+    let minutes = micros / (60 * 1_000_000);
+    micros %= 60 * 1_000_000;
+    let seconds = micros / 1_000_000;
+    let fraction = micros % 1_000_000;
+    let mut parts: Vec<String> = Vec::new();
+    if hours != 0 {
+        parts.push(format!("{hours}H"));
+    }
+    if minutes != 0 {
+        parts.push(format!("{minutes}M"));
+    }
+    if seconds != 0 || fraction != 0 || parts.is_empty() {
+        let mut second_text = seconds.to_string();
+        if fraction != 0 {
+            let frac = format!(".{fraction:06}");
+            second_text.push_str(frac.trim_end_matches('0'));
+        }
+        parts.push(format!("{second_text}S"));
+    }
+    format!("{sign}PT{}", parts.join(""))
 }
 
 #[cfg(test)]

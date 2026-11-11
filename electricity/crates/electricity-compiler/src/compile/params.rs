@@ -24,7 +24,7 @@
 
 use crate::CompileError;
 use crate::compile::templates::check_templates;
-use crate::state_ns::validate_reference_path;
+use crate::state_ns::{validate_cel_expr, validate_cel_syntax, validate_reference_path};
 use electricity_bytecode::{Escape, ParamNode, TemplateText};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
@@ -233,6 +233,90 @@ pub(crate) fn build_tool_params(
         }
     }
     Ok(node)
+}
+
+/// A `cel` tool effect's own params (`expr`, `strict`, `schema`, all
+/// literal) -- `plugins/cel.py::static_param_errors` plus `core/
+/// compiler.py::_check_cel_params` (issue #723). Every other tool
+/// provider's `params` go through [`build_tool_params`]'s `{from: ...}`/
+/// template walk instead; `cel`'s never do -- `expr` is parsed and
+/// scope-checked as written, never rendered, never read with
+/// `{from: ...}` and never set by `params_json`.
+const CEL_PARAM_KEYS: [&str; 3] = ["expr", "strict", "schema"];
+
+pub(crate) fn build_cel_params(
+    params: &Dict,
+    params_json: Option<&str>,
+    name: &str,
+    effect_path: &str,
+    loop_names: &BTreeSet<String>,
+) -> Result<ParamNode, CompileError> {
+    let mut problems: Vec<String> = Vec::new();
+    if params_json.is_some() {
+        problems.push("params_json is not accepted; write every param literally".to_string());
+    }
+    let mut unknown: Vec<String> = params
+        .keys()
+        .filter_map(|key| {
+            let key_str = match key {
+                Value::Str(s) => s.clone(),
+                other => other.py_str(),
+            };
+            (!CEL_PARAM_KEYS.contains(&key_str.as_str())).then_some(key_str)
+        })
+        .collect();
+    unknown.sort();
+    if !unknown.is_empty() {
+        let quoted = unknown
+            .iter()
+            .map(|key| Value::Str(key.clone()).py_repr())
+            .collect::<Vec<_>>()
+            .join(", ");
+        problems.push(format!(
+            "unknown param(s) {quoted}; the params are 'expr', 'strict' and 'schema'"
+        ));
+    }
+    let expr_key = Value::Str("expr".to_string());
+    let expr_value = params.get(&expr_key);
+    let expr_text = match expr_value {
+        Some(Value::Str(s)) if !s.trim().is_empty() => Some(s.clone()),
+        _ => None,
+    };
+    if expr_text.is_none() {
+        problems.push("params.expr must be a non-empty CEL expression string".to_string());
+    }
+    if let Some(strict_value) = params.get(&Value::Str("strict".to_string())) {
+        if !matches!(strict_value, Value::None | Value::Bool(_)) {
+            problems.push("params.strict must be true or false".to_string());
+        }
+    }
+    if let Some(schema_value) = params.get(&Value::Str("schema".to_string())) {
+        // A malformed-but-dict `schema` (one that is not itself a valid
+        // JSON Schema) is not checked here: `cof check` catches that at
+        // compile time too (`jsonschema.validators.validator_for(schema).
+        // check_schema(schema)`), but electricity only ever learns of it
+        // at the `cel` effect's own run, through `electricity_schema::
+        // cel_schema_errors`'s own `SchemaError` outcome -- a documented
+        // timing divergence (`DESIGN.md` §13), not a missing check.
+        if !matches!(schema_value, Value::None | Value::Dict(_)) {
+            problems.push("params.schema must be a JSON Schema object".to_string());
+        }
+    }
+    if !problems.is_empty() {
+        return Err(CompileError(format!(
+            "Tool effect '{name}' (cel) at '{effect_path}': {}",
+            problems.join("; ")
+        )));
+    }
+    let expr = expr_text.expect("checked above: a problem was recorded otherwise");
+    validate_cel_expr(
+        &expr,
+        effect_path,
+        loop_names,
+        &BTreeSet::from(["state".to_string()]),
+    )?;
+    validate_cel_syntax(&expr, effect_path, Some(name), "CEL expression")?;
+    Ok(ParamNode::Literal(Value::Dict(params.clone())))
 }
 
 /// Builds the [`ParamNode::Map`] for a `use` effect's `inputs:` -- see
@@ -776,5 +860,106 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.0.contains("takes no other key (1)"), "{}", err.0);
+    }
+
+    #[test]
+    fn cel_params_become_one_literal_not_a_template_walk() {
+        let params = dict(vec![(
+            "expr",
+            Value::Str("state.input.ok == true".to_string()),
+        )]);
+        let node = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap();
+        assert!(matches!(node, ParamNode::Literal(Value::Dict(_))));
+    }
+
+    #[test]
+    fn cel_params_json_is_rejected() {
+        let params = dict(vec![("expr", Value::Str("true".to_string()))]);
+        let err = build_cel_params(&params, Some("{}"), "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0
+                .contains("params_json is not accepted; write every param literally"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_unknown_param_is_rejected() {
+        let params = dict(vec![
+            ("expr", Value::Str("true".to_string())),
+            ("oops", Value::Bool(true)),
+        ]);
+        let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0
+                .contains("unknown param(s) 'oops'; the params are 'expr', 'strict' and 'schema'"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_expr_must_be_a_non_empty_string() {
+        let params = dict(vec![("expr", Value::Int(1.into()))]);
+        let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0
+                .contains("params.expr must be a non-empty CEL expression string"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_strict_must_be_a_bool() {
+        let params = dict(vec![
+            ("expr", Value::Str("true".to_string())),
+            ("strict", Value::Str("yes".to_string())),
+        ]);
+        let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0.contains("params.strict must be true or false"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_schema_must_be_an_object() {
+        let params = dict(vec![
+            ("expr", Value::Str("true".to_string())),
+            ("schema", Value::Str("not an object".to_string())),
+        ]);
+        let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0.contains("params.schema must be a JSON Schema object"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_expr_scope_checked_against_state_namespaces() {
+        let params = dict(vec![("expr", Value::Str("state.bogus.x".to_string()))]);
+        let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0.contains("does not name a state namespace"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_expr_sees_an_enclosing_loops_bindings() {
+        let params = dict(vec![("expr", Value::Str("state.each".to_string()))]);
+        let loop_names = BTreeSet::from(["each".to_string()]);
+        assert!(build_cel_params(&params, None, "g", "p", &loop_names).is_ok());
+    }
+
+    #[test]
+    fn cel_expr_must_parse() {
+        let params = dict(vec![("expr", Value::Str("state.input ==".to_string()))]);
+        assert!(build_cel_params(&params, None, "g", "p", &BTreeSet::new()).is_err());
     }
 }
