@@ -12354,6 +12354,49 @@ mod flow_layout_tests {
     }
 
     #[test]
+    fn selected_pass_lines_scales_its_own_vs_usual_figure() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let pass = oscilloscope_core::screens::SelectedPass {
+            index: 0,
+            label: "iter_0".to_string(),
+            active_label: "Draft".to_string(),
+            active_status: oscilloscope_core::model::RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            active_elapsed_s: None,
+            slot: None,
+            steps: vec![oscilloscope_core::screens::SelectedPassStep {
+                label: "Draft".to_string(),
+                status: oscilloscope_core::model::RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                sent: 1_200,
+                received: 100,
+                usual: Some(1_500_000),
+                produced: None,
+            }],
+        };
+        let lines = selected_pass_lines(&pass, true, &ctx);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("vs usual 1.5 Mt"), "{text}");
+    }
+
+    #[test]
     fn flow_indicator_line_names_whatever_is_off_the_right_edge() {
         let items: Vec<RailItem> = (0..10)
             .map(|i| station(&format!("s{i}"), StatusKind::Done))
