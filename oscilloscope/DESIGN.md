@@ -3666,6 +3666,58 @@ screen's own bindings while the full-screen step is open. Every
 screen's key bar reads this shared full-screen key bar instead of
 its own ordinary one for as long as it stays open.
 
+**The detail pane's own description, fields and sections** (issue
+#716, shared by the Tape's own pane, the Signal's and the Store's
+full-screen step). `PlanTree` grows `PlanEntry::description` (read
+from a tool/prompt/`use`/yield leaf's own compiled `description:`;
+`None` for a report, which has no plan row, or a container, whose
+schema has no `description:` of its own); `FocusedStep` and
+`TapeSelectedDetail` both carry it through, and `tape_normal_detail_
+lines`/`focused_step_full_lines` print it in full, ahead of
+everything else. A new shared renderer (`detail_field_lines`/
+`wrap_detail_value`/`detail_section_rule`/`detail_key_style`) lays
+out every key/value field (Status, Type, Tokens, Usual, Share, the
+Agent block's own fields, and now a tool step's own Command and
+Exit) in one right-aligned column, a value wrapping under its own
+column with a hanging indent rather than running off the pane; every
+section (Prompt Sent, Reply, Produced, Error, Transcript, Attempts,
+Tool's renamed Output/Errors, Decision, Loop, Meta) now starts with
+a titled rule (`── Reply · 41 t ───`) instead of a bare title line.
+`detail_key_style` carries the dim modifier in every theme, so a
+key reads differently from a value even in `terminal`, where
+`fg_muted` alone is the same colour as the default foreground.
+
+A tool step's own Command field reads the rendered command and args
+(`meta.params_rendered`, the same source `FocusDetail::Tool::
+command` already read) or, before the node has one yet, the plan's
+own static command (`tool_rendered_command`, falling back to
+`PlanEntry::tool_command`); a running tool's Status line also reads
+its elapsed time against its usual busy time from history
+(`FocusedStep::usual_busy_p50_s`, populated by `build_focused_step`
+itself now, from the same `header.history_step_usual` the Tokens
+line's own "usual" already reads). Once finished, an Exit field and
+`── Output ───`/`── Errors ───` sections follow, each the run's own
+last 20 lines of stdout/stderr -- neither shows before the tool
+finishes, since neither engine publishes one before then. The
+Flow's own simpler Selected pane, out of this issue's scope, keeps
+its exit code in its own existing `produced:` line instead.
+
+`Tab` moves focus between the Tape's own list and its detail pane
+(`App::pane`, the same `Pane::Tree`/`Pane::Details` the Overview-era
+code already had, now actually wired to a key): the pane gets the
+accent border, and `↑↓`/`PgUp`/`PgDn`/`Home`/`End`/`g`/`G` scroll it
+(`move_or_scroll`'s existing `Pane::Details` arm) while the list
+selection stays put; `esc` or `Tab` again gives focus back without
+leaving the screen. Switching screens drops the focus back to the
+list. The pane's own top and bottom borders read `↑ n above`/
+`↓ n more` once its content overflows it (`Block::title_top`/
+`title_bottom`, new to this crate); choosing another row resets the
+scroll to the top (the existing `details_scroll` reset already did
+this); a live step's growing content follows the bottom only once
+the pane was already scrolled there (`App::tape_detail_bottom`,
+compared against the current scroll at the start of every draw,
+before its own clamp runs).
+
 ### 6.4 Tests
 
 - **Golden tests, with `insta`.** Each fixture is a recorded run: plan, snapshot sequence with times, events, stdout/stderr and exit code. The fixtures are the §1 probes, with paths scrubbed. Two outputs are checked against goldens:
