@@ -26,10 +26,10 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use support::{
-    SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process, drain_continuously,
-    e2e_enabled, launch_osi_log, open_pty, osi_command, send_bytes, spawn_osi_on_pty,
-    wait_for_registry_entries, wait_for_screen_text, wait_for_step_start, wait_with_timeout,
-    wait_with_timeout_capturing_stdout, write_doc,
+    SCRIPTED_CONFIG, SELECT_SLOW_DOC, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
+    drain_continuously, e2e_enabled, launch_osi_log, open_pty, osi_command, scripted_config,
+    send_bytes, spawn_osi_on_pty, wait_for_registry_entries, wait_for_screen_text,
+    wait_for_step_start, wait_with_timeout, wait_with_timeout_capturing_stdout, write_doc,
 };
 
 /// Serialises every test in this file against every other (see the
@@ -263,14 +263,56 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     assert_no_leftover_process(out_b.path());
 }
 
-/// Issue #714: `T` cycles the theme on Select, survives the
-/// attach into a run, cycles again on that run's own Store, and
-/// survives `esc` back to Select -- one shared value across every
-/// leg of the round trip, never reset on either hop. Each press is
-/// checked by the theme banner (`theme: <name>`) naming the *next*
-/// theme in the cycle from wherever the previous press left it,
-/// which only happens if the value actually carried across the hop
-/// rather than resetting to `terminal` and re-advancing from there.
+/// Every distinct SGR background colour parameter list (`\x1b[...m`
+/// where the parameters contain `48;`) in *raw* -- used to check
+/// that a theme switch actually painted something different, since
+/// this crate's own `screen_grid` strips every escape sequence and
+/// keeps only the text.
+fn background_codes(raw: &str) -> std::collections::HashSet<String> {
+    let mut codes = std::collections::HashSet::new();
+    let mut rest = raw;
+    while let Some(start) = rest.find("\u{1b}[") {
+        rest = &rest[start + 2..];
+        let Some(end) = rest.find('m') else { break };
+        let seq = &rest[..end];
+        if seq.contains("48;") {
+            codes.insert(seq.to_string());
+        }
+        rest = &rest[end + 1..];
+    }
+    codes
+}
+
+/// A document with one scripted prompt -- tokens for the Store
+/// screen's own leaf tile -- followed by a long-running tool step,
+/// so the run stays live through this test's own navigation;
+/// document-level `adapter`/`model`, paired with [`scripted_config`]'s
+/// own replies file, the same shape `e2e_tui_pty.rs`'s own Store test
+/// uses.
+const SELECT_THEME_DOC: &str = "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"60\"]\n      allowed_commands: [\"sleep\"]\n";
+
+// 400 tokens, not a handful: the area diagram's own token unit (50
+// t/cell with no history) would round a tiny leaf's rect down to
+// zero width, which `fill_rect` then skips outright -- no fill for
+// this test's own background checks to find.
+const SELECT_THEME_REPLIES: &str =
+    "prime.ask:\n  - text: \"hi there\"\n    tokens_sent: 200\n    tokens_received: 200\n";
+
+/// Issue #714: `T` cycles the theme on Select, survives the attach
+/// into a run, cycles again on that run's own Store, through the All
+/// screen opened from Select's own `All` row, and back to Select --
+/// one shared value across every leg of the round trip, never reset
+/// on any hop. Each press is checked by the theme banner (`theme:
+/// <name>`) naming the *next* theme in the cycle from wherever the
+/// previous press left it, which only happens if the value actually
+/// carried across the hop rather than resetting to `terminal` and
+/// re-advancing from there -- every wait's own returned screen is
+/// asserted on, not merely discarded, so a banner that never appears
+/// actually fails the test. Before any switch, the Store's own
+/// finished-prompt leaf tile is checked for a bright-black fill (SGR
+/// `100`), the only ANSI colour `terminal` paints it with (issue
+/// #714); after the first switch, the header band is checked for a
+/// truecolour background (`48;2;`), which `terminal` never emits.
 #[test]
 fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     if !e2e_enabled() {
@@ -280,10 +322,17 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     let _guard = SELECT_LOCK.lock().unwrap();
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
-    let doc_a = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
-    let doc_b = write_doc(work.path(), "b.yml", SELECT_SLOW_DOC);
-    let config_a = write_doc(work.path(), "config-a.json", SCRIPTED_CONFIG);
-    let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
+    // Two live runs, not one: with exactly one, bare `osi` attaches
+    // at once (`bare_osi_attaches_at_once_with_exactly_one_live_run`,
+    // below) and the interactive Select screen never draws at all,
+    // so `enter` on it would never actually set `opened_from_select`
+    // -- this test's own point.
+    let doc_a = write_doc(work.path(), "a.yml", SELECT_THEME_DOC);
+    let doc_b = write_doc(work.path(), "b.yml", SELECT_THEME_DOC);
+    let replies_a = write_doc(work.path(), "replies-a.yaml", SELECT_THEME_REPLIES);
+    let replies_b = write_doc(work.path(), "replies-b.yaml", SELECT_THEME_REPLIES);
+    let config_a = write_doc(work.path(), "config-a.json", &scripted_config(&replies_a));
+    let config_b = write_doc(work.path(), "config-b.json", &scripted_config(&replies_b));
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
     let child_a = AutoKill::new(launch_osi_log(
@@ -313,52 +362,120 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     );
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    let cursor_doc = earliest_registered_document(&runs_dir);
+    // The finished prompt's own tokens land in the run's live state,
+    // polled on its own tick -- a plain event wait only proves the
+    // *next* step started, not that the live-state poll already
+    // caught up with the one before it (`pressing_3_during_a_live_
+    // run_opens_the_store_screen`'s own same `SIGNAL_DELAY`).
+    std::thread::sleep(SIGNAL_DELAY);
 
     let (master, slave_path) = open_pty();
     let mut master = master;
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("SELECT") && screen.contains("a.yml") && screen.contains("b.yml"),
+        "expected both runs listed on Select:\n{screen}"
+    );
 
-    // terminal -> dracula, on Select.
-    send_bytes(&mut master, b"T");
-    wait_for_screen_text(&captured_buf, "theme: dracula", Duration::from_secs(10));
-
-    // Attach to a run: dracula must still be the theme the Tape
-    // draws in, not reset back to terminal.
+    // Attach to the cursor's own run (row 1, the earliest registered)
+    // while still `terminal`.
     send_bytes(&mut master, b"\r");
-    wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(20));
+    assert!(
+        screen.contains("TAPE") && line_with(&screen, "TAPE").contains(&cursor_doc),
+        "expected enter to attach to the cursor's own run ({cursor_doc}):\n{screen}"
+    );
 
-    // dracula -> nord, on the Tape -- only reachable if the attach
-    // kept dracula rather than resetting to terminal (which would
-    // land back on dracula here instead).
-    send_bytes(&mut master, b"T");
-    wait_for_screen_text(&captured_buf, "theme: nord", Duration::from_secs(10));
-
-    // Open the Store: still nord.
+    // Open the Store, still `terminal`: the finished prompt's own
+    // leaf tile must carry a bright-black fill, the only way its
+    // area reads against the pane in this theme.
     send_bytes(&mut master, b"3");
-    wait_for_screen_text(&captured_buf, "STORE", Duration::from_secs(10));
+    let screen = wait_for_screen_text(&captured_buf, "STORE", Duration::from_secs(10));
+    assert!(
+        screen.contains("STORE") && screen.contains("ask · 400 t"),
+        "expected the Store screen with the finished prompt's own tile:\n{screen}"
+    );
+    // This pty's own `TERM=xterm-256color` (`spawn_osi_on_pty`'s own
+    // env, no `COLORTERM`) resolves to [`theme::ColorMode::Indexed256`],
+    // so even `Color::DarkGray` leaves crossterm as an indexed SGR
+    // background (`48;5;8`, ANSI colour 8, "bright black"), never the
+    // plain `100` a truecolour-capable terminal would use for the same
+    // named colour.
+    let before_switch = background_codes(&String::from_utf8_lossy(&captured_buf.lock().unwrap()));
+    assert!(
+        before_switch.iter().any(|c| c.contains("48;5;8")),
+        "expected the Store's leaf tile to carry a bright-black (indexed \
+         ANSI colour 8) background while the theme is still terminal, got: \
+         {before_switch:?}"
+    );
 
-    // nord -> solarized-dark, on the Store.
+    // terminal -> dracula, on the Store: a theme other than `terminal`
+    // also downgrades to indexed-256 in this environment, so the
+    // switch is checked by a *new* background colour appearing, not a
+    // truecolour one specifically.
     send_bytes(&mut master, b"T");
-    wait_for_screen_text(
+    let screen = wait_for_screen_text(&captured_buf, "theme: dracula", Duration::from_secs(10));
+    assert!(
+        screen.contains("theme: dracula"),
+        "expected the theme banner after T on the Store:\n{screen}"
+    );
+    let after_switch = background_codes(&String::from_utf8_lossy(&captured_buf.lock().unwrap()));
+    assert!(
+        after_switch.difference(&before_switch).next().is_some(),
+        "expected a background colour on screen that wasn't there before \
+         the switch away from terminal, got the same set: {after_switch:?}"
+    );
+
+    // esc back to Select: dracula must still be the theme.
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("SELECT"),
+        "expected esc from the Store back to Select:\n{screen}"
+    );
+
+    // dracula -> nord, back on Select -- only reachable if esc kept
+    // dracula rather than resetting to terminal (which would land
+    // back on dracula here instead).
+    send_bytes(&mut master, b"T");
+    let screen = wait_for_screen_text(&captured_buf, "theme: nord", Duration::from_secs(10));
+    assert!(
+        screen.contains("theme: nord"),
+        "expected the theme banner after T on Select:\n{screen}"
+    );
+
+    // Home to the All row (row 0), enter opens it: nord must still
+    // be the theme there.
+    send_bytes(&mut master, b"g");
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(20));
+    assert!(
+        screen.contains("ALL"),
+        "expected enter on the All row to open All:\n{screen}"
+    );
+
+    // nord -> solarized-dark, on All -- the banner must show there
+    // too, same as every other screen.
+    send_bytes(&mut master, b"T");
+    let screen = wait_for_screen_text(
         &captured_buf,
         "theme: solarized-dark",
         Duration::from_secs(10),
     );
+    assert!(
+        screen.contains("theme: solarized-dark"),
+        "expected the theme banner after T on All:\n{screen}"
+    );
 
-    // esc back to Select: solarized-dark must still be the theme.
     send_bytes(&mut master, b"\x1b");
-    wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
-
-    // solarized-dark -> solarized-light, back on Select -- only
-    // reachable if esc kept solarized-dark rather than resetting.
-    send_bytes(&mut master, b"T");
-    wait_for_screen_text(
-        &captured_buf,
-        "theme: solarized-light",
-        Duration::from_secs(10),
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("SELECT"),
+        "expected esc from All back to Select:\n{screen}"
     );
 
     send_bytes(&mut master, b"q");

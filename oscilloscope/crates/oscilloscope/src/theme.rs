@@ -245,6 +245,12 @@ impl Theme {
     /// no second ANSI colour is this same safe middle ground, so
     /// `tui.rs`'s own `mark_inset_frame` draws a container's bounds
     /// as a guide line instead of a fill.
+    ///
+    /// `tui.rs`'s own `store_leaf_lines` additionally dims a running
+    /// leaf's own text (`Modifier::DIM`) over this same fill --
+    /// weaker than either contrast check above measures, since a
+    /// terminal's own dim rendering isn't a fixed colour this crate
+    /// can compute a ratio for.
     fn terminal() -> Theme {
         Theme {
             name: ThemeName::Terminal,

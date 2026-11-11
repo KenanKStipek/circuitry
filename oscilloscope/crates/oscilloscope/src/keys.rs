@@ -3000,6 +3000,27 @@ mod tests {
     }
 
     #[test]
+    fn shift_t_reaches_every_screen_and_the_full_screen_step() {
+        use oscilloscope_core::screens::Screen;
+        for screen in [Screen::Tape, Screen::Signal, Screen::Flow, Screen::Store] {
+            let mut app = App::new(false);
+            app.screen = screen;
+            assert_eq!(
+                app.handle_key(key(KeyCode::Char('T')), &[], &[], true, false, &[]),
+                Action::CycleTheme,
+                "T should cycle the theme on {screen:?}"
+            );
+        }
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('T')), &[], &[], true, false, &[]),
+            Action::CycleTheme,
+            "T should cycle the theme with the full-screen step open"
+        );
+    }
+
+    #[test]
     fn esc_closes_the_help_overlay() {
         let mut app = App::new(false);
         app.dialog = Dialog::Help;

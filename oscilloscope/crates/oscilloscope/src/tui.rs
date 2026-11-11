@@ -3870,16 +3870,30 @@ fn draw_select_header_band(
                 .add_modifier(Modifier::BOLD),
         ));
     }
+    let banner_text = ctx
+        .theme_banner
+        .map(|name| format!("theme: {name}  "))
+        .unwrap_or_default();
     let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let clock_text =
         oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
     let chip_text = "  SELECT  ".to_string();
-    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let right_width = banner_text.chars().count()
+        + chip_text.chars().count()
+        + 2
+        + clock_text.chars().count()
+        + 1;
     let pad = (area.width as usize).saturating_sub(left_width + right_width);
     left.push(Span::styled(
         " ".repeat(pad),
         Style::default().fg(ctx.theme.text).bg(bg),
     ));
+    if !banner_text.is_empty() {
+        left.push(Span::styled(
+            banner_text,
+            Style::default().fg(ctx.theme.dim).bg(bg),
+        ));
+    }
     left.push(Span::styled(
         chip_text,
         Style::default()
@@ -4519,16 +4533,30 @@ fn draw_all_header_band(
             Style::default().fg(ctx.theme.text).bg(bg),
         ),
     ];
+    let banner_text = ctx
+        .theme_banner
+        .map(|name| format!("theme: {name}  "))
+        .unwrap_or_default();
     let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let clock_text =
         oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
     let chip_text = format!("  ALL · {}  ", all_screen_chip_word(screen));
-    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let right_width = banner_text.chars().count()
+        + chip_text.chars().count()
+        + 2
+        + clock_text.chars().count()
+        + 1;
     let pad = (area.width as usize).saturating_sub(left_width + right_width);
     left.push(Span::styled(
         " ".repeat(pad),
         Style::default().fg(ctx.theme.text).bg(bg),
     ));
+    if !banner_text.is_empty() {
+        left.push(Span::styled(
+            banner_text,
+            Style::default().fg(ctx.theme.dim).bg(bg),
+        ));
+    }
     left.push(Span::styled(
         chip_text,
         Style::default()
@@ -5319,16 +5347,30 @@ fn draw_combined_header_band(
             Style::default().fg(ctx.theme.text).bg(bg),
         ),
     ];
+    let banner_text = ctx
+        .theme_banner
+        .map(|name| format!("theme: {name}  "))
+        .unwrap_or_default();
     let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let clock_text =
         oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
     let chip_text = "  ALL · COMBINED SIGNAL  ".to_string();
-    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let right_width = banner_text.chars().count()
+        + chip_text.chars().count()
+        + 2
+        + clock_text.chars().count()
+        + 1;
     let pad = (area.width as usize).saturating_sub(left_width + right_width);
     left.push(Span::styled(
         " ".repeat(pad),
         Style::default().fg(ctx.theme.text).bg(bg),
     ));
+    if !banner_text.is_empty() {
+        left.push(Span::styled(
+            banner_text,
+            Style::default().fg(ctx.theme.dim).bg(bg),
+        ));
+    }
     left.push(Span::styled(
         chip_text,
         Style::default()
@@ -9302,11 +9344,17 @@ fn draw_store_table(
     let theme = ctx.theme;
     // "From the frames": the header's own `TOKENS` lands one column
     // to the left of where the data rows' own tokens column starts,
-    // at both pinned widths -- not literally aligned to it.
+    // at both pinned widths -- not literally aligned to it. Once an
+    // eight-digit figure widens `tokens_w` past its own 8-column
+    // floor (issue #714), `TOKENS` itself pads out to match, keeping
+    // that same one-column gap before `SHARE` rather than running
+    // into it.
     let header_text = format!(
-        "   {:<width$}TOKENS SHARE VS USUAL",
+        "   {:<label_bar_width$}{:<tokens_header_width$}SHARE VS USUAL",
         "STORE",
-        width = (label_w + bar_w).saturating_sub(1)
+        "TOKENS",
+        label_bar_width = (label_w + bar_w).saturating_sub(1),
+        tokens_header_width = tokens_w.saturating_sub(1),
     );
     let mut lines = vec![pad_line(
         vec![Span::styled(
@@ -21052,6 +21100,17 @@ mod tape_frame_goldens {
         assert!(
             !text.contains("35,396,916 t66%"),
             "the TOKENS figure must never run straight into SHARE:\n{text}"
+        );
+        // `tokens_w` is 13 here (the eight-digit figure plus a
+        // trailing space): the header's own `TOKENS` widens to fill
+        // 12 columns (`tokens_w - 1`, the frames' own one-column
+        // offset before `SHARE`), six spaces past the word itself,
+        // rather than the fixed single space the 8-column floor
+        // uses.
+        assert!(
+            text.contains("TOKENS      SHARE"),
+            "the header's own TOKENS must widen with the column instead of \
+             leaving SHARE stranded to its left:\n{text}"
         );
     }
 
