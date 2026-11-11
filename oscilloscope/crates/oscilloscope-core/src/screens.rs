@@ -4596,6 +4596,102 @@ pub fn build_flow(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    /// A list number's own period (`1.`, `12.`) is never a sentence
+    /// end, so `1. Faster parser.` cuts at the real one.
+    #[test]
+    fn first_sentence_end_skips_a_list_numbers_own_period() {
+        assert_eq!(
+            first_sentence_end("1. Faster parser. Also fixes a bug."),
+            Some(16)
+        );
+        assert_eq!(first_words("1. Faster parser.", 80), "1. Faster parser.");
+    }
+
+    /// A period embedded in a word (no space after it, followed by
+    /// another letter or digit) is never a sentence end either.
+    #[test]
+    fn first_sentence_end_skips_a_period_embedded_in_a_word() {
+        assert_eq!(first_sentence_end("See api.py.main for that."), Some(24));
+        assert_eq!(first_sentence_end("v1.2.0 shipped."), Some(14));
+        assert_eq!(
+            first_sentence_end("Read https://example.com/a.b for more."),
+            Some(37)
+        );
+        assert_eq!(first_sentence_end("It costs 3.14 dollars."), Some(21));
+    }
+
+    /// `e.g.`/`U.S.` aren't specially recognised at all -- the
+    /// period right after the first one-letter abbreviation is
+    /// itself followed immediately by another letter with no space
+    /// (`e`+`.`+`g`), so it's skipped as "embedded in a word" the
+    /// same as `api.py` would be; the *next* period (after `g`/the
+    /// second `S`) is followed by a space, so that one reads as the
+    /// real end. This just pins the actual, unchanged behaviour
+    /// rather than claiming a rule this function has never had.
+    #[test]
+    fn first_sentence_end_reads_an_abbreviations_period_as_a_real_one() {
+        assert_eq!(first_sentence_end("e.g. a cat."), Some(3));
+        assert_eq!(first_sentence_end("U.S. markets rose."), Some(3));
+    }
+
+    /// `...` and a trailing `?!` both still end at their own first
+    /// punctuation mark, same as before this fix.
+    #[test]
+    fn first_sentence_end_stops_at_the_first_punctuation_mark() {
+        assert_eq!(first_sentence_end("Wait... really?"), Some(4));
+        assert_eq!(first_sentence_end("Really?! Yes."), Some(6));
+    }
+
+    #[test]
+    fn first_sentence_end_is_none_with_no_sentence_end_at_all() {
+        assert_eq!(first_sentence_end("no punctuation here"), None);
+    }
+
+    /// A tool with no `params_rendered` yet (a loop pass's own tool
+    /// child, concurrently started with its siblings, before its own
+    /// `start` event has landed) still shows the plan's own static
+    /// command meanwhile, straight off `PlanTree::match_path`.
+    #[test]
+    fn tape_tool_what_falls_back_to_the_plans_own_static_command() {
+        static CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let tmp = std::env::temp_dir().join(format!(
+            "osi-screens-test-tool-what-{}-{call}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("doc.yml");
+        std::fs::write(
+            &path,
+            "effects:\n  - name: flaky\n    type: tool\n    provider: shell\n    params:\n      command: ls\n      args: [\"/nonexistent-osi-demo\"]\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
+        std::fs::remove_dir_all(&tmp).ok();
+        let plan = PlanTree::from_program(&program);
+        let row = Row {
+            path: "prime.flaky".to_string(),
+            depth: 1,
+            label: "flaky".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::Pending,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        assert_eq!(
+            tape_tool_what(&row, None, &plan),
+            "ls /nonexistent-osi-demo"
+        );
+    }
 
     /// Issue #704 rule 4's own Meta section: `meta.error` is already
     /// its own Error section, never repeated here under its own raw
@@ -4776,7 +4872,6 @@ mod tests {
         assert_eq!(default_follow_path(&rows), None);
     }
 
-    use super::*;
     use crate::model::ProcessState;
     use crate::plan::PlanTree;
     use chrono::FixedOffset;
