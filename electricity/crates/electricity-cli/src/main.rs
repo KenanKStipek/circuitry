@@ -1457,4 +1457,114 @@ mod unit_tests {
             _ => panic!("expected Run"),
         }
     }
+
+    #[test]
+    fn run_subcommand_with_a_single_positional_is_a_run_request_with_no_config() {
+        match classify(&["run".to_string(), "doc.yml".to_string()]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.orchestration, "doc.yml");
+                assert_eq!(run_args.config, None);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_subcommand_parses_every_new_flag() {
+        match classify(&[
+            "run".to_string(),
+            "doc.yml".to_string(),
+            "--config".to_string(),
+            "config.json".to_string(),
+            "--out".to_string(),
+            "state.json".to_string(),
+            "--live-state".to_string(),
+            "live.json".to_string(),
+            "--events".to_string(),
+            "events.jsonl".to_string(),
+            "--allow-capabilities".to_string(),
+            "shell,network".to_string(),
+            "--adapter".to_string(),
+            "claude_code".to_string(),
+            "--quiet".to_string(),
+            "-e".to_string(),
+            "name=World".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.orchestration, "doc.yml");
+                assert_eq!(run_args.config.as_deref(), Some("config.json"));
+                assert_eq!(run_args.out.as_deref(), Some("state.json"));
+                assert_eq!(run_args.live_state.as_deref(), Some("live.json"));
+                assert_eq!(run_args.events.as_deref(), Some("events.jsonl"));
+                assert_eq!(
+                    run_args.allow_capabilities.as_deref(),
+                    Some("shell,network")
+                );
+                assert_eq!(run_args.adapter.as_deref(), Some("claude_code"));
+                assert!(run_args.quiet);
+                assert_eq!(run_args.inputs, vec!["name=World".to_string()]);
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_subcommand_with_no_positional_is_missing_orchestration_not_a_usage_error() {
+        assert!(matches!(
+            classify(&[
+                "run".to_string(),
+                "--config".to_string(),
+                "c.json".to_string()
+            ]),
+            Action::MissingOrchestration
+        ));
+        assert!(matches!(
+            classify(&["run".to_string()]),
+            Action::MissingOrchestration
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_with_two_positionals_is_a_usage_error() {
+        assert!(matches!(
+            classify(&["run".to_string(), "a.yml".to_string(), "b.yml".to_string()]),
+            Action::UsageError(_)
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_rejects_dump_ir() {
+        assert!(matches!(
+            classify(&[
+                "run".to_string(),
+                "doc.yml".to_string(),
+                "--dump-ir".to_string()
+            ]),
+            Action::UsageError(_)
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_unknown_flag_is_a_usage_error() {
+        assert!(matches!(
+            classify(&[
+                "run".to_string(),
+                "doc.yml".to_string(),
+                "--bogus".to_string()
+            ]),
+            Action::UsageError(_)
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_honors_version_and_help_even_after_run() {
+        assert!(matches!(
+            classify(&["run".to_string(), "--version".to_string()]),
+            Action::Version
+        ));
+        assert!(matches!(
+            classify(&["run".to_string(), "--help".to_string()]),
+            Action::Help
+        ));
+    }
 }

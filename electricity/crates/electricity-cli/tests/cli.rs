@@ -973,3 +973,177 @@ fn a_ten_thousand_hop_ref_chain_in_a_prompt_schema_never_overflows_the_main_thre
         "maximum recursion depth exceeded while calling a Python object"
     );
 }
+
+/// `electricity run <doc>` (issue #728): the same document the legacy
+/// positional form runs, with `--config` given explicitly, succeeds
+/// with the same stdout contract (no `--out`: the state JSON on
+/// stdout).
+#[test]
+fn run_subcommand_with_an_explicit_config_succeeds() {
+    let (mut cmd, home) = command("run-sub-explicit-config");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(payload["input"].is_object());
+}
+
+/// `--allow-capabilities`/`--adapter`/`--quiet` (issue #728): all three
+/// parse and don't themselves change an ordinary run's outcome.
+#[test]
+fn run_subcommand_accepts_allow_capabilities_adapter_and_quiet() {
+    let (mut cmd, home) = command("run-sub-new-flags");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--allow-capabilities",
+            "shell,network",
+            "--adapter",
+            "ollama",
+            "--quiet",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+}
+
+/// `electricity run` with no orchestration positional (issue #728):
+/// `cof run`'s own "Missing orchestration" text, on stdout, exit 1 --
+/// not a usage error (exit 2), since the positional stands in for
+/// `--last` there (not implemented here -- #727's own scope).
+#[test]
+fn run_subcommand_with_no_orchestration_fails_with_cofs_own_text_and_exit_one() {
+    let (mut cmd, home) = command("run-sub-missing-orchestration");
+    let config = home.config("{}");
+    let output = cmd
+        .args(["run", "--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout,
+        "Error: Missing orchestration. Use --last or provide a path/name.\n"
+    );
+}
+
+/// Config discovery (issue #728): with no `--config`, `CIRCUITRY_CONFIG`
+/// is honored, same order as `cli/config.py::resolve_config`.
+#[test]
+fn run_subcommand_discovers_config_via_circuitry_config_env_var() {
+    let (mut cmd, home) = command("run-sub-circuitry-config-env");
+    let config = home.config(r#"{"default_model": "from-env-var"}"#);
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    cmd.env("CIRCUITRY_CONFIG", config.to_str().unwrap());
+    let output = cmd.args(["run", doc.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+}
+
+/// A discovered project config (`circuitry.config.json` in the working
+/// directory) with no trust store entry and no
+/// `CIRCUITRY_TRUST_PROJECT_CONFIG` is skipped, with the same warning
+/// text `cli/config_trust.py::ProjectConfigStatus.skip_warning` writes
+/// (issue #728's config-discovery branch). The run still succeeds (the
+/// built-in defaults apply instead).
+#[test]
+fn run_subcommand_skips_an_untrusted_discovered_project_config() {
+    let (mut cmd, home) = command("run-sub-untrusted-project-config");
+    let cwd = home.path.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    let project_config = cwd.join("circuitry.config.json");
+    fs::write(&project_config, r#"{"default_model": "from-project"}"#).unwrap();
+    let doc = cwd.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .current_dir(&cwd)
+        .args(["run", "doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // `std::env::current_dir()` inside the child resolves any symlink
+    // in the path (e.g. macOS's `/var` -> `/private/var`), so the
+    // message's own path is compared against the canonicalized form,
+    // not the possibly-unresolved one this test built *cwd* from.
+    let resolved = fs::canonicalize(&project_config).unwrap();
+    let expected = format!(
+        "Skipped project config {}: it is not trusted, so none of its settings apply. Review \
+         it, then run `cof trust {}` to apply it.",
+        resolved.display(),
+        resolved.display(),
+    );
+    assert!(stderr.contains(&expected), "{stderr}");
+}
+
+/// `CIRCUITRY_TRUST_PROJECT_CONFIG` (issue #728's config-discovery
+/// branch) trusts a discovered project config with no store entry at
+/// all, and so it applies silently (no skip warning).
+#[test]
+fn run_subcommand_env_var_trusts_a_discovered_project_config() {
+    let (mut cmd, home) = command("run-sub-env-trusted-project-config");
+    let cwd = home.path.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("circuitry.config.json"),
+        r#"{"default_model": "from-project"}"#,
+    )
+    .unwrap();
+    let doc = cwd.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    cmd.env("CIRCUITRY_TRUST_PROJECT_CONFIG", "1");
+    let output = cmd
+        .current_dir(&cwd)
+        .args(["run", "doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Skipped project config"), "{stderr}");
+}
+
+/// `electricity run <doc> --bogus` (issue #728): an unknown option
+/// under the new subcommand is still a usage error, exit 2 -- same
+/// convention as the legacy form's own unrecognized-flag handling.
+#[test]
+fn run_subcommand_unknown_flag_is_a_usage_error() {
+    let (mut cmd, home) = command("run-sub-unknown-flag");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args(["run", doc.to_str().unwrap(), "--bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
+/// `--help`'s own usage text names every option `electricity run`
+/// accepts (issue #728) -- ties the help text to the actual parser the
+/// way `usage_text_matches_supported_current_for_every_gated_effect_type`
+/// already ties it to `Supported::current()`.
+#[test]
+fn help_text_names_every_run_subcommand_option() {
+    let (mut cmd, _home) = command("help-run-options");
+    let output = cmd.arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("electricity run <orchestration.yml>"));
+    for flag in ["--config", "--allow-capabilities", "--adapter", "--quiet"] {
+        assert!(stdout.contains(flag), "--help is missing {flag}: {stdout}");
+    }
+}

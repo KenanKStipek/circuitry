@@ -865,4 +865,175 @@ mod tests {
         let cfg = resolve_config(&path, &HashMap::new()).unwrap();
         assert_eq!(cfg.environment, "dev");
     }
+
+    #[test]
+    fn resolve_config_for_run_with_an_explicit_path_matches_resolve_config() {
+        let scratch = ScratchDir::new("for-run-explicit");
+        let path = scratch.write_config(r#"{"default_model": "gpt-4"}"#);
+        let resolved =
+            resolve_config_for_run(Some(&path), &scratch.0, None, &HashMap::new()).unwrap();
+        assert_eq!(resolved.config.default_model, Some("gpt-4".to_string()));
+        assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_for_run_honors_circuitry_config_over_discovery() {
+        let scratch = ScratchDir::new("for-run-env-config");
+        let env_path = scratch.0.join("env-config.json");
+        fs::write(&env_path, r#"{"default_model": "from-env-var"}"#).unwrap();
+        fs::write(
+            scratch.0.join("circuitry.config.json"),
+            r#"{"default_model": "from-project"}"#,
+        )
+        .unwrap();
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_CONFIG".to_string(),
+            env_path.display().to_string(),
+        );
+        let resolved = resolve_config_for_run(None, &scratch.0, None, &env).unwrap();
+        assert_eq!(
+            resolved.config.default_model,
+            Some("from-env-var".to_string())
+        );
+    }
+
+    #[test]
+    fn circuitry_config_env_var_errors_are_fatal_and_tagged() {
+        let scratch = ScratchDir::new("for-run-env-config-missing");
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_CONFIG".to_string(),
+            scratch.0.join("missing.json").display().to_string(),
+        );
+        let err = resolve_config_for_run(None, &scratch.0, None, &env).unwrap_err();
+        assert!(err.0.starts_with("CIRCUITRY_CONFIG points to"));
+        assert!(err.0.ends_with("unset it or fix the path"));
+    }
+
+    #[test]
+    fn resolve_config_for_run_discovers_a_trusted_project_config() {
+        let scratch = ScratchDir::new("for-run-trusted-project");
+        let project_path = scratch.0.join("circuitry.config.json");
+        let data = br#"{"default_model": "from-project"}"#;
+        fs::write(&project_path, data).unwrap();
+        let home = scratch.0.join("home");
+        let store_path = trust_store_path(&home);
+        let key = config_trust::trust_key(&project_path);
+        let digest = config_trust::config_digest(data);
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        fs::write(
+            &store_path,
+            format!(
+                r#"{{"trusted": {{{:?}: {{"sha256": {:?}, "trusted_at": "2026-01-01T00:00:00+00:00"}}}}}}"#,
+                key, digest
+            ),
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_config_for_run(None, &scratch.0, Some(&home), &HashMap::new()).unwrap();
+        assert_eq!(
+            resolved.config.default_model,
+            Some("from-project".to_string())
+        );
+        assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_for_run_skips_an_untrusted_project_config_with_a_warning() {
+        let scratch = ScratchDir::new("for-run-untrusted-project");
+        fs::write(
+            scratch.0.join("circuitry.config.json"),
+            r#"{"default_model": "from-project"}"#,
+        )
+        .unwrap();
+        let home = scratch.0.join("home");
+
+        let resolved =
+            resolve_config_for_run(None, &scratch.0, Some(&home), &HashMap::new()).unwrap();
+        // The sane default, not the skipped project config's own value.
+        assert_eq!(
+            resolved.config.default_model,
+            Some("llama3.1:8b".to_string())
+        );
+        assert_eq!(resolved.warnings.len(), 1);
+        assert!(resolved.warnings[0].starts_with("Skipped project config"));
+        assert!(resolved.warnings[0].contains("it is not trusted"));
+    }
+
+    #[test]
+    fn resolve_config_for_run_env_var_trusts_a_project_config_with_no_store() {
+        let scratch = ScratchDir::new("for-run-env-trusted-project");
+        fs::write(
+            scratch.0.join("circuitry.config.json"),
+            r#"{"default_model": "from-project"}"#,
+        )
+        .unwrap();
+        let home = scratch.0.join("home");
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_TRUST_PROJECT_CONFIG".to_string(),
+            "1".to_string(),
+        );
+
+        let resolved = resolve_config_for_run(None, &scratch.0, Some(&home), &env).unwrap();
+        assert_eq!(
+            resolved.config.default_model,
+            Some("from-project".to_string())
+        );
+        assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_for_run_narrows_but_never_widens_a_global_allowlist() {
+        let scratch = ScratchDir::new("for-run-narrow-allowlist");
+        let home = scratch.0.join("home");
+        let global_path = global_config_path(&home);
+        fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+        fs::write(&global_path, r#"{"enabled_tools": ["json", "shell"]}"#).unwrap();
+        let project_path = scratch.0.join("circuitry.config.json");
+        let data = br#"{"enabled_tools": ["shell", "http"]}"#;
+        fs::write(&project_path, data).unwrap();
+        let store_path = trust_store_path(&home);
+        let key = config_trust::trust_key(&project_path);
+        let digest = config_trust::config_digest(data);
+        fs::write(
+            &store_path,
+            format!(
+                r#"{{"trusted": {{{:?}: {{"sha256": {:?}, "trusted_at": "2026-01-01T00:00:00+00:00"}}}}}}"#,
+                key, digest
+            ),
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_config_for_run(None, &scratch.0, Some(&home), &HashMap::new()).unwrap();
+        // `http` is dropped (not in the global list); `shell` survives
+        // (in both); `json` (global-only) is untouched by the project's
+        // own narrower list, which never widens it back in since it
+        // isn't named there at all -- it simply isn't in the project's
+        // list either way, so the intersection still drops it.
+        assert_eq!(
+            resolved.config.enabled_tools,
+            Some(vec!["shell".to_string()])
+        );
+    }
+
+    #[test]
+    fn discover_project_config_prefers_circuitry_config_json() {
+        let scratch = ScratchDir::new("discover-prefers-circuitry");
+        fs::write(scratch.0.join("config.json"), "{}").unwrap();
+        fs::write(scratch.0.join("circuitry.config.json"), "{}").unwrap();
+        assert_eq!(
+            discover_project_config(&scratch.0),
+            Some(scratch.0.join("circuitry.config.json"))
+        );
+    }
+
+    #[test]
+    fn discover_project_config_is_none_when_neither_filename_exists() {
+        let scratch = ScratchDir::new("discover-none");
+        assert_eq!(discover_project_config(&scratch.0), None);
+    }
 }
