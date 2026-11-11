@@ -809,7 +809,7 @@ pub fn finished_legend_text(
     };
     let with_tokens = format!(
         "\u{2713} {label}{extra_text} \u{b7} {}",
-        crate::format::format_tokens_t(tokens_total)
+        crate::format::format_tokens(tokens_total)
     );
     if start_col + with_tokens.chars().count() < limit_col {
         return with_tokens;
@@ -988,14 +988,15 @@ mod tests {
     #[test]
     fn finished_legend_text_keeps_tokens_when_there_is_room() {
         let text = finished_legend_text("plan", 3, 4_646, 22, 46);
-        assert_eq!(text, "\u{2713} plan +3 \u{b7} 4,646 t");
+        assert_eq!(text, "\u{2713} plan +3 \u{b7} 4.6 kt");
     }
 
     #[test]
     fn finished_legend_text_drops_tokens_before_the_running_column() {
-        // Reaching exactly `limit_col` still loses the token figure
-        // (the frame's own classify row touches it exactly).
-        let text = finished_legend_text("iter_0 \u{203a} label", 5, 1_152, 17, 46);
+        // Reaching exactly `limit_col` still loses the token figure,
+        // at a boundary chosen for this test alone -- the frame's
+        // own classify row sits at different columns and has room.
+        let text = finished_legend_text("iter_0 \u{203a} label", 5, 1_152, 17, 45);
         assert_eq!(text, "\u{2713} iter_0 \u{203a} label +5");
     }
 

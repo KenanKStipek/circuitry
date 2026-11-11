@@ -66,7 +66,7 @@ model and the metadata around each step. Four screens look at one run; two more 
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
-│         ■ Run End            usually 1,324 t · 5.0s      ETA 12:50:52    ││                                          │
+│         ■ Run End            usually 1.3 kt · 5.0s      ETA 12:50:52     ││                                          │
 │──────────────────────────────────────────────────────────────────────────││                                          │
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
@@ -90,8 +90,8 @@ and duration, and the ETA in the token column. The Now area's own middle row sit
 finished rows fill upward from it, newest closest, the oldest scrolling off the top; rows ahead fill downward, the
 latest scrolling off the bottom; blank above when the past is short, blank below when the plan is short.
 
-**Token column** (16 cells). `▰▰▰▰▱▱▱▱   215 t`: eight bar cells at a fixed 50 tokens each, then the count,
-thousands separated, `t` as the unit. The largest step so far has the only bold number. A loop row shows a
+**Token column** (16 cells). `▰▰▰▰▱▱▱▱   215 t`: eight bar cells at a fixed 50 tokens each, then the count in
+t, kt, Mt (§3.5). The largest step so far has the only bold number. A loop row shows a
 sparkline of its finished passes and the per-pass average, `▃▃   130 t/p`. Pressing `t` swaps the column for
 each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a baseline tick with up to four cells per side at
 12.5 % each, coloured by the deviation (§3.6):
@@ -121,7 +121,7 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
-│         ■ Run End            usually 1,324 t · 5.0s      ETA 12:50:52    ││                                          │
+│         ■ Run End            usually 1.3 kt · 5.0s      ETA 12:50:52     ││                                          │
 │──────────────────────────────────────────────────────────────────────────││                                          │
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
@@ -171,7 +171,7 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 │         · iter_2 › pause     tool · sleep 1 · queued                         │
 │         · flaky              tool · ls /nonexistent-osi-dem⋯                 │
 │         · summary            prompt                          usually 402 t   │
-│         ■ Run End            usually 1,324 t · ETA 12:50:52                  │
+│         ■ Run End            usually 1.3 kt · ETA 12:50:52                   │
 │                                                                              │
 │──────────────────────────────────────────────────────────────────────────────│
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —      │
@@ -462,10 +462,10 @@ the three ways to start one:
 │                                                                              │
 │ Recent Runs · open read-only                                                 │
 │      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME                  │
-│  ❯ ✓ demo.yml config-h3.json 14:14:09  5.0s 1,296 t ok · 1 handled failure   │
-│    ✓ demo.yml config-h2.json 14:14:03  5.1s 1,386 t ok · 1 handled failure   │
-│    ✓ demo.yml config-h1.json 14:13:57  5.0s 1,324 t ok · 1 handled failure   │
-│    ✓ demo.yml config.json    12:50:47  5.1s 1,410 t ok · 1 handled failure   │
+│  ❯ ✓ demo.yml config-h3.json 14:14:09  5.0s  1.3 kt ok · 1 handled failure   │
+│    ✓ demo.yml config-h2.json 14:14:03  5.1s  1.4 kt ok · 1 handled failure   │
+│    ✓ demo.yml config-h1.json 14:13:57  5.0s  1.3 kt ok · 1 handled failure   │
+│    ✓ demo.yml config.json    12:50:47  5.1s  1.4 kt ok · 1 handled failure   │
 │    ✗ demo.yml config.json    12:48:49  0.0s   215 t failed · tests           │
 │                                                                              │
 │ Start One                                                                    │
@@ -547,12 +547,17 @@ second rule reads `2 of 2 Slots Busy · 1 Pass Queued` while a loop runs. The he
 
 ### 3.5 Tokens
 
-- **Unit bar.** `▰ = 50 t`, eight cells, so a bar is full at 400 tokens; the count is always printed,
-  `215 t`, `1,902 t`. The legend states the unit in every panel title that has bars. The unit is a constant per
-  run, shown in the title; deriving it from history (the smallest of 10, 20, 50, 100, 200, 500 that keeps the usual
-  largest step inside eight cells) is an open decision (§9).
-- **Arrows carry no unit.** `↑212 ↓3` is sent and received; the total carries the `t`.
-- **Loop rows** show a sparkline of finished passes and the per-pass average, `130 t/p`.
+- **Counts with their unit** use one formatter: below 1,000 the count is exact (`215 t`); from 1,000 it shows one
+  decimal below 100 of its unit and none from 100, scaling through `kt`, `Mt`, `Gt` and `Tt` (`1.9 kt`, `18.0 kt`,
+  `142 kt`, `35.4 Mt`, `1.2 Gt`, `1.0 Tt`), carrying into the next unit on rounding (`999,960` -> `1.0 Mt`).
+- **Unit bar.** `▰ = 50 t`, eight cells, so a bar is full at 400 tokens; the count is always printed, `215 t`,
+  `1.9 kt`. The legend states the unit in every panel title that has bars. The unit is a constant per run, shown
+  in the title; deriving it from history (the smallest of 10, 20, 50, 100, 200, 500 that keeps the usual largest
+  step inside eight cells) is an open decision (§9).
+- **Arrows carry no unit**, scaling with the same rounding and a one-letter suffix instead: `↑212 ↓3`,
+  `↑1.2k ↓56`, `↑35.4M ↓203k`, `↑1.2G ↓98.8k` is sent and received; the total carries the full unit (`t`/`kt`/...).
+- **Loop rows** show a sparkline of finished passes and the per-pass average, `130 t/p`, scaling the same way
+  (`5.2 kt/p`).
 - **Usual** is the median of the document's finished runs in history, per step and for the whole run:
   `usually 155 t` on rows ahead, `+47%` next to a finished step, `+12% Usual` in the totals, `ETA` = run start +
   usual wall time. Three runs are enough to show it; with fewer, `usually` and the deviation are absent and the
@@ -592,7 +597,7 @@ second rule reads `2 of 2 Slots Busy · 1 Pass Queued` while a loop runs. The he
 
 ### 3.8 Numbers, times and truncation
 
-Tokens with thousands separators and a space before `t`; durations `3.0s`, `5.1s`; ages `0.6s ago`; clocks
+Tokens scaled through `t`/`kt`/`Mt`/`Gt`/`Tt` (§3.5); durations `3.0s`, `5.1s`; ages `0.6s ago`; clocks
 `12:50:50` in local time, the same instant on the whole frame; percentages `+47%`, `-16%`, `45%`. Text that does
 not fit is cut with `⋯`, never wrapped in a row; panel titles are shortened before they overflow (`Signal · Sent
 Above · Received Below · Fixed Scale`). Counts in chrome are `6 Done · 2 Running · 4 Ahead` and `6/14 Effects`.

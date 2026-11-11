@@ -476,12 +476,12 @@ Polling, every 100 ms, is preferred over `notify`. The live file is replaced by 
 
 ```
 19:56:22 ▶ flaky                 prompt scripted/scripted-model "flaky"
-19:56:24 ✓ flaky                 2.0s  retries 2  ↑3 t ↓1 t
+19:56:24 ✓ flaky                 2.0s  retries 2  ↑3 ↓1
 19:56:24 ▶ always_fails          shell ls /nonexistent-osi-probe
 19:56:24 ✗ always_fails          /bin/ls failed (exit 1): ls: … (on_error: continue)
 19:56:25 ✗ guarded.g_fail        /bin/ls failed (exit 1) …
 19:56:26 ✓ guarded.g_cleanup     0.7s  (finally)
-19:56:27 ■ run ok  5.7s · 12 effects · ↑3 t ↓1 t
+19:56:27 ■ run ok  5.7s · 12 effects · ↑3 ↓1
 ```
 
 ### 6.3 TUI (shipped, issue #434; the state pane, treemap and token bar,

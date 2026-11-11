@@ -328,21 +328,22 @@ pub fn shared_signal_axis_starting_top(no_history_start: u64) -> u64 {
     round_top_series_min(0, no_history_start)
 }
 
-/// The shared Signal scale's own axis label (issue #698): one
-/// decimal place in `k` from 1,000 up (`5.0k`,
-/// `8.0k`), the plain token figure below it (`400 t`) -- a single
-/// run's own smaller, never-shared axis keeps its existing plain
-/// thousands-separated figure (`format::format_tokens_t`) instead.
+/// The Signal axis label (issue #698, shared by a single run's own
+/// axis and the shared/Combined Signal scale alike, issue #715): one
+/// decimal place in `k` from 1,000 up (`5.0k`, `8.0k`), the plain
+/// token figure below it (`400 t`).
 pub fn format_shared_axis_label(n: u64) -> String {
     if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
+        // The arrows' own one-letter form, so a top past a million
+        // reads `1.5M`, not a run of thousands.
+        crate::format::format_tokens_arrow(n)
     } else {
         format!("{n} t")
     }
 }
 
 /// A Signal tile's own finished-prompt label group: a frame's
-/// `✓ plan +3 · 4,646 t` is a tool-free run of finished prompts
+/// `✓ plan +3 · 4.6 kt` is a tool-free run of finished prompts
 /// whose own finish times land in the same 100 ms Signal column --
 /// as many tokens merge there as the trace's own bucketing already
 /// puts in one column, never a separate rule of its own. `label` is
@@ -1082,6 +1083,13 @@ mod tests {
         assert_eq!(format_shared_axis_label(8_000), "8.0k");
         assert_eq!(format_shared_axis_label(2_500), "2.5k");
         assert_eq!(format_shared_axis_label(400), "400 t");
+    }
+
+    #[test]
+    fn format_shared_axis_label_scales_past_thousands() {
+        assert_eq!(format_shared_axis_label(250_000), "250k");
+        assert_eq!(format_shared_axis_label(1_500_000), "1.5M");
+        assert_eq!(format_shared_axis_label(2_000_000_000), "2.0G");
     }
 
     /// `tile_grid` for 1-9 runs at the issue's own four sizes
