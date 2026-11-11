@@ -8,15 +8,14 @@ tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
 **This is a preview.** `electricity <config.json> <orchestration.yml>` runs
-documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
-`prompt` and `reflector` effects and `finally:` blocks, with the `json`,
-`shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
-`clock`, `regex`, `http`, `validate_yaml` and `gh` tool providers, aiming
-at the same final state, `--live-state` and `--events` output as
-`cof run`. A
-top-level `prompts:` map and `{{> name}}` composition run too, in every
-field that reaches them (a tool's `prompt`/`params`/`params_json`, a
-`use`'s `inputs`/`inline`, a `yield`'s `template`, a `prompt`'s own
+documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`, `prompt`
+and `reflector` effects and `finally:` blocks, with the `json`, `shell`, `awk`,
+`imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`, `clock`, `regex`,
+`http`, `validate_yaml` and `gh` tool providers, aiming at the same final
+state, `--live-state` and `--events` output as `cof run`. A top-level
+`prompts:` map and `{{> name}}` composition run too, in every field that
+reaches them (a tool's `prompt`/`params`/`params_json`, a `use`'s
+`inputs`/`inline`, a `yield`'s `template`, a `prompt`'s own
 `template`/`messages`). A `prompt` effect runs for real against a
 document's own top-level `adapter:`/a prompt's own `provider:` (native
 Ollama, the OpenAI-compatible family, `openai`, `anthropic`, `replicate`,
