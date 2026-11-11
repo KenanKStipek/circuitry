@@ -1,0 +1,23 @@
+name: c723-cel-tool-while-own-write
+effects:
+  - type: loop
+    name: counter
+    while:
+      mode: cel
+      expr: "state.iter.index < 2"
+    body:
+      - type: tool
+        name: before_write
+        provider: cel
+        params:
+          expr: "state.iter.index"
+      - type: tool
+        name: own_write
+        provider: cel
+        params:
+          expr: "state.iter.index * 10"
+      - type: tool
+        name: after_write
+        provider: cel
+        params:
+          expr: "state.prime.own_write.value + 1"

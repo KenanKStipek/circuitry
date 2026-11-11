@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #723",
+  "description": "A `cel` row inside a `while` body sees the enclosing loop's own prior-pass writes and the bindings an `if` at the same position sees, both before and after a sibling in the same pass writes its own node -- one acceptance item of #723's own list.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
