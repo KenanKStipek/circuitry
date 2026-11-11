@@ -20,6 +20,7 @@ pub mod history;
 pub mod icon;
 pub mod layout;
 pub mod model;
+pub mod multi;
 pub mod observe;
 pub mod plan;
 pub mod rail;

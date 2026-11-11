@@ -159,6 +159,10 @@ so another `osi` process -- or a script -- can find it.
   subdirectories -- and prints one plain line per run (document, config,
   engine, pid, run directory), then exits 0. On a TTY with no `--log`, it
   opens the Select screen instead (below).
+- **`OSI_PROCESS_SCAN=0`:** list only the registry, skipping the `ps`
+  scan and the current-directory source entirely -- for tests and a
+  shared machine where the scan would otherwise find orchestrations this
+  `osi` never launched or watched.
 
 ## Select
 
@@ -169,11 +173,11 @@ does, and shows one of three screens:
 - **Exactly one running:** attaches to it straight away, read-only, the
   same as `osi watch <run_dir>` (`c` is inert; `esc` does nothing, since
   there is no Select screen behind this one to go back to).
-- **More than one running:** a list, `All` first (not yet wired to
-  anything -- the tiled grid is a later part of this same design), then
-  one row per run with the document and config basenames and the engine.
-  The cursor starts on the first run. `enter` attaches to it, the same
-  way; `esc` on that attached run returns here.
+- **More than one running:** a list, `All` first, then one row per run
+  with the document and config basenames and the engine. The cursor
+  starts on the first run. `enter` on a run row attaches to it, the same
+  way; `esc` on that attached run returns here. `enter` on `All` opens
+  the tiled grid (below).
 - **None running:** where discovery looked, and a Recent Runs table built
   from run history across every document -- DOC, CONFIG (`—` for an
   older record with none), STARTED, TOOK, TOKENS and OUTCOME (`ok`, `ok ·
@@ -197,6 +201,40 @@ forwarded SIGTERM/SIGHUP quits with 143/129. Select needs at least 80
 columns (every screen's own shared 60-column floor is higher here, since
 80×24 is already its own narrowest frame); below that it shows the usual
 too-small notice.
+
+## All
+
+`enter` on Select's own `All` row tiles every running orchestration, one
+full osi per run:
+
+- **Screens:** `0`-`3` set every tile's own screen at once (the same four
+  screens the terminal UI section below describes, one per tile). A Tape
+  tile keeps the Tape's own order without the clock column or a detail
+  pane, folding whatever doesn't fit into `… n earlier`/`… n more`. A
+  Signal tile is a fixed fifteen-row chart on a scale every tile shares
+  (the smallest round top at or above 1.5× the largest single finished
+  effect's own tokens anywhere on the grid, growing only), its own sent
+  trace in its run's own colour, one of six roles repeating past the
+  sixth run; under the chart, its own two most recent finished-prompt
+  label groups, each sitting at its own trace column; below that, a Now
+  pane listing the running leaves then the rows ahead. Flow and Store
+  tiles are the ordinary rail and area diagram, clipped to the tile. The
+  Combined Signal (`u`) isn't built yet -- the key is inert, and Help
+  says so.
+- **Grid:** as many 56-cell columns as the width fits, as many rows as
+  the runs need, then fewer columns when that leaves fewer empty cells,
+  never paging a run that would otherwise fit on one page (six runs at
+  180 columns make 3×2; five also fit 3×2, with one empty cell; four
+  make 2×2; three make one row). More tiles than a page holds page, the
+  last slot reading `… n more`; `PageUp`/`PageDown` turn the page. A grid
+  too narrow for even one real tile pages every run from the start,
+  rather than showing one as if it were the only run going.
+- **Keys:** `←→↑↓` move the focus (the focused tile gets the accent
+  border); `enter` opens the focused run full-screen on whichever screen
+  every tile was already showing, the same attach a Select row opens --
+  `esc` from it returns to the grid, not to Select; `esc` on the grid
+  itself returns to Select; `q` quits at once everywhere here, the same
+  as Select.
 
 ## The terminal UI
 

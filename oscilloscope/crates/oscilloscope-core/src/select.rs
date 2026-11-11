@@ -35,7 +35,7 @@ pub enum Row {
 }
 
 /// Bare `osi`'s own choice of shape once discovery has run (issue
-/// #698, Settled point 3): exactly one running run attaches to it
+/// #698): exactly one running run attaches to it
 /// directly, with no Select screen drawn at all; any other count --
 /// none, or more than one -- shows Select, with the empty or running
 /// body respectively.
@@ -89,6 +89,37 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
         .iter()
         .map(|r| r.config.as_deref().map(basename))
         .collect();
+    let document_labels = disambiguated_document_labels(runs, &config_labels);
+
+    let mut rows = Vec::with_capacity(runs.len() + 1);
+    rows.push(Row::All {
+        running: runs.len(),
+    });
+    for (i, run) in runs.iter().enumerate() {
+        rows.push(Row::Run {
+            run: Box::new(run.clone()),
+            document_label: document_labels[i].clone(),
+            config_label: config_labels[i].clone(),
+        });
+    }
+    rows
+}
+
+/// The same (document, config) collision rule [`build_rows`] uses
+/// for its own running list, exposed for the All screen's own tiles
+/// (`main.rs`'s `AllRunSlot`), which need the disambiguated label
+/// without a [`Row`] wrapper around it: basenames for the document
+/// column, except that a document whose (document, config) basename
+/// pair collides with another run's own gets its parent directory
+/// added too (issue #698: "add the parent directory only when two
+/// rows would read identically"). `config_labels` is `runs`'s own
+/// config column, already resolved to a basename (or `None`) by the
+/// caller, since both callers already need it for their own purposes
+/// too.
+pub fn disambiguated_document_labels(
+    runs: &[DiscoveredRun],
+    config_labels: &[Option<String>],
+) -> Vec<String> {
     let plain_doc_labels: Vec<String> = runs
         .iter()
         .map(|r| {
@@ -105,28 +136,21 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
         *counts.entry((doc.as_str(), cfg)).or_insert(0) += 1;
     }
 
-    let mut rows = Vec::with_capacity(runs.len() + 1);
-    rows.push(Row::All {
-        running: runs.len(),
-    });
-    for (i, run) in runs.iter().enumerate() {
-        let key = (plain_doc_labels[i].as_str(), &config_labels[i]);
-        let collides = counts.get(&key).copied().unwrap_or(0) > 1;
-        let document_label = if collides {
-            run.orchestration
-                .as_deref()
-                .map(basename_with_parent)
-                .unwrap_or_else(|| "—".to_string())
-        } else {
-            plain_doc_labels[i].clone()
-        };
-        rows.push(Row::Run {
-            run: Box::new(run.clone()),
-            document_label,
-            config_label: config_labels[i].clone(),
-        });
-    }
-    rows
+    runs.iter()
+        .enumerate()
+        .map(|(i, run)| {
+            let key = (plain_doc_labels[i].as_str(), &config_labels[i]);
+            let collides = counts.get(&key).copied().unwrap_or(0) > 1;
+            if collides {
+                run.orchestration
+                    .as_deref()
+                    .map(basename_with_parent)
+                    .unwrap_or_else(|| "—".to_string())
+            } else {
+                plain_doc_labels[i].clone()
+            }
+        })
+        .collect()
 }
 
 /// A step in a [`HistoryRecord`]'s own `ok: false` (issue #698's

@@ -305,7 +305,7 @@ impl HistoryHandle {
         }
         // `self.config` as given (`--config`, or whatever the
         // registry/process-arguments fallback resolved to at attach
-        // time, issue #698's own Settled point 8) -- else the
+        // time) -- else the
         // engine's own `run_start.config` (issue A), known by now
         // even for a run `attach_discovered_run` first found with
         // neither (the live-state-in-cwd source): this is the one
