@@ -294,6 +294,15 @@ pub fn last_event(path: &Path) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("{} last line is not JSON: {e}", path.display()))
 }
 
+/// Whether `text` (a `--log` stdout capture) carries the run's own
+/// `■ run ... ok` summary line -- issue #717 put the run's own
+/// short name between "run" and "ok" (`■ run amber-falcon  ok  0.0s`),
+/// so a plain `contains("■ run ok")` no longer matches a real run.
+pub fn log_shows_run_ok(text: &str) -> bool {
+    text.lines()
+        .any(|line| line.contains("■ run ") && line.contains("ok"))
+}
+
 pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, contents).unwrap();
