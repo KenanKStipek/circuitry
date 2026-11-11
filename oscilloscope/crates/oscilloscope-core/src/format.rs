@@ -78,8 +78,8 @@ const TOKEN_SCALE: [(f64, &str); 4] = [(1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3
 
 /// The value and scale letter both [`format_tokens`] and
 /// [`format_tokens_arrow`] print, so the two can never round or
-/// carry differently -- `None` for the letter means `n` is under
-/// 1,000 and prints plain.
+/// carry differently -- an empty letter means `n` is under 1,000
+/// and prints plain.
 fn scale_tokens(n: u64) -> (String, &'static str) {
     let value = n as f64;
     for (i, &(scale, letter)) in TOKEN_SCALE.iter().enumerate() {

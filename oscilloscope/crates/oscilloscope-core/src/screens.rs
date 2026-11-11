@@ -3910,7 +3910,7 @@ pub fn build_signal(
             .unwrap_or_else(|| "?".to_string());
         let (tokens, count) = signal_loop_pass_tokens(&loop_row.path, flat);
         let per_pass = match tokens.checked_div(count) {
-            Some(avg) => format!(" \u{b7} {avg} t per pass"),
+            Some(avg) => format!(" \u{b7} {} per pass", crate::format::format_tokens(avg)),
             None => String::new(),
         };
         (

@@ -341,7 +341,7 @@ pub fn format_shared_axis_label(n: u64) -> String {
 }
 
 /// A Signal tile's own finished-prompt label group: a frame's
-/// `✓ plan +3 · 4,646 t` is a tool-free run of finished prompts
+/// `✓ plan +3 · 4.6 kt` is a tool-free run of finished prompts
 /// whose own finish times land in the same 100 ms Signal column --
 /// as many tokens merge there as the trace's own bucketing already
 /// puts in one column, never a separate rule of its own. `label` is

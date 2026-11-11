@@ -6146,8 +6146,8 @@ fn draw_combined_per_run_table(
 
 /// Readings: Runs, Steps, Largest, Scale -- the label field
 /// always leaves one real space before the value, even when the
-/// label itself is exactly 6 characters (`Largest`), unlike the
-/// frame's own `Largestsummarize.yml`, allow-listed as a frame typo.
+/// label itself is longer than the padding width (`Largest`, seven
+/// characters against a width of six).
 fn draw_combined_readings(
     frame: &mut Frame,
     area: Rect,
@@ -10149,7 +10149,10 @@ fn selected_pass_lines(
                 ));
                 if wide {
                     spans.push(Span::styled(
-                        format!("vs usual {usual} t"),
+                        format!(
+                            "vs usual {}",
+                            oscilloscope_core::format::format_tokens(usual)
+                        ),
                         Style::default().fg(ctx.theme.fg_muted),
                     ));
                 }
@@ -11026,7 +11029,10 @@ fn flow_headline_spans(
         Headline::ContainerAhead(kind) => vec![(kind.clone(), faint)],
         Headline::UsualTokens(usual) => {
             let text = match usual {
-                Some(u) => format!("usual {u}"),
+                Some(u) => format!(
+                    "usual {}",
+                    oscilloscope_core::format::format_tokens_arrow(*u)
+                ),
                 None => "usual —".to_string(),
             };
             vec![(text, faint)]
@@ -11083,7 +11089,10 @@ fn flow_detail_spans(
         Detail::Tokens(t) => vec![(oscilloscope_core::format::format_tokens(*t), muted)],
         Detail::UsualTokens(u) => {
             let text = match u {
-                Some(v) => format!("usual {v}"),
+                Some(v) => format!(
+                    "usual {}",
+                    oscilloscope_core::format::format_tokens_arrow(*v)
+                ),
                 None => "usual —".to_string(),
             };
             vec![(text, faint)]
@@ -17168,39 +17177,6 @@ mod tape_frame_goldens {
     const COMBINED_SIGNAL_STATUS_LINE_PRECISION: &[(u16, u16)] =
         &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
 
-    /// The frame's own `Largest` reading lost the one space its
-    /// label field always leaves before the value everywhere else
-    /// (`Runs`, `Steps`, `Scale`) -- kept here, not bent to match.
-    const COMBINED_SIGNAL_READINGS_LABEL_GUTTER: &[(u16, u16)] = &[
-        (145, 36),
-        (146, 36),
-        (147, 36),
-        (149, 36),
-        (150, 36),
-        (151, 36),
-        (152, 36),
-        (153, 36),
-        (154, 36),
-        (155, 36),
-        (156, 36),
-        (157, 36),
-        (158, 36),
-        (159, 36),
-        (160, 36),
-        (161, 36),
-        (162, 36),
-        (163, 36),
-        (164, 36),
-        (165, 36),
-        (166, 36),
-        (167, 36),
-        (168, 36),
-        (169, 36),
-        (170, 36),
-        (171, 36),
-        (172, 36),
-    ];
-
     /// The fixture's own arithmetic behind the frame's Totals row,
     /// worked out rather than only matched pixel for pixel: Peak is
     /// the largest stacked column (4,912 t, 0.5s after the
@@ -17278,7 +17254,6 @@ mod tape_frame_goldens {
             COMBINED_SIGNAL_RECEIVED_PARTIAL_ROUNDING,
             COMBINED_SIGNAL_EFFECTS_DONE_COUNTER,
             COMBINED_SIGNAL_STATUS_LINE_PRECISION,
-            COMBINED_SIGNAL_READINGS_LABEL_GUTTER,
         ]
         .concat();
         assert_matches_mock(
