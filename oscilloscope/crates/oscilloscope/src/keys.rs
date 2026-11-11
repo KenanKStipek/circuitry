@@ -1695,7 +1695,7 @@ impl SelectState {
 /// index (`page_offset + focus`) and page transitions on its own,
 /// so a test drives every key with no real grid or terminal
 /// involved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AllState {
     pub screen: oscilloscope_core::screens::Screen,
     pub focus: usize,
@@ -1708,6 +1708,21 @@ pub struct AllState {
     /// floor.
     pub shared_sent_top: u64,
     pub shared_received_top: u64,
+    /// The Combined Signal's own shared scale (issue #698's `u`) --
+    /// kept here rather than local to one leg of the Combined loop,
+    /// so it survives `enter`/`esc` round trips through an opened
+    /// run the same way the grid's own tiles' shared scale does.
+    pub combined_sent_top: u64,
+    pub combined_received_top: u64,
+    /// Set when `u` bounced straight back here because the
+    /// terminal was too small for the Combined Signal's own layout
+    /// -- shown once on the grid's own status line, then cleared,
+    /// the same shape the Signal screen's own bounce to the Tape
+    /// below 80 columns already has, just with a note where that
+    /// one needs none (a resize can put a user back on the Tape
+    /// with no explanation needed; here `u` looked like it did
+    /// nothing at all otherwise).
+    pub combined_too_small_note: Option<String>,
 }
 
 impl AllState {
@@ -1719,6 +1734,9 @@ impl AllState {
             help_open: false,
             shared_sent_top: oscilloscope_core::multi::shared_signal_axis_starting_top(600),
             shared_received_top: oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            combined_sent_top: oscilloscope_core::multi::shared_signal_axis_starting_top(600),
+            combined_received_top: oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            combined_too_small_note: None,
         }
     }
 }
@@ -1739,6 +1757,8 @@ pub enum AllKeyOutcome {
     Open(usize),
     /// `esc`: back to Select.
     BackToSelect,
+    /// `u`: the Combined Signal.
+    Combined,
 }
 
 impl AllState {
@@ -1747,8 +1767,8 @@ impl AllState {
     /// within the current page's own `columns` x rows grid, wrapping
     /// at the page's own edges (never crossing a page -- that's
     /// `PageUp`/`PageDown`'s own job); `enter` opens
-    /// the focused tile; `u` is inert (the Combined Signal isn't
-    /// built yet); `esc` goes back to Select; `q` quits at once
+    /// the focused tile; `u` opens the Combined Signal;
+    /// `esc` goes back to Select; `q` quits at once
     /// (watching only, never a confirm); a raw Ctrl-C quits with
     /// exit 130, checked first, same reasoning as everywhere else
     /// this repository handles it. `page_run_count` is how many real
@@ -1855,12 +1875,111 @@ impl AllState {
                     AllKeyOutcome::None
                 }
             }
-            // `u` (the Combined Signal) is inert until it ships;
-            // `c` is never offered here either (`c` cancels only a
-            // run this osi launched, and the focused run's own
+            // `c` is never offered here (`c` cancels only a run
+            // this osi launched, and the focused run's own
             // ownership is a question for the attached single-run
             // screen, not this one).
+            KeyCode::Char('u') => AllKeyOutcome::Combined,
             _ => AllKeyOutcome::None,
+        }
+    }
+}
+
+/// The Combined Signal's own cursor state (issue #698, §2.6/§4):
+/// `←→` scrub a column cursor, `n` returns it to Now, `↑↓` move the
+/// Per Run table's own cursor, `enter` opens the selected run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CombinedState {
+    /// `None` while following Now (`n` returns to it) -- a
+    /// scrubbed column once `←→` has moved it away.
+    pub scrub_col: Option<usize>,
+    pub cursor_run: usize,
+    pub help_open: bool,
+}
+
+impl CombinedState {
+    pub fn new() -> Self {
+        CombinedState::default()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CombinedKeyOutcome {
+    None,
+    Quit(u8),
+    /// `esc`: back to the tiles.
+    BackToTiles,
+    /// `enter` on the Per Run table's own cursor.
+    Open(usize),
+}
+
+impl CombinedState {
+    /// One key's worth of the Combined Signal's own behaviour
+    /// (issue #698, §4): `←→` scrub a column cursor within `[0,
+    /// max_col]`, starting from `now_col` the first time; `n`
+    /// returns to Now (clears the scrub); `↑↓` move the Per Run
+    /// cursor within `run_count`, wrapping at its own edges; `enter`
+    /// opens the selected run; `esc` returns to the tiles; `q` quits
+    /// at once (watching only, never a confirm); a raw Ctrl-C quits
+    /// with exit 130, checked first, same reasoning as everywhere
+    /// else this repository handles it.
+    pub fn handle_key(
+        &mut self,
+        code: KeyCode,
+        modifiers: KeyModifiers,
+        run_count: usize,
+        now_col: usize,
+        max_col: usize,
+    ) -> CombinedKeyOutcome {
+        if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
+            self.help_open = false;
+            return CombinedKeyOutcome::Quit(130);
+        }
+        if self.help_open {
+            self.help_open = false;
+            return CombinedKeyOutcome::None;
+        }
+        match code {
+            KeyCode::Char('q') => CombinedKeyOutcome::Quit(0),
+            KeyCode::Char('?') => {
+                self.help_open = true;
+                CombinedKeyOutcome::None
+            }
+            KeyCode::Esc => CombinedKeyOutcome::BackToTiles,
+            KeyCode::Left => {
+                let current = self.scrub_col.unwrap_or(now_col);
+                self.scrub_col = Some(current.saturating_sub(1));
+                CombinedKeyOutcome::None
+            }
+            KeyCode::Right => {
+                let current = self.scrub_col.unwrap_or(now_col);
+                self.scrub_col = Some((current + 1).min(max_col));
+                CombinedKeyOutcome::None
+            }
+            KeyCode::Char('n') => {
+                self.scrub_col = None;
+                CombinedKeyOutcome::None
+            }
+            KeyCode::Up => {
+                if run_count > 0 {
+                    self.cursor_run = (self.cursor_run + run_count - 1) % run_count;
+                }
+                CombinedKeyOutcome::None
+            }
+            KeyCode::Down => {
+                if run_count > 0 {
+                    self.cursor_run = (self.cursor_run + 1) % run_count;
+                }
+                CombinedKeyOutcome::None
+            }
+            KeyCode::Enter => {
+                if run_count > 0 {
+                    CombinedKeyOutcome::Open(self.cursor_run.min(run_count - 1))
+                } else {
+                    CombinedKeyOutcome::None
+                }
+            }
+            _ => CombinedKeyOutcome::None,
         }
     }
 }
@@ -3470,12 +3589,89 @@ mod tests {
     }
 
     #[test]
-    fn all_u_is_inert() {
+    fn all_u_opens_the_combined_signal() {
         let mut state = AllState::new();
         let (code, modifiers) = all_key(KeyCode::Char('u'));
         assert_eq!(
             state.handle_key(code, modifiers, 3, 6, 1),
-            AllKeyOutcome::None
+            AllKeyOutcome::Combined
+        );
+    }
+
+    #[test]
+    fn combined_right_scrubs_from_now_and_left_scrubs_back() {
+        let mut state = CombinedState::new();
+        let (code, modifiers) = all_key(KeyCode::Right);
+        state.handle_key(code, modifiers, 6, 27, 150);
+        assert_eq!(state.scrub_col, Some(28));
+        let (code, modifiers) = all_key(KeyCode::Left);
+        state.handle_key(code, modifiers, 6, 27, 150);
+        assert_eq!(state.scrub_col, Some(27));
+    }
+
+    #[test]
+    fn combined_scrub_never_passes_max_col() {
+        let mut state = CombinedState::new();
+        state.scrub_col = Some(150);
+        let (code, modifiers) = all_key(KeyCode::Right);
+        state.handle_key(code, modifiers, 6, 27, 150);
+        assert_eq!(state.scrub_col, Some(150));
+    }
+
+    #[test]
+    fn combined_n_returns_to_now() {
+        let mut state = CombinedState::new();
+        state.scrub_col = Some(10);
+        let (code, modifiers) = all_key(KeyCode::Char('n'));
+        state.handle_key(code, modifiers, 6, 27, 150);
+        assert_eq!(state.scrub_col, None);
+    }
+
+    #[test]
+    fn combined_up_down_move_the_cursor_and_wrap() {
+        let mut state = CombinedState::new();
+        let (code, modifiers) = all_key(KeyCode::Up);
+        state.handle_key(code, modifiers, 6, 27, 150);
+        assert_eq!(
+            state.cursor_run, 5,
+            "up from the first run wraps to the last"
+        );
+        let (code, modifiers) = all_key(KeyCode::Down);
+        state.handle_key(code, modifiers, 6, 27, 150);
+        assert_eq!(
+            state.cursor_run, 0,
+            "down from the last run wraps to the first"
+        );
+    }
+
+    #[test]
+    fn combined_enter_opens_the_selected_run() {
+        let mut state = CombinedState::new();
+        state.cursor_run = 2;
+        let (code, modifiers) = all_key(KeyCode::Enter);
+        assert_eq!(
+            state.handle_key(code, modifiers, 6, 27, 150),
+            CombinedKeyOutcome::Open(2)
+        );
+    }
+
+    #[test]
+    fn combined_esc_goes_back_to_the_tiles() {
+        let mut state = CombinedState::new();
+        let (code, modifiers) = all_key(KeyCode::Esc);
+        assert_eq!(
+            state.handle_key(code, modifiers, 6, 27, 150),
+            CombinedKeyOutcome::BackToTiles
+        );
+    }
+
+    #[test]
+    fn combined_q_quits_at_once() {
+        let mut state = CombinedState::new();
+        let (code, modifiers) = all_key(KeyCode::Char('q'));
+        assert_eq!(
+            state.handle_key(code, modifiers, 6, 27, 150),
+            CombinedKeyOutcome::Quit(0)
         );
     }
 

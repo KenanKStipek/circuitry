@@ -218,9 +218,8 @@ full osi per run:
   sixth run; under the chart, its own two most recent finished-prompt
   label groups, each sitting at its own trace column; below that, a Now
   pane listing the running leaves then the rows ahead. Flow and Store
-  tiles are the ordinary rail and area diagram, clipped to the tile. The
-  Combined Signal (`u`) isn't built yet -- the key is inert, and Help
-  says so.
+  tiles are the ordinary rail and area diagram, clipped to the tile. `u`
+  opens the Combined Signal (below).
 - **Grid:** as many 56-cell columns as the width fits, as many rows as
   the runs need, then fewer columns when that leaves fewer empty cells,
   never paging a run that would otherwise fit on one page (six runs at
@@ -235,6 +234,39 @@ full osi per run:
   `esc` from it returns to the grid, not to Select; `esc` on the grid
   itself returns to Select; `q` quits at once everywhere here, the same
   as Select.
+
+## The Combined Signal
+
+`u` on All folds every running run into one trace: every run's 100 ms
+columns stack on it, sent tokens above a shared axis and received
+below it, in launch order -- a run whose own addition completes a row
+claims it; the one partial top row, when a column's total never fills a
+whole row by itself, goes to whichever run contributes the larger share
+of that one row. The axis is anchored to the earliest of every run's own
+start and shares one round top across every run (growing only,
+persisted for as long as All stays open); the window holds Now wherever
+it falls until Now would sit past three quarters of the way across it,
+then scrolls to keep it pinned there, so a run of any length still
+shows its own latest activity. Under the chart, one
+legend row per run: a swatch in the run's own colour, the document, its
+first finished prompt (`+N` for the rest, the run's own tokens so far
+appended only while there's room before the running label), and the
+running label fixed at the Now column. Below that, cross-run Totals
+(tokens, Peak, Rate, Quiet), a Per Run table (document, config, engine,
+what's running now, tokens, share, done) with a cursor, and Readings.
+
+- **Keys:** `←→` scrub a column cursor, clamped to Now (it never
+  scrubs into the future); it moves Peak and Quiet the same way Signal's
+  own scrub cursor does. `n` returns to Now; `↑↓` select a run in the
+  Per Run table, which scrolls to keep the cursor in view once the runs
+  outgrow it; `enter` opens the selected run full-screen on its Signal
+  screen -- `esc` from it returns to the Combined Signal, not the grid;
+  `esc` on the Combined Signal returns to the grid, with its own focus
+  and page unchanged; `q` quits at once; `?` shows this screen's own
+  Help, which lists `c` as inert, the same as the grid's.
+- **Sizes:** below 120 columns, or below the height the chart and its
+  own legend row need, the shared too-small notice shows naming 120
+  columns.
 
 ## The terminal UI
 
