@@ -14,7 +14,15 @@ use std::path::PathBuf;
 /// than every flag becoming its own function parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRequest {
-    pub config_path: PathBuf,
+    /// `None` for `electricity run` with no `--config` (issue #728) --
+    /// this is the CLI flag's own raw value, not the config file
+    /// discovery actually resolved (`--events`' own `run_start.config`
+    /// mirrors `cli/runtime_shim.py::run`'s own `req.config_path.name
+    /// if req.config_path is not None else None`, which is likewise
+    /// the raw `--config` flag, never the resolved file). Always
+    /// `Some` for the legacy `electricity <config.json> <doc>` form
+    /// (its first positional).
+    pub config_path: Option<PathBuf>,
     pub orchestration_path: PathBuf,
     /// `-e key=value`, in command-line order ([`crate::parse_inputs`]'s
     /// own output).
@@ -47,6 +55,17 @@ pub struct RunRequest {
     /// (`cli` tier, `cli/effective_settings.py::
     /// resolve_effective_settings`).
     pub adapter_override: Option<String>,
+    /// Warnings from resolving this run's own config, before
+    /// `RunRequest` even existed (issue #728's config-discovery
+    /// branch: a discovered-but-skipped project config's one line,
+    /// `electricity::config_error_for_run`'s own return value) --
+    /// seeded into `RunResult.warnings` ahead of anything this run
+    /// itself adds, exactly as `cli/runtime_shim.py::run`'s own
+    /// `warnings.extend(cfg.resolution_warnings())` runs ahead of
+    /// every other `warnings.extend` call there. Always empty for the
+    /// legacy explicit-`<config.json>` form, which never discovers
+    /// anything to warn about.
+    pub config_warnings: Vec<String>,
     /// `true` for a CLI-driven run (`ToolCall::armed`'s own doc
     /// comment, `electricity_tools::ToolCall`) -- a run option on
     /// *this* struct, not a literal `run_orchestration` hard-codes,

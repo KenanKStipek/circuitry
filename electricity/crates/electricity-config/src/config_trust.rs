@@ -68,9 +68,7 @@ pub fn trust_key(path: &Path) -> String {
             let absolute = if path.is_absolute() {
                 path.to_path_buf()
             } else {
-                std::env::current_dir()
-                    .unwrap_or_default()
-                    .join(path)
+                std::env::current_dir().unwrap_or_default().join(path)
             };
             absolute.display().to_string()
         }
@@ -79,8 +77,12 @@ pub fn trust_key(path: &Path) -> String {
 
 /// `cli/config_trust.py::env_trusts_project_config`.
 pub fn env_trusts_project_config(env: &HashMap<String, String>) -> bool {
-    env.get(TRUST_PROJECT_CONFIG_ENV)
-        .is_some_and(|raw| matches!(raw.trim().to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    env.get(TRUST_PROJECT_CONFIG_ENV).is_some_and(|raw| {
+        matches!(
+            raw.trim().to_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 /// `cli/config_trust.py::_read_store`, narrowed to the one entry
@@ -247,8 +249,14 @@ mod tests {
 
     #[test]
     fn skip_warning_is_none_once_applied() {
-        assert_eq!(skip_warning(Path::new("/x/circuitry.config.json"), TrustState::Trusted), None);
-        assert_eq!(skip_warning(Path::new("/x/circuitry.config.json"), TrustState::Env), None);
+        assert_eq!(
+            skip_warning(Path::new("/x/circuitry.config.json"), TrustState::Trusted),
+            None
+        );
+        assert_eq!(
+            skip_warning(Path::new("/x/circuitry.config.json"), TrustState::Env),
+            None
+        );
     }
 
     #[test]

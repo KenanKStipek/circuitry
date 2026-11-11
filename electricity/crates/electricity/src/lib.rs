@@ -1069,6 +1069,34 @@ pub fn config_error(config_path: &Path) -> Result<CircuitryConfig, String> {
     electricity_config::resolve_config(config_path, &current_env_vars()).map_err(|err| err.0)
 }
 
+/// [`config_error`]'s own counterpart for `electricity run` (issue
+/// #728), where `--config` is optional: *explicit_path* is `--config`'s
+/// own value, `None` when it was omitted -- ported from `cli/config.py::
+/// resolve_config`'s *other* branch (`electricity_config::
+/// resolve_config_for_run`'s own doc comment), so this additionally
+/// returns the run's own config-resolution warnings (a discovered but
+/// untrusted/changed project config's one line) for the caller to merge
+/// into `RunResult.warnings` the same way `cli/runtime_shim.py::run`
+/// does (`warnings.extend(cfg.resolution_warnings())`) -- there is no
+/// `RunRequest`/`RunResult` seam of its own for a *pre*-run warning, so
+/// `electricity-cli`'s own caller folds this `Vec` into the one it
+/// already prints via [`crate::run::RunResult::warnings`] once the run
+/// itself returns.
+pub fn config_error_for_run(
+    explicit_path: Option<&Path>,
+    cwd: &Path,
+) -> Result<(CircuitryConfig, Vec<String>), String> {
+    let home = std::env::home_dir();
+    electricity_config::resolve_config_for_run(
+        explicit_path,
+        cwd,
+        home.as_deref(),
+        &current_env_vars(),
+    )
+    .map(|resolved| (resolved.config, resolved.warnings))
+    .map_err(|err| err.0)
+}
+
 /// Runs *req* the way `electricity <config.json> <doc> ...` does (issue
 /// #431's run-wiring table, steps 1-19) -- resolving the config,
 /// seeding and checking the document, refusing unsupported content,
@@ -1096,7 +1124,21 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     // `electricity_config::resolve_config`'s own `log::warn!` ("Unknown
     // environment ...", issue #442) fires for them.
     let env_vars = current_env_vars();
-    match electricity_config::resolve_config(&req.config_path, &env_vars) {
+    let Some(config_path) = req.config_path.as_ref() else {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(
+                "no config path given to run_orchestration; use run_orchestration_with_config \
+                 for config discovery (electricity::config_error_for_run)"
+                    .to_string(),
+            ),
+            warnings: Vec::new(),
+            signal: None,
+        };
+    };
+    match electricity_config::resolve_config(config_path, &env_vars) {
         Ok(cfg) => run_orchestration_with_config(cfg, req, token).await,
         Err(err) => RunResult {
             ok: false,
@@ -1126,7 +1168,7 @@ pub async fn run_orchestration_with_config(
     token: &CancellationToken,
 ) -> RunResult {
     let run_t0 = Instant::now();
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = req.config_warnings.clone();
 
     // Step 4: seed state (`input` namespace, from the CLI's own `-e`
     // entries) -- every failure from here on reports *some* state,
@@ -1946,7 +1988,10 @@ pub async fn run_orchestration_with_config(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(""),
-            req.config_path.file_name().and_then(|n| n.to_str()),
+            req.config_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .and_then(|n| n.to_str()),
         );
         log
     });

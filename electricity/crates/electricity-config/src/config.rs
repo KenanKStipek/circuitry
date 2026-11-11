@@ -355,7 +355,9 @@ fn load_config_file(path: &Path, env_var: Option<&str>) -> Result<Dict, ConfigEr
             &display_path,
             env_var,
             &format!("must contain a JSON object at the root; found {found}"),
-            format!("Config file {display_path} must contain a JSON object at the root; found {found}."),
+            format!(
+                "Config file {display_path} must contain a JSON object at the root; found {found}."
+            ),
         ));
     }
     // `raw` implements `Drop`, so its `Dict` field can't be moved out by

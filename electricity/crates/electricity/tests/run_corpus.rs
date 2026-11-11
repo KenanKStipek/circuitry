@@ -226,7 +226,7 @@ async fn run_case(name: &str, orchestration: &str, inputs: &[(&str, &str)]) -> R
         input_map.insert(k.to_string(), v.to_string());
     }
     let req = RunRequest {
-        config_path,
+        config_path: Some(config_path),
         orchestration_path: doc_path,
         inputs: input_map,
         out_path: Some(out_path.clone()),
@@ -235,6 +235,7 @@ async fn run_case(name: &str, orchestration: &str, inputs: &[(&str, &str)]) -> R
         events_path: Some(events_path.clone()),
         profile_path: None,
         allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
         adapter_override: None,
         armed: true,
     };
