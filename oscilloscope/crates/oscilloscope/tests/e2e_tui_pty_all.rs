@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 
 use support::{
     SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process, drain_continuously,
-    e2e_enabled, launch_osi_log, open_pty, send_bytes, spawn_osi_on_pty, wait_for_registry_entries,
-    wait_for_screen_text, wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout,
-    write_doc,
+    e2e_enabled, launch_osi_log, open_pty, resize_pty, send_bytes, spawn_osi_on_pty,
+    wait_for_registry_entries, wait_for_screen_text, wait_for_screen_text_gone,
+    wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 static ALL_LOCK: Mutex<()> = Mutex::new(());
@@ -236,13 +236,27 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     assert_no_leftover_process(out_b.path());
 }
 
+/// The screen's own line that carries `needle` -- `screen` is
+/// already one `\n`-joined [`support::screen_grid`] replay, so a
+/// line search is enough to tell one header row apart from any
+/// other row that merely also mentions a document's own name.
+fn line_with<'a>(screen: &'a str, needle: &str) -> &'a str {
+    screen
+        .lines()
+        .find(|l| l.contains(needle))
+        .unwrap_or_else(|| panic!("no line containing {needle:?} in:\n{screen}"))
+}
+
 /// Issue #698's own `u`: with three live runs, Select → All → `u`
 /// opens the Combined Signal; `↓` moves its own cursor off the
-/// first run; `enter` opens that run full-screen on Signal; `esc`
-/// from it returns to a fresh Combined leg; `esc` from Combined
-/// returns to the tiles, with the grid's own focus and page
-/// untouched by the round trip; `esc` from the grid returns to
-/// Select; `q` quits at once.
+/// first run; `enter` opens that run full-screen on Signal, the Per
+/// Run table's own second row named in the header, not its first;
+/// `esc` from it returns to a fresh Combined leg; `esc` from
+/// Combined returns to the tiles, with the grid's own page
+/// untouched by the round trip (checked by paging to the grid's own
+/// second page beforehand and confirming the status line still
+/// names it afterwards, not the first page); `esc` from the grid
+/// returns to Select; `q` quits at once.
 #[test]
 fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select() {
     if !e2e_enabled() {
@@ -253,7 +267,8 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
-    let docs: Vec<_> = ["a.yml", "b.yml", "c.yml"]
+    let doc_names = ["a.yml", "b.yml", "c.yml"];
+    let docs: Vec<_> = doc_names
         .iter()
         .map(|name| write_doc(work.path(), name, SELECT_SLOW_DOC))
         .collect();
@@ -278,7 +293,7 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
         wait_for_step_start(
             &out.path().join("events.jsonl"),
             "prime.slow",
-            Duration::from_secs(20),
+            Duration::from_secs(10),
         );
     }
     let runs_dir = home.path().join("runs");
@@ -289,7 +304,7 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(10));
     assert!(
         screen.contains("All"),
         "expected the All row listed on Select:\n{screen}"
@@ -297,18 +312,62 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
 
     send_bytes(&mut master, b"g");
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(10));
     assert!(
         screen.contains("ALL"),
         "expected enter on the All row to open the grid:\n{screen}"
     );
+    // Three runs at this terminal's own size page one tile per
+    // page -- the status line's own `… N more` names how many runs
+    // are *not* on the current page, which differs page to page (2
+    // on the first, 1 on the second, none on the third), so it
+    // names the page itself without needing a specific run's own
+    // identity to survive a round trip (`discover_running`'s own
+    // order is free to re-settle a near-simultaneous launch's own
+    // tie between two scans, even without anything in between
+    // touching the grid at all).
+    assert!(
+        screen.contains("… 2 more"),
+        "expected the first page to name 2 more runs:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b[6~"); // PageDown.
+    wait_for_screen_text(&captured_buf, "… 1 more", Duration::from_secs(10));
 
     send_bytes(&mut master, b"u");
-    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
     assert!(
         screen.contains("Per Run") && screen.contains("Readings"),
         "expected u to open the Combined Signal:\n{screen}"
     );
+    // The Per Run table's own second row, top to bottom, read
+    // straight off this screen rather than assumed from launch
+    // order -- three runs launched this close together don't
+    // reliably settle a registry-time tie-break the same way
+    // every time. The chart's own legend, above the "Per Run"
+    // title, names every run too, so only lines after that title
+    // are candidates.
+    let per_run_title_at = screen
+        .lines()
+        .position(|l| l.contains("Per Run"))
+        .unwrap_or_else(|| panic!("expected a \"Per Run\" title:\n{screen}"));
+    // Only the part of the row before the Per Run/Readings border
+    // (`││`) is this table's own text -- the Readings panel beside
+    // it names runs too ("Largest a.yml"), on the very same
+    // terminal row as one of this table's own rows.
+    let per_run_cell = |l: &str| l.split("\u{2502}\u{2502}").next().unwrap_or(l).to_string();
+    let second_row = screen
+        .lines()
+        .skip(per_run_title_at + 1)
+        .map(per_run_cell)
+        .filter(|l| doc_names.iter().any(|d| l.contains(d)))
+        .nth(1)
+        .unwrap_or_else(|| panic!("expected a second Per Run row:\n{screen}"));
+    let second_combined_doc = *doc_names
+        .iter()
+        .find(|&&doc| second_row.contains(doc))
+        .unwrap_or_else(|| {
+            panic!("expected the second Per Run row to name one of the three runs:\n{second_row}")
+        });
 
     send_bytes(&mut master, b"\x1b[B"); // Down arrow: select the second run.
     send_bytes(&mut master, b"\r");
@@ -316,14 +375,23 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     // waits for the Combined chip to actually disappear, not merely
     // for a needle the Combined screen itself already satisfies.
     let screen =
-        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
     assert!(
         screen.contains("SIGNAL") && !screen.contains("COMBINED SIGNAL"),
         "expected enter on the selected run to open it full-screen on Signal:\n{screen}"
     );
+    // This would still pass if `↓` had been silently ignored and
+    // `enter` simply reopened the first row's own run instead, so
+    // the document itself is checked against the Per Run table's
+    // own second row, read above, not only that some Signal screen
+    // opened.
+    assert!(
+        line_with(&screen, "SIGNAL").contains(second_combined_doc),
+        "expected enter after ↓ to open the Per Run table's own second row ({second_combined_doc}), not the first:\n{screen}"
+    );
 
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
     assert!(
         screen.contains("COMBINED SIGNAL"),
         "expected esc from the opened run to return to the Combined Signal:\n{screen}"
@@ -331,21 +399,48 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
 
     send_bytes(&mut master, b"\x1b");
     let screen =
-        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
     assert!(
         screen.contains("osi  All") && !screen.contains("COMBINED SIGNAL"),
         "expected esc from the Combined Signal to return to the tiles:\n{screen}"
     );
+    // The grid's own page survived the round trip: still the
+    // second page (… 1 more), not reset back to the first (… 2
+    // more).
+    assert!(
+        screen.contains("… 1 more") && !screen.contains("… 2 more"),
+        "expected the grid's own page to survive the Combined round trip:\n{screen}"
+    );
+
+    // `enter` here, with no `PageDown`/`PageUp` touched since the
+    // round trip began, opens whichever run the still-second page
+    // shows.
+    // "TAPE" alone is already on screen (the grid's own "ALL ·
+    // TAPE" chip), so this waits for that chip to actually change,
+    // not merely for a needle the grid itself already satisfies.
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "ALL · TAPE", Duration::from_secs(10));
+    assert!(
+        doc_names.iter().any(|doc| screen.contains(doc)),
+        "expected enter on the grid to open one of the three runs:\n{screen}"
+    );
 
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "ALL · TAPE", Duration::from_secs(10));
+    assert!(
+        screen.contains("osi  All") && screen.contains("ALL · TAPE"),
+        "expected esc from the reopened run to return to the tiles:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(10));
     assert!(
         screen.contains("SELECT") && !screen.contains("osi  All"),
         "expected esc from the grid to return to Select, not stay on All:\n{screen}"
     );
 
     send_bytes(&mut master, b"q");
-    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(30));
+    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(20));
     assert!(
         status.success(),
         "q on Select should quit at once with exit 0, got {status:?}"
@@ -355,4 +450,113 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     for out in &outs {
         assert_no_leftover_process(out.path());
     }
+}
+
+/// Below the Combined Signal's own floor (narrower than 120
+/// columns, here, rather than shorter than its own rows), `u`
+/// bounces straight back to the tiles with a status note, the same
+/// way the single-run Signal screen bounces to the Tape below 80
+/// columns -- never the shared too-small notice, which stays for a
+/// terminal too small for any screen at all.
+#[test]
+fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let _guard = ALL_LOCK.lock().unwrap();
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+
+    let doc_a = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
+    let doc_b = write_doc(work.path(), "b.yml", SELECT_SLOW_DOC);
+    let config_a = write_doc(work.path(), "config-a.json", SCRIPTED_CONFIG);
+    let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
+    let out_a = tempfile::tempdir().unwrap();
+    let out_b = tempfile::tempdir().unwrap();
+    let child_a = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc_a,
+        &config_a,
+        out_a.path(),
+    ));
+    let child_b = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc_b,
+        &config_b,
+        out_b.path(),
+    ));
+
+    for out in [&out_a, &out_b] {
+        wait_for_step_start(
+            &out.path().join("events.jsonl"),
+            "prime.slow",
+            Duration::from_secs(10),
+        );
+    }
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
+
+    wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(10));
+    send_bytes(&mut master, b"g");
+    send_bytes(&mut master, b"\r");
+    wait_for_screen_text(&captured_buf, "ALL · TAPE", Duration::from_secs(10));
+
+    // Narrower than the Combined Signal's own floor (120 columns),
+    // but still well above the shared 60x24 floor every screen has.
+    resize_pty(&slave_path, 100, 40);
+    send_bytes(&mut master, b"u");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "Combined Signal needs",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("osi  All")
+            && screen.contains("ALL · TAPE")
+            && !screen.contains("COMBINED SIGNAL"),
+        "expected u to bounce straight back to the tiles, not open the Combined Signal:\n{screen}"
+    );
+    assert!(
+        !screen.contains("osi needs"),
+        "expected the Combined Signal's own note, not the shared too-small notice:\n{screen}"
+    );
+
+    // Back to a size the Combined Signal does fit: `u` opens it
+    // normally once the terminal is wide enough again.
+    resize_pty(&slave_path, 120, 40);
+    send_bytes(&mut master, b"u");
+    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    assert!(
+        screen.contains("COMBINED SIGNAL"),
+        "expected u to open the Combined Signal once the terminal is wide enough:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(10));
+    assert!(
+        screen.contains("SELECT") && !screen.contains("osi  All"),
+        "expected esc from the grid to return to Select:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(20));
+    assert!(
+        status.success(),
+        "q on Select should quit at once with exit 0, got {status:?}"
+    );
+
+    drop(child_a);
+    drop(child_b);
+    assert_no_leftover_process(out_a.path());
+    assert_no_leftover_process(out_b.path());
 }

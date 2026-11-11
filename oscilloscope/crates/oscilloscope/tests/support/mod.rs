@@ -573,6 +573,29 @@ pub fn open_pty() -> (File, PathBuf) {
     (master, PathBuf::from(slave_path))
 }
 
+/// Resizes an already-open pty to `cols`x`rows`, the same
+/// `TIOCSWINSZ` [`open_pty`] uses for its own initial 120x40 --
+/// `TIOCSWINSZ` changing the size of a process's own controlling
+/// terminal raises `SIGWINCH` to its foreground process group on
+/// its own, which crossterm turns into `Event::Resize` the same way
+/// a real terminal resize would.
+pub fn resize_pty(slave_path: &Path, cols: u16, rows: u16) {
+    let slave = File::options()
+        .read(true)
+        .write(true)
+        .open(slave_path)
+        .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
+        panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
+    }
+}
+
 /// Drains `master` continuously, from the moment it's called, into a
 /// shared buffer a caller can inspect at any time -- started right
 /// after the pty is opened, *before* the child is even spawned,
