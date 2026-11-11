@@ -3425,17 +3425,30 @@ tile reads, since a loop's own several passes fold into one
 `QuickSteps` row there, dropping the individual rows this screen's
 own finished-prompt and running-step scans need. The chart's own
 time axis is anchored to the earliest of every run's own
-`run_start_ts` (`earliest_run_start`), not each run's own start,
-and never scrolls: 100 ms per column, a tick every second, the Now
-sweep and the dashed axis ahead exactly as the single-run Signal
-draws them, just stacked.
+`run_start_ts` (`earliest_run_start`), not each run's own start: 100
+ms per column, a tick every second, the Now sweep and the dashed
+axis ahead exactly as the single-run Signal draws them, just
+stacked. The window holds Now wherever it falls until Now would sit
+past three quarters of the way across it (fifteen seconds ahead of
+Now at the golden's own 180 columns); from there the window scrolls
+to keep Now pinned at that three-quarter mark, so a run of any
+length still shows its own latest activity rather than only ever
+the first fifteen seconds. Legend rows carry every finished prompt,
+so the axis itself never draws a `✓` mark the way a single-run
+Signal's own does.
 
 **Stacking** (`combined::stack_column`): a column's own `rows` cells
 fill from the axis upward, in the caller's own run order -- a run's
 addition that completes a whole row claims it (the run active when
 the shared cumulative total first reaches that row's own
 threshold, the same rule a single run's own column already uses,
-just walked across every run in turn); the one partial cap row, when
+just walked across every run in turn), drawn solid -- unless that
+row is the first one the run's own addition completes *and* the
+cumulative total just before it wasn't itself an exact multiple of
+the row's own unit, meaning an earlier run already left something
+in it: that one row draws one eighth short of solid, to mark the
+blend, while every row after it from the same addition stays solid;
+the one partial cap row, when
 the column's own total never completes a whole row by itself, goes
 to whichever run contributes the larger *share of that one row*,
 not simply the last one added -- a column where two runs' tokens
@@ -3465,62 +3478,83 @@ than the column's own full gap to TOKENS, inferred from the frame
 `classify.yml`'s own two, never cut) since no single width the
 frame draws pins the real one exactly.
 
-**Totals and Readings**: Peak is the largest stacked column's own
-total (sent or received, whichever is larger) and its own elapsed
-time from the anchor; Rate is every run's own total tokens over the
-elapsed time since the anchor; Quiet is the time since the newest
-finished step across every run (`multi::newest_finished_across_runs`,
-the same figure the cross-run status line already reads). SHARE and
-the Largest reading both read `combined::format_share` (`§3.3`'s own
-`<1%` rounding, not a second copy of it). DONE uses the shipped
-effects counter (`header.effects_done`/`effects_planned_full`)
-unchanged, same as the All grid's own tiles.
+**Totals and Readings**: Peak and Quiet both read only up to the
+scrub cursor (Now's own column when not scrubbed), the same moment
+the trace itself stops drawing at -- Peak is the largest stacked
+column up to there (sent or received, whichever is larger) and its
+own elapsed time from the anchor; Quiet is the time from the newest
+column with anything in it, up to there, to Now. Sent/Received and
+the grand total always read every run's own full header figures,
+never cut at the cursor; Rate is that same grand total over the
+elapsed time since the anchor. SHARE and the Largest reading both
+read `combined::format_share` (`§3.3`'s own `<1%` rounding, not a
+second copy of it). DONE uses the shipped effects counter
+(`header.effects_done`/`effects_planned_full`) unchanged, same as
+the All grid's own tiles.
 
 **Keys** (`keys::CombinedState`, pure and unit-tested the same way
 `AllState` is): `←→` scrub a column cursor, starting from Now the
-first time, never past either end; `n` returns to Now; `↑↓` move the
-Per Run table's own cursor, wrapping at its own edges; `enter` opens
-the selected run full-screen on its Signal screen (through the same
-`attach_discovered_run` the grid's own `enter` uses, but always on
-Signal regardless of whatever the grid's own tiles are showing), so
-`esc` from it returns to a fresh Combined leg (`run_combined_signal_
-leg`'s own re-entry, the same shape `run_all_grid_screen`'s already
-is); `esc` on the Combined Signal itself returns to the grid, with
-its own focus and page untouched, since the grid's own `AllState`
-never changes while a Combined leg runs; `q` quits at once
-everywhere on this screen (watching only, never a confirm); `?`
-shows this screen's own Help, which lists `c` as inert, the same as
-the grid's.
+first time, clamped to `[0, now_col]` -- it never scrubs past Now,
+since there's nothing ahead of it to scrub to; `n` returns to Now;
+`↑↓` move the Per Run table's own cursor, wrapping at its own
+edges, the table scrolling to keep it in view once the runs outgrow
+its own rows (the same way the Store's own Largest table already
+does); `enter` opens the selected run full-screen on its Signal
+screen (through the same `attach_discovered_run` the grid's own
+`enter` uses, but always on Signal regardless of whatever the
+grid's own tiles are showing), so `esc` from it returns to a fresh
+Combined leg (`run_combined_signal_leg`'s own re-entry, the same
+shape `run_all_grid_screen`'s already is); `esc` on the Combined
+Signal itself returns to the grid, with its own focus and page
+untouched, since the grid's own `AllState` never changes while a
+Combined leg runs; `q` quits at once everywhere on this screen
+(watching only, never a confirm); `?` shows this screen's own
+Help, which lists `c` as inert, the same as the grid's.
 
-**Sizes**: below 120 columns, or below the 30 rows the chart's own
-fixed-height trace, one legend row, a separator and Totals need
-alongside the chrome rows every screen already carries, the shared
-too-small notice shows naming 120 columns -- `design/tui-design.md`
-§5 names no narrower rule of its own for this screen, and falling
-back to the grid outright (as §5's own text for the screen in
-general suggests) is not yet implemented; this is reported as a
-residual gap, not bent into a redirect this pull request doesn't
-build. At 180x48 (the golden's own size) the chart and the Per Run
-table split 32/13 rows; past that the chart keeps growing with the
-extra height and the Per Run table with the extra width, both
-proven at 187x61 rather than pinned to the floor's own numbers.
+**Sizes**: below 120 columns, or below the 28 rows the chart's own
+fixed-height trace, one seconds row, one legend row, a separator
+and Totals need alongside the three chrome rows every screen
+already carries, the shared too-small notice shows naming 120
+columns -- `design/tui-design.md` §5 names no narrower rule of its
+own for this screen, and falling back to the grid outright (as
+§5's own text for the screen in general suggests) is not yet
+implemented; this is reported as a residual gap, not bent into a
+redirect this pull request doesn't build. The chart's own floor
+always comes first: the Per Run table and Readings give up rows to
+it, down to as little as none visible, rather than the other way
+around, so even the narrowest height that still clears the floor
+keeps the chart whole. At 180x48 (the golden's own size) the chart
+and the Per Run table split 32/13 rows; past that the chart keeps
+growing with the extra height, and the lower row's own panels with
+the extra width. TOKENS/SHARE/DONE stay right-aligned to the Per
+Run table's own right edge at any width, so they move further right
+as the table widens; NOW takes whatever gap that leaves before
+them, capped at the golden's own 40 columns. RUN/CONFIG/ENGINE/NOW's
+own start columns stay pinned at the same offsets regardless.
 
 Goldens: `all--combined-signal--180x48`
 (`tui::tape_frame_goldens::all_combined_signal_180x48_matches_the_
 frame`), replayed from the same six-run fixture frozen at the same
-instant as both All frames. Every allow-listed cell: two sent
-columns where `summarize.yml`'s own stacked total completes a whole
-row a whole eighth short of this screen's own majority-contributor
-rule (`COMBINED_SIGNAL_STACK_ROUNDING`, reported rather than bent to
-match); the same `N/M Effects` counter discrepancy the All frames
-already carry, used unchanged (`COMBINED_SIGNAL_EFFECTS_DONE_
-COUNTER`); the cross-run status line's own `classify.yml` tie,
-broken by real microsecond precision underneath the frame's own
-hand-chosen row, the same reasoning the All frames' own status line
-allow-list already gives (`COMBINED_SIGNAL_STATUS_LINE_PRECISION`);
-and the frame's own `Largestsummarize.yml` reading, which lost the
-one space every other label here keeps, kept here and allow-listed
-rather than reproduced (`COMBINED_SIGNAL_READINGS_LABEL_GUTTER`).
+instant as both All frames. Every allow-listed cell: four
+received-side cells whose own single partial row never reaches a
+whole stacked row in this fixture, rounded here by the combined
+remainder's own share of the row's unit, which the frame rounds
+each one differently and not consistently in one direction
+(`COMBINED_SIGNAL_RECEIVED_PARTIAL_ROUNDING`, reported rather than
+bent to whichever rounding each one would need); the same `N/M
+Effects` counter discrepancy the All frames already carry, used
+unchanged (`COMBINED_SIGNAL_EFFECTS_DONE_COUNTER`); the cross-run
+status line's own `classify.yml` tie, broken by real microsecond
+precision underneath the frame's own hand-chosen row, the same
+reasoning the All frames' own status line allow-list already gives
+(`COMBINED_SIGNAL_STATUS_LINE_PRECISION`); and the frame's own
+`Largestsummarize.yml` reading, which lost the one space every
+other label here keeps, kept here and allow-listed rather than
+reproduced (`COMBINED_SIGNAL_READINGS_LABEL_GUTTER`). A shared full
+row -- one run's own leftover completed by the next run's own
+start, on the sent side -- draws one eighth short of solid to mark
+that blend; every other full row draws solid, reproducing the
+frame exactly rather than needing its own allow-listed group.
 
 **From the frames, not from the design text.** The legend's own
 finished-prompt label sits at its own real finish column, cut to
@@ -3530,17 +3564,23 @@ column cuts to two running steps plus `+N` at a width narrower than
 the column's own full gap to TOKENS, inferred from the frame as
 above. The lower half's own 136/44 column split is that exact
 ratio, not a rounder percentage that only coincidentally matches at
-180 columns. Run colours and the shared scale both already carry
-their own from-the-frames notes above (the All screen's own
-paragraph).
+180 columns. The axis itself carries no `✓` marks -- every finished
+prompt is in the legend instead. The time axis extends fifteen
+seconds ahead of Now at 180 columns, from the window rule above.
+Stacking follows launch order, the same order the legend and the
+Per Run table already share. Run colours and the shared scale both
+already carry their own from-the-frames notes above (the All
+screen's own paragraph).
 
 A PTY end-to-end test, in the same file as the grid's own
 (`e2e_tui_pty_all.rs`): three live runs; Select lists all three and
-`All`; `g` then `enter` opens the grid; `u` opens the Combined
-Signal; `↓` selects the second run; `enter` opens it full-screen on
-Signal; `esc` returns to the Combined Signal; `esc` returns to the
-grid; `esc` returns to Select, all three runs still listed; `q`
-quits at once.
+`All`; `g` then `enter` opens the grid; paging to the grid's own
+second page; `u` opens the Combined Signal; `↓` selects the Per Run
+table's own second row; `enter` opens that run full-screen on
+Signal, its own document checked against that row, not the first's;
+`esc` returns to the Combined Signal; `esc` returns to the grid,
+still on its own second page; `esc` returns to Select; `q` quits at
+once.
 
 **Browsing every effect after a run, with one selection across
 screens** (issue #704, beyond anything `design/tui-design.md` itself
