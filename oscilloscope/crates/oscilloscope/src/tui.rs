@@ -17099,7 +17099,7 @@ mod tape_frame_goldens {
     /// one still cuts it (`tool · ls /nonexistent-osi-dem⋯`). Kept
     /// on the fix that drops the column-160 wildcard (`<=`, not
     /// `<`); this one cell is allow-listed instead.
-    const FLAKY_AHEAD_ROW_EXACT_FIT: [(u16, u16); 1] = [(61, 15)];
+    const FLAKY_AHEAD_ROW_EXACT_FIT: [(u16, u16); 1] = [(61, 14)];
 
     #[test]
     fn tape_normal_80x24_matches_the_frame() {
