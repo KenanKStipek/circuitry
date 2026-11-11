@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
-  "description": "`runtime.plugins.gh.binary` points both engines at the same fake `gh`, by absolute path, with nothing named `gh` on `PATH` at all -- proves the configured override is what resolves the call, not a PATH lookup.",
+  "description": "`runtime.plugins.gh.binary` points both engines at the same fake `gh`, by absolute path. The harness still keeps the host `PATH`, so the case's own `fakes/gh` -- a decoy that fails loudly if it's ever reached -- is what a regression back to a plain PATH lookup would find instead of the configured override.",
   "engines": ["python", "electricity"],
   "expect": "success",
   "config": "config.json"

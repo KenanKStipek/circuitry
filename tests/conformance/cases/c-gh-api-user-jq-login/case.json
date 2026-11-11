@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
-  "description": "`gh api user --jq .login`, no `parse: json` -- the result's `value` is the plain trimmed-by-`gh`-itself text `gh --jq` already produced, not re-parsed by circuitry.",
+  "description": "`gh api user --jq .login`, no `parse: json` -- the result's `value` is the plain text `gh --jq` already produced, not re-parsed by circuitry and not trimmed by it either: the fake's own output keeps its trailing newline, `\"octocat\\n\"`.",
   "engines": ["python", "electricity"],
   "expect": "success"
 }
