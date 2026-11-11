@@ -285,9 +285,9 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
 /// 1 the pane's own top border, then 15 more) whichever of the three
 /// steps happens to be the one running when this reads the screen.
 /// Every wait here (the alternate screen opening, the first step
-/// starting, one short redraw delay, `Ended`, the exit wait) is its
-/// own named step with its own cap, summing to under a minute; the
-/// run itself finishes in about 3s.
+/// starting, the TUI drawing alpha's own row as running, `Ended`,
+/// the exit wait) is its own named step with its own cap, summing
+/// to 95s; the run itself finishes in about 3s.
 #[test]
 fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
     if !e2e_enabled() {
@@ -319,7 +319,7 @@ fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
 
     const ALTERNATE_SCREEN_WAIT: Duration = Duration::from_secs(20);
     const FIRST_STEP_WAIT: Duration = Duration::from_secs(20);
-    const REDRAW_WAIT: Duration = Duration::from_millis(300);
+    const RUNNING_ROW_WAIT: Duration = Duration::from_secs(5);
     const ENDED_WAIT: Duration = Duration::from_secs(20);
     const EXIT_WAIT: Duration = Duration::from_secs(30);
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", ALTERNATE_SCREEN_WAIT);
@@ -328,7 +328,11 @@ fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
         "prime.alpha",
         FIRST_STEP_WAIT,
     );
-    std::thread::sleep(REDRAW_WAIT);
+    // The engine's own start event can land before the TUI has drawn
+    // the matching frame -- wait for alpha's own running row, not a
+    // fixed delay, so a slow draw under load doesn't read the screen
+    // one frame too early.
+    wait_for_screen_text(&captured_buf, "\u{25cf} alpha", RUNNING_ROW_WAIT);
 
     let whole = captured_buf.lock().unwrap().clone();
     let screen = support::screen_grid(&whole, 200, 60);

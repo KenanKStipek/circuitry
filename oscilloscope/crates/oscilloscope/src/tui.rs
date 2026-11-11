@@ -1381,12 +1381,12 @@ fn tape_list_window_start(
         };
     };
     let h = (now_area.end - now_area.start) as isize;
-    if h >= content_rows_i {
-        // Taller than the list itself (many running rows) -- shown
-        // from its own first row, nothing above it at all.
-        return now_area.start as isize;
-    }
     if follow || previous_start.is_none() {
+        if h >= content_rows_i {
+            // Taller than the list itself (many running rows) -- shown
+            // from its own first row, nothing above it at all.
+            return now_area.start as isize;
+        }
         // Centred: the Now area's own middle row sits on the list's
         // middle row, rounding down when the split is uneven. This
         // same arithmetic is also where a window with follow off
@@ -1397,7 +1397,8 @@ fn tape_list_window_start(
         now_area.start as isize - above
     } else {
         // Follow off: keep the selected row in view, scrolling no
-        // further than the previous window already needs to.
+        // further than the previous window already needs to, even
+        // when the Now area is itself taller than the list.
         let mut start = previous_start.unwrap_or(0);
         if let Some(selected) = selected {
             let selected = selected as isize;
@@ -1551,6 +1552,17 @@ mod tape_list_window_tests {
         let on = tape_list_window_start(&kinds, Some(8..12), 11, true, None, None);
         let off = tape_list_window_start(&kinds, Some(8..12), 11, false, Some(0), None);
         assert_eq!(off, on);
+    }
+
+    #[test]
+    fn follow_off_keeps_the_selection_in_view_even_when_the_now_area_is_taller_than_the_list() {
+        // A band of 12 rows (5..17) inside a 10-row list -- on its
+        // own this would always show from the band's first row, but
+        // follow is off and the selection sits above the previous
+        // window, so it must scroll up to meet it instead.
+        let kinds = normal(30);
+        let start = tape_list_window_start(&kinds, Some(5..17), 10, false, Some(2), Some(5));
+        assert_eq!(start, 2);
     }
 
     #[test]
@@ -1976,18 +1988,23 @@ fn draw_tape_list(
 
     // -1 rule, -1 totals row.
     let viewport = inner.height.saturating_sub(2) as usize;
-    // Issue #710: the list's own `L` for the centred window is the
-    // whole of this area, at every width -- the 80-119 column
-    // floor's own one extra row of slack (issue #678's own 80x24 vs
-    // 60x24) is now exactly the centred window's own blank padding,
-    // not a separate fixed gap.
-    let content_rows = viewport;
+    let now_area = now_area_start.zip(now_area_end).map(|(s, e)| s..e);
+    // Issue #710: while a run is live, the list's own `L` for the
+    // centred window is the whole of this area, at every width --
+    // the 80-119 column floor's own one extra row of slack (issue
+    // #678's own 80x24 vs 60x24) is now exactly the centred
+    // window's own blank padding, not a separate fixed gap. Ended
+    // and Failed keep that floor's slack exactly as before.
+    let content_rows = if now_area.is_some() || narrow || wide_detail {
+        viewport
+    } else {
+        viewport.saturating_sub(1)
+    };
     let selected_idx = app.selected_path.as_deref().and_then(|p| {
         lines
             .iter()
             .position(|(path, _)| path.as_deref() == Some(p))
     });
-    let now_area = now_area_start.zip(now_area_end).map(|(s, e)| s..e);
     let start = tape_list_window_start(
         &kinds,
         now_area,
@@ -3147,7 +3164,7 @@ fn tape_starting_detail_lines(
     // detail pane has beyond the run's own shape, since nothing has
     // happened yet to show.
     for sentence in [
-        "The tape fills from the top as events arrive.",
+        "Finished steps stack up above Now.",
         "Nothing is shown that has not happened.",
     ] {
         lines.push(tape_detail_line(

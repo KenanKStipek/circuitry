@@ -2162,13 +2162,15 @@ padding above or below, drawn from the frame's own blank-row
 convention; a preview line landing at the window's own top with its
 own row scrolled off above it draws blank there instead, never
 floating on its own. A Now area at least as tall as the list itself
-shows from its own first row. With follow on, this is recomputed on
-every draw; with it off, `App::tape_list_start` keeps the window
-where it last was across draws, moving only as far as the selection
-needs to stay in view (the same rule the selection already followed
-before this issue, just no longer the window's only rule) -- the one
-exception is the very first draw, before `tape_list_start` is ever
-set, which centres regardless of `follow`, the same as if it were on.
+shows from its own first row while the window is centred. With
+follow on, the centring is recomputed on every draw; with it off,
+`App::tape_list_start` keeps the window where it last was across
+draws, moving only as far as the selection needs to stay in view --
+this keep-in-view rule applies however tall the Now area is, so a
+Now area at least as tall as the list no longer pins the window to
+its own first row once follow is off. The one exception is the very
+first draw, before `tape_list_start` is ever set, which centres
+regardless of `follow`, the same as if it were on.
 Ended and Failed keep the list's own original rule: biased toward the
 tail, scrolling up only as far as it must to keep the anchor (the
 selection, or the last line while following) in view. Six of the nine
@@ -2906,10 +2908,12 @@ second stays pending.
 design document's own prose never states, read off the frames
 themselves instead, so a later frame change could change them: the
 80–119 column floor keeps one row of slack at the bottom of its own
-scrollable list that 60–79 and 120 + do not (both fit `Run Started`
-through `Run End` in the same height; only 80–119 draws a trailing
-blank line before it); rows read in plan order, not real finish
-order, once a run has ended (finish order would scramble a loop's
+scrollable list that 60–79 and 120 + do not, once a run has ended or
+failed (both fit `Run Started` through `Run End` in the same height;
+only 80–119 draws a trailing blank line before it) -- while a run is
+starting or live, this slack is folded into the centred window's own
+blank padding instead, the same at every width; rows read in plan
+order, not real finish order, once a run has ended (finish order would scramble a loop's
 own passes by whichever of two near-simultaneous steps the engine
 happened to write first); and prompt previews are off for the
 Starting, Ended and Failed states. The Help overlay's own six blank
