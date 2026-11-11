@@ -263,6 +263,113 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     assert_no_leftover_process(out_b.path());
 }
 
+/// Issue #714: `T` cycles the theme on Select, survives the
+/// attach into a run, cycles again on that run's own Store, and
+/// survives `esc` back to Select -- one shared value across every
+/// leg of the round trip, never reset on either hop. Each press is
+/// checked by the theme banner (`theme: <name>`) naming the *next*
+/// theme in the cycle from wherever the previous press left it,
+/// which only happens if the value actually carried across the hop
+/// rather than resetting to `terminal` and re-advancing from there.
+#[test]
+fn t_cycles_the_theme_across_select_a_run_and_its_store() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let _guard = SELECT_LOCK.lock().unwrap();
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc_a = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
+    let doc_b = write_doc(work.path(), "b.yml", SELECT_SLOW_DOC);
+    let config_a = write_doc(work.path(), "config-a.json", SCRIPTED_CONFIG);
+    let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
+    let out_a = tempfile::tempdir().unwrap();
+    let out_b = tempfile::tempdir().unwrap();
+    let child_a = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc_a,
+        &config_a,
+        out_a.path(),
+    ));
+    let child_b = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc_b,
+        &config_b,
+        out_b.path(),
+    ));
+
+    wait_for_step_start(
+        &out_a.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    wait_for_step_start(
+        &out_b.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
+
+    wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+
+    // terminal -> dracula, on Select.
+    send_bytes(&mut master, b"T");
+    wait_for_screen_text(&captured_buf, "theme: dracula", Duration::from_secs(10));
+
+    // Attach to a run: dracula must still be the theme the Tape
+    // draws in, not reset back to terminal.
+    send_bytes(&mut master, b"\r");
+    wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(20));
+
+    // dracula -> nord, on the Tape -- only reachable if the attach
+    // kept dracula rather than resetting to terminal (which would
+    // land back on dracula here instead).
+    send_bytes(&mut master, b"T");
+    wait_for_screen_text(&captured_buf, "theme: nord", Duration::from_secs(10));
+
+    // Open the Store: still nord.
+    send_bytes(&mut master, b"3");
+    wait_for_screen_text(&captured_buf, "STORE", Duration::from_secs(10));
+
+    // nord -> solarized-dark, on the Store.
+    send_bytes(&mut master, b"T");
+    wait_for_screen_text(&captured_buf, "theme: solarized-dark", Duration::from_secs(10));
+
+    // esc back to Select: solarized-dark must still be the theme.
+    send_bytes(&mut master, b"\x1b");
+    wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+
+    // solarized-dark -> solarized-light, back on Select -- only
+    // reachable if esc kept solarized-dark rather than resetting.
+    send_bytes(&mut master, b"T");
+    wait_for_screen_text(
+        &captured_buf,
+        "theme: solarized-light",
+        Duration::from_secs(10),
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "q from Select should exit 0, got {status:?}"
+    );
+
+    drop(child_a);
+    drop(child_b);
+    assert_no_leftover_process(out_a.path());
+    assert_no_leftover_process(out_b.path());
+}
+
 /// With exactly one live run registered, bare `osi` on a TTY
 /// attaches to it straight away -- the Select screen never draws at
 /// all.

@@ -3383,7 +3383,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             WatchOutcome::Exited(code, _) => code,
             // `opened_from_select` is false here, so `run_tui_watch`
             // never actually returns this for a plain `osi watch`.
-            WatchOutcome::BackToSelect(_) => {
+            WatchOutcome::BackToSelect(..) => {
                 unreachable!("a plain `osi watch` never opens from the Select screen")
             }
         };
@@ -3465,7 +3465,11 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// before this type is ever constructed on that path).
 enum WatchOutcome {
     Exited(ExitCode, Vec<u8>),
-    BackToSelect(EventReader),
+    /// Issue #714: carries the theme this leg ended on, so the
+    /// Select/All/Combined loop it returns to keeps drawing in
+    /// whatever the user last cycled to here, rather than
+    /// reverting to what it started this leg with.
+    BackToSelect(EventReader, theme::ThemeName),
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4273,7 +4277,7 @@ fn run_tui_watch(
     // set) still ends the process explicitly here, same as `run_tui`'s
     // own matching tail.
     if back_to_select {
-        return WatchOutcome::BackToSelect(event_rx);
+        return WatchOutcome::BackToSelect(event_rx, theme_name);
     }
     if !manage_terminal {
         // The Select loop owns the real `TerminalGuard` and the
@@ -4303,7 +4307,7 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
             oscilloscope_core::screens::Screen::Tape,
         ) {
             WatchOutcome::Exited(code, _) => code,
-            WatchOutcome::BackToSelect(_) => {
+            WatchOutcome::BackToSelect(..) => {
                 unreachable!("bare osi's own single-run attach never opens from Select")
             }
         };
@@ -4330,10 +4334,16 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
     // (`Some`), so `esc` back from a run doesn't lose whichever row
     // was under it.
     let mut cursor: Option<usize> = None;
+    // Issue #714: `T` is one value shared by every leg of this
+    // loop -- each call below both reads and, once it returns,
+    // overwrites this same binding, so a cycle on any screen
+    // survives the round trip back to Select.
+    let mut theme_name = theme_name;
     let (code, pending_output) = loop {
-        let (action, reader, last_cursor) =
+        let (action, reader, last_cursor, new_theme) =
             run_select_screen(no_history, theme_name, event_rx, cursor);
         cursor = Some(last_cursor);
+        theme_name = new_theme;
         let outcome = match action {
             SelectAction::Quit(code) => break (code, Vec::new()),
             SelectAction::AttachRun(run) => attach_discovered_run(
@@ -4352,7 +4362,10 @@ fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool
         };
         match outcome {
             WatchOutcome::Exited(code, output) => break (code, output),
-            WatchOutcome::BackToSelect(reader) => event_rx = reader,
+            WatchOutcome::BackToSelect(reader, new_theme) => {
+                event_rx = reader;
+                theme_name = new_theme;
+            }
         }
     };
     drop(guard);
@@ -4454,10 +4467,10 @@ const SELECT_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 /// one fixed default `run_select` could pre-compute on its own.
 fn run_select_screen(
     no_history: bool,
-    theme_name: theme::ThemeName,
+    mut theme_name: theme::ThemeName,
     event_rx: EventReader,
     initial_cursor: Option<usize>,
-) -> (SelectAction, EventReader, usize) {
+) -> (SelectAction, EventReader, usize, theme::ThemeName) {
     // `run_select`'s own `TerminalGuard` is already active for the
     // whole Select<->Attach lifecycle -- only a fresh `Terminal`
     // (ratatui's own diffing state, no raw-mode/alt-screen ioctls of
@@ -4475,13 +4488,15 @@ fn run_select_screen(
                 SelectAction::Quit(ExitCode::from(1)),
                 event_rx,
                 initial_cursor.unwrap_or(0),
+                theme_name,
             );
         }
     };
     let _ = terminal.clear();
     let color_mode = theme::ColorMode::from_env();
-    let resolved_theme = theme::resolve(theme_name, color_mode);
-    let theme = resolved_theme.theme;
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    let mut theme = resolved_theme.theme;
+    let mut theme_banner_until: Option<Instant> = None;
 
     let mut runs = discover_running();
     let mut recent = if runs.is_empty() {
@@ -4583,6 +4598,13 @@ fn run_select_screen(
                                     break 'select SelectAction::AttachRecent(row.clone());
                                 }
                             }
+                            keys::SelectKeyOutcome::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                theme = resolved_theme.theme;
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
                             keys::SelectKeyOutcome::None => {}
                         }
                         needs_draw = true;
@@ -4600,9 +4622,12 @@ fn run_select_screen(
         if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
             let now_str = now_rfc3339();
             let rows = oscilloscope_core::select::build_rows(&runs);
+            let banner = theme_banner_until
+                .filter(|&until| Instant::now() < until)
+                .map(|_| theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &theme,
-                theme_banner: None,
+                theme_banner: banner,
                 zone: &LocalZone,
                 no_animation: true,
             };
@@ -4638,7 +4663,7 @@ fn run_select_screen(
     } else {
         drop(terminal);
     }
-    (outcome, event_rx, select_state.cursor)
+    (outcome, event_rx, select_state.cursor, theme_name)
 }
 
 /// Attaches to a [`oscilloscope_core::discovery::DiscoveredRun`] the
@@ -5212,20 +5237,23 @@ fn all_grid_info(
 /// leaves this loop for good.
 fn run_all_loop(
     no_history: bool,
-    theme_name: theme::ThemeName,
+    // Issue #714: shared across every leg below, the same way
+    // `run_select`'s own binding is.
+    mut theme_name: theme::ThemeName,
     no_animation: bool,
     mut event_rx: EventReader,
 ) -> WatchOutcome {
     let mut all_state = keys::AllState::new();
     loop {
-        let (action, reader) =
+        let (action, reader, new_theme) =
             run_all_grid_screen(no_history, theme_name, event_rx, &mut all_state);
         event_rx = reader;
+        theme_name = new_theme;
         match action {
             AllAction::Quit(code) => {
                 return WatchOutcome::Exited(ExitCode::from(code), Vec::new());
             }
-            AllAction::BackToSelect => return WatchOutcome::BackToSelect(event_rx),
+            AllAction::BackToSelect => return WatchOutcome::BackToSelect(event_rx, theme_name),
             AllAction::Open(run) => {
                 match attach_discovered_run(
                     &run,
@@ -5239,13 +5267,17 @@ fn run_all_loop(
                     WatchOutcome::Exited(code, output) => {
                         return WatchOutcome::Exited(code, output);
                     }
-                    WatchOutcome::BackToSelect(reader) => event_rx = reader,
+                    WatchOutcome::BackToSelect(reader, new_theme) => {
+                        event_rx = reader;
+                        theme_name = new_theme;
+                    }
                 }
             }
             AllAction::Combined => 'combined: loop {
-                let (action, reader) =
+                let (action, reader, new_theme) =
                     run_combined_signal_leg(theme_name, event_rx, &mut all_state);
                 event_rx = reader;
+                theme_name = new_theme;
                 match action {
                     CombinedLegAction::Quit(code) => {
                         return WatchOutcome::Exited(ExitCode::from(code), Vec::new());
@@ -5272,7 +5304,10 @@ fn run_all_loop(
                             WatchOutcome::Exited(code, output) => {
                                 return WatchOutcome::Exited(code, output);
                             }
-                            WatchOutcome::BackToSelect(reader) => event_rx = reader,
+                            WatchOutcome::BackToSelect(reader, new_theme) => {
+                                event_rx = reader;
+                                theme_name = new_theme;
+                            }
                         }
                     }
                 }
@@ -5320,21 +5355,22 @@ fn disambiguate_tile_document_labels(slots: &mut [AllRunSlot]) {
 /// history yet` regardless, same as a run with none at all.
 fn run_all_grid_screen(
     _no_history: bool,
-    theme_name: theme::ThemeName,
+    mut theme_name: theme::ThemeName,
     event_rx: EventReader,
     all_state: &mut keys::AllState,
-) -> (AllAction, EventReader) {
+) -> (AllAction, EventReader, theme::ThemeName) {
     let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
         Ok(t) => t,
         Err(err) => {
             eprintln!("osi: couldn't start the TUI ({err})");
-            return (AllAction::Quit(1), event_rx);
+            return (AllAction::Quit(1), event_rx, theme_name);
         }
     };
     let _ = terminal.clear();
     let color_mode = theme::ColorMode::from_env();
-    let resolved_theme = theme::resolve(theme_name, color_mode);
-    let theme = resolved_theme.theme;
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    let mut theme = resolved_theme.theme;
+    let mut theme_banner_until: Option<Instant> = None;
 
     let mut runs = discover_running();
     let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
@@ -5407,6 +5443,13 @@ fn run_all_grid_screen(
                                 }
                             }
                             keys::AllKeyOutcome::Combined => break 'all AllAction::Combined,
+                            keys::AllKeyOutcome::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                theme = resolved_theme.theme;
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
                             keys::AllKeyOutcome::None => {}
                         }
                         needs_draw = true;
@@ -5428,9 +5471,12 @@ fn run_all_grid_screen(
                 all_grid_info(runs.len(), size.width, size.height, all_state.page);
             all_state.page = all_state.page.min(page_count.saturating_sub(1));
             all_state.focus = all_state.focus.min(page_run_count.saturating_sub(1));
+            let banner = theme_banner_until
+                .filter(|&until| Instant::now() < until)
+                .map(|_| theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &theme,
-                theme_banner: None,
+                theme_banner: banner,
                 zone: &LocalZone,
                 no_animation: true,
             };
@@ -5521,7 +5567,7 @@ fn run_all_grid_screen(
     } else {
         drop(terminal);
     }
-    (outcome, event_rx)
+    (outcome, event_rx, theme_name)
 }
 
 /// What one leg of [`run_combined_signal_leg`]'s own loop decided.
@@ -5539,21 +5585,22 @@ enum CombinedLegAction {
 /// opened run's own `esc` comes back to a fresh leg, never one
 /// carrying stale ticker state across the round trip).
 fn run_combined_signal_leg(
-    theme_name: theme::ThemeName,
+    mut theme_name: theme::ThemeName,
     event_rx: EventReader,
     all_state: &mut keys::AllState,
-) -> (CombinedLegAction, EventReader) {
+) -> (CombinedLegAction, EventReader, theme::ThemeName) {
     let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
         Ok(t) => t,
         Err(err) => {
             eprintln!("osi: couldn't start the TUI ({err})");
-            return (CombinedLegAction::Quit(1), event_rx);
+            return (CombinedLegAction::Quit(1), event_rx, theme_name);
         }
     };
     let _ = terminal.clear();
     let color_mode = theme::ColorMode::from_env();
-    let resolved_theme = theme::resolve(theme_name, color_mode);
-    let theme = resolved_theme.theme;
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    let mut theme = resolved_theme.theme;
+    let mut theme_banner_until: Option<Instant> = None;
 
     let mut runs = discover_running();
     let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
@@ -5628,6 +5675,13 @@ fn run_combined_signal_leg(
                                     break 'combined CombinedLegAction::Open(Box::new(run.clone()));
                                 }
                             }
+                            keys::CombinedKeyOutcome::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                theme = resolved_theme.theme;
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
                             keys::CombinedKeyOutcome::None => {}
                         }
                         needs_draw = true;
@@ -5698,9 +5752,12 @@ fn run_combined_signal_leg(
             combined_state.cursor_run = combined_state
                 .cursor_run
                 .min(screen.runs.len().saturating_sub(1));
+            let banner = theme_banner_until
+                .filter(|&until| Instant::now() < until)
+                .map(|_| theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &theme,
-                theme_banner: None,
+                theme_banner: banner,
                 zone: &LocalZone,
                 no_animation: true,
             };
@@ -5732,7 +5789,7 @@ fn run_combined_signal_leg(
     } else {
         drop(terminal);
     }
-    (outcome, event_rx)
+    (outcome, event_rx, theme_name)
 }
 
 /// The common ending every `osi watch` session reaches, however its
