@@ -603,7 +603,7 @@ Above · Received Below · Fixed Scale`). Counts in chrome are `6 Done · 2 Runn
 
 | Where | Keys |
 | --- | --- |
-| Everywhere | `0`–`3` Screens (Tape, Signal, Flow, Store) · `?` Help · `q` Quit, confirms while a run is live · `c` Cancel the run, confirms (listed in Help) · `esc` closes the help, or goes back to where the screen was opened from |
+| Everywhere | `0`–`3` Screens (Tape, Signal, Flow, Store) · `T` Colour theme · `?` Help · `q` Quit, confirms while a run is live · `c` Cancel the run, confirms (listed in Help) · `esc` closes the help, or goes back to where the screen was opened from |
 | Tape | `↑↓` Select · `enter` Open the step · `p` Previews on or off · `t` Tokens: units or vs usual |
 | Signal | `←→` Scrub · `+/-` Zoom · `n` Now · `enter` Open the step under the cursor |
 | Flow | `←→` Scroll · `↑↓` Lane · `+/-` Lanes · `f` Follow · `enter` Open |
