@@ -5370,13 +5370,21 @@ fn draw_signal_chart(
     let sent_half_label = axis_label_format(screen.sent_axis_top / 2);
     let received_top_label = axis_label_format(screen.received_axis_top);
     // The sent side's own labels set the field's width (`0`, the
-    // top and its own half) -- the received label (always the
-    // smaller side in practice) is never wider in any frame this
-    // draws, including the shared `k`-scale's own `400 t` against
-    // `5.0k`'s four cells: it overflows its own gutter rather than
-    // widening it, same as `saturating_sub` already lets it.
+    // top and its own half) for a tile (`title_override.is_some()`):
+    // the shared `k`-scale's own received label is never wider
+    // there than the sent ones, including `400 t` against `5.0k`'s
+    // four cells, so it overflows its own gutter rather than
+    // widening it, same as `saturating_sub` already lets it. A
+    // single-run Signal's own received label, with history, can
+    // still be wider than its sent ones (`5,120 t` against `300 t`),
+    // so it stays in this computation there.
     let label_width = ["0", sent_top_label.as_str(), sent_half_label.as_str()]
         .iter()
+        .chain(
+            title_override
+                .is_none()
+                .then_some(&received_top_label.as_str()),
+        )
         .map(|s| s.chars().count())
         .max()
         .unwrap_or(1) as u16;
@@ -17825,6 +17833,29 @@ mod tape_frame_goldens {
             })
             .collect();
         assert_eq!(row, "1,200 t");
+    }
+
+    /// A single-run Signal's own received label, wider than its own
+    /// sent labels (`5,120 t` with history, against a plain `300 t`
+    /// sent top) still fits its own field whole -- only a tile
+    /// (`title_override.is_some()`) ever lets the received label
+    /// overflow the gutter the sent side alone sized.
+    #[test]
+    fn a_wide_received_label_still_fits_the_gutter_on_a_single_run() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 300,
+            received_axis_top: 5_120,
+            now_col: Some(0),
+            cursor_col: Some(0),
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default()],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 12, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + SIGNAL_RECEIVED_ROWS as u16;
+        let row: String = (0..7)
+            .map(|i| buffer[(buffer.area.x + 1 + i, y)].symbol().to_string())
+            .collect();
+        assert_eq!(row, "5,120 t");
     }
 
     /// At a coarse zoom (1 s per column here), second marks keep at
