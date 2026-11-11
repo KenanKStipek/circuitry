@@ -6142,17 +6142,27 @@ fn draw_combined_per_run_table(
             "\u{25a0}",
             cell_bg(Style::default().fg(color)),
         );
+        // Issue #734: a column's own text fits before the next one
+        // starts, or is cut with `⋯` -- never left to overwrite, or
+        // be overwritten by, the column after it (`store_cut_label`,
+        // the Largest Stores table's own cut rule, shared here).
         buf.set_string(
             inner.x + PER_RUN_NAME_COL,
             y,
-            &run.document_label,
+            store_cut_label(
+                &run.document_label,
+                (PER_RUN_CONFIG_COL - PER_RUN_NAME_COL) as usize,
+            ),
             row_style(ctx.theme.text),
         );
         let config_text = run.config_label.as_deref().unwrap_or("\u{2014}");
         buf.set_string(
             inner.x + PER_RUN_CONFIG_COL,
             y,
-            config_text,
+            store_cut_label(
+                config_text,
+                (PER_RUN_ENGINE_COL - PER_RUN_CONFIG_COL) as usize,
+            ),
             row_style(ctx.theme.fg_muted),
         );
         // The engine reads in the same muted span as the config
@@ -6161,7 +6171,10 @@ fn draw_combined_per_run_table(
         buf.set_string(
             inner.x + PER_RUN_ENGINE_COL,
             y,
-            &run.engine_label,
+            store_cut_label(
+                &run.engine_label,
+                (PER_RUN_NOW_COL - PER_RUN_ENGINE_COL) as usize,
+            ),
             row_style(ctx.theme.fg_muted),
         );
         let now_text =
@@ -6248,12 +6261,23 @@ fn draw_combined_readings(
             Span::styled(format!("{} running now", r.steps_running), text_style),
         ]),
     ];
+    let line_width = inner.width.saturating_sub(1) as usize;
     if let Some(doc) = &r.largest_doc {
         let share_text = oscilloscope_core::combined::format_share(r.largest_share_pct);
         let tokens_text = oscilloscope_core::format::format_tokens(r.largest_tokens);
+        let prefix = format!("{:<6} ", "Largest");
+        let suffix = format!("{tokens_text} \u{b7} {share_text}");
+        // Issue #734, S5: the label alone is cut with `⋯` when the
+        // whole line would otherwise overflow -- the figure and the
+        // share after it always stay whole.
+        let doc_cut = readings_cut_leading_label(
+            doc,
+            prefix.chars().count() + 1 + suffix.chars().count(),
+            line_width,
+        );
         lines.push(Line::from(vec![
-            Span::styled(format!("{:<6} ", "Largest"), muted),
-            Span::styled(format!("{doc} "), text_style),
+            Span::styled(prefix, muted),
+            Span::styled(format!("{doc_cut} "), text_style),
             Span::styled(format!("{tokens_text} "), bold),
             Span::styled(format!("\u{b7} {share_text}"), muted),
         ]));
@@ -6271,12 +6295,11 @@ fn draw_combined_readings(
         ),
     ]));
     frame.render_widget(
-        // A narrower panel than the golden's own (below 180 columns)
-        // wraps a line too long for it rather than truncating it --
-        // the panel has rows to spare for a wrapped line long before
-        // it runs out of the four lines themselves (issue #713), and
-        // the golden's own width never wraps any of them.
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        // Never wrapped (issue #734, S5/§3.8: "cut with ⋯, never
+        // wrapped in a row") -- the Largest line's own label is
+        // already cut above to fit, and the golden's own width never
+        // overflows any of the others.
+        Paragraph::new(lines),
         Rect {
             x: inner.x + 1,
             y: inner.y,
@@ -7809,16 +7832,22 @@ fn draw_signal_readings(
     ));
     lines.push(pad_line(
         match &readings.largest {
-            Some((label, tokens)) => vec![
-                Span::styled("Largest  ", muted),
-                Span::styled(
-                    format!(
-                        "{label} {}",
-                        oscilloscope_core::format::format_tokens(*tokens)
-                    ),
-                    default,
-                ),
-            ],
+            Some((label, tokens)) => {
+                let prefix = "Largest  ";
+                let tokens_text = oscilloscope_core::format::format_tokens(*tokens);
+                // Issue #734, S5: the label alone is cut with `⋯`
+                // when the whole line would otherwise overflow -- the
+                // token figure after it always stays whole.
+                let label_cut = readings_cut_leading_label(
+                    label,
+                    prefix.chars().count() + 1 + tokens_text.chars().count(),
+                    line_width,
+                );
+                vec![
+                    Span::styled(prefix, muted),
+                    Span::styled(format!("{label_cut} {tokens_text}"), default),
+                ]
+            }
             None => vec![
                 Span::styled("Largest  ", muted),
                 Span::styled("\u{2014}", muted),
@@ -9293,6 +9322,19 @@ fn store_cut_label(label: &str, width: usize) -> String {
         Some(0) if width < 2 => String::new(),
         Some(keep) => format!("{}\u{22ef}", label.chars().take(keep).collect::<String>()),
     }
+}
+
+/// A Readings line's own leading, variable-length label (a document
+/// name), cut with `⋯` when it and the fixed text after it together
+/// would overflow the line -- the fixed text always stays whole,
+/// never pushed off the edge by a label that would otherwise run
+/// into it (issue #734, S5: §3.8's "cut with ⋯, never wrapped").
+/// Reuses the Largest Stores table's own cut rule (`store_cut_label`),
+/// just sized to leave room for `fixed_len` (every other character
+/// the line holds: a label prefix, the gap after the label, and the
+/// fixed text itself).
+fn readings_cut_leading_label(label: &str, fixed_len: usize, line_width: usize) -> String {
+    store_cut_label(label, line_width.saturating_sub(fixed_len))
 }
 
 /// The Largest Stores table (issue #695's rule 8): full path from
@@ -17801,6 +17843,56 @@ mod tape_frame_goldens {
         }
     }
 
+    /// A long RUN label never runs into the CONFIG column after it
+    /// -- cut with `⋯` before it starts, never overwritten by it
+    /// (issue #734); the same holds for CONFIG against ENGINE.
+    #[test]
+    fn combined_signal_per_run_run_label_cuts_before_the_config_column() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let mut run = synthetic_combined_run(0);
+        run.document_label = "pipelines/nightly-report.yml".to_string();
+        run.config_label = Some("configs/production.yml".to_string());
+        let screen = oscilloscope_core::combined::CombinedSignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            runs: vec![run],
+            now_col: 0,
+            now_elapsed_s: 0.0,
+            totals: Default::default(),
+            readings: Default::default(),
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 140,
+            height: 6,
+        };
+        let backend = TestBackend::new(140, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_combined_per_run_table(f, area, &screen, 0, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let row: String = buffer_row_cells(buf, 2, 0..140)
+            .iter()
+            .map(|c| c.ch)
+            .collect();
+        assert!(
+            row.contains("pipelines/nig⋯") || row.contains("pipelines/nightly-report.yml"),
+            "expected the RUN text whole or cut with ⋯, never overwritten: {row:?}"
+        );
+        assert!(
+            row.contains("configs/production.yml") || row.contains("configs/produc⋯"),
+            "expected CONFIG's own text, not torn by RUN overwriting it: {row:?}"
+        );
+    }
+
     /// Once the runs outgrow the table's own rows, `↓` scrolls the
     /// window to keep the cursor in view -- the same way the Store's
     /// own Largest table already does -- rather than always showing
@@ -17989,20 +18081,17 @@ mod tape_frame_goldens {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
-                draw_combined_signal(
-                    f,
-                    f.area(),
-                    &screen,
-                    0,
-                    None,
-                    "2026-01-01T01:00:01Z",
-                    &ctx,
-                )
+                draw_combined_signal(f, f.area(), &screen, 0, None, "2026-01-01T01:00:01Z", &ctx)
             })
             .unwrap();
         let buf = terminal.backend().buffer();
         let text: String = (0..48)
-            .map(|y| -> String { buffer_row_cells(buf, y, 0..180).iter().map(|c| c.ch).collect() })
+            .map(|y| -> String {
+                buffer_row_cells(buf, y, 0..180)
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect()
+            })
             .collect::<Vec<_>>()
             .join("\n");
         assert!(
@@ -18066,6 +18155,74 @@ mod tape_frame_goldens {
         assert!(
             all.contains("1 engine") && !all.contains("1 engines"),
             "expected the singular \"1 engine\":\n{all}"
+        );
+    }
+
+    /// A long Largest document name never wraps the Readings pane
+    /// onto a second line -- it's cut with `⋯` instead, and the
+    /// token figure and the share after it stay whole (issue #734,
+    /// S5).
+    #[test]
+    fn combined_signal_readings_never_wraps_the_largest_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::combined::CombinedSignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            runs: vec![synthetic_combined_run(0)],
+            now_col: 0,
+            now_elapsed_s: 0.0,
+            totals: Default::default(),
+            readings: oscilloscope_core::combined::CombinedReadings {
+                run_count: 1,
+                engine_count: 1,
+                largest_doc: Some("pipelines/nightly-report.yml".to_string()),
+                largest_tokens: 1_200,
+                largest_share_pct: 33.0,
+                ..Default::default()
+            },
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 6,
+        };
+        let backend = TestBackend::new(40, 6);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_combined_readings(f, area, &screen, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..6)
+            .map(|y| {
+                buffer_row_cells(buf, y, 0..40)
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect()
+            })
+            .collect();
+        let largest_row = rows
+            .iter()
+            .find(|r| r.contains("Largest"))
+            .unwrap_or_else(|| panic!("expected a Largest row: {rows:?}"));
+        assert!(
+            largest_row.contains("1.2 kt") && largest_row.contains("33%"),
+            "expected the figure and share to stay whole: {largest_row:?}"
+        );
+        assert!(
+            largest_row.contains('⋯'),
+            "expected the long name to be cut with ⋯: {largest_row:?}"
+        );
+        let largest_count = rows.iter().filter(|r| r.contains("Largest")).count();
+        assert_eq!(
+            largest_count, 1,
+            "the Largest line must never wrap onto a second row: {rows:?}"
         );
     }
 
@@ -18149,15 +18306,7 @@ mod tape_frame_goldens {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal
             .draw(|f| {
-                draw_combined_signal(
-                    f,
-                    f.area(),
-                    &screen,
-                    0,
-                    None,
-                    "2026-01-01T01:00:01Z",
-                    &ctx,
-                )
+                draw_combined_signal(f, f.area(), &screen, 0, None, "2026-01-01T01:00:01Z", &ctx)
             })
             .unwrap();
         let buf = terminal.backend().buffer();
@@ -20556,6 +20705,64 @@ mod tape_frame_goldens {
             row.as_bytes().get(now_at - 1).copied(),
             Some(b' '),
             "expected a blank column right before the Now label: {row:?}"
+        );
+    }
+
+    /// A long Largest step name never wraps the single-run Signal's
+    /// own Readings pane -- it's cut with `⋯`, and the token figure
+    /// after it stays whole (issue #734, S5).
+    #[test]
+    fn signal_readings_never_wraps_the_largest_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::screens::SignalScreen {
+            readings: oscilloscope_core::screens::SignalReadings {
+                largest: Some(("pipelines › nightly-report › build".to_string(), 1_200)),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 8,
+        };
+        let backend = TestBackend::new(30, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_signal_readings(f, area, &screen, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..8)
+            .map(|y| {
+                buffer_row_cells(buf, y, 0..30)
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect()
+            })
+            .collect();
+        let largest_row = rows
+            .iter()
+            .find(|r| r.contains("Largest"))
+            .unwrap_or_else(|| panic!("expected a Largest row: {rows:?}"));
+        assert!(
+            largest_row.contains("1.2 kt"),
+            "expected the token figure to stay whole: {largest_row:?}"
+        );
+        assert!(
+            largest_row.contains('⋯'),
+            "expected the long name to be cut with ⋯: {largest_row:?}"
+        );
+        let largest_count = rows.iter().filter(|r| r.contains("Largest")).count();
+        assert_eq!(
+            largest_count, 1,
+            "the Largest line must never wrap onto a second row: {rows:?}"
         );
     }
 
