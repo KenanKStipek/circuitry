@@ -745,6 +745,12 @@ impl App {
                     }
                 }
             }
+            // Issue #714: `T` still cycles the theme with Help
+            // open -- every other key dismisses it, same as every
+            // other overlay, but `T` on every other screen leaves
+            // whatever's open where it is, and Help overlaying one
+            // screen's own keys is no different.
+            Dialog::Help if key.code == KeyCode::Char('T') => Action::CycleTheme,
             Dialog::Help => {
                 self.dialog = Dialog::None;
                 Action::None
@@ -1609,6 +1615,8 @@ pub enum SelectKeyOutcome {
     /// `runs_empty` is never true when this fires -- the empty
     /// Select has no such row at all.
     OpenAll,
+    /// `T` (issue #714): cycle the theme, on this screen too.
+    CycleTheme,
 }
 
 impl SelectState {
@@ -1636,6 +1644,12 @@ impl SelectState {
         if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             self.help_open = false;
             return SelectKeyOutcome::Quit(130);
+        }
+        // Issue #714: `T` cycles the theme even with Help open,
+        // without closing it -- checked before the "any other key
+        // closes Help" fallback below, the same way Ctrl-C is.
+        if code == KeyCode::Char('T') {
+            return SelectKeyOutcome::CycleTheme;
         }
         if self.help_open {
             self.help_open = false;
@@ -1759,6 +1773,8 @@ pub enum AllKeyOutcome {
     BackToSelect,
     /// `u`: the Combined Signal.
     Combined,
+    /// `T` (issue #714): cycle the theme, on this screen too.
+    CycleTheme,
 }
 
 impl AllState {
@@ -1786,6 +1802,12 @@ impl AllState {
         if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             self.help_open = false;
             return AllKeyOutcome::Quit(130);
+        }
+        // Issue #714: `T` cycles the theme even with Help open,
+        // without closing it -- same placement as `SelectState`'s
+        // own.
+        if code == KeyCode::Char('T') {
+            return AllKeyOutcome::CycleTheme;
         }
         if self.help_open {
             self.help_open = false;
@@ -1911,6 +1933,8 @@ pub enum CombinedKeyOutcome {
     BackToTiles,
     /// `enter` on the Per Run table's own cursor.
     Open(usize),
+    /// `T` (issue #714): cycle the theme, on this screen too.
+    CycleTheme,
 }
 
 impl CombinedState {
@@ -1934,6 +1958,12 @@ impl CombinedState {
         if code == KeyCode::Char('c') && modifiers.contains(KeyModifiers::CONTROL) {
             self.help_open = false;
             return CombinedKeyOutcome::Quit(130);
+        }
+        // Issue #714: `T` cycles the theme even with Help open,
+        // without closing it -- same placement as `SelectState`'s
+        // own.
+        if code == KeyCode::Char('T') {
+            return CombinedKeyOutcome::CycleTheme;
         }
         if self.help_open {
             self.help_open = false;
@@ -2483,6 +2513,22 @@ mod tests {
     }
 
     #[test]
+    fn capital_t_cycles_the_theme_with_help_open_without_closing_it() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        let action = app.handle_key(key(KeyCode::Char('T')), &visible, &[], false, false, &[]);
+        assert_eq!(action, Action::CycleTheme);
+        assert_eq!(
+            app.dialog,
+            Dialog::Help,
+            "T must leave Help open, unlike every other key"
+        );
+    }
+
+    #[test]
     fn v_opens_the_full_value_overlay_and_any_key_closes_it() {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
@@ -2950,6 +2996,27 @@ mod tests {
         assert_eq!(
             app.handle_key(key(KeyCode::Char('T')), &[], &[], true, false, &[]),
             Action::CycleTheme
+        );
+    }
+
+    #[test]
+    fn shift_t_reaches_every_screen_and_the_full_screen_step() {
+        use oscilloscope_core::screens::Screen;
+        for screen in [Screen::Tape, Screen::Signal, Screen::Flow, Screen::Store] {
+            let mut app = App::new(false);
+            app.screen = screen;
+            assert_eq!(
+                app.handle_key(key(KeyCode::Char('T')), &[], &[], true, false, &[]),
+                Action::CycleTheme,
+                "T should cycle the theme on {screen:?}"
+            );
+        }
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        assert_eq!(
+            app.handle_key(key(KeyCode::Char('T')), &[], &[], true, false, &[]),
+            Action::CycleTheme,
+            "T should cycle the theme with the full-screen step open"
         );
     }
 
@@ -3455,6 +3522,21 @@ mod tests {
     }
 
     #[test]
+    fn select_capital_t_cycles_the_theme_even_with_help_open() {
+        let mut state = SelectState::new(1);
+        state.help_open = true;
+        let (code, modifiers) = select_key(KeyCode::Char('T'));
+        assert_eq!(
+            state.handle_key(code, modifiers, false, 2, false),
+            SelectKeyOutcome::CycleTheme
+        );
+        assert!(
+            state.help_open,
+            "T must leave Help open, unlike every other key"
+        );
+    }
+
+    #[test]
     fn select_a_plain_c_and_number_keys_do_nothing() {
         let mut state = SelectState::new(1);
         for code in [
@@ -3712,5 +3794,35 @@ mod tests {
             AllKeyOutcome::None
         );
         assert!(!state.help_open);
+    }
+
+    #[test]
+    fn all_capital_t_cycles_the_theme_even_with_help_open() {
+        let mut state = AllState::new();
+        state.help_open = true;
+        let (code, modifiers) = all_key(KeyCode::Char('T'));
+        assert_eq!(
+            state.handle_key(code, modifiers, 3, 6, 1),
+            AllKeyOutcome::CycleTheme
+        );
+        assert!(
+            state.help_open,
+            "T must leave Help open, unlike every other key"
+        );
+    }
+
+    #[test]
+    fn combined_capital_t_cycles_the_theme_even_with_help_open() {
+        let mut state = CombinedState::new();
+        state.help_open = true;
+        let (code, modifiers) = all_key(KeyCode::Char('T'));
+        assert_eq!(
+            state.handle_key(code, modifiers, 6, 27, 150),
+            CombinedKeyOutcome::CycleTheme
+        );
+        assert!(
+            state.help_open,
+            "T must leave Help open, unlike every other key"
+        );
     }
 }
