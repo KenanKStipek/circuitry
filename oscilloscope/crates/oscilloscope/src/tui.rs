@@ -5487,10 +5487,6 @@ pub fn draw_combined_signal(
     draw_combined_readings(frame, lower[1], screen, ctx);
 }
 
-fn format_seconds_1(v: f64) -> String {
-    format!("{v:.1}")
-}
-
 fn combined_chart_title() -> String {
     [
         "Combined Signal",
@@ -5789,13 +5785,22 @@ fn draw_combined_seconds_row(
         let start = r.saturating_sub(1);
         (start, start + now_label.chars().count())
     });
-    for sec in (start_col / 10)..=((start_col + data_width) / 10) {
-        let col = sec * 10;
-        if col < start_col || col - start_col >= data_width {
+    // Issue #734: the step between marks, wide enough that the
+    // farthest one this row ever shows (`format_signal_elapsed`'s
+    // own text, at the window's own right edge) never overlaps its
+    // neighbour -- the same rule the single-run Signal's own
+    // seconds row uses ([`signal_mark_step_s`]).
+    const COLS_PER_SECOND: u64 = 10;
+    let max_elapsed_s = (start_col + data_width) as f64 / COLS_PER_SECOND as f64;
+    let step_s = oscilloscope_core::format::signal_mark_step_s(COLS_PER_SECOND, max_elapsed_s);
+    let max_sec = (start_col + data_width) as u64 / COLS_PER_SECOND;
+    for sec in (0..=max_sec).step_by(step_s.max(1) as usize) {
+        let col = sec * COLS_PER_SECOND;
+        if col < start_col as u64 || col as usize - start_col >= data_width {
             continue;
         }
-        let tick_rel = col - start_col;
-        let label = format!("{sec}s");
+        let tick_rel = col as usize - start_col;
+        let label = oscilloscope_core::format::format_signal_elapsed(sec as f64);
         let tick_len = label.chars().count();
         if tick_rel + tick_len > data_width {
             continue;
@@ -5913,13 +5918,15 @@ fn draw_combined_totals_row(
     let t = &screen.totals;
     let quiet_text = t
         .quiet_s
-        .map(|q| format!("{}s", format_seconds_1(q)))
+        .map(oscilloscope_core::format::format_signal_elapsed)
         .unwrap_or_else(|| "\u{2014}".to_string());
     let sent_text = oscilloscope_core::format::format_tokens_arrow(t.sent);
     let received_text = oscilloscope_core::format::format_tokens_arrow(t.received);
     let total_text = oscilloscope_core::format::format_tokens(t.total);
     let peak_text = oscilloscope_core::format::format_tokens(t.peak_tokens);
-    let peak_time_text = format_seconds_1(t.peak_time_s);
+    // Issue #734: the one elapsed format every Signal screen's
+    // marks and Peak time share, never a raw second count.
+    let peak_time_text = oscilloscope_core::format::format_signal_elapsed(t.peak_time_s);
     let rate_text = oscilloscope_core::format::format_tokens(t.rate_tokens_per_s.round() as u64);
     let spans = vec![
         Span::styled(" ", Style::default().fg(ctx.theme.text)),
@@ -5945,7 +5952,7 @@ fn draw_combined_totals_row(
         ),
         Span::styled(format!("{peak_text} "), Style::default().fg(ctx.theme.text)),
         Span::styled(
-            format!("at {peak_time_text}s  Rate "),
+            format!("at {peak_time_text}  Rate "),
             Style::default().fg(ctx.theme.fg_muted),
         ),
         Span::styled(
@@ -7086,12 +7093,14 @@ fn draw_signal_chart(
     );
 }
 
-/// The seconds-mark row: ticks spaced at least about six columns
-/// apart (`cols_per_second`'s own interval at the default 100 ms per
-/// column, a wider few-second step once zoomed out enough that a
-/// one-second step would overlap its own labels), replaced at the
-/// Now column by its own label and, at the full width tier, `Ahead
-/// · plan order · usually ends <clock>` after it.
+/// The seconds-mark row: ticks in the one duration format every
+/// Signal screen's second marks share (issue #734,
+/// `format_signal_elapsed`), spaced widely enough
+/// (`signal_mark_step_s`) that the farthest one this row ever draws
+/// never overlaps its neighbour, replaced at the Now column by its
+/// own label -- with at least one blank column always kept between
+/// a tick and that label, on either side -- and, at the full width
+/// tier, `Ahead · plan order · usually ends <clock>` after it.
 #[allow(clippy::too_many_arguments)]
 fn draw_signal_seconds_row(
     frame: &mut Frame,
@@ -7169,11 +7178,14 @@ fn draw_signal_seconds_row(
     };
 
     let cols_per_second = (1000.0 / screen.column_ms.max(1) as f64).round().max(1.0) as u64;
-    // At least six columns between tick labels: at 100 ms per
-    // column (ten columns a second) that's every second, same as
-    // always; past that, whichever whole number of seconds first
-    // keeps consecutive labels from overlapping.
-    let seconds_step = (6u64).div_ceil(cols_per_second).max(1);
+    // Issue #734: the step between tick labels, wide enough that the
+    // farthest one this row will ever show (`format_signal_elapsed`'s
+    // own text, at the window's own right edge) never runs into its
+    // neighbour -- the same rule the Combined Signal's own seconds
+    // row uses.
+    let max_elapsed_for_spacing = (start_col + data_width) as f64 / cols_per_second as f64;
+    let seconds_step =
+        oscilloscope_core::format::signal_mark_step_s(cols_per_second, max_elapsed_for_spacing);
     let mut seconds = 0u64;
     loop {
         let abs_col = seconds * cols_per_second;
@@ -7186,10 +7198,13 @@ fn draw_signal_seconds_row(
             break;
         }
         let x = data_x + col as u16;
-        let text = format!("{seconds}s");
+        let text = oscilloscope_core::format::format_signal_elapsed(seconds as f64);
         let text_end = x + text.chars().count() as u16;
-        let before_now = now_x.is_none_or(|n| text_end <= n);
-        let after_everything = wide && x >= occupied_end;
+        // At least one blank column always separates a tick from
+        // the Now label, on either side (issue #734, S3: the
+        // Combined Signal's own seconds row already keeps this gap).
+        let before_now = now_x.is_none_or(|n| text_end < n);
+        let after_everything = wide && x > occupied_end;
         if before_now {
             frame.buffer_mut().set_string(x, y, &text, dim);
         } else if after_everything {
@@ -7209,11 +7224,11 @@ fn draw_signal_seconds_row(
 
 /// One step row's own styled fragments (§2.2's "step rows under the
 /// axis"), already positioned left to right -- the caller draws each
-/// in turn, clipping to the pane's own right edge. Only ever called
-/// for a row whose own start column (`row.col`) is already inside
-/// the trace's own visible window; a tool bar that started before
-/// it but is still running draws its own plain continuation instead
-/// ([`draw_signal_step_rows`]'s own `clipped` branch).
+/// in turn, clipping to the pane's own right edge, the row's own
+/// start column (`row.col`) included: a tool bar that started before
+/// the trace's own visible window still draws this same text, from
+/// the window's own left edge, with whatever of it still fits
+/// (issue #734).
 fn signal_step_row_spans(
     row: &oscilloscope_core::screens::SignalStepRow,
     screen: &oscilloscope_core::screens::SignalScreen,
@@ -7297,14 +7312,15 @@ fn signal_step_row_spans(
 
 /// A step row visible in the trace's own current window: `visible_col`
 /// is where it actually starts drawing (never before the window's
-/// own left edge), `clipped` when that's later than the row's own
-/// real start column -- a tool bar already running when the window
-/// scrolled past its own start.
+/// own left edge) -- a tool bar already running when the window
+/// scrolled past its own start still draws its own full label there
+/// (issue #734: `draw_signal_step_rows`'s own per-span budget
+/// already clips it to whatever room is left, the same way it clips
+/// any other row's own text that runs long).
 struct SignalVisibleStepRow<'a> {
     row: &'a oscilloscope_core::screens::SignalStepRow,
     orig_index: usize,
     visible_col: usize,
-    clipped: bool,
 }
 
 /// A Signal tile's own two rows under the chart (issue #698): its
@@ -7393,8 +7409,8 @@ fn draw_signal_step_rows(
     // Scrolled off the window's own left edge entirely: a plain
     // point-in-time row (a finished prompt, a decision, a loop's own
     // heading) just isn't there any more; a tool's own bar keeps
-    // showing, clipped to the window's own edge, for as long as it
-    // is still running past it.
+    // showing, its own label readable from the window's own edge
+    // (issue #734), for as long as it is still running past it.
     let mut visible: Vec<SignalVisibleStepRow> = Vec::new();
     for (i, row) in screen.step_rows.iter().enumerate() {
         match &row.kind {
@@ -7402,12 +7418,10 @@ fn draw_signal_step_rows(
                 if *end_col < start_col {
                     continue;
                 }
-                let clipped = row.col < start_col;
                 visible.push(SignalVisibleStepRow {
                     row,
                     orig_index: i,
                     visible_col: row.col.max(start_col),
-                    clipped,
                 });
             }
             _ => {
@@ -7418,7 +7432,6 @@ fn draw_signal_step_rows(
                     row,
                     orig_index: i,
                     visible_col: row.col,
-                    clipped: false,
                 });
             }
         }
@@ -7433,18 +7446,14 @@ fn draw_signal_step_rows(
         if x >= right_edge {
             continue;
         }
-        let spans: Vec<(String, Style)> = if v.clipped {
-            match &v.row.kind {
-                SignalStepKind::Tool { end_col, .. } => {
-                    let style = tape_glyph_style(v.row.row_kind, v.row.status, ctx.theme);
-                    let fill = end_col.saturating_add(1).saturating_sub(start_col);
-                    vec![("\u{2501}".repeat(fill), style)]
-                }
-                _ => Vec::new(),
-            }
-        } else {
-            signal_step_row_spans(v.row, screen, v.orig_index == last_idx, ctx)
-        };
+        // Issue #734: a tool bar already running when the window
+        // scrolled past its own start still draws its own label
+        // (`━ plan · 12m54s ━━━`), starting at the window's own
+        // left edge -- the per-span budget below already clips it
+        // to whatever room is left, the same way it would for any
+        // row whose own full text simply runs long.
+        let spans: Vec<(String, Style)> =
+            signal_step_row_spans(v.row, screen, v.orig_index == last_idx, ctx);
         let mut last_style = None;
         for (text, style) in spans {
             if x >= right_edge {
@@ -17950,6 +17959,66 @@ mod tape_frame_goldens {
         );
     }
 
+    /// The Combined Totals' own `Peak … at` and `Quiet` read in the
+    /// shared elapsed format, never a raw second count past a
+    /// minute (issue #734).
+    #[test]
+    fn combined_signal_totals_peak_and_quiet_read_in_the_elapsed_format() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::combined::CombinedSignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            runs: vec![synthetic_combined_run(0)],
+            now_col: 36_010,
+            now_elapsed_s: 3601.0,
+            totals: oscilloscope_core::combined::CombinedTotals {
+                peak_tokens: 4_912,
+                peak_time_s: 3_723.0,
+                quiet_s: Some(3_723.0),
+                ..Default::default()
+            },
+            readings: Default::default(),
+        };
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_combined_signal(
+                    f,
+                    f.area(),
+                    &screen,
+                    0,
+                    None,
+                    "2026-01-01T01:00:01Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let text: String = (0..48)
+            .map(|y| -> String { buffer_row_cells(buf, y, 0..180).iter().map(|c| c.ch).collect() })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            text.contains("at 1h02m03s"),
+            "expected Peak's time in the elapsed format: {text:?}"
+        );
+        assert!(
+            text.contains("Quiet 1h02m03s"),
+            "expected Quiet in the elapsed format: {text:?}"
+        );
+        assert!(
+            !text.contains("3723.0s") && !text.contains("3723s"),
+            "a time must never read as a bare second count: {text:?}"
+        );
+    }
+
     /// `Runs` reads "1 engine", not "1 engines".
     #[test]
     fn combined_signal_readings_singular_engine() {
@@ -18053,6 +18122,55 @@ mod tape_frame_goldens {
             seconds_row.as_bytes().get(now_end).copied(),
             Some(b' '),
             "expected a blank column right after the Now label: {seconds_row:?}"
+        );
+    }
+
+    /// A long-run second mark on the Combined Signal reads in the
+    /// shared elapsed format, never a raw second count (issue #734).
+    #[test]
+    fn combined_signal_second_mark_reads_in_the_elapsed_format_not_raw_seconds() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::combined::CombinedSignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            runs: vec![synthetic_combined_run(0)],
+            now_col: 36_010, // 3,601s at the fixed 100ms/column
+            now_elapsed_s: 3601.0,
+            totals: Default::default(),
+            readings: Default::default(),
+        };
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_combined_signal(
+                    f,
+                    f.area(),
+                    &screen,
+                    0,
+                    None,
+                    "2026-01-01T01:00:01Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let seconds_row: String = (0..180)
+            .map(|x| buf[(x, 21)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            seconds_row.contains("1h00m"),
+            "expected an elapsed-format mark: {seconds_row:?}"
+        );
+        assert!(
+            !seconds_row.contains("3601s"),
+            "a mark must never read as a bare second count: {seconds_row:?}"
         );
     }
 
@@ -20351,9 +20469,10 @@ mod tape_frame_goldens {
         assert_eq!(row, " 5.1k");
     }
 
-    /// At a coarse zoom (1 s per column here), second marks keep at
-    /// least six columns between labels rather than printing one
-    /// every column and overlapping -- `0s` and `6s`, not `0s6s`.
+    /// At a coarse zoom (1 s per column here), second marks keep
+    /// wide enough apart that the farthest one this row ever shows
+    /// never overlaps its neighbour (issue #734) -- `0s` and `10s`,
+    /// not `0s10s`.
     #[test]
     fn seconds_marks_stay_spaced_out_at_a_coarse_zoom() {
         let screen = oscilloscope_core::screens::SignalScreen {
@@ -20370,11 +20489,73 @@ mod tape_frame_goldens {
             .collect();
         assert_eq!(row[0], "0", "{row:?}");
         assert_eq!(row[1], "s", "{row:?}");
-        assert_eq!(row[6], "6", "{row:?}");
-        assert_eq!(row[7], "s", "{row:?}");
+        assert_eq!(row[10], "1", "{row:?}");
+        assert_eq!(row[11], "0", "{row:?}");
+        assert_eq!(row[12], "s", "{row:?}");
         assert!(
-            row[2..6].iter().all(|c| c == " "),
+            row[2..10].iter().all(|c| c == " "),
             "no overlap between labels: {row:?}"
+        );
+    }
+
+    /// A long-run second mark reads in the shared elapsed format,
+    /// never a raw second count (issue #734: `3600s` must read
+    /// `1h00m00s`).
+    #[test]
+    fn a_long_run_second_mark_reads_in_the_elapsed_format_not_raw_seconds() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            now_col: Some(36_010), // 3,601s at the default 100ms/column
+            cursor_col: Some(36_010),
+            now_ts: Some("2026-01-01T01:00:01Z".to_string()),
+            now_elapsed_s: Some(3601.0),
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 187, 16, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+        let row: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        assert!(
+            row.contains("1h00m"),
+            "expected an elapsed-format mark: {row:?}"
+        );
+        assert!(
+            !row.contains("3601s"),
+            "a mark must never read as a bare second count: {row:?}"
+        );
+    }
+
+    /// A mark never glues straight into the Now label with no gap
+    /// (issue #734: the single-run Signal and its tiles now keep the
+    /// same one-column gap the Combined Signal's own seconds row
+    /// already does).
+    #[test]
+    fn a_mark_never_glues_to_the_now_label() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            // 3.3s: a mark at 3s (`abs_col` 30, ending at column 32)
+            // would otherwise touch a Now label starting right at 32.
+            now_col: Some(33),
+            cursor_col: Some(33),
+            now_ts: Some("2026-01-01T00:00:03.3Z".to_string()),
+            now_elapsed_s: Some(3.3),
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 120, 16, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+        let row: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        let now_at = row
+            .find("Now")
+            .unwrap_or_else(|| panic!("expected a Now label: {row:?}"));
+        assert_eq!(
+            row.as_bytes().get(now_at - 1).copied(),
+            Some(b' '),
+            "expected a blank column right before the Now label: {row:?}"
         );
     }
 
