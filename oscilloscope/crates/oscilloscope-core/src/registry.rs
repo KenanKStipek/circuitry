@@ -62,7 +62,7 @@ pub trait Liveness {
     fn is_alive(&self, pid: u32) -> bool;
 }
 
-/// [`Liveness`] backed by a real `ps -o args= -p <pid>` call: alive
+/// [`Liveness`] backed by a real `ps -ww -o args= -p <pid>` call: alive
 /// means the pid exists *and* its command line still names `cof` or
 /// `electricity` -- a bare `kill(pid, 0)` can be fooled by a recycled
 /// pid, but `ps` always reports whatever process actually holds that
@@ -73,11 +73,19 @@ pub struct RealLiveness;
 
 impl Liveness for RealLiveness {
     fn is_alive(&self, pid: u32) -> bool {
-        let result = std::process::Command::new("ps")
-            .args(["-o", "args=", "-p", &pid.to_string()])
-            .output();
-        is_alive_from_ps_result(result)
+        is_alive_from_ps_result(liveness_ps_command(pid).output())
     }
+}
+
+/// The liveness check's own `ps` call. `-ww` keeps the whole command
+/// line: without it, Linux's `ps` cuts the `args` column at
+/// `$COLUMNS` when stdout isn't a terminal, which can drop the
+/// `cof`/`electricity` word from a long interpreter path and make a
+/// live run read as gone.
+pub fn liveness_ps_command(pid: u32) -> std::process::Command {
+    let mut command = std::process::Command::new("ps");
+    command.args(["-ww", "-o", "args=", "-p", &pid.to_string()]);
+    command
 }
 
 /// [`RealLiveness::is_alive`]'s own decision, pulled out so a test
@@ -292,6 +300,33 @@ pub fn resolve_attached_config<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `-ww`: Linux's `ps` otherwise cuts command lines at `$COLUMNS`
+    /// when piped, which can drop the engine's name from a long path.
+    #[test]
+    fn the_liveness_ps_call_asks_for_whole_command_lines() {
+        let command = liveness_ps_command(4242);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["-ww", "-o", "args=", "-p", "4242"]);
+    }
+
+    /// The real `ps`, with `COLUMNS` set narrower than this test's own
+    /// command line, still reports the whole of it.
+    #[test]
+    fn the_liveness_ps_call_ignores_a_narrow_columns() {
+        let mut command = liveness_ps_command(std::process::id());
+        command.env("COLUMNS", "20");
+        let output = command.output().expect("ps runs");
+        let line = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let own = std::env::args().collect::<Vec<_>>().join(" ");
+        assert!(
+            line.len() > 20 && line.starts_with(own.split_whitespace().next().unwrap_or("")),
+            "expected the whole command line, got {line:?}"
+        );
+    }
 
     struct FixedLiveness(std::collections::HashSet<u32>);
     impl Liveness for FixedLiveness {
