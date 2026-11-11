@@ -3660,7 +3660,7 @@ pub fn build_signal(
                     .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
                 let reply_words = crate::render::display_value(&node.value);
                 let reply_words = (!reply_words.is_empty()).then(|| first_words(&reply_words, 24));
-                let mut parts = vec![format!("{}", crate::format::format_tokens(total))];
+                let mut parts = vec![crate::format::format_tokens(total)];
                 if let Some(dev) = dev {
                     parts.push(format!("{dev:+.0}%"));
                 }

@@ -7183,9 +7183,7 @@ mod tests {
         assert!(final_state.is_some());
         assert!(!differ.has_pending_ends());
         assert!(
-            lines
-                .iter()
-                .any(|l| l.text == "✓ prime.ask  0.1s  ↑3 t ↓5 t"),
+            lines.iter().any(|l| l.text == "✓ prime.ask  0.1s  ↑3 ↓5"),
             "held line must resolve with its real tokens, not ok or nothing: {lines:?}"
         );
     }

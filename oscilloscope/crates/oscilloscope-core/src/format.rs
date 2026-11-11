@@ -122,26 +122,6 @@ pub fn format_tokens_arrow(n: u64) -> String {
     format!("{value}{letter}")
 }
 
-fn thousands_grouped(n: u64) -> String {
-    let digits = n.to_string();
-    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().enumerate() {
-        if i > 0 && (digits.len() - i) % 3 == 0 {
-            out.push(',');
-        }
-        out.push(ch);
-    }
-    out
-}
-
-/// Thousands-separated, with a trailing ` t` (`215 t`, `1,902 t`) --
-/// kept only for the single-run Signal screen's own fixed axis label,
-/// which issue #715 leaves unchanged. Every other display path scales
-/// through [`format_tokens`] instead.
-pub fn format_tokens_t(n: u64) -> String {
-    format!("{} t", thousands_grouped(n))
-}
-
 /// `41k`, `200k`, `900` -- the agent block's own compact context
 /// figure (issue #703: `ctx 41k`, `/200k`), rounded to the nearest
 /// thousand once `n` reaches one; below that, the plain number with

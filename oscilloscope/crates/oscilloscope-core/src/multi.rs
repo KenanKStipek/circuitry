@@ -328,11 +328,10 @@ pub fn shared_signal_axis_starting_top(no_history_start: u64) -> u64 {
     round_top_series_min(0, no_history_start)
 }
 
-/// The shared Signal scale's own axis label (issue #698): one
-/// decimal place in `k` from 1,000 up (`5.0k`,
-/// `8.0k`), the plain token figure below it (`400 t`) -- a single
-/// run's own smaller, never-shared axis keeps its existing plain
-/// thousands-separated figure (`format::format_tokens_t`) instead.
+/// The Signal axis label (issue #698, shared by a single run's own
+/// axis and the shared/Combined Signal scale alike, issue #715): one
+/// decimal place in `k` from 1,000 up (`5.0k`, `8.0k`), the plain
+/// token figure below it (`400 t`).
 pub fn format_shared_axis_label(n: u64) -> String {
     if n >= 1_000 {
         format!("{:.1}k", n as f64 / 1_000.0)
