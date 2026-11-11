@@ -70,7 +70,9 @@ impl Drop for AutoKill {
 /// `1` switches every tile to Signal; `→` moves the focus from the
 /// first tile to the second; `enter` opens whichever run is
 /// focused, proving the move really landed there, not just that the
-/// key was accepted; `esc` returns to the grid; a second `esc`
+/// key was accepted; `esc` returns to the grid, with the focus still
+/// on the second tile (another `enter` there opens the same run
+/// again, not the grid's own default focus); a further `esc`
 /// returns to Select, with every run still listed; `q` from Select
 /// quits at once, with no confirm.
 #[test]
@@ -181,6 +183,26 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
          {second_doc}, not {first_doc} again:\n{screen}"
     );
 
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "osi  All", Duration::from_secs(20));
+    assert!(
+        screen.contains("ALL"),
+        "expected esc from the opened run to return to the grid:\n{screen}"
+    );
+
+    // The focus itself survived that round trip: `enter` here, with
+    // no further navigation, opens the same tile `\x1b[C` moved to
+    // above (`second_doc`) again -- not the grid's own default
+    // focus (index 0), which pressing `\x1b[C` then `enter` would
+    // also reach from a freshly reset focus, so this is the one
+    // check that actually tells the two apart.
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
+    assert!(
+        screen.contains(second_doc) && !screen.contains(first_doc) && !screen.contains("osi  All"),
+        "expected the grid's own focus to still be on {second_doc} after the esc round trip, \
+         not reset to the default focus:\n{screen}"
+    );
     send_bytes(&mut master, b"\x1b");
     let screen = wait_for_screen_text(&captured_buf, "osi  All", Duration::from_secs(20));
     assert!(
