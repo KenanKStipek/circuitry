@@ -4982,6 +4982,34 @@ mod all_run_slot_tests {
         // on a real change, never mutates it in place.
         assert_eq!(plan_ptr_before, std::ptr::addr_of!(slot.plan));
     }
+
+    #[test]
+    fn disambiguate_tile_document_labels_adds_the_parent_directory_only_on_a_real_collision() {
+        let run = |orchestration: &str| oscilloscope_core::discovery::DiscoveredRun {
+            run_id: None,
+            orchestration: Some(orchestration.to_string()),
+            config: None,
+            engine: None,
+            pid: None,
+            launcher: None,
+            run_dir: None,
+            events: None,
+            live_state: None,
+            started_at: None,
+        };
+        let mut slots = vec![
+            AllRunSlot::new(run("/a/triage.yml")),
+            AllRunSlot::new(run("/b/triage.yml")),
+            AllRunSlot::new(run("/c/digest.yml")),
+        ];
+        disambiguate_tile_document_labels(&mut slots);
+        assert_eq!(slots[0].document_label, "a/triage.yml");
+        assert_eq!(slots[1].document_label, "b/triage.yml");
+        assert_eq!(
+            slots[2].document_label, "digest.yml",
+            "the one without a collision stays a plain basename"
+        );
+    }
 }
 
 impl AllRunSlot {
@@ -5180,6 +5208,23 @@ enum AllAction {
     Open(Box<oscilloscope_core::discovery::DiscoveredRun>),
 }
 
+/// Tells two tiles with the same document and config basenames
+/// apart the same way Select's own running list does (issue #698:
+/// "basenames everywhere", the parent directory added only when two
+/// rows would read identically) -- two slots that happen to watch
+/// the same document from different directories would otherwise
+/// draw identical tile bands, with nothing on screen to tell them
+/// apart at all.
+fn disambiguate_tile_document_labels(slots: &mut [AllRunSlot]) {
+    let runs: Vec<oscilloscope_core::discovery::DiscoveredRun> =
+        slots.iter().map(|s| s.run.clone()).collect();
+    let config_labels: Vec<Option<String>> = slots.iter().map(|s| s.config_label.clone()).collect();
+    let labels = oscilloscope_core::select::disambiguated_document_labels(&runs, &config_labels);
+    for (slot, label) in slots.iter_mut().zip(labels) {
+        slot.document_label = label;
+    }
+}
+
 /// One leg of the All screen's own grid (issue #698): its own fresh
 /// `Terminal` on `run_select`'s already-active `TerminalGuard`,
 /// exactly like [`run_select_screen`]'s own -- re-entered every time
@@ -5211,6 +5256,7 @@ fn run_all_grid_screen(
 
     let mut runs = discover_running();
     let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    disambiguate_tile_document_labels(&mut slots);
     let mut last_refresh = Instant::now();
     let mut signals = SignalWatcher::new().ok();
     let mut needs_draw = true;
@@ -5241,6 +5287,7 @@ fn run_all_grid_screen(
                 }
             }
             slots = new_slots;
+            disambiguate_tile_document_labels(&mut slots);
             last_refresh = Instant::now();
             needs_draw = true;
         }
