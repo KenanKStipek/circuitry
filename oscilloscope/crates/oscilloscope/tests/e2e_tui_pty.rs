@@ -271,6 +271,91 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #710: while a run is live, the Tape's own Now band sits at
+/// the list's own vertical centre -- `(L - h) / 2` rows down from the
+/// list's own first content row, `L` the list's own height (33, at
+/// this pty's own 120x40: the Tape's inner area is 35 rows, less 2
+/// for the rule and Totals row) and `h` the Now area's own (2 here:
+/// the band line plus the one plain tool step actually running, no
+/// preview or slots rule) -- rounding down on an uneven split, which
+/// this one isn't. The window pads blank above instead of drifting
+/// with the run's own progress: none of this three-step chain's own
+/// past ever reaches the 15 rows 120x40 needs above the band, so the
+/// band sits at the same row (absolute row 17: row 0 the header, row
+/// 1 the pane's own top border, then 15 more) whichever of the three
+/// steps happens to be the one running when this reads the screen.
+/// Every wait here (the alternate screen opening, the first step
+/// starting, the TUI drawing alpha's own row as running, `Ended`,
+/// the exit wait) is its own named step with its own cap, summing
+/// to 95s; the run itself finishes in about 3s.
+#[test]
+fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    const ALTERNATE_SCREEN_WAIT: Duration = Duration::from_secs(20);
+    const FIRST_STEP_WAIT: Duration = Duration::from_secs(20);
+    const RUNNING_ROW_WAIT: Duration = Duration::from_secs(5);
+    const ENDED_WAIT: Duration = Duration::from_secs(20);
+    const EXIT_WAIT: Duration = Duration::from_secs(30);
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", ALTERNATE_SCREEN_WAIT);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.alpha",
+        FIRST_STEP_WAIT,
+    );
+    // The engine's own start event can land before the TUI has drawn
+    // the matching frame -- wait for alpha's own running row, not a
+    // fixed delay, so a slow draw under load doesn't read the screen
+    // one frame too early.
+    wait_for_screen_text(&captured_buf, "\u{25cf} alpha", RUNNING_ROW_WAIT);
+
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60);
+    let now_row = screen
+        .iter()
+        .position(|line| line.contains("\u{2501}\u{2501} Now"))
+        .unwrap_or_else(|| panic!("expected a Now band on screen; got:\n{}", screen.join("\n")));
+    assert_eq!(
+        now_row,
+        2 + 15,
+        "expected the Now band centred at row 17; screen:\n{}",
+        screen.join("\n")
+    );
+
+    wait_for_pattern(&captured_buf, b"Ended", ENDED_WAIT);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, EXIT_WAIT);
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
 /// A run this `osi` launched has a registry entry while it's live --
 /// named by its own document and run directory in bare `osi`'s own
 /// non-TTY list too -- and that entry is gone once the run ends.

@@ -14,7 +14,6 @@
 #! focus r2
 {accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                              {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
 {border.focus}╭─ {/}{fg.title bold}Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t {/}{border.focus}─────────────────────────────╮{/}
-{border.focus}│{/}{fg.faint}12:50:47 {/}{status.success}✓ {/}{fg.default}kind               {/}{fg.muted}↑212 ↓3 · Bug.                  {/}{accent.primary}▰▰▰▰{/}{fg.faint}▱▱▱▱   {/}{fg.default}215 t{/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint}12:50:50 {/}{status.success}✓ {/}{fg.default}tests              {/}{fg.muted}3.0s · sleep 3                                  {/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint}12:50:50 {/}{accent.secondary bold}◆ {/}{fg.default}gate → then        {/}{fg.muted}kind != ""                                      {/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint on:selection.bg}12:50:50 {/}{status.success on:selection.bg}✓ {/}{selection.fg bold on:selection.bg}gate › reply       {/}{fg.muted on:selection.bg}↑348 ↓41 · Thanks for the repo⋯ {/}{accent.primary on:selection.bg}▰▰▰▰▰▰▰▰   {/}{fg.default bold on:selection.bg}389 t{/}{border.focus}│{/}
@@ -30,6 +29,7 @@
 {border.focus}│         {/}{fg.faint}· flaky              tool · ls /nonexistent-osi-dem⋯                 {/}{border.focus}│{/}
 {border.focus}│         {/}{fg.faint}· summary            prompt                          usually 402 t   {/}{border.focus}│{/}
 {border.focus}│         {/}{fg.muted}■ {/}{fg.faint}Run End            usually 1,324 t · ETA 12:50:52                  {/}{border.focus}│{/}
+{border.focus}│                                                                              │{/}
 {border.focus}│                                                                              │{/}
 {border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}
 {border.focus}│ {/}{fg.title bold}Totals {/}{fg.default}↑796 ↓69 · {/}{fg.default bold}865 t  +12% {/}{fg.muted}Usual  {/}{fg.default}6/14 {/}{fg.muted}Effects  ETA {/}{fg.default}12:50:52  {/}{fg.muted}Cost {/}{fg.faint}—      {/}{border.focus}│{/}
