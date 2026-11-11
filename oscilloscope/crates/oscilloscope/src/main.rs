@@ -4612,7 +4612,14 @@ fn run_select_screen(
                 } else {
                     tui::SelectBody::Running(&rows)
                 };
-                tui::draw_select(f, &body, select_state.cursor, &now_str, &ctx);
+                tui::draw_select(
+                    f,
+                    &body,
+                    select_state.cursor,
+                    &now_str,
+                    process_scan_enabled(),
+                    &ctx,
+                );
                 if select_state.help_open {
                     tui::draw_select_help(f, &ctx);
                 }
@@ -4915,6 +4922,66 @@ mod all_run_slot_tests {
         let runs = [Some(a), Some(a)];
         assert_eq!(match_existing_slots(&existing, &runs), [Some(0), None]);
     }
+
+    #[test]
+    fn update_run_recompiles_the_plan_once_the_orchestration_is_first_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(&doc, "effects: []\n").unwrap();
+        // The live-state-in-cwd source: a run first found with
+        // neither an orchestration nor a config path known yet.
+        let found_bare = oscilloscope_core::discovery::DiscoveredRun {
+            run_id: None,
+            orchestration: None,
+            config: None,
+            engine: None,
+            pid: None,
+            launcher: None,
+            run_dir: Some(dir.path().to_path_buf()),
+            events: None,
+            live_state: None,
+            started_at: None,
+        };
+        let mut slot = AllRunSlot::new(found_bare);
+        assert_eq!(slot.document_label, "—");
+        assert!(!slot.plan.has_plan(), "an empty plan has nothing yet");
+        let now_named = oscilloscope_core::discovery::DiscoveredRun {
+            orchestration: Some(doc.to_str().unwrap().to_string()),
+            ..slot.run.clone()
+        };
+        slot.update_run(now_named);
+        assert_eq!(slot.document_label, "do.yml");
+        assert!(
+            slot.plan.has_plan(),
+            "the plan should compile once the document is known"
+        );
+    }
+
+    #[test]
+    fn update_run_never_recompiles_the_plan_when_nothing_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(&doc, "effects: []\n").unwrap();
+        let run = oscilloscope_core::discovery::DiscoveredRun {
+            run_id: None,
+            orchestration: Some(doc.to_str().unwrap().to_string()),
+            config: None,
+            engine: None,
+            pid: None,
+            launcher: None,
+            run_dir: Some(dir.path().to_path_buf()),
+            events: None,
+            live_state: None,
+            started_at: None,
+        };
+        let mut slot = AllRunSlot::new(run.clone());
+        let plan_ptr_before = std::ptr::addr_of!(slot.plan);
+        slot.update_run(run);
+        // Same `plan` field, never rebuilt: comparing the address is
+        // enough since `update_run` only ever reassigns it wholesale
+        // on a real change, never mutates it in place.
+        assert_eq!(plan_ptr_before, std::ptr::addr_of!(slot.plan));
+    }
 }
 
 impl AllRunSlot {
@@ -4928,6 +4995,30 @@ impl AllRunSlot {
             .live_state
             .clone()
             .unwrap_or_else(|| run_dir.join("state.live.json"));
+        let (document_label, config_label, plan) = Self::resolve_document_config_plan(&run);
+        AllRunSlot {
+            run,
+            document_label,
+            config_label,
+            plan,
+            model: RunModel::new(),
+            live_poller: LiveStatePoller::new(&live_state_path),
+            events_tailer: EventsTailer::new(events_path),
+            differ: Differ::new(),
+            last_state: None,
+        }
+    }
+
+    /// This run's own document label, config label and compiled
+    /// plan, straight off its own orchestration/config paths --
+    /// shared by [`Self::new`] and [`Self::update_run`], so a slot
+    /// matched to a refreshed run that only now knows its own
+    /// document (the live-state-in-cwd source, before its own
+    /// events have named one) recompiles the same way a fresh slot
+    /// would, rather than keeping `—` and an empty plan forever.
+    fn resolve_document_config_plan(
+        run: &oscilloscope_core::discovery::DiscoveredRun,
+    ) -> (String, Option<String>, PlanTree) {
         let document_label = run
             .orchestration
             .as_deref()
@@ -4946,17 +5037,26 @@ impl AllRunSlot {
                     .map(|program| PlanTree::from_program(&program))
             })
             .unwrap_or_else(PlanTree::empty);
-        AllRunSlot {
-            run,
-            document_label,
-            config_label,
-            plan,
-            model: RunModel::new(),
-            live_poller: LiveStatePoller::new(&live_state_path),
-            events_tailer: EventsTailer::new(events_path),
-            differ: Differ::new(),
-            last_state: None,
+        (document_label, config_label, plan)
+    }
+
+    /// Matches a refreshed [`DiscoveredRun`] to this already-live
+    /// slot (`main.rs`'s own refresh loop, every [`SELECT_REFRESH_
+    /// INTERVAL`]): the document label, config label and plan are
+    /// only ever recomputed when the orchestration or config path
+    /// has actually changed since the last refresh -- most commonly
+    /// never, but always true the first time a run first found with
+    /// neither (the live-state-in-cwd source) finally has one, which
+    /// a plain `self.run = run` would otherwise leave stuck at `—`
+    /// with no rows ahead for the rest of the run.
+    fn update_run(&mut self, run: oscilloscope_core::discovery::DiscoveredRun) {
+        if run.orchestration != self.run.orchestration || run.config != self.run.config {
+            let (document_label, config_label, plan) = Self::resolve_document_config_plan(&run);
+            self.document_label = document_label;
+            self.config_label = config_label;
+            self.plan = plan;
         }
+        self.run = run;
     }
 
     fn tick(&mut self) {
@@ -5134,7 +5234,7 @@ fn run_all_grid_screen(
             for (run, matched) in runs.iter().zip(matches) {
                 match matched.and_then(|i| existing[i].take()) {
                     Some(mut slot) => {
-                        slot.run = run.clone();
+                        slot.update_run(run.clone());
                         new_slots.push(slot);
                     }
                     None => new_slots.push(AllRunSlot::new(run.clone())),

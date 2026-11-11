@@ -3400,7 +3400,14 @@ pub enum SelectBody<'a> {
 /// already this screen's own narrowest, with nothing narrower ever
 /// shown. `cursor` indexes whichever list `body` holds; out of range
 /// (an empty list) draws no selected row at all.
-pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &str, ctx: &DrawCtx) {
+pub fn draw_select(
+    frame: &mut Frame,
+    body: &SelectBody,
+    cursor: usize,
+    now: &str,
+    scan_enabled: bool,
+    ctx: &DrawCtx,
+) {
     let area = frame.area();
     if let Some(bg) = ctx.theme.background {
         frame.render_widget(
@@ -3436,7 +3443,9 @@ pub fn draw_select(frame: &mut Frame, body: &SelectBody, cursor: usize, now: &st
     };
     match body {
         SelectBody::Running(rows) => draw_select_list(frame, body_area, rows, cursor, ctx),
-        SelectBody::Empty(recent) => draw_select_empty_panel(frame, body_area, recent, cursor, ctx),
+        SelectBody::Empty(recent) => {
+            draw_select_empty_panel(frame, body_area, recent, cursor, scan_enabled, ctx)
+        }
     }
     let status_area = Rect {
         x: area.x,
@@ -3763,13 +3772,17 @@ fn draw_select_status_line(frame: &mut Frame, area: Rect, body: &SelectBody, ctx
 }
 
 /// The empty Select screen's own panel (§2.5): a full-width box
-/// naming where discovery looked, the Recent Runs table, and the
+/// naming where discovery looked (just `registry` with
+/// `scan_enabled` false -- `OSI_PROCESS_SCAN=0` turns off both the
+/// process scan and the current-directory source together), the
+/// Recent Runs table, and the
 /// three ways to start a run.
 fn draw_select_empty_panel(
     frame: &mut Frame,
     area: Rect,
     rows: &[oscilloscope_core::select::RecentRow],
     cursor: usize,
+    scan_enabled: bool,
     ctx: &DrawCtx,
 ) {
     let border = ctx.theme.border_focused;
@@ -3801,7 +3814,14 @@ fn draw_select_empty_panel(
         },
         vec![
             Span::styled(" Looked ", muted_style),
-            Span::styled("registry · process scan · live state in cwd", text_style),
+            Span::styled(
+                if scan_enabled {
+                    "registry · process scan · live state in cwd"
+                } else {
+                    "registry"
+                },
+                text_style,
+            ),
         ],
     );
     y += 1;
@@ -15923,6 +15943,7 @@ mod tape_frame_goldens {
                     &SelectBody::Running(&rows),
                     1,
                     "2026-11-08T23:51:58.588Z",
+                    true,
                     &ctx,
                 )
             })
@@ -15957,6 +15978,7 @@ mod tape_frame_goldens {
                     &SelectBody::Running(&rows),
                     1,
                     "2026-11-08T23:51:58.588Z",
+                    true,
                     &ctx,
                 )
             })
@@ -16020,6 +16042,7 @@ mod tape_frame_goldens {
                     &SelectBody::Empty(&rows),
                     0,
                     "2026-11-08T22:14:14.355262+00:00",
+                    true,
                     &ctx,
                 )
             })
@@ -16042,6 +16065,39 @@ mod tape_frame_goldens {
         );
     }
 
+    /// `OSI_PROCESS_SCAN=0` turns off both the process scan and the
+    /// current-directory source together -- the empty Select's own
+    /// "Looked" line names only what it actually still looked at.
+    #[test]
+    fn select_empty_looked_line_names_only_the_registry_with_scan_off() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Empty(&[]),
+                    0,
+                    "2026-01-01T00:00:00Z",
+                    false,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let screen = terminal.backend().to_string();
+        assert!(screen.contains("Looked"), "{screen}");
+        assert!(!screen.contains("process scan"), "{screen}");
+        assert!(!screen.contains("live state in cwd"), "{screen}");
+    }
+
     /// Issue #698's own §5: Select's narrowest frame is 80x24, so it
     /// needs that many columns, not every other screen's shared 60
     /// ([`SELECT_MIN_WIDTH`], not [`MIN_WIDTH`]).
@@ -16059,7 +16115,16 @@ mod tape_frame_goldens {
             let backend = TestBackend::new(cols, 24);
             let mut terminal = Terminal::new(backend).unwrap();
             terminal
-                .draw(|f| draw_select(f, &SelectBody::Empty(&[]), 0, "2026-01-01T00:00:00Z", &ctx))
+                .draw(|f| {
+                    draw_select(
+                        f,
+                        &SelectBody::Empty(&[]),
+                        0,
+                        "2026-01-01T00:00:00Z",
+                        true,
+                        &ctx,
+                    )
+                })
                 .unwrap();
             terminal.backend().to_string()
         };
