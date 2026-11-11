@@ -186,6 +186,21 @@ fn draw_tape_header_band(
             Style::default().fg(ctx.theme.text).bg(bg),
         ),
         Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+    ];
+    // Issue #717: a run's own short name, once its `run_id` is known
+    // -- never a suffix here, since this header is always exactly
+    // one run and has nothing on screen to collide with.
+    if let Some(run_id) = &header.run_id {
+        left.push(Span::styled(
+            format!("{} ", oscilloscope_core::names::run_name(run_id)),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ));
+        left.push(Span::styled(
+            "· ",
+            Style::default().fg(ctx.theme.dim).bg(bg),
+        ));
+    }
+    left.extend([
         Span::styled(
             format!("{glyph} {status_word} "),
             Style::default()
@@ -197,7 +212,7 @@ fn draw_tape_header_band(
             oscilloscope_core::format::format_duration(header.elapsed_s),
             Style::default().fg(ctx.theme.text).bg(bg),
         ),
-    ];
+    ]);
     // `t`'s own banner (issue #535), now `T`'s: shown for about 2
     // seconds after a theme switch, reserved out of `pad` the same
     // way the old one-line header did so it never overflows the
@@ -3886,10 +3901,14 @@ fn draw_select_list(
     ctx: &DrawCtx,
 ) {
     let run_count = rows.len().saturating_sub(1);
+    // Issue #717's own name column widens the box by exactly its own
+    // width, keeping `config_width`'s own formula (and so every
+    // config basename this box already fit) unchanged below.
+    let name_col = SELECT_NAME_COL_WIDTH as u16;
     let box_width: u16 = if area.width >= 100 {
-        60
+        60 + name_col
     } else {
-        56.min(area.width.saturating_sub(4))
+        (56 + name_col).min(area.width.saturating_sub(4))
     };
     let box_height = rows.len() as u16 + 2;
     let box_x = area.x + area.width.saturating_sub(box_width) / 2;
@@ -3925,7 +3944,7 @@ fn draw_select_list(
         .saturating_sub(max_visible.saturating_sub(1))
         .min(max_start);
 
-    let config_width = (inner.width as usize).saturating_sub(32);
+    let config_width = (inner.width as usize).saturating_sub(32 + SELECT_NAME_COL_WIDTH);
     for (i, row) in rows.iter().enumerate().skip(start).take(max_visible) {
         let line_rect = Rect {
             x: inner.x,
@@ -3938,10 +3957,18 @@ fn draw_select_list(
     }
 }
 
+/// This run's own short name's own column width (issue #717), wide
+/// enough for the longest possible name with its collision suffix
+/// (`mindful-sparrow·0299`, 15 + 1 + 4 = 20) with no truncation --
+/// shared with [`draw_select_list`]'s own `config_width` formula, so
+/// the two can never drift apart.
+const SELECT_NAME_COL_WIDTH: usize = 20;
+
 /// One [`draw_select_list`] row's own spans -- shared between `All`
 /// and a run row, and between a selected and a plain one, so the
-/// field widths (doc 15, config `config_width`, engine 11) can never
-/// drift apart between the two stylings.
+/// field widths (doc 15, name [`SELECT_NAME_COL_WIDTH`], config
+/// `config_width`, engine 11) can never drift apart between the two
+/// stylings.
 fn select_row_spans(
     row: &oscilloscope_core::select::Row,
     selected: bool,
@@ -3952,6 +3979,10 @@ fn select_row_spans(
     let doc_text = match row {
         SelectRow::All { .. } => "All".to_string(),
         SelectRow::Run { document_label, .. } => document_label.clone(),
+    };
+    let name_text = match row {
+        SelectRow::All { .. } => String::new(),
+        SelectRow::Run { name, .. } => name.clone().unwrap_or_default(),
     };
     let tail = match row {
         SelectRow::All { running } => {
@@ -3975,7 +4006,10 @@ fn select_row_spans(
             cw = config_width
         ),
     };
-    let rest = format!("{doc_text:<15}{tail}");
+    let rest = format!(
+        "{doc_text:<15}{name_text:<nw$}{tail}",
+        nw = SELECT_NAME_COL_WIDTH
+    );
     if selected {
         let sel_bg = ctx.theme.selection_bg;
         vec![
@@ -4139,7 +4173,7 @@ fn draw_select_empty_panel(
             height: 1,
         },
         vec![Span::styled(
-            "      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME",
+            "      DOC      NAME          CONFIG         STARTED   TOOK  TOKENS OUTCOME",
             header_style,
         )],
     );
@@ -4216,10 +4250,14 @@ fn render_line(frame: &mut Frame, rect: Rect, spans: Vec<Span<'static>>) {
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
-/// One Recent Runs row's own spans (issue #698): DOC(9) CONFIG(15)
-/// STARTED(10) then TOOK+TOKENS combined (13, `{:<5}{:>7} `) and
-/// OUTCOME -- field widths measured from `design/frames/select--
-/// empty--80x24`.
+/// One Recent Runs row's own spans (issue #698): DOC(9) NAME(14,
+/// issue #717) CONFIG(15) STARTED(10) then TOOK+TOKENS combined
+/// (13, `{:<5}{:>7} `) and OUTCOME -- field widths measured from
+/// `design/frames/select--empty--80x24`. At this width there is no
+/// slack left for NAME without something giving way, so the far
+/// right of OUTCOME is what gives: a terminal narrower than the
+/// row's own full content simply clips it, the same as every other
+/// field here already would.
 fn recent_row_spans(
     row: &oscilloscope_core::select::RecentRow,
     selected: bool,
@@ -4237,6 +4275,7 @@ fn recent_row_spans(
     let started =
         oscilloscope_core::format::format_clock_time(&row.started_at, zone).unwrap_or_default();
     let doc_field = format!("{:<9}", row.document_label);
+    let name_field = format!("{:<14}", row.name);
     let config_field = format!("{config_text:<15}");
     let started_field = format!("{started:<10}");
     let tokens_text = oscilloscope_core::format::format_tokens(row.tokens);
@@ -4274,7 +4313,7 @@ fn recent_row_spans(
             ),
             Span::styled(
                 format!(
-                    "{doc_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"
+                    "{doc_field}{name_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"
                 ),
                 Style::default().fg(ctx.theme.selection_fg).bg(sel_bg),
             ),
@@ -4295,6 +4334,7 @@ fn recent_row_spans(
             Span::styled("    ".to_string(), Style::default().fg(ctx.theme.text)),
             Span::styled(format!("{glyph} "), glyph_style),
             Span::styled(doc_field, Style::default().fg(ctx.theme.text)),
+            Span::styled(name_field, Style::default().fg(ctx.theme.text)),
             Span::styled(
                 format!("{config_field}{started_field}"),
                 Style::default().fg(ctx.theme.fg_muted),
@@ -4317,6 +4357,10 @@ fn recent_row_spans(
 pub struct AllTile {
     pub document_label: String,
     pub config_label: Option<String>,
+    /// This run's own short name (issue #717), already
+    /// disambiguated against every other tile on this page --
+    /// `None` for a run whose `run_start` hasn't arrived yet.
+    pub name: Option<String>,
     pub render: oscilloscope_core::multi::TileRender,
     /// This run's own position in launch order, across every page
     /// (never a page-relative slot index) -- a Signal tile's own
@@ -4620,41 +4664,66 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         oscilloscope_core::model::RunStatus::Ok => ('✓', ctx.theme.status_done),
         _ => ('✗', ctx.theme.status_failed),
     };
-    let config_text = tile
-        .config_label
+    let name_text = tile
+        .name
         .as_deref()
-        .map(|c| format!("{c} "))
+        .map(|n| format!("{n} "))
         .unwrap_or_default();
-    let mut left = vec![
-        Span::styled(
-            format!(" {} ", tile.document_label),
-            Style::default()
-                .fg(ctx.theme.text)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
-        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
-        Span::styled(
-            format!("{glyph} "),
-            Style::default()
-                .fg(glyph_color)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            oscilloscope_core::format::format_duration(header.elapsed_s),
-            Style::default().fg(ctx.theme.text).bg(bg),
-        ),
-    ];
     let engine_word = header
         .engine
         .split_whitespace()
         .next()
         .unwrap_or(&header.engine)
         .to_string();
-    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let right_text = format!("{engine_word} ");
+    // Issue #717: the name comes right after the document and is
+    // never dropped; when the band is too narrow for everything,
+    // the config -- already optional -- gives way first.
+    let build = |show_config: bool| -> Vec<Span<'static>> {
+        let config_text = if show_config {
+            tile.config_label
+                .as_deref()
+                .map(|c| format!("{c} "))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        vec![
+            Span::styled(
+                format!(" {} ", tile.document_label),
+                Style::default()
+                    .fg(ctx.theme.text)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                name_text.clone(),
+                Style::default().fg(ctx.theme.text).bg(bg),
+            ),
+            Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
+            Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+            Span::styled(
+                format!("{glyph} "),
+                Style::default()
+                    .fg(glyph_color)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                oscilloscope_core::format::format_duration(header.elapsed_s),
+                Style::default().fg(ctx.theme.text).bg(bg),
+            ),
+        ]
+    };
+    let fits = |spans: &[Span<'static>]| -> bool {
+        let width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        width + right_text.chars().count() <= area.width as usize
+    };
+    let mut left = build(true);
+    if !fits(&left) {
+        left = build(false);
+    }
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let pad = (area.width as usize).saturating_sub(left_width + right_text.chars().count());
     left.push(Span::styled(" ".repeat(pad), base));
     left.push(Span::styled(right_text, base));
@@ -5536,7 +5605,7 @@ fn draw_combined_chart(
     let max_doc_len = screen
         .runs
         .iter()
-        .map(|r| r.document_label.chars().count())
+        .map(|r| combined_legend_label(r).chars().count())
         .max()
         .unwrap_or(0);
     let label_field_width = (max_doc_len + 1).max(5) as u16;
@@ -5826,6 +5895,18 @@ fn draw_combined_seconds_row(
 /// when it would run into the running label), and the running
 /// label fixed at the Now column.
 #[allow(clippy::too_many_arguments)]
+/// The legend's own left label (issue #717): the document, then
+/// the run's own short name once it's known -- shared between
+/// [`draw_combined_chart`]'s own width sizing and
+/// [`draw_combined_legend`]'s own drawing so the two can never
+/// drift apart.
+fn combined_legend_label(run: &oscilloscope_core::combined::CombinedRun) -> String {
+    match &run.name {
+        Some(name) => format!("{} {name}", run.document_label),
+        None => run.document_label.clone(),
+    }
+}
+
 fn draw_combined_legend(
     frame: &mut Frame,
     area: Rect,
@@ -5852,7 +5933,7 @@ fn draw_combined_legend(
         let color = run_colors[oscilloscope_core::multi::run_role_index(run.role)];
         let buf = frame.buffer_mut();
         buf.set_string(area.x, y, "\u{25a0} ", Style::default().fg(color));
-        buf.set_string(area.x + 2, y, &run.document_label, muted);
+        buf.set_string(area.x + 2, y, combined_legend_label(run), muted);
         if let (Some(label), Some(col)) = (&run.finished_label, run.finished_col) {
             if let Some(rel) = col.checked_sub(start_col) {
                 let x = data_x as usize + rel;
@@ -5957,9 +6038,14 @@ fn draw_combined_totals_row(
 /// from the panel's own `inner.x` -- derived from the frame itself,
 /// not from a guessed field width.
 const PER_RUN_NAME_COL: u16 = 5;
-const PER_RUN_CONFIG_COL: u16 = 20;
-const PER_RUN_ENGINE_COL: u16 = 43;
-const PER_RUN_NOW_COL: u16 = 55;
+/// Issue #717: the RUN column now also carries the run's own short
+/// name after the document (`triage.yml amber-falcon`), so CONFIG/
+/// ENGINE/NOW each shift right by the same amount from their own
+/// pre-#717 offsets, leaving the RUN column enough room for both.
+const PER_RUN_NAME_EXTRA: u16 = 16;
+const PER_RUN_CONFIG_COL: u16 = 20 + PER_RUN_NAME_EXTRA;
+const PER_RUN_ENGINE_COL: u16 = 43 + PER_RUN_NAME_EXTRA;
+const PER_RUN_NOW_COL: u16 = 55 + PER_RUN_NAME_EXTRA;
 /// `TOKENS`/`SHARE`/`DONE` are right-aligned instead, each this
 /// many columns in from the panel's own right edge -- derived from
 /// the 136-wide frame (`inner.width` 134 there) so they scale with
@@ -6133,7 +6219,7 @@ fn draw_combined_per_run_table(
         buf.set_string(
             inner.x + PER_RUN_NAME_COL,
             y,
-            &run.document_label,
+            combined_legend_label(run),
             row_style(ctx.theme.text),
         );
         let config_text = run.config_label.as_deref().unwrap_or("\u{2014}");
@@ -10571,15 +10657,17 @@ fn draw_flow_story_pane(
 /// (`fg.faint`), the glyph (the rail's own role colour for `■`/`◆`/
 /// `⟳`/`✗`, plain otherwise), and the rest of the line in
 /// `fg.default`.
-/// The Story pane's own `run started · <run id>` (DESIGN.md §2.3):
-/// a short run id, its own first hyphen-delimited segment, never
-/// the full UUID `--log` itself writes.
+/// The Story pane's own `run started · <name>` (DESIGN.md §2.3,
+/// issue #717): the run's own short name, never the full run id
+/// `--log` itself writes after it (`"run started  amber-falcon
+/// <run-id>"`, [`oscilloscope_core::diff::Differ::diff_event`]'s own
+/// `RunStart` line).
 fn shorten_run_id(text: &str) -> String {
     let Some(after) = text.strip_prefix("run started  ") else {
         return text.to_string();
     };
-    let short = after.split('-').next().unwrap_or(after);
-    format!("run started · {short}")
+    let name = after.split_whitespace().next().unwrap_or(after);
+    format!("run started · {name}")
 }
 
 fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) -> Line<'static> {
@@ -16886,6 +16974,9 @@ mod tape_frame_goldens {
         .unwrap();
         let zone = frame_zone();
         let multi_dir = fixtures_dir().join("multi");
+        let run_ids: Vec<Option<&str>> =
+            manifest.iter().map(|entry| entry["key"].as_str()).collect();
+        let names = oscilloscope_core::names::disambiguated_names(&run_ids);
         manifest
             .iter()
             .enumerate()
@@ -16922,6 +17013,7 @@ mod tape_frame_goldens {
                     run_index,
                     document_label: multi_basename(orchestration),
                     config_label: Some(multi_basename(config)),
+                    name: names[run_index].clone(),
                     render,
                 }
             })
@@ -17734,9 +17826,15 @@ mod tape_frame_goldens {
             !seconds_row.contains("  0s"),
             "expected the long-scrolled window not to still label 0s: {seconds_row:?}"
         );
+        // Issue #717's own name column widens the chart's own left
+        // label field whenever a run's `run_id` is known (every
+        // snap6 fixture run here has one, from its own real
+        // events.jsonl), narrowing the data area by the same amount
+        // and so starting the visible window one second mark later
+        // than before #717.
         assert!(
-            seconds_row.contains("28s"),
-            "expected the window's own first second mark at 28s: {seconds_row:?}"
+            seconds_row.contains("29s"),
+            "expected the window's own first second mark at 29s: {seconds_row:?}"
         );
         assert!(
             seconds_row.contains("43s"),
@@ -17753,6 +17851,7 @@ mod tape_frame_goldens {
             role: i,
             document_label: format!("run{i}.yml"),
             config_label: None,
+            name: None,
             engine_label: "cof".to_string(),
             tokens_sent: 0,
             tokens_received: 0,

@@ -2,7 +2,7 @@
 source: crates/oscilloscope/src/tui.rs
 expression: terminal.backend().to_string()
 ---
-" ⠔⠒⠒⠤⠤⠔⠒⠒  do-thing.yml · ● Running 1.2s                                                               TAPE    11:46:44 "
+" ⠔⠒⠒⠤⠤⠔⠒⠒  do-thing.yml · humid-weasel · ● Running 1.2s                                                TAPE    11:46:44 "
 "╭─ Tape · 0 Done · 1 Running · 0 Ahead · ▰ = 50 t · Previews On ───────────╮╭─ ask · Selected ─────────────────────────╮"
 "│                                                                          ││ Status  ● Running  1.2s                  │"
 "│                                                                          ││ Type    prompt                           │"
