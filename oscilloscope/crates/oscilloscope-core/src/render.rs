@@ -1387,6 +1387,23 @@ pub(crate) fn display_value(v: &Value) -> String {
     }
 }
 
+/// The header's own document name (issue #714): the file name of
+/// `document`, whatever the orchestration path handed to `build`/
+/// `build_folded` looks like -- `osi watch <dir> --plan /path/to/
+/// ticket.yml` once showed the whole absolute path, where every
+/// frame shows the file name alone (`demo.yml`); two runs on the
+/// same file name are already told apart by the parent directory on
+/// Select and All, never here. Falls back to `document` itself only
+/// if it carries no file name of its own (empty, or `.`/`..`/`/`),
+/// never expected for a real path.
+fn document_file_name(document: &str) -> String {
+    std::path::Path::new(document)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| document.to_string())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn build_header(
     document: &str,
@@ -1698,7 +1715,7 @@ fn build_header(
     });
 
     Header {
-        document: document.to_string(),
+        document: document_file_name(document),
         engine: engine.to_string(),
         run_id,
         status,
@@ -2448,6 +2465,36 @@ mod tests {
     use super::*;
     use crate::observe::Event;
     use serde_json::json;
+
+    /// Issue #714: `osi watch <dir> --plan /path/to/ticket.yml`
+    /// shows `ticket.yml` in the header, never the whole absolute
+    /// path.
+    #[test]
+    fn document_file_name_keeps_only_the_file_name() {
+        assert_eq!(document_file_name("/path/to/ticket.yml"), "ticket.yml");
+        assert_eq!(document_file_name("demo.yml"), "demo.yml");
+        assert_eq!(document_file_name("sub/dir/demo.yml"), "demo.yml");
+    }
+
+    /// The same, through `build` -- the header's own `document`
+    /// field a real `--plan` carries an absolute path into.
+    #[test]
+    fn build_header_keeps_only_the_plan_files_own_file_name() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = build(
+            "/path/to/ticket.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+        );
+        assert_eq!(state.header.document, "ticket.yml");
+    }
 
     /// Siblings created in the same second but at different
     /// timestamp precisions (`2026-01-01T00:00:00Z` is earlier than
