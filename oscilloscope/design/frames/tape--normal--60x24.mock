@@ -12,7 +12,7 @@
 #! region r2 list 0,1,60,21 Tape · 6/14 · ▰ = 50 t
 #! region r3 keybar 0,23,60,1
 #! focus r2
-{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s          {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}wooly-ginger {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s{/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:5{/}
 {border.focus}╭─ {/}{fg.title bold}Tape · 6/14 · ▰ = 50 t {/}{border.focus}─────────────────────────────────╮{/}
 {border.focus}│{/}{status.success}✓ {/}{fg.default}tests                                                   {/}{border.focus}│{/}
 {border.focus}│{/}{accent.secondary bold}◆ {/}{fg.default}gate → then                                             {/}{border.focus}│{/}
