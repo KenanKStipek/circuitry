@@ -274,6 +274,18 @@ pub struct App {
     /// right after computing it, the same lifecycle `flow_scroll`
     /// already has.
     pub tape_list_start: Option<isize>,
+    /// Issue #716 ruling D3: the detail pane's own bottom scroll
+    /// offset as of the last draw -- compared against `details_
+    /// scroll` at the start of every `tui::draw_tape_detail` call,
+    /// before its own clamp runs, to tell a live step's growing
+    /// content whether to follow the bottom (the comparison still
+    /// reads `>=` once a manual `↑`/`k` has since moved `details_
+    /// scroll` strictly below it) or leave the scroll where the user
+    /// left it. `usize::MAX` right after a fresh selection (`Self::
+    /// select_tree_path`'s own reset, alongside `details_scroll`'s
+    /// own `0`) so that reset never itself reads as "already at the
+    /// bottom" and springs the fresh pane open scrolled down.
+    pub tape_detail_bottom: usize,
 }
 
 impl App {
@@ -323,6 +335,7 @@ impl App {
             loop_pass_line_paths: Vec::new(),
             step_meta_unfolded: false,
             tape_list_start: None,
+            tape_detail_bottom: usize::MAX,
         }
     }
 
@@ -646,6 +659,7 @@ impl App {
         if self.selected_path != path {
             self.selected_path = path;
             self.details_scroll = 0;
+            self.tape_detail_bottom = usize::MAX;
             self.details_source = Pane::Tree;
             // Issue #704 rule 2: the selection moved by some route
             // other than the Signal's own scrub (which writes the
@@ -665,6 +679,7 @@ impl App {
         if self.selected_path != path {
             self.selected_path = path;
             self.details_scroll = 0;
+            self.tape_detail_bottom = usize::MAX;
             self.details_source = Pane::Tree;
         }
     }
@@ -680,6 +695,7 @@ impl App {
             self.selected_path = path;
             if self.details_source == Pane::Tree {
                 self.details_scroll = 0;
+                self.tape_detail_bottom = usize::MAX;
             }
             // Same reasoning as `select_tree_path`'s own: follow's
             // own target update (`main.rs`) and `tape_select_run_
@@ -885,6 +901,15 @@ impl App {
         if self.screen == Screen::Store && self.handle_store_key(key, store_rows) {
             return Action::None;
         }
+        // Issue #716 ruling D3: `esc` with the Tape's own detail
+        // pane focused returns focus to the list -- it never leaves
+        // the screen, checked here (before the Select-return guard
+        // just below) so a run also opened from Select doesn't jump
+        // there instead while the pane still has focus.
+        if key.code == KeyCode::Esc && self.screen == Screen::Tape && self.pane == Pane::Details {
+            self.pane = Pane::Tree;
+            return Action::None;
+        }
         // Issue #698 (§2.5): `esc` on a run opened from the Select
         // screen returns there, before any of this screen's own
         // bindings below -- checked here rather than added as a
@@ -896,6 +921,20 @@ impl App {
             return Action::BackToSelect;
         }
         match key.code {
+            // Issue #716 ruling D3: `Tab` moves focus between the
+            // Tape's own list and its detail pane; `esc` above, or
+            // `Tab` again here, gives it back -- guarded against the
+            // full-screen step (its own key block above already
+            // returned for every key it binds, but an unbound one
+            // like `Tab` falls through to this match unless stopped
+            // here too) and against every other screen, which has no
+            // such toggle of its own.
+            KeyCode::Tab if self.screen == Screen::Tape && !self.tape_fullscreen_step => {
+                self.pane = match self.pane {
+                    Pane::Details => Pane::Tree,
+                    _ => Pane::Details,
+                };
+            }
             // DESIGN.md §6.3/issue #527: every one of these moves (or
             // scrolls) whichever pane currently has focus — the
             // orchestration pane's own selection when `Pane::Tree`,
@@ -1038,6 +1077,12 @@ impl App {
                         // scroll, in whichever unrelated pane the
                         // next screen draws.
                         self.details_scroll = 0;
+                        // Issue #716 ruling D3: the Tape's own
+                        // detail-pane focus is per-screen, unlike
+                        // the scroll above -- it never follows the
+                        // selection to a screen with no such toggle
+                        // of its own.
+                        self.pane = Pane::Tree;
                     }
                     self.screen = screen;
                 }
@@ -3824,5 +3869,70 @@ mod tests {
             state.help_open,
             "T must leave Help open, unlike every other key"
         );
+    }
+
+    // -------------------------------------------------------------
+    // Issue #716 ruling D3: Tab focuses the Tape's own detail pane
+    // -------------------------------------------------------------
+
+    #[test]
+    fn tab_focuses_the_tape_detail_pane_and_down_scrolls_it_while_the_list_selection_stays() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Details);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        // The list's own selection never moves while the pane has focus.
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.details_scroll, 1);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+        // `↓` now moves the list again, not the pane's own scroll.
+        app.details_scroll = 0;
+    }
+
+    #[test]
+    fn esc_with_the_tape_detail_pane_focused_returns_to_the_list_without_leaving_the_screen() {
+        let mut app = App::new(false);
+        app.pane = Pane::Details;
+        let action = app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn tab_does_nothing_on_a_screen_with_no_detail_pane_focus_of_its_own() {
+        let mut app = App::new(false);
+        app.screen = Screen::Store;
+        app.handle_key(key(KeyCode::Tab), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn tab_does_nothing_while_the_full_screen_step_is_open() {
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        app.handle_key(key(KeyCode::Tab), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn switching_screens_drops_the_tape_detail_pane_focus() {
+        let mut app = App::new(false);
+        app.pane = Pane::Details;
+        app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn selecting_a_new_row_resets_the_tape_detail_pane_bottom_tracking() {
+        let mut app = App::new(false);
+        app.tape_detail_bottom = 3;
+        app.select_tree_path(Some("prime.a".to_string()));
+        assert_eq!(app.tape_detail_bottom, usize::MAX);
     }
 }
