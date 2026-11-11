@@ -7,7 +7,12 @@ to an internal bytecode and execute it, producing the same final state as
 tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
-**This is a preview.** `electricity <config.json> <orchestration.yml>` runs
+**This is a preview.** `electricity run <orchestration.yml>` -- cof's own `run` option names
+(`-e`, `--config`, `--out`, `--live-state`, `--events`, `--allow-capabilities`, `--adapter`,
+`--quiet`), with the same config discovery as `cof run` when `--config` is omitted
+(`CIRCUITRY_CONFIG`, a trusted project config in the working directory, the global config); the
+legacy `electricity <config.json> <orchestration.yml>` form (config always explicit) keeps
+working as an alias -- runs
 documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `prompt` and `reflector` effects and `finally:` blocks, with the `json`,
 `shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
@@ -74,11 +79,10 @@ release alongside the Python distributions, marked as a preview.
   no `--resume` or `--state` yet.
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
-- **CLI.** The config is a required argument: no config discovery, no
-  `cof trust`. `--profile` takes a path, not a name. There is no
-  `--dry-run`, `--validate-only`, `--verbose` or `--skip-preflight`.
-  `.toon` documents and `use: {ref: ...}` are refused. Windows isn't
-  supported.
+- **CLI.** `--resume`/`--state`/`--force`/`--last` aren't accepted yet (#727).
+  `--profile` takes a path, not a name, and there is no `--dry-run`,
+  `--validate-only`, `--verbose` or `--skip-preflight`. `.toon` documents and
+  `use: {ref: ...}` are refused. Windows isn't supported.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
   JSON Schema shapes (#507); a reflector plan containing a date (#512).
 

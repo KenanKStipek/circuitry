@@ -22,6 +22,20 @@
 //! an explicit path only, never discovered by name (DESIGN §1, §6.11).
 //! A loaded profile's own `out:` (`RunResult::out_path`) is written only
 //! when no `--out` was given.
+//!
+//! `electricity run <orchestration.yml> ...` (issue #728) is a second,
+//! cof-named-option entry into `Action::Run` alongside the legacy
+//! two-positional form above: `run` must be the very first token, and
+//! everything after it parses with the same flag table (plus `--config`,
+//! `--allow-capabilities`, `--adapter`, `--quiet`, none of which the
+//! legacy form's own positional-config shape has room for). No
+//! `--dump-ir` under `run` -- it has no `cof run` equivalent, and stays
+//! reachable through the legacy form only. A missing orchestration
+//! positional under `run` is `Action::MissingOrchestration` (exit 1,
+//! cof's own text on stdout), not `Action::UsageError` (exit 2): cof's
+//! own positional is `Optional[str]` to let `--last` (not implemented
+//! here, #727's scope) stand in for it, so Click never raises a usage
+//! error for its absence either.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
