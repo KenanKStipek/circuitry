@@ -44,47 +44,48 @@ model and the metadata around each step. Four screens look at one run; two more 
 ```text
  osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t · Previews On ───────────╮╭─ gate › reply · Selected ────────────────╮
-│12:50:47 ■ Run Started        demo.yml · cof 0.1.0                        ││ Status  ✓ Done  0.0s · 12:50:50          │
-│12:50:47 ✓ kind               ↑212 ↓3 · Bug.              ▰▰▰▰▱▱▱▱   215 t││ Type    prompt · scripted-model          │
-│             › Is this issue a bug, a feature or a quest⋯                 ││ Tokens  ↑348 ↓41 · 389 t                 │
-│12:50:50 ✓ tests              3.0s · sleep 3                              ││ Usual   265 t  +47% · median of 3 runs   │
-│12:50:50 ◆ gate → then        kind != ""                                  ││ Share   45% of this run so far           │
-│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ▰▰▰▰▰▰▰▰   389 t││                                          │
-│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││ Prompt Sent · 348 t                      │
-│12:50:50 ⟳ drafts             3 passes · 2 wide · 0 done  ▃▃       130 t/p││ Reply as the maintainer (kind: Bug.).    │
-│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ▰▰▰▱▱▱▱▱   130 t││ Issue: parse_duration fails on 1h30m     │
-│             › Write one sentence about cats.                             ││ with ValueError: invalid duration. 90m   │
-│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ▰▰▰▱▱▱▱▱   131 t││ works.                                   │
-│             › Write one sentence about dogs.                             ││                                          │
-│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ Reply · 41 t                             │
-│12:50:50 ● iter_0 › pause     0.6s · sleep 1                              ││ Thanks for the report. We will look into │
-│12:50:50 ● iter_1 › pause     0.6s · sleep 1                              ││ why 1h30m fails while 90m works and fix  │
-│━━ 2 of 2 Slots Busy · 1 Pass Queued ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ it in the next release.                  │
-│         · iter_2 › draft     prompt · queued             usually 155 t   ││                                          │
-│             › Write one sentence about {{topic}}.                        ││                                          │
-│         · iter_2 › pause     tool · sleep 1 · queued                     ││                                          │
+│                                                                          ││ Status  ✓ Done  0.0s · 12:50:50          │
+│12:50:50 ✓ tests              3.0s · sleep 3                              ││ Type    prompt · scripted-model          │
+│12:50:50 ◆ gate → then        kind != ""                                  ││ Tokens  ↑348 ↓41 · 389 t                 │
+│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ▰▰▰▰▰▰▰▰   389 t││ Usual   265 t  +47% · median of 3 runs   │
+│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││ Share   45% of this run so far           │
+│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ▰▰▰▱▱▱▱▱   130 t││                                          │
+│             › Write one sentence about cats.                             ││ Prompt Sent · 348 t                      │
+│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ▰▰▰▱▱▱▱▱   131 t││ Reply as the maintainer (kind: Bug.).    │
+│             › Write one sentence about dogs.                             ││ Issue: parse_duration fails on 1h30m     │
+│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ with ValueError: invalid duration. 90m   │
+│12:50:50 ⟳ drafts             2 of 2 Slots Busy · 1 Pass⋯ ▃▃       130 t/p││ works.                                   │
+│12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││                                          │
+│12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││ Reply · 41 t                             │
+│         · iter_2 › draft     prompt · queued             usually 155 t   ││ Thanks for the report. We will look into │
+│             › Write one sentence about {{topic}}.                        ││ why 1h30m fails while 90m works and fix  │
+│         · iter_2 › pause     tool · sleep 1 · queued                     ││ it in the next release.                  │
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
-│         ■ Run End            usually 1.3 kt · 5.0s      ETA 12:50:52     ││                                          │
+│         ■ Run End            usually 1.3 kt · 5.1s      ETA 12:50:52     ││                                          │
+│                                                                          ││                                          │
+│                                                                          ││                                          │
+│                                                                          ││                                          │
 │──────────────────────────────────────────────────────────────────────────││                                          │
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
- ✓ gate › reply finished · ↑348 ↓41 · 0.6s ago
+ ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago
  ↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens                                                ? Help  q Quit
 ```
 *`frames/tape--normal--120x30.mock` · [png](frames/tape--normal--120x30.png)*
 
-**Anatomy, left to right.** The event clock (`12:50:50`), the status glyph, the step name without its loop prefix
-(the loop row above it carries the loop's name), what the step did, and the token column. A finished prompt
-reads `↑212 ↓3 · Bug.` (sent, received, the reply's first words); a finished tool `3.0s · sleep 3`; a
-decision `gate → then` with its condition; a loop `3 passes · 2 wide · 0 done`.
+**Anatomy, left to right.** The event clock (`12:50:50`), the status glyph, the step's own breadcrumb (its
+parents, every one of them dim, down to its own name in the row's own colour), what the step did, and the token
+column. A finished prompt reads `↑212 ↓3 · Bug.` (sent, received, the reply's first words); a finished tool
+`3.0s · sleep 3`; a decision `gate → then` with its condition; a finished loop `3 passes · 2 wide · 0 done`; a
+running loop `2 of 2 Slots Busy · 1 Pass Queued`.
 
 **Top to bottom.** `■ Run Started` with the document and engine. Finished rows in the order they finished, each
 prompt followed by one faint preview line (`› Is this issue a bug…`) of the text actually sent, when previews are
-on (`p`). The **Now band**, `━━ Now 12:50:50 · 3.6s ━━`, a full-width rule in the accent colour. The running
-rows, bold, with how long they have run. A second rule while a loop runs: `━━ 2 of 2 Slots Busy · 1 Pass Queued ━━`.
-Then the rows ahead, faint, with their type first (`prompt · queued`, `tool · sleep 1 · queued`) and
+on (`p`). The **Now band**, `━━ Now 12:50:50 · 3.6s ━━`, a full-width rule in the accent colour. Below it, the
+Now area's own tree: every running step and every running loop, each loop's own counts in its `what` column
+rather than a separate rule, its running children indented two cells per level under it. Then the rows ahead, faint, with their type first (`prompt · queued`, `tool · sleep 1 · queued`) and
 `usually 155 t` in the token column when history knows the step. `■ Run End` closes the list with the usual total
 and duration, and the ETA in the token column. The Now area's own middle row sits on the list's own middle row:
 finished rows fill upward from it, newest closest, the oldest scrolling off the top; rows ahead fill downward, the
@@ -99,33 +100,33 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 ```text
  osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · vs Usual · 3 Runs · Previews On ──╮╭─ gate › reply · Selected ────────────────╮
-│12:50:47 ■ Run Started        demo.yml · cof 0.1.0                        ││ Status  ✓ Done  0.0s · 12:50:50          │
-│12:50:47 ✓ kind               ↑212 ↓3 · Bug.              ────┼────   +6% ││ Type    prompt · scripted-model          │
-│             › Is this issue a bug, a feature or a quest⋯                 ││ Tokens  ↑348 ↓41 · 389 t                 │
-│12:50:50 ✓ tests              3.0s · sleep 3                              ││ Usual   265 t  +47% · median of 3 runs   │
-│12:50:50 ◆ gate → then        kind != ""                                  ││ Share   45% of this run so far           │
-│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ────┼▓▓▓▓  +47% ││                                          │
-│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││ Prompt Sent · 348 t                      │
-│12:50:50 ⟳ drafts             3 passes · 2 wide · 0 done  ▃▃       130 t/p││ Reply as the maintainer (kind: Bug.).    │
-│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ───▓┼────  -16% ││ Issue: parse_duration fails on 1h30m     │
-│             › Write one sentence about cats.                             ││ with ValueError: invalid duration. 90m   │
-│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ───▓┼────  -14% ││ works.                                   │
-│             › Write one sentence about dogs.                             ││                                          │
-│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ Reply · 41 t                             │
-│12:50:50 ● iter_0 › pause     0.6s · sleep 1                              ││ Thanks for the report. We will look into │
-│12:50:50 ● iter_1 › pause     0.6s · sleep 1                              ││ why 1h30m fails while 90m works and fix  │
-│━━ 2 of 2 Slots Busy · 1 Pass Queued ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ it in the next release.                  │
-│         · iter_2 › draft     prompt · queued             usually 155 t   ││                                          │
-│             › Write one sentence about {{topic}}.                        ││                                          │
-│         · iter_2 › pause     tool · sleep 1 · queued                     ││                                          │
+│                                                                          ││ Status  ✓ Done  0.0s · 12:50:50          │
+│12:50:50 ✓ tests              3.0s · sleep 3                              ││ Type    prompt · scripted-model          │
+│12:50:50 ◆ gate → then        kind != ""                                  ││ Tokens  ↑348 ↓41 · 389 t                 │
+│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ────┼▓▓▓▓  +47% ││ Usual   265 t  +47% · median of 3 runs   │
+│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││ Share   45% of this run so far           │
+│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ───▓┼────  -16% ││                                          │
+│             › Write one sentence about cats.                             ││ Prompt Sent · 348 t                      │
+│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ───▓┼────  -14% ││ Reply as the maintainer (kind: Bug.).    │
+│             › Write one sentence about dogs.                             ││ Issue: parse_duration fails on 1h30m     │
+│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ with ValueError: invalid duration. 90m   │
+│12:50:50 ⟳ drafts             2 of 2 Slots Busy · 1 Pass⋯ ▃▃       130 t/p││ works.                                   │
+│12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││                                          │
+│12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││ Reply · 41 t                             │
+│         · iter_2 › draft     prompt · queued             usually 155 t   ││ Thanks for the report. We will look into │
+│             › Write one sentence about {{topic}}.                        ││ why 1h30m fails while 90m works and fix  │
+│         · iter_2 › pause     tool · sleep 1 · queued                     ││ it in the next release.                  │
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
-│         ■ Run End            usually 1.3 kt · 5.0s      ETA 12:50:52     ││                                          │
+│         ■ Run End            usually 1.3 kt · 5.1s      ETA 12:50:52     ││                                          │
+│                                                                          ││                                          │
+│                                                                          ││                                          │
+│                                                                          ││                                          │
 │──────────────────────────────────────────────────────────────────────────││                                          │
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
- ✓ gate › reply finished · ↑348 ↓41 · 0.6s ago
+ ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago
  ↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens                                                ? Help  q Quit
 ```
 *`frames/tape--usual--120x30.mock` · [png](frames/tape--usual--120x30.png)*
@@ -160,23 +161,23 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 │12:50:50 ✓ tests              3.0s · sleep 3                                  │
 │12:50:50 ◆ gate → then        kind != ""                                      │
 │12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the repo⋯ ▰▰▰▰▰▰▰▰   389 t│
-│12:50:50 ⟳ drafts             3 passes · 2 wide               ▃▃       130 t/p│
 │12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sunbeam⋯ ▰▰▰▱▱▱▱▱   130 t│
 │12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the mail⋯ ▰▰▰▱▱▱▱▱   131 t│
 │━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│
-│12:50:50 ● iter_0 › pause     0.6s · sleep 1                                  │
-│12:50:50 ● iter_1 › pause     0.6s · sleep 1                                  │
-│━━ 2 of 2 Slots Busy · 1 Pass Queued ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│
+│12:50:50 ⟳ drafts             2 of 2 Slots Busy · 1 Pass Que⋯ ▃▃       130 t/p│
+│12:50:50   ● iter_0 › pause   0.6s · sleep 1                                  │
+│12:50:50   ● iter_1 › pause   0.6s · sleep 1                                  │
 │         · iter_2 › draft     prompt · queued                 usually 155 t   │
 │         · iter_2 › pause     tool · sleep 1 · queued                         │
 │         · flaky              tool · ls /nonexistent-osi-dem⋯                 │
 │         · summary            prompt                          usually 402 t   │
 │         ■ Run End            usually 1.3 kt · ETA 12:50:52                   │
 │                                                                              │
+│                                                                              │
 │──────────────────────────────────────────────────────────────────────────────│
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —      │
 ╰──────────────────────────────────────────────────────────────────────────────╯
- ✓ gate › reply finished · ↑348 ↓41 · 0.6s ago
+ ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago
  ↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens        ? Help  q Quit
 ```
 *`frames/tape--normal--80x24.mock` · [png](frames/tape--normal--80x24.png)*
@@ -189,13 +190,12 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 │✓ tests                                                   │
 │◆ gate → then                                             │
 │✓ gate › reply                            ▰▰▰▰▰▰▰▰   389 t│
-│⟳ drafts                                  ▃▃       130 t/p│
 │✓ iter_0 › draft                          ▰▰▰▱▱▱▱▱   130 t│
 │✓ iter_1 › draft                          ▰▰▰▱▱▱▱▱   131 t│
 │━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│
-│● iter_0 › pause                                          │
-│● iter_1 › pause                                          │
-│━━ 2 of 2 Slots Busy · 1 Pass Queued ━━━━━━━━━━━━━━━━━━━━━│
+│⟳ drafts                                  ▃▃       130 t/p│
+│  ● iter_0 › pause                                        │
+│  ● iter_1 › pause                                        │
 │· iter_2 › draft                          usually 155 t   │
 │· iter_2 › pause                                          │
 │· flaky                                                   │
@@ -541,8 +541,11 @@ Peak, Rate and Quiet.
 A row is glyph, name, what it did or will do, token column. Finished prompts: `↑212 ↓3 · Bug.`; finished
 tools: `3.0s · sleep 3`; running: `0.6s · sleep 1`; ahead: the type first, `prompt`, `tool · sleep 1 ·
 queued`, `if`, `loop · 3 passes`; skipped: `skipped · not reached · prompt`. Loop passes are named `iter_0 ›
-draft`; a nested step `gate › reply`. The Now band is `━━ Now 12:50:50 · 3.6s ━━`; under the running rows a
-second rule reads `2 of 2 Slots Busy · 1 Pass Queued` while a loop runs. The head rule changes with the run:
+draft`; a nested step `gate › reply`; every parent segment and `›` is dim, the step's own name in the row's
+colour. The Now band is `━━ Now 12:50:50 · 3.6s ━━`; below it, the Now area is a tree of what is running --
+every running loop's own row reads `2 of 2 Slots Busy · 1 Pass Queued` in its own `what` column instead of a
+separate rule, and its running children sit indented two cells per level under it, never above the band. The
+head rule changes with the run:
 `Run Ended · OK · 5.1s · 12:50:52`, `Run Failed · 0.0s · 12:48:49`, `Starting · cof 0.1.0 launching · no events yet`.
 
 ### 3.5 Tokens

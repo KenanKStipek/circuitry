@@ -1096,6 +1096,56 @@ fn tape_token_column(
     }
 }
 
+/// A breadcrumb label (issue #737's layout decision), split so its
+/// parent segments and every `›` draw in `dim_style` (`fg.muted`)
+/// while the step's own final segment keeps `name_style`, the row's
+/// own colour -- padded or cut to exactly `width` cells either way,
+/// so the caller never has to pad the result itself. A label too
+/// long for `width` loses its middle segments first, shown as a
+/// single `⋯`, keeping its first segment and the step's own name;
+/// if even that doesn't fit, it falls back to an end cut of the
+/// step's own name alone.
+fn tape_breadcrumb_spans(
+    label: &str,
+    width: usize,
+    name_style: Style,
+    dim_style: Style,
+) -> Vec<Span<'static>> {
+    let segments: Vec<&str> = label.split(" › ").collect();
+    let Some((last, parents)) = segments.split_last() else {
+        return vec![Span::styled(" ".repeat(width), name_style)];
+    };
+    if parents.is_empty() {
+        return vec![Span::styled(
+            format!("{:<width$}", truncate_text(label, width)),
+            name_style,
+        )];
+    }
+    let parents_text = format!("{} › ", parents.join(" › "));
+    let full_len = parents_text.chars().count() + last.chars().count();
+    if full_len <= width {
+        let pad = width - full_len;
+        return vec![
+            Span::styled(parents_text, dim_style),
+            Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
+        ];
+    }
+    let first = parents[0];
+    let cut_len = first.chars().count() + 1 + last.chars().count();
+    if cut_len <= width {
+        let pad = width - cut_len;
+        return vec![
+            Span::styled(first.to_string(), dim_style),
+            Span::styled("⋯".to_string(), dim_style),
+            Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
+        ];
+    }
+    vec![Span::styled(
+        format!("{:<width$}", truncate_text(last, width)),
+        name_style,
+    )]
+}
+
 #[allow(clippy::too_many_arguments)]
 fn tape_row_line(
     row: &oscilloscope_core::screens::TapeRow,
@@ -1172,31 +1222,53 @@ fn tape_row_line(
         Style::default().fg(border_color)
     };
     let ts_width = if narrow { 0 } else { 9 };
-    let mut spans = vec![
-        Span::styled(
-            format!("{:<ts_width$}", ts_text.unwrap_or_default()),
-            bg(ts_style),
+    // The Now area's own tree (issue #737): two cells per level,
+    // ahead of the glyph -- the name field itself narrows by the
+    // same amount, so every row's own `what`/token columns still
+    // line up regardless of how deep a line sits.
+    let indent_cells = row.indent * 2;
+    // A faint row ahead (and a selected one, already its own single
+    // highlight colour) reads its whole breadcrumb in one colour --
+    // the parent/child split (`fg.muted` against the row's own
+    // colour) is a Normal-row distinction only.
+    let dim_style =
+        if selected || matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped) {
+            name_style
+        } else {
+            Style::default().fg(ctx.theme.fg_muted)
+        };
+    let mut spans = vec![Span::styled(
+        format!("{:<ts_width$}", ts_text.unwrap_or_default()),
+        bg(ts_style),
+    )];
+    if indent_cells > 0 {
+        spans.push(Span::styled(" ".repeat(indent_cells), bg(ts_style)));
+    }
+    spans.push(Span::styled(
+        format!("{} ", tape_glyph(row.kind, row.status.kind)),
+        bg(tape_glyph_style(row.kind, row.status.kind, ctx.theme)),
+    ));
+    spans.extend(
+        tape_breadcrumb_spans(
+            &row.label,
+            name_width.saturating_sub(indent_cells),
+            name_style,
+            dim_style,
+        )
+        .into_iter()
+        .map(|s| Span::styled(s.content, bg(s.style))),
+    );
+    spans.push(Span::styled(
+        format!(
+            "{:<what_width$}",
+            if row.what_is_agent_text {
+                tape_agent_what_text(&tape_loop_what(row, wide_detail), what_width)
+            } else {
+                tape_what_text(&tape_loop_what(row, wide_detail), what_width)
+            }
         ),
-        Span::styled(
-            format!("{} ", tape_glyph(row.kind, row.status.kind)),
-            bg(tape_glyph_style(row.kind, row.status.kind, ctx.theme)),
-        ),
-        Span::styled(
-            format!("{:<name_width$}", truncate_text(&row.label, name_width)),
-            bg(name_style),
-        ),
-        Span::styled(
-            format!(
-                "{:<what_width$}",
-                if row.what_is_agent_text {
-                    tape_agent_what_text(&tape_loop_what(row, wide_detail), what_width)
-                } else {
-                    tape_what_text(&tape_loop_what(row, wide_detail), what_width)
-                }
-            ),
-            bg(what_style),
-        ),
-    ];
+        bg(what_style),
+    ));
     match tape_token_column(&row.tokens, unit, tokens_view_usual, ctx) {
         Some(token_line) => {
             // The token column is right-aligned flush to the pane's
@@ -1662,7 +1734,23 @@ fn draw_tape_list(
     let name_width = if narrow {
         (inner.width as usize).saturating_sub(2 + token_width)
     } else {
-        19
+        // Issue #737: the name column widens to fit the longest
+        // breadcrumb actually on screen (a running row's own
+        // indent counted in), up to a third of the list's own
+        // width, and never narrower than the design's own 19-cell
+        // floor -- so a document with nothing longer than that
+        // still lays out exactly as before.
+        let longest = screen
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                TapeItem::Row(r) => Some(r.indent * 2 + r.label.chars().count()),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        let cap = ((inner.width as usize) / 3).max(1);
+        (longest + 1).max(19).min(cap)
     };
     let what_width = if narrow {
         0
@@ -1818,24 +1906,6 @@ fn draw_tape_list(
                         ctx.theme.accent_primary,
                         ctx.theme.accent_primary,
                         true,
-                        inner.width as usize,
-                    ),
-                ));
-                kinds.push(TapeListLineKind::Normal);
-            }
-            TapeItem::SlotsRule {
-                busy,
-                slots,
-                queued,
-            } => {
-                let label = format!("{busy} of {slots} Slots Busy · {queued} Pass Queued");
-                lines.push((
-                    None,
-                    tape_rule_line(
-                        &label,
-                        ctx.theme.accent_primary,
-                        ctx.theme.accent_primary,
-                        false,
                         inner.width as usize,
                     ),
                 ));
@@ -4937,30 +5007,6 @@ fn draw_all_tape_tile(
                     full_row,
                 );
             }
-            TapeTileLine::Item(TapeItem::SlotsRule {
-                busy,
-                slots,
-                queued,
-            }) => {
-                // A tile drops the trailing `· N Pass Queued` once
-                // nothing actually is (the frames: `2 of 2 Slots
-                // Busy` alone, never `· 0 Pass Queued`).
-                let label = if *queued > 0 {
-                    format!("{busy} of {slots} Slots Busy · {queued} Pass Queued")
-                } else {
-                    format!("{busy} of {slots} Slots Busy")
-                };
-                frame.render_widget(
-                    Paragraph::new(tape_rule_line(
-                        &label,
-                        ctx.theme.accent_primary,
-                        ctx.theme.accent_primary,
-                        false,
-                        full_row.width as usize,
-                    )),
-                    full_row,
-                );
-            }
             TapeTileLine::Item(TapeItem::HeadRule) => {
                 if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
                     frame.render_widget(Paragraph::new(Line::from(spans)), content_row);
@@ -5007,15 +5053,6 @@ fn draw_all_tape_tile(
                         Style::default().fg(ctx.theme.dim),
                     ))),
                     content_row,
-                );
-            }
-            TapeTileLine::RunningSeparator => {
-                frame.render_widget(
-                    Paragraph::new(Line::from(Span::styled(
-                        "━".repeat(full_row.width as usize),
-                        Style::default().fg(ctx.theme.accent_primary),
-                    ))),
-                    full_row,
                 );
             }
         }

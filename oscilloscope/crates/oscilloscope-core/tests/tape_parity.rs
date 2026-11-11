@@ -88,7 +88,6 @@ fn normalize(mut tape: TapeScreen) -> TapeScreen {
                 *usual_wall_s = None;
                 *eta_ts = None;
             }
-            TapeItem::SlotsRule { .. } => {}
             TapeItem::HeadRule => {}
         }
     }

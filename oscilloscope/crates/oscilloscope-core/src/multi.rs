@@ -168,12 +168,6 @@ pub enum TapeTileLine<'a> {
     Item(&'a TapeItem),
     EarlierFold(usize),
     MoreFold(usize),
-    /// The rule between the running block and the rows ahead when
-    /// no loop is running to give that rule its own `SlotsRule`
-    /// text (from the frames: a tile always draws one rule there,
-    /// labelled or not, where a single-run Tape draws none at all
-    /// without a running loop).
-    RunningSeparator,
 }
 
 fn is_ahead_row(item: &TapeItem) -> bool {
@@ -226,11 +220,8 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
     let ahead_start = body.iter().position(is_ahead_row).unwrap_or(body.len());
     let kept_head = &body[..ahead_start];
     let ahead = &body[ahead_start..];
-    let has_slots_rule = kept_head
-        .iter()
-        .any(|it| matches!(it, TapeItem::SlotsRule { .. }));
 
-    let mandatory = 1 + kept_head.len() + usize::from(!has_slots_rule) + usize::from(has_run_end);
+    let mandatory = 1 + kept_head.len() + usize::from(has_run_end);
     let budget = max_rows.saturating_sub(mandatory);
 
     let mut fin_shown = finished.len();
@@ -258,9 +249,6 @@ pub fn fold_tape_tile(items: &[TapeItem], max_rows: usize) -> Vec<TapeTileLine<'
     }
     out.extend(finished[fin_folded..].iter().map(TapeTileLine::Item));
     out.extend(kept_head.iter().map(TapeTileLine::Item));
-    if !has_slots_rule {
-        out.push(TapeTileLine::RunningSeparator);
-    }
     out.extend(ahead[..ahead_shown].iter().map(TapeTileLine::Item));
     let ahead_folded = ahead.len() - ahead_shown;
     if ahead_folded > 0 {
@@ -487,18 +475,30 @@ pub fn tile_now_pane_rows(
     let mut ahead = Vec::new();
     for item in items {
         match item {
-            // Unlike the Tape tile's own slots rule, the Signal
-            // tile's Now pane title never names a queued pass --
-            // the frame reads `3 of 3 Slots Busy` alone even when
-            // one is.
-            TapeItem::SlotsRule { busy, slots, .. } => {
-                slots_text = Some(format!("{busy} of {slots} Slots Busy"));
+            // A running loop's own row carries its counts in `what`
+            // now (issue #737's layout decision dropped the
+            // separate slots rule everywhere) -- the Signal tile's
+            // own title keeps only the busy/slots half of it, never
+            // naming a queued pass the way the Tape tile's own line
+            // does.
+            TapeItem::Row(row)
+                if row.kind == RowKind::Loop
+                    && matches!(
+                        row.status.kind,
+                        StatusKind::Running
+                            | StatusKind::LikelyRunning
+                            | StatusKind::RunningOrQueued
+                    ) =>
+            {
+                if slots_text.is_none() {
+                    slots_text = row.what.split(" · ").next().map(str::to_string);
+                }
             }
             TapeItem::Row(row) => match row.status.kind {
                 // A loop's own container row is never in the Now
                 // pane's running list (the frame lists only the
-                // loop's own running leaves there) -- its own slots
-                // rule carries the loop's own summary instead.
+                // loop's own running leaves there) -- its own
+                // counts are handled above instead.
                 StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
                     if row.kind.is_leaf() =>
                 {
@@ -887,6 +887,7 @@ mod tests {
             what_is_agent_text: false,
             preview: None,
             bold: false,
+            indent: 0,
             tokens: Default::default(),
         }
     }
@@ -925,10 +926,9 @@ mod tests {
     fn fold_tape_tile_keeps_everything_when_it_fits() {
         let items = sample_items(2, 1, 2);
         let folded = fold_tape_tile(&items, 20);
-        // One more line than `items` itself: no loop runs here, so
-        // the running-block separator (never a real `TapeItem`) is
-        // the one synthetic line this ever inserts unprompted.
-        assert_eq!(folded.len(), items.len() + 1);
+        // One line per `TapeItem` (issue #737 dropped the running-
+        // block separator this tile used to insert unprompted).
+        assert_eq!(folded.len(), items.len());
     }
 
     #[test]

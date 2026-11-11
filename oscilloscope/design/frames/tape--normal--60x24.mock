@@ -13,17 +13,17 @@
 #! region r3 keybar 0,23,60,1
 #! focus r2
 {accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s          {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
-{border.focus}╭─ {/}{fg.title bold}Tape · 6/14 · ▰ = 50 t {/}{border.focus}─────────────────────────────────╮{/}
+{border.focus}╭─ {/}{fg.default bold}Tape · 6/14 · ▰ = 50 t {/}{border.focus}─────────────────────────────────╮{/}
+{border.focus}│{/}{status.success}✓ {/}{fg.default}kind                                    {/}{accent.primary}▰▰▰▰{/}{fg.faint}▱▱▱▱   {/}{fg.default}215 t{/}{border.focus}│{/}
 {border.focus}│{/}{status.success}✓ {/}{fg.default}tests                                                   {/}{border.focus}│{/}
 {border.focus}│{/}{accent.secondary bold}◆ {/}{fg.default}gate → then                                             {/}{border.focus}│{/}
-{border.focus}│{/}{status.success on:selection.bg}✓ {/}{selection.fg bold on:selection.bg}gate › reply                            {/}{accent.primary on:selection.bg}▰▰▰▰▰▰▰▰   {/}{fg.default bold on:selection.bg}389 t{/}{border.focus}│{/}
-{border.focus}│{/}{accent.secondary bold}⟳ {/}{fg.default bold}drafts                                  {/}{accent.secondary}▃▃       {/}{fg.muted}130 t/p{/}{border.focus}│{/}
-{border.focus}│{/}{status.success}✓ {/}{fg.default}iter_0 › draft                          {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}130 t{/}{border.focus}│{/}
-{border.focus}│{/}{status.success}✓ {/}{fg.default}iter_1 › draft                          {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}131 t{/}{border.focus}│{/}
+{border.focus}│{/}{status.success on:selection.bg}✓ {/}{fg.default bold on:selection.bg}gate › reply                            {/}{accent.primary on:selection.bg}▰▰▰▰▰▰▰▰   {/}{fg.default bold on:selection.bg}389 t{/}{border.focus}│{/}
+{border.focus}│{/}{status.success}✓ {/}{fg.muted}iter_0 › {/}{fg.default}draft                          {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}130 t{/}{border.focus}│{/}
+{border.focus}│{/}{status.success}✓ {/}{fg.muted}iter_1 › {/}{fg.default}draft                          {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}131 t{/}{border.focus}│{/}
 {border.focus}│{/}{accent.primary}━━ {/}{accent.primary bold}Now 12:50:50 · 3.6s {/}{accent.primary}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}
-{border.focus}│{/}{accent.primary bold}● {/}{fg.default bold}iter_0 › pause                                          {/}{border.focus}│{/}
-{border.focus}│{/}{accent.primary bold}● {/}{fg.default bold}iter_1 › pause                                          {/}{border.focus}│{/}
-{border.focus}│{/}{accent.primary}━━ 2 of 2 Slots Busy · 1 Pass Queued ━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}
+{border.focus}│{/}{accent.secondary bold}⟳ {/}{fg.default bold}drafts                                  {/}{accent.secondary}▃▃       {/}{fg.muted}130 t/p{/}{border.focus}│{/}
+{border.focus}│  {/}{accent.primary bold}● {/}{fg.muted}iter_0 › {/}{fg.default bold}pause                                        {/}{border.focus}│{/}
+{border.focus}│  {/}{accent.primary bold}● {/}{fg.muted}iter_1 › {/}{fg.default bold}pause                                        {/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint}· iter_2 › draft                          usually 155 t   {/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint}· iter_2 › pause                                          {/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint}· flaky                                                   {/}{border.focus}│{/}
@@ -32,7 +32,7 @@
 {border.focus}│                                                          │{/}
 {border.focus}│                                                          │{/}
 {border.focus}│{/}{border.default}──────────────────────────────────────────────────────────{/}{border.focus}│{/}
-{border.focus}│ {/}{fg.title bold}Totals {/}{fg.default bold}865 t +12% {/}{fg.default}· 6/14 {/}{fg.muted}· ETA {/}{fg.default}12:50:52                  {/}{border.focus}│{/}
+{border.focus}│ {/}{fg.default bold}Totals 865 t +12% {/}{fg.default}· 6/14 {/}{fg.muted}· ETA {/}{fg.default}12:50:52                  {/}{border.focus}│{/}
 {border.focus}╰──────────────────────────────────────────────────────────╯{/}
-{status.success} ✓ {/}{fg.default}gate › reply finished {/}{fg.faint}· 0.6s ago{/}
-{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open  {/}{keyhint.key bold on:statusbar.bg}t {/}{keyhint.desc on:statusbar.bg}Tokens             {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}
+ {status.success}✓ {/}{fg.default}iter_1 › draft finished {/}{fg.faint}· 0.6s ago{/}                       
+{accent.primary bold on:statusbar.bg} ↑↓ {/}{fg.default on:statusbar.bg}Select  {/}{accent.primary bold on:statusbar.bg}enter {/}{fg.default on:statusbar.bg}Open  {/}{accent.primary bold on:statusbar.bg}t {/}{fg.default on:statusbar.bg}Tokens             {/}{accent.primary bold on:statusbar.bg}? {/}{fg.default on:statusbar.bg}Help  {/}{accent.primary bold on:statusbar.bg}q {/}{fg.default on:statusbar.bg}Quit {/}
