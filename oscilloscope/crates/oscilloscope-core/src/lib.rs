@@ -9,6 +9,7 @@
 //! (`ratatui`) lands in O-2, in the `oscilloscope` binary crate only.
 
 pub mod changes;
+pub mod combined;
 pub mod config_discovery;
 pub mod diff;
 pub mod discovery;

@@ -5215,9 +5215,979 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("←→↑↓", "Move the focus"),
         row("enter", "Open the focused run"),
         row("PageUp PageDown", "Turn the page"),
-        row("u", "Combined Signal (coming soon)"),
+        row("u", "Combined Signal"),
         row("c", "Inert here (no run attached to cancel)"),
         row("esc", "Back to Select"),
+        row("?", "This help"),
+        row("q", "Quit"),
+    ];
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
+        content_area,
+    );
+}
+
+/// The Combined Signal's own 100 ms columns above the axis (K1):
+/// taller than a single run's own [`SIGNAL_SENT_ROWS`] since every
+/// run's own bars stack into one trace here.
+const COMBINED_SENT_ROWS: usize = 14;
+const COMBINED_RECEIVED_ROWS: usize = 4;
+/// K1: the trace's own fixed window, 15 s at 100 ms per column --
+/// never scrolling, unlike a single run's own Signal chart.
+const COMBINED_WINDOW_COLS: usize = 150;
+
+fn combined_key_bar_items() -> Vec<(&'static str, &'static str)> {
+    vec![
+        ("←→", "Scrub"),
+        ("n", "Now"),
+        ("↑↓", "Select"),
+        ("enter", "Open"),
+        ("esc", "Tiles"),
+        ("?", "Help"),
+        ("q", "Quit"),
+    ]
+}
+
+/// The Combined Signal's own header band (issue #698, `u`): `osi
+/// All · ● 6 Running · 2.8s`, the `ALL · COMBINED SIGNAL` chip --
+/// the same band the grid's own header draws, with its own chip
+/// word and no screen-switch meaning behind `running_count` (every
+/// run shown here is, by definition, still running).
+fn draw_combined_header_band(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let bg = ctx.theme.statusbar_bg;
+    let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
+    let mut left = vec![
+        Span::styled(
+            " osi  ",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled("All ", Style::default().fg(ctx.theme.text).bg(bg)),
+        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+        Span::styled(
+            "● ",
+            Style::default()
+                .fg(ctx.theme.accent_primary)
+                .bg(bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("{} Running ", screen.totals.run_count),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ),
+        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+        Span::styled(
+            oscilloscope_core::format::format_duration(screen.now_elapsed_s),
+            Style::default().fg(ctx.theme.text).bg(bg),
+        ),
+    ];
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
+    let clock_text =
+        oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
+    let chip_text = "  ALL · COMBINED SIGNAL  ".to_string();
+    let right_width = chip_text.chars().count() + 2 + clock_text.chars().count() + 1;
+    let pad = (area.width as usize).saturating_sub(left_width + right_width);
+    left.push(Span::styled(
+        " ".repeat(pad),
+        Style::default().fg(ctx.theme.text).bg(bg),
+    ));
+    left.push(Span::styled(
+        chip_text,
+        Style::default()
+            .fg(ctx.theme.on_accent)
+            .bg(ctx.theme.accent_secondary),
+    ));
+    left.push(Span::styled(format!("  {clock_text} "), base));
+    frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
+}
+
+/// The status line (K7/§3.2): the newest finished step across every
+/// run, same as the grid's own.
+fn draw_combined_status_line(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let entries: Vec<(
+        String,
+        Option<oscilloscope_core::screens::SignalLastFinished>,
+    )> = screen
+        .runs
+        .iter()
+        .map(|r| (r.document_label.clone(), r.last_finished.clone()))
+        .collect();
+    let Some((document, last)) = oscilloscope_core::multi::newest_finished_across_runs(&entries)
+    else {
+        frame.render_widget(Paragraph::new(Line::from("")), area);
+        return;
+    };
+    let glyph = tape_glyph(last.kind, last.status);
+    let age = last
+        .ts
+        .as_deref()
+        .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now));
+    let age_text = age
+        .map(|a| format!(" · {} ago", oscilloscope_core::format::format_duration(a)))
+        .unwrap_or_default();
+    let spans = vec![
+        Span::styled(
+            format!(" {glyph} "),
+            tape_glyph_style(last.kind, last.status, ctx.theme),
+        ),
+        Span::styled(
+            format!("{document} · {} finished", last.label),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(age_text, Style::default().fg(ctx.theme.dim)),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The Combined Signal (issue #698, `u` on All): the stacked trace
+/// with its own legend and Totals row in one panel, the Per Run
+/// table and Readings below it.
+#[allow(clippy::too_many_arguments)]
+pub fn draw_combined_signal(
+    frame: &mut Frame,
+    full_area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    cursor_run: usize,
+    scrub_col: Option<usize>,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    if let Some(bg) = ctx.theme.background {
+        frame.render_widget(
+            Block::default().style(Style::default().bg(bg).fg(ctx.theme.text)),
+            full_area,
+        );
+    }
+    // K8: below 120 columns (§5 names no narrower rule of its own for
+    // this screen) or below the height its own layout needs (the
+    // chart's own 19 trace/axis rows, one seconds row, at least one
+    // legend row, a separator and Totals, plus the chrome rows
+    // every screen already carries).
+    const COMBINED_MIN_WIDTH: u16 = 120;
+    const COMBINED_MIN_HEIGHT: u16 = 30;
+    if full_area.width < COMBINED_MIN_WIDTH || full_area.height < COMBINED_MIN_HEIGHT {
+        draw_too_small_with_min_width(frame, full_area, ctx, COMBINED_MIN_WIDTH);
+        return;
+    }
+    let sections = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(1),
+            Constraint::Min(5),
+            Constraint::Length(1),
+            Constraint::Length(1),
+        ])
+        .split(full_area);
+    draw_combined_header_band(frame, sections[0], screen, now, ctx);
+    draw_combined_status_line(frame, sections[2], screen, now, ctx);
+    draw_key_bar(frame, sections[3], &combined_key_bar_items(), ctx);
+
+    let body = sections[1];
+    // K1/K5/K6: the chart (with its own legend and Totals) on top,
+    // the Per Run table and Readings sharing the row below it --
+    // the frame's own 180x48 split (32 of 45 body rows to the
+    // chart), kept as a fixed floor so a shorter terminal still has
+    // room for the Per Run table's own header and at least one row.
+    let per_run_height = if body.height >= 45 {
+        13
+    } else {
+        (body.height / 3)
+            .max(6)
+            .min(body.height.saturating_sub(10).max(6))
+    };
+    let chart_height = body.height.saturating_sub(per_run_height);
+    let chart_area = Rect {
+        x: body.x,
+        y: body.y,
+        width: body.width,
+        height: chart_height,
+    };
+    let lower_area = Rect {
+        x: body.x,
+        y: body.y + chart_height,
+        width: body.width,
+        height: per_run_height,
+    };
+    draw_combined_chart(frame, chart_area, screen, scrub_col, now, ctx);
+    // The frame's own 180-wide split is 136/44 (K5/K6), not a round
+    // percentage -- kept as that exact ratio rather than one that
+    // only coincidentally rounds the same way at this one width.
+    let table_width = (lower_area.width as u32 * 136 / 180) as u16;
+    let lower = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(table_width), Constraint::Min(0)])
+        .split(lower_area);
+    draw_combined_per_run_table(frame, lower[0], screen, cursor_run, ctx);
+    draw_combined_readings(frame, lower[1], screen, ctx);
+}
+
+fn format_seconds_1(v: f64) -> String {
+    format!("{v:.1}")
+}
+
+fn combined_chart_title() -> String {
+    [
+        "Combined Signal",
+        "Every Running Orchestration",
+        "Sent Above",
+        "Received Below",
+        "100 ms per Column",
+        "Stacked by Run",
+    ]
+    .join(" \u{b7} ")
+}
+
+/// The chart (K1): stacked sent/received columns, the Now sweep,
+/// the dashed axis ahead, the seconds row and, inside the same
+/// panel, the legend rows and the Totals row.
+fn draw_combined_chart(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    scrub_col: Option<usize>,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let title = combined_chart_title();
+    let border_color = ctx.theme.border_focused;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+
+    let chart_rows = COMBINED_SENT_ROWS + 1 + COMBINED_RECEIVED_ROWS;
+    if inner.height < chart_rows as u16 + 2 {
+        return;
+    }
+
+    let max_doc_len = screen
+        .runs
+        .iter()
+        .map(|r| r.document_label.chars().count())
+        .max()
+        .unwrap_or(0);
+    let label_field_width = (max_doc_len + 1).max(5) as u16;
+    let gutter: u16 = 2;
+    let data_x = inner.x + label_field_width + gutter;
+    // One trailing blank column past the trace's own last drawn one
+    // (from the frame: the dashed axis stops one column short of
+    // the panel's own right border).
+    let data_width =
+        (inner.width as usize).saturating_sub((label_field_width + gutter) as usize + 1);
+    if data_width == 0 {
+        return;
+    }
+
+    let dim = Style::default().fg(ctx.theme.dim);
+    let border_style = Style::default().fg(border_color);
+    let axis_row_y = inner.y + COMBINED_SENT_ROWS as u16;
+    {
+        let buf = frame.buffer_mut();
+        let axis_label = |buf: &mut ratatui::buffer::Buffer, y: u16, text: &str| {
+            let pad = (label_field_width as usize).saturating_sub(text.chars().count());
+            buf.set_string(inner.x, y, " ".repeat(pad), border_style);
+            buf.set_string(inner.x + pad as u16, y, text, dim);
+        };
+        let sent_top_label =
+            oscilloscope_core::multi::format_shared_axis_label(screen.sent_axis_top);
+        let sent_half_label =
+            oscilloscope_core::multi::format_shared_axis_label(screen.sent_axis_top / 2);
+        let received_top_label =
+            oscilloscope_core::multi::format_shared_axis_label(screen.received_axis_top);
+        axis_label(buf, inner.y, &sent_top_label);
+        axis_label(
+            buf,
+            inner.y + COMBINED_SENT_ROWS as u16 / 2,
+            &sent_half_label,
+        );
+        axis_label(buf, axis_row_y, "0");
+        buf.set_string(data_x - 1, axis_row_y, " ", dim);
+        axis_label(buf, inner.y + chart_rows as u16 - 1, &received_top_label);
+    }
+
+    let now_col_abs = screen.now_col;
+    let focus_col = scrub_col.unwrap_or(now_col_abs);
+    let start_col = focus_col.saturating_sub(data_width * 3 / 4);
+    let sweep_col = now_col_abs
+        .checked_sub(start_col)
+        .filter(|&c| c < data_width);
+    let cursor_col = scrub_col
+        .and_then(|c| c.checked_sub(start_col))
+        .filter(|&c| c < data_width);
+
+    let run_colors = ctx.theme.run_colors();
+    let now_sweep_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+
+    for col in 0..data_width {
+        let abs_col = start_col + col;
+        let x = data_x + col as u16;
+        let sent_values: Vec<u64> = screen
+            .runs
+            .iter()
+            .map(|r| r.buckets.sent.get(&abs_col).copied().unwrap_or(0))
+            .collect();
+        let sent_cells = oscilloscope_core::combined::stack_column(
+            &sent_values,
+            screen.sent_axis_top,
+            COMBINED_SENT_ROWS,
+            oscilloscope_core::combined::sent_partial_glyph,
+        );
+        for (row_idx, cell) in sent_cells.iter().enumerate() {
+            let y = inner.y + row_idx as u16;
+            draw_combined_chart_cell(
+                frame,
+                x,
+                y,
+                *cell,
+                Some(col) == sweep_col,
+                run_colors,
+                now_sweep_style,
+                border_color,
+            );
+        }
+        let received_values: Vec<u64> = screen
+            .runs
+            .iter()
+            .map(|r| r.buckets.received.get(&abs_col).copied().unwrap_or(0))
+            .collect();
+        let mut received_cells = oscilloscope_core::combined::stack_column(
+            &received_values,
+            screen.received_axis_top,
+            COMBINED_RECEIVED_ROWS,
+            oscilloscope_core::combined::received_partial_glyph,
+        );
+        received_cells.reverse();
+        for (row_idx, cell) in received_cells.iter().enumerate() {
+            let y = axis_row_y + 1 + row_idx as u16;
+            draw_combined_chart_cell(
+                frame,
+                x,
+                y,
+                *cell,
+                Some(col) == sweep_col,
+                run_colors,
+                now_sweep_style,
+                border_color,
+            );
+        }
+        let ahead = sweep_col.is_some_and(|s| col > s);
+        let (ch, style) = if Some(col) == sweep_col {
+            ('\u{2503}', now_sweep_style)
+        } else if ahead {
+            ('\u{254c}', dim)
+        } else {
+            ('\u{2500}', Style::default().fg(ctx.theme.border))
+        };
+        frame
+            .buffer_mut()
+            .set_string(x, axis_row_y, ch.to_string(), style);
+    }
+
+    if let Some(c) = cursor_col {
+        if Some(c) != sweep_col {
+            let cursor_rect = Rect {
+                x: data_x + c as u16,
+                y: inner.y,
+                width: 1,
+                height: chart_rows as u16,
+            };
+            frame
+                .buffer_mut()
+                .set_style(cursor_rect, Style::default().bg(ctx.theme.selection_bg));
+        }
+    }
+
+    draw_combined_seconds_row(
+        frame, inner, data_x, data_width, start_col, screen, now, ctx,
+    );
+
+    let legend_y = axis_row_y + 1 + COMBINED_RECEIVED_ROWS as u16 + 1;
+    let legend_available = (inner.y + inner.height)
+        .saturating_sub(legend_y)
+        .saturating_sub(2);
+    draw_combined_legend(
+        frame,
+        Rect {
+            x: inner.x,
+            y: legend_y,
+            width: inner.width,
+            height: legend_available,
+        },
+        screen,
+        data_x,
+        start_col,
+        sweep_col,
+        ctx,
+    );
+
+    let totals_y = inner.y + inner.height - 1;
+    let sep_y = totals_y - 1;
+    frame.buffer_mut().set_string(
+        inner.x,
+        sep_y,
+        "\u{2500}".repeat(inner.width as usize),
+        Style::default().fg(ctx.theme.border),
+    );
+    draw_combined_totals_row(
+        frame,
+        Rect {
+            x: inner.x,
+            y: totals_y,
+            width: inner.width,
+            height: 1,
+        },
+        screen,
+        ctx,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_combined_chart_cell(
+    frame: &mut Frame,
+    x: u16,
+    y: u16,
+    cell: Option<oscilloscope_core::combined::StackedCell>,
+    at_sweep: bool,
+    run_colors: [Color; 6],
+    now_sweep_style: Style,
+    border_color: Color,
+) {
+    if let Some(c) = cell {
+        let color = run_colors[oscilloscope_core::multi::run_role_index(c.run_index)];
+        frame
+            .buffer_mut()
+            .set_string(x, y, c.glyph.to_string(), Style::default().fg(color));
+    } else if at_sweep {
+        frame
+            .buffer_mut()
+            .set_string(x, y, "\u{2503}", now_sweep_style);
+    } else {
+        frame
+            .buffer_mut()
+            .set_string(x, y, " ", Style::default().fg(border_color));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_combined_seconds_row(
+    frame: &mut Frame,
+    inner: Rect,
+    data_x: u16,
+    data_width: usize,
+    start_col: usize,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    now: &str,
+    ctx: &DrawCtx,
+) {
+    let y = inner.y + COMBINED_SENT_ROWS as u16 + 1 + COMBINED_RECEIVED_ROWS as u16;
+    let dim = Style::default().fg(ctx.theme.dim);
+    frame.buffer_mut().set_string(
+        inner.x,
+        y,
+        " ".repeat(inner.width as usize),
+        Style::default().fg(ctx.theme.border),
+    );
+    let now_rel = screen.now_col.checked_sub(start_col);
+    let clock_text =
+        oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
+    let now_label = format!(
+        "Now {clock_text} \u{b7} {}",
+        oscilloscope_core::format::format_duration(screen.now_elapsed_s)
+    );
+    // The label starts one column before the sweep itself, not at
+    // it (from the frame).
+    let now_span = now_rel.map(|r| {
+        let start = r.saturating_sub(1);
+        (start, start + now_label.chars().count())
+    });
+    for sec in 0..=(COMBINED_WINDOW_COLS / 10) {
+        let col = sec * 10;
+        if col < start_col || col - start_col >= data_width {
+            continue;
+        }
+        let tick_rel = col - start_col;
+        if let Some((start, end)) = now_span {
+            if tick_rel + 3 >= start && tick_rel < end {
+                continue;
+            }
+        }
+        let label = format!("{sec}s");
+        frame
+            .buffer_mut()
+            .set_string(data_x + tick_rel as u16, y, &label, dim);
+    }
+    if let Some((start, _)) = now_span {
+        if start < data_width {
+            frame.buffer_mut().set_string(
+                data_x + start as u16,
+                y,
+                &now_label,
+                Style::default()
+                    .fg(ctx.theme.accent_primary)
+                    .add_modifier(Modifier::BOLD),
+            );
+        }
+    }
+}
+
+/// One legend row per run (K3): `\u{25a0} <doc>`, the finished-prompt
+/// label at its own column (the token figure the first thing cut
+/// when it would run into the running label), and the running
+/// label fixed at the Now column.
+#[allow(clippy::too_many_arguments)]
+fn draw_combined_legend(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    data_x: u16,
+    start_col: usize,
+    sweep_col: Option<usize>,
+    ctx: &DrawCtx,
+) {
+    if area.height == 0 {
+        return;
+    }
+    let run_colors = ctx.theme.run_colors();
+    let running_col = sweep_col.map(|c| data_x as usize + c + 2);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let running_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    for (i, run) in screen.runs.iter().enumerate() {
+        if i as u16 >= area.height {
+            break;
+        }
+        let y = area.y + i as u16;
+        let color = run_colors[oscilloscope_core::multi::run_role_index(run.role)];
+        let buf = frame.buffer_mut();
+        buf.set_string(area.x, y, "\u{25a0} ", Style::default().fg(color));
+        buf.set_string(area.x + 2, y, &run.document_label, muted);
+        if let (Some(label), Some(col)) = (&run.finished_label, run.finished_col) {
+            if let Some(rel) = col.checked_sub(start_col) {
+                let x = data_x as usize + rel;
+                let limit = running_col.unwrap_or(area.x as usize + area.width as usize);
+                let text = oscilloscope_core::combined::finished_legend_text(
+                    label,
+                    run.finished_extra,
+                    run.tokens_total,
+                    x,
+                    limit,
+                );
+                frame
+                    .buffer_mut()
+                    .set_string(x as u16, y, &text, Style::default().fg(color));
+            }
+        }
+        if let Some(running_col) = running_col {
+            if let Some(first) = run.running.first() {
+                let extra = run.running.len() - 1;
+                let suffix = if extra > 0 {
+                    format!(" +{extra}")
+                } else {
+                    String::new()
+                };
+                frame.buffer_mut().set_string(
+                    running_col as u16,
+                    y,
+                    format!("\u{25cf} {first}{suffix}"),
+                    running_style,
+                );
+            }
+        }
+    }
+}
+
+/// The cross-run Totals row (K4).
+fn draw_combined_totals_row(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    ctx: &DrawCtx,
+) {
+    let t = &screen.totals;
+    let quiet_text = t
+        .quiet_s
+        .map(|q| format!("{}s", format_seconds_1(q)))
+        .unwrap_or_else(|| "\u{2014}".to_string());
+    let sent_text = oscilloscope_core::format::format_tokens_thousands(t.sent);
+    let received_text = oscilloscope_core::format::format_tokens_thousands(t.received);
+    let total_text = oscilloscope_core::format::format_tokens_t(t.total);
+    let peak_text = oscilloscope_core::format::format_tokens_t(t.peak_tokens);
+    let peak_time_text = format_seconds_1(t.peak_time_s);
+    let rate_text =
+        oscilloscope_core::format::format_tokens_thousands(t.rate_tokens_per_s.round() as u64);
+    let spans = vec![
+        Span::styled(" ", Style::default().fg(ctx.theme.text)),
+        Span::styled(
+            "Totals ",
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("\u{2191}{sent_text} \u{2193}{received_text} \u{b7} "),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled(
+            format!("{total_text}  "),
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            format!("across {} runs  Peak ", t.run_count),
+            Style::default().fg(ctx.theme.fg_muted),
+        ),
+        Span::styled(format!("{peak_text} "), Style::default().fg(ctx.theme.text)),
+        Span::styled(
+            format!("at {peak_time_text}s  Rate "),
+            Style::default().fg(ctx.theme.fg_muted),
+        ),
+        Span::styled(
+            format!("{rate_text} t/s  "),
+            Style::default().fg(ctx.theme.text),
+        ),
+        Span::styled("Quiet ", Style::default().fg(ctx.theme.fg_muted)),
+        Span::styled(quiet_text, Style::default().fg(ctx.theme.text)),
+    ];
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The Per Run table's own fixed columns (K5), each an offset from
+/// the panel's own `inner.x` -- derived from the frame itself, not
+/// from a guessed field width, since `RUN`/`CONFIG`/`ENGINE` are
+/// left-aligned at their own start column while `TOKENS`/`SHARE`/
+/// `DONE` are right-aligned to their own end column.
+const PER_RUN_NAME_COL: u16 = 5;
+const PER_RUN_CONFIG_COL: u16 = 20;
+const PER_RUN_ENGINE_COL: u16 = 43;
+const PER_RUN_NOW_COL: u16 = 55;
+const PER_RUN_TOKENS_RIGHT: u16 = 119;
+const PER_RUN_SHARE_RIGHT: u16 = 125;
+const PER_RUN_DONE_RIGHT: u16 = 132;
+
+fn draw_combined_per_run_header(frame: &mut Frame, inner: Rect, style: Style) {
+    let buf = frame.buffer_mut();
+    buf.set_string(inner.x + PER_RUN_NAME_COL, inner.y, "RUN", style);
+    buf.set_string(inner.x + PER_RUN_CONFIG_COL, inner.y, "CONFIG", style);
+    buf.set_string(inner.x + PER_RUN_ENGINE_COL, inner.y, "ENGINE", style);
+    buf.set_string(inner.x + PER_RUN_NOW_COL, inner.y, "NOW", style);
+    set_right_aligned(
+        buf,
+        inner.x + PER_RUN_TOKENS_RIGHT,
+        inner.y,
+        "TOKENS",
+        style,
+    );
+    set_right_aligned(buf, inner.x + PER_RUN_SHARE_RIGHT, inner.y, "SHARE", style);
+    set_right_aligned(buf, inner.x + PER_RUN_DONE_RIGHT, inner.y, "DONE", style);
+}
+
+/// `text` right-aligned so its own last character lands at `right_x`.
+fn set_right_aligned(
+    buf: &mut ratatui::buffer::Buffer,
+    right_x: u16,
+    y: u16,
+    text: &str,
+    style: Style,
+) {
+    let start = right_x.saturating_sub(text.chars().count() as u16 - 1);
+    buf.set_string(start, y, text, style);
+}
+
+/// The Per Run table (K5): one row per run in launch order, a
+/// `\u{276f}` cursor on the selected one.
+fn draw_combined_per_run_table(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    cursor_run: usize,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Per Run", border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let header_style = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    draw_combined_per_run_header(frame, inner, header_style);
+    let run_colors = ctx.theme.run_colors();
+    for (i, run) in screen.runs.iter().enumerate() {
+        let y = inner.y + 1 + i as u16;
+        if y >= inner.y + inner.height {
+            break;
+        }
+        let selected = i == cursor_run;
+        let color = run_colors[oscilloscope_core::multi::run_role_index(run.role)];
+        if selected {
+            frame.buffer_mut().set_style(
+                Rect {
+                    x: inner.x,
+                    y,
+                    width: inner.width,
+                    height: 1,
+                },
+                Style::default().bg(ctx.theme.selection_bg),
+            );
+        }
+        // The selected row reads in one flat colour (`selection.fg`)
+        // throughout -- never the unselected row's own text/muted
+        // split (from the frame).
+        let row_style = |natural: Color| {
+            let fg = if selected {
+                ctx.theme.selection_fg
+            } else {
+                natural
+            };
+            let base = Style::default().fg(fg);
+            if selected {
+                base.bg(ctx.theme.selection_bg)
+            } else {
+                base
+            }
+        };
+        let buf = frame.buffer_mut();
+        let cell_bg = |base: Style| {
+            if selected {
+                base.bg(ctx.theme.selection_bg)
+            } else {
+                base
+            }
+        };
+        let cursor = if selected { "\u{276f}" } else { " " };
+        // The cursor and swatch keep the run's own colour even when
+        // selected -- only the rest of the row switches to
+        // `selection.fg` (from the frame).
+        buf.set_string(
+            inner.x + 1,
+            y,
+            cursor,
+            cell_bg(Style::default().fg(color)).add_modifier(Modifier::BOLD),
+        );
+        buf.set_string(
+            inner.x + 3,
+            y,
+            "\u{25a0}",
+            cell_bg(Style::default().fg(color)),
+        );
+        buf.set_string(
+            inner.x + PER_RUN_NAME_COL,
+            y,
+            &run.document_label,
+            row_style(ctx.theme.text),
+        );
+        let config_text = run.config_label.as_deref().unwrap_or("\u{2014}");
+        buf.set_string(
+            inner.x + PER_RUN_CONFIG_COL,
+            y,
+            config_text,
+            row_style(ctx.theme.fg_muted),
+        );
+        // The engine reads in the same muted span as the config
+        // (from the frame), not the text colour the NOW/TOKENS/DONE
+        // columns use.
+        buf.set_string(
+            inner.x + PER_RUN_ENGINE_COL,
+            y,
+            &run.engine_label,
+            row_style(ctx.theme.fg_muted),
+        );
+        // Not the full gap up to TOKENS: the frame cuts review's
+        // own three running passes to two plus `+1` well before
+        // that column would force it to (classify's own two, never
+        // cut, bounds this from below; review's own three, cut,
+        // bounds it from above).
+        let now_width = 40usize;
+        let now_text =
+            oscilloscope_core::combined::join_steps_with_overflow(&run.running, now_width);
+        buf.set_string(
+            inner.x + PER_RUN_NOW_COL,
+            y,
+            &now_text,
+            row_style(ctx.theme.text),
+        );
+        let tokens_text = oscilloscope_core::format::format_tokens_t(run.tokens_total);
+        set_right_aligned(
+            buf,
+            inner.x + PER_RUN_TOKENS_RIGHT,
+            y,
+            &tokens_text,
+            row_style(ctx.theme.text),
+        );
+        let share_text = oscilloscope_core::combined::format_share(run.share_pct);
+        set_right_aligned(
+            buf,
+            inner.x + PER_RUN_SHARE_RIGHT,
+            y,
+            &share_text,
+            row_style(ctx.theme.fg_muted),
+        );
+        let done_text = match run.effects_total {
+            Some(total) => format!("{}/{total}", run.effects_done),
+            None => run.effects_done.to_string(),
+        };
+        set_right_aligned(
+            buf,
+            inner.x + PER_RUN_DONE_RIGHT,
+            y,
+            &done_text,
+            row_style(ctx.theme.text),
+        );
+    }
+}
+
+/// Readings (K6): Runs, Steps, Largest, Scale -- the label field
+/// always leaves one real space before the value, even when the
+/// label itself is exactly 6 characters (`Largest`), unlike the
+/// frame's own `Largestsummarize.yml`, allow-listed as a frame typo.
+fn draw_combined_readings(
+    frame: &mut Frame,
+    area: Rect,
+    screen: &oscilloscope_core::combined::CombinedSignalScreen,
+    ctx: &DrawCtx,
+) {
+    let border_color = ctx.theme.border;
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Readings", border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+    fill_border_rows(frame, inner, border_color);
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let text_style = Style::default().fg(ctx.theme.text);
+    let bold = Style::default()
+        .fg(ctx.theme.text)
+        .add_modifier(Modifier::BOLD);
+    let r = &screen.readings;
+    let mut lines: Vec<Line> = vec![
+        Line::from(vec![
+            Span::styled(format!("{:<6} ", "Runs"), muted),
+            Span::styled(
+                format!("{} running \u{b7} {} engines", r.run_count, r.engine_count),
+                text_style,
+            ),
+        ]),
+        Line::from(vec![
+            Span::styled(format!("{:<6} ", "Steps"), muted),
+            Span::styled(format!("{} running now", r.steps_running), text_style),
+        ]),
+    ];
+    if let Some(doc) = &r.largest_doc {
+        let share_text = oscilloscope_core::combined::format_share(r.largest_share_pct);
+        let tokens_text = oscilloscope_core::format::format_tokens_t(r.largest_tokens);
+        lines.push(Line::from(vec![
+            Span::styled(format!("{:<6} ", "Largest"), muted),
+            Span::styled(format!("{doc} "), text_style),
+            Span::styled(format!("{tokens_text} "), bold),
+            Span::styled(format!("\u{b7} {share_text}"), muted),
+        ]));
+    }
+    // `format_shared_axis_label` already carries its own ` t` unit
+    // below 1,000 (`400 t`) but not at or above it (`8.0k`) -- the
+    // number alone here, with ` t` added back just once.
+    let scale_number = oscilloscope_core::multi::format_shared_axis_label(screen.sent_axis_top);
+    let scale_number = scale_number.strip_suffix(" t").unwrap_or(&scale_number);
+    lines.push(Line::from(vec![
+        Span::styled(format!("{:<6} ", "Scale"), muted),
+        Span::styled(
+            format!("{scale_number} t per column \u{b7} shared"),
+            text_style,
+        ),
+    ]));
+    frame.render_widget(
+        Paragraph::new(lines),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width.saturating_sub(1),
+            height: inner.height,
+        },
+    );
+}
+
+/// The Combined Signal's own Help overlay (K7).
+pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
+    let area = frame.area();
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 5,
+        width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
+        height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
+    };
+    frame.render_widget(Clear, popup);
+    let border = ctx.theme.border_focused;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+        popup,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title("Help \u{b7} Combined Signal", border, ctx))
+        .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    fill_border_rows(frame, inner, border);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
+    let key_style = Style::default()
+        .fg(ctx.theme.keyhint_key)
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
+    let row = |k: &str, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{k:<16}"), key_style),
+            Span::styled(d.to_string(), desc_style),
+        ])
+    };
+    let lines = vec![
+        row("\u{2190}\u{2192}", "Scrub the chart"),
+        row("n", "Back to Now"),
+        row("\u{2191}\u{2193}", "Select a run"),
+        row("enter", "Open the selected run on its Signal"),
+        row("c", "Inert here (no run attached to cancel)"),
+        row("esc", "Back to the tiles"),
         row("?", "This help"),
         row("q", "Quit"),
     ];
@@ -15716,6 +16686,95 @@ mod tape_frame_goldens {
             .collect()
     }
 
+    /// `design/fixtures/multi/snap6`'s own six runs, built straight
+    /// off `build_folded` (issue #698's own Combined Signal, `u`) --
+    /// never through [`snap6_tiles`]/[`build_tile`], which only ever
+    /// builds whichever one screen the All grid's own tiles are
+    /// showing, while the Combined Signal always needs every run's
+    /// own rows and flattened state regardless.
+    struct Snap6CombinedRun {
+        document_label: String,
+        config_label: Option<String>,
+        engine_label: String,
+        plan: oscilloscope_core::plan::PlanTree,
+        model: oscilloscope_core::model::RunModel,
+        rendered: oscilloscope_core::render::RenderState,
+        flat: std::collections::BTreeMap<String, oscilloscope_core::model::NodeMeta>,
+    }
+
+    fn snap6_combined_runs(now: &str) -> Vec<Snap6CombinedRun> {
+        let manifest_path = fixtures_dir().join("multi/snap6/manifest.json");
+        let manifest: Vec<serde_json::Value> = serde_json::from_str(
+            &std::fs::read_to_string(&manifest_path)
+                .unwrap_or_else(|e| panic!("couldn't read {manifest_path:?}: {e}")),
+        )
+        .unwrap();
+        let multi_dir = fixtures_dir().join("multi");
+        manifest
+            .iter()
+            .map(|entry| {
+                let key = entry["key"].as_str().unwrap();
+                let orchestration = entry["orchestration"].as_str().unwrap();
+                let config = entry["config"].as_str().unwrap();
+                let engine = entry["engine"].as_str().unwrap();
+                let doc_path = multi_dir.join(orchestration);
+                let config_path = multi_dir.join(config);
+                let program = oscilloscope_core::plan::compile(
+                    &doc_path,
+                    Some(&config_path),
+                    &indexmap::IndexMap::new(),
+                )
+                .unwrap_or_else(|e| panic!("{orchestration} doesn't compile: {e}"));
+                let plan = oscilloscope_core::plan::PlanTree::from_program(&program);
+                let snap_dir = fixtures_dir().join("multi/snap6").join(key);
+                let state = load_json(&snap_dir.join("state.live.json"));
+                let events = load_events(&snap_dir.join("events.jsonl"));
+                let mut model = oscilloscope_core::model::RunModel::new();
+                observe_all_events(&mut model, &events);
+                let flat = oscilloscope_core::model::flatten_state(&state);
+                let rendered = oscilloscope_core::render::build_folded(
+                    &multi_basename(orchestration),
+                    engine,
+                    &plan,
+                    &mut model,
+                    Some(&state),
+                    oscilloscope_core::model::ProcessState::Running,
+                    0.0,
+                    now,
+                    &[],
+                    true,
+                    &Default::default(),
+                );
+                Snap6CombinedRun {
+                    document_label: multi_basename(orchestration),
+                    config_label: Some(multi_basename(config)),
+                    engine_label: engine.to_string(),
+                    plan,
+                    model,
+                    rendered,
+                    flat,
+                }
+            })
+            .collect()
+    }
+
+    fn snap6_combined_inputs(
+        runs: &[Snap6CombinedRun],
+    ) -> Vec<oscilloscope_core::combined::CombinedRunInput<'_>> {
+        runs.iter()
+            .map(|r| oscilloscope_core::combined::CombinedRunInput {
+                document_label: r.document_label.clone(),
+                config_label: r.config_label.clone(),
+                engine_label: r.engine_label.clone(),
+                rows: &r.rendered.unfolded_rows,
+                flat: &r.flat,
+                plan: &r.plan,
+                model: &r.model,
+                header: &r.rendered.header,
+            })
+            .collect()
+    }
+
     /// The Totals row's own `N/M Effects` count, the shipped
     /// counter used unchanged: every snap6 frame counts exactly one
     /// more finished effect than this osi's own walk of the
@@ -15995,6 +17054,254 @@ mod tape_frame_goldens {
             &mock,
             "all--signal--180x48",
             &allowed,
+        );
+    }
+
+    /// The two sent columns where two runs stack in the same 100 ms
+    /// bucket (`summarize.yml`'s own two finishes, each joined by a
+    /// small `classify.yml` one) round their shared top row to a
+    /// whole block here; the frame reads it `\u{2587}` (seven
+    /// eighths) instead. Every other cell of both columns, and the
+    /// received side's own equivalent columns, already match this
+    /// screen's own majority-contributor rule exactly -- reported
+    /// here rather than bent to match the frame's own one-eighth
+    /// rounding.
+    const COMBINED_SIGNAL_STACK_ROUNDING: &[(u16, u16)] = &[
+        (17, 10),
+        (37, 10),
+        (22, 15),
+        (27, 17),
+        (32, 17),
+        (37, 17),
+        (22, 19),
+    ];
+
+    /// Same reason as `ALL_TAPE_EFFECTS_DONE_COUNTER`: the shipped
+    /// effects counter used unchanged reads one more finished effect
+    /// than this osi's own walk of the fixture's real state and
+    /// events finds, for every run.
+    const COMBINED_SIGNAL_EFFECTS_DONE_COUNTER: &[(u16, u16)] = &[
+        (130, 35),
+        (130, 36),
+        (131, 37),
+        (130, 38),
+        (131, 39),
+        (130, 40),
+    ];
+
+    /// Same reason as `ALL_TAPE_STATUS_LINE_PRECISION`:
+    /// `classify.yml`'s own fixture carries microsecond timestamps
+    /// under the millisecond ones its events log shows, so the
+    /// newest-finished pick genuinely differs from the frame's own
+    /// hand-chosen row, not a tie this screen breaks differently.
+    const COMBINED_SIGNAL_STATUS_LINE_PRECISION: &[(u16, u16)] =
+        &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
+
+    /// K6: the frame's own `Largest` reading lost the one space its
+    /// label field always leaves before the value everywhere else
+    /// (`Runs`, `Steps`, `Scale`) -- kept here, not bent to match.
+    const COMBINED_SIGNAL_READINGS_LABEL_GUTTER: &[(u16, u16)] = &[
+        (145, 36),
+        (146, 36),
+        (147, 36),
+        (149, 36),
+        (150, 36),
+        (151, 36),
+        (152, 36),
+        (153, 36),
+        (154, 36),
+        (155, 36),
+        (156, 36),
+        (157, 36),
+        (158, 36),
+        (159, 36),
+        (160, 36),
+        (161, 36),
+        (162, 36),
+        (163, 36),
+        (164, 36),
+        (165, 36),
+        (166, 36),
+        (167, 36),
+        (168, 36),
+        (169, 36),
+        (171, 36),
+        (172, 36),
+    ];
+
+    #[test]
+    fn all_combined_signal_180x48_matches_the_frame() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let mock = parse_mock("all--combined-signal--180x48", &theme);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let runs = snap6_combined_runs(now);
+        let inputs = snap6_combined_inputs(&runs);
+        let anchor = oscilloscope_core::combined::earliest_run_start(
+            inputs
+                .iter()
+                .filter_map(|i| i.header.run_start_ts.as_deref()),
+        )
+        .unwrap()
+        .to_string();
+        let screen = oscilloscope_core::combined::build_combined_signal(
+            &inputs,
+            &anchor,
+            oscilloscope_core::multi::shared_signal_axis_starting_top(600),
+            oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            now,
+        );
+        let backend = TestBackend::new(180, 48);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_combined_signal(f, f.area(), &screen, 0, None, now, &ctx))
+            .unwrap();
+        let allowed = [
+            COMBINED_SIGNAL_STACK_ROUNDING,
+            COMBINED_SIGNAL_EFFECTS_DONE_COUNTER,
+            COMBINED_SIGNAL_STATUS_LINE_PRECISION,
+            COMBINED_SIGNAL_READINGS_LABEL_GUTTER,
+        ]
+        .concat();
+        assert_matches_mock(
+            terminal.backend().buffer(),
+            &mock,
+            "all--combined-signal--180x48",
+            &allowed,
+        );
+    }
+
+    /// K8: below 120 columns the Combined Signal shows the shared
+    /// too-small notice rather than a squeezed layout.
+    #[test]
+    fn combined_signal_119x30_is_too_narrow() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let runs = snap6_combined_runs(now);
+        let inputs = snap6_combined_inputs(&runs);
+        let anchor = "2026-11-08T23:51:55.797Z".to_string();
+        let screen = oscilloscope_core::combined::build_combined_signal(
+            &inputs,
+            &anchor,
+            oscilloscope_core::multi::shared_signal_axis_starting_top(600),
+            oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            now,
+        );
+        let backend = TestBackend::new(119, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_combined_signal(f, f.area(), &screen, 0, None, now, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let found = (0..30).any(|y| {
+            buffer_row_cells(buf, y, 0..119)
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .contains("120")
+        });
+        assert!(found, "expected the too-small notice to name 120 columns");
+    }
+
+    /// K8: at 120x30 the screen draws its full layout (chart, Per
+    /// Run and Readings), just at the floor's own size.
+    #[test]
+    fn combined_signal_120x30_draws_the_full_layout() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let runs = snap6_combined_runs(now);
+        let inputs = snap6_combined_inputs(&runs);
+        let anchor = "2026-11-08T23:51:55.797Z".to_string();
+        let screen = oscilloscope_core::combined::build_combined_signal(
+            &inputs,
+            &anchor,
+            oscilloscope_core::multi::shared_signal_axis_starting_top(600),
+            oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            now,
+        );
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_combined_signal(f, f.area(), &screen, 0, None, now, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let found_per_run = (0..30).any(|y| {
+            buffer_row_cells(buf, y, 0..120)
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .contains("Per Run")
+        });
+        assert!(
+            found_per_run,
+            "expected the Per Run table to still fit at 120x30"
+        );
+    }
+
+    /// K8: at 187x61 the chart and the Per Run table grow with the
+    /// extra room rather than staying pinned to the 180x48 floor.
+    #[test]
+    fn combined_signal_187x61_grows_the_chart_and_table() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let now = "2026-11-08T23:51:58.588Z";
+        let runs = snap6_combined_runs(now);
+        let inputs = snap6_combined_inputs(&runs);
+        let anchor = "2026-11-08T23:51:55.797Z".to_string();
+        let screen = oscilloscope_core::combined::build_combined_signal(
+            &inputs,
+            &anchor,
+            oscilloscope_core::multi::shared_signal_axis_starting_top(600),
+            oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            now,
+        );
+        let backend = TestBackend::new(187, 61);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_combined_signal(f, f.area(), &screen, 0, None, now, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let found_per_run = (0..61).any(|y| {
+            buffer_row_cells(buf, y, 0..187)
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .contains("Per Run")
+        });
+        assert!(found_per_run, "expected the Per Run table to fit at 187x61");
+        let found_chart = (0..61).any(|y| {
+            buffer_row_cells(buf, y, 0..187)
+                .iter()
+                .map(|c| c.ch)
+                .collect::<String>()
+                .contains("Stacked by Run")
+        });
+        assert!(
+            found_chart,
+            "expected the chart's own title to fit at 187x61"
         );
     }
 

@@ -235,3 +235,124 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     assert_no_leftover_process(out_a.path());
     assert_no_leftover_process(out_b.path());
 }
+
+/// Issue #698's own `u`: with three live runs, Select → All → `u`
+/// opens the Combined Signal; `↓` moves its own cursor off the
+/// first run; `enter` opens that run full-screen on Signal; `esc`
+/// from it returns to a fresh Combined leg; `esc` from Combined
+/// returns to the tiles, with the grid's own focus and page
+/// untouched by the round trip; `esc` from the grid returns to
+/// Select; `q` quits at once.
+#[test]
+fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let _guard = ALL_LOCK.lock().unwrap();
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+
+    let docs: Vec<_> = ["a.yml", "b.yml", "c.yml"]
+        .iter()
+        .map(|name| write_doc(work.path(), name, SELECT_SLOW_DOC))
+        .collect();
+    let configs: Vec<_> = ["config-a.json", "config-b.json", "config-c.json"]
+        .iter()
+        .map(|name| write_doc(work.path(), name, SCRIPTED_CONFIG))
+        .collect();
+    let outs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
+    let children: Vec<AutoKill> = (0..3)
+        .map(|i| {
+            AutoKill::new(launch_osi_log(
+                &home,
+                work.path(),
+                &docs[i],
+                &configs[i],
+                outs[i].path(),
+            ))
+        })
+        .collect();
+
+    for out in &outs {
+        wait_for_step_start(
+            &out.path().join("events.jsonl"),
+            "prime.slow",
+            Duration::from_secs(20),
+        );
+    }
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 3, Duration::from_secs(10));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
+
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("All"),
+        "expected the All row listed on Select:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"g");
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(20));
+    assert!(
+        screen.contains("ALL"),
+        "expected enter on the All row to open the grid:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"u");
+    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+    assert!(
+        screen.contains("Per Run") && screen.contains("Readings"),
+        "expected u to open the Combined Signal:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b[B"); // Down arrow: select the second run.
+    send_bytes(&mut master, b"\r");
+    // "SIGNAL" alone is a substring of "COMBINED SIGNAL", so this
+    // waits for the Combined chip to actually disappear, not merely
+    // for a needle the Combined screen itself already satisfies.
+    let screen =
+        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+    assert!(
+        screen.contains("SIGNAL") && !screen.contains("COMBINED SIGNAL"),
+        "expected enter on the selected run to open it full-screen on Signal:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+    assert!(
+        screen.contains("COMBINED SIGNAL"),
+        "expected esc from the opened run to return to the Combined Signal:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    let screen =
+        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(20));
+    assert!(
+        screen.contains("osi  All") && !screen.contains("COMBINED SIGNAL"),
+        "expected esc from the Combined Signal to return to the tiles:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("SELECT") && !screen.contains("osi  All"),
+        "expected esc from the grid to return to Select, not stay on All:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(30));
+    assert!(
+        status.success(),
+        "q on Select should quit at once with exit 0, got {status:?}"
+    );
+
+    drop(children);
+    for out in &outs {
+        assert_no_leftover_process(out.path());
+    }
+}

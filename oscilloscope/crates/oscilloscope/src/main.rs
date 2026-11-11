@@ -5124,6 +5124,51 @@ impl AllRunSlot {
             run_index,
         }
     }
+
+    /// This run's own [`CombinedSlotData`] (issue #698's `u`): the
+    /// same `Row`/flattened-state pair `build` already builds for a
+    /// tile, independent of whichever screen the grid's own tiles
+    /// are showing -- the Combined Signal always reads every run's
+    /// own Signal-shaped data, regardless.
+    fn build_combined_slot_data(&mut self, now: &str) -> CombinedSlotData {
+        let engine_label = self.run.engine.clone().unwrap_or_else(|| "cof".to_string());
+        let rendered = oscilloscope_core::render::build_folded(
+            &self.document_label,
+            &engine_label,
+            &self.plan,
+            &mut self.model,
+            self.last_state.as_ref(),
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let empty = serde_json::Value::Null;
+        let flat =
+            oscilloscope_core::model::flatten_state(self.last_state.as_ref().unwrap_or(&empty));
+        CombinedSlotData {
+            document_label: self.document_label.clone(),
+            config_label: self.config_label.clone(),
+            engine_label,
+            rendered,
+            flat,
+        }
+    }
+}
+
+/// One run's own [`oscilloscope_core::render::RenderState`] and
+/// flattened state, held together just long enough to build this
+/// redraw's own
+/// [`oscilloscope_core::combined::CombinedRunInput`] slice from --
+/// the input itself only ever borrows into this, never owns a copy.
+struct CombinedSlotData {
+    document_label: String,
+    config_label: Option<String>,
+    engine_label: String,
+    rendered: oscilloscope_core::render::RenderState,
+    flat: std::collections::BTreeMap<String, oscilloscope_core::model::NodeMeta>,
 }
 
 /// The grid geometry and this page's own slice of `run_count` runs
@@ -5197,6 +5242,41 @@ fn run_all_loop(
                     WatchOutcome::BackToSelect(reader) => event_rx = reader,
                 }
             }
+            AllAction::Combined => 'combined: loop {
+                let (action, reader) =
+                    run_combined_signal_leg(theme_name, event_rx, &mut all_state);
+                event_rx = reader;
+                match action {
+                    CombinedLegAction::Quit(code) => {
+                        return WatchOutcome::Exited(ExitCode::from(code), Vec::new());
+                    }
+                    CombinedLegAction::BackToTiles => break 'combined,
+                    CombinedLegAction::Open(run) => {
+                        // K7: `enter` on the Per Run table always
+                        // opens that run on its Signal screen,
+                        // whatever the grid's own tiles happen to
+                        // be showing -- and `esc` from it comes
+                        // back to a fresh Combined leg, not the
+                        // grid, since this loop (not `run_all_
+                        // loop`'s own outer one) is what re-enters
+                        // on `BackToSelect`.
+                        match attach_discovered_run(
+                            &run,
+                            true,
+                            no_animation,
+                            theme_name,
+                            no_history,
+                            event_rx,
+                            oscilloscope_core::screens::Screen::Signal,
+                        ) {
+                            WatchOutcome::Exited(code, output) => {
+                                return WatchOutcome::Exited(code, output);
+                            }
+                            WatchOutcome::BackToSelect(reader) => event_rx = reader,
+                        }
+                    }
+                }
+            },
         }
     }
 }
@@ -5206,6 +5286,8 @@ enum AllAction {
     Quit(u8),
     BackToSelect,
     Open(Box<oscilloscope_core::discovery::DiscoveredRun>),
+    /// `u`: the Combined Signal.
+    Combined,
 }
 
 /// Tells two tiles with the same document and config basenames
@@ -5324,6 +5406,7 @@ fn run_all_grid_screen(
                                     break 'all AllAction::Open(Box::new(run.clone()));
                                 }
                             }
+                            keys::AllKeyOutcome::Combined => break 'all AllAction::Combined,
                             keys::AllKeyOutcome::None => {}
                         }
                         needs_draw = true;
@@ -5427,6 +5510,202 @@ fn run_all_grid_screen(
             if drew.is_err() {
                 lost_terminal = true;
                 break 'all AllAction::Quit(0);
+            }
+        }
+    };
+
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
+    (outcome, event_rx)
+}
+
+/// What one leg of [`run_combined_signal_leg`]'s own loop decided.
+enum CombinedLegAction {
+    Quit(u8),
+    /// `esc`: back to the tiles.
+    BackToTiles,
+    Open(Box<oscilloscope_core::discovery::DiscoveredRun>),
+}
+
+/// One leg of the Combined Signal's own screen (issue #698, `u`):
+/// the same shape as [`run_all_grid_screen`]'s own leg -- a fresh
+/// `Terminal` and a fresh set of [`AllRunSlot`]s every time this is
+/// re-entered, which is also the only time it needs to be (an
+/// opened run's own `esc` comes back to a fresh leg, never one
+/// carrying stale ticker state across the round trip).
+fn run_combined_signal_leg(
+    theme_name: theme::ThemeName,
+    event_rx: EventReader,
+    all_state: &mut keys::AllState,
+) -> (CombinedLegAction, EventReader) {
+    let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return (CombinedLegAction::Quit(1), event_rx);
+        }
+    };
+    let _ = terminal.clear();
+    let color_mode = theme::ColorMode::from_env();
+    let resolved_theme = theme::resolve(theme_name, color_mode);
+    let theme = resolved_theme.theme;
+
+    let mut runs = discover_running();
+    let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    disambiguate_tile_document_labels(&mut slots);
+    let mut combined_state = keys::CombinedState::new();
+    let mut last_refresh = Instant::now();
+    let mut signals = SignalWatcher::new().ok();
+    let mut needs_draw = true;
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut lost_terminal = false;
+    let mut last_now_col = 0usize;
+    let mut last_max_col = 0usize;
+
+    let outcome = 'combined: loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                break 'combined CombinedLegAction::Quit(forward_signal_exit_code(sig));
+            }
+        }
+        if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
+            runs = discover_running();
+            let existing_keys: Vec<Option<&Path>> =
+                slots.iter().map(|s| slot_key(&s.run)).collect();
+            let run_keys: Vec<Option<&Path>> = runs.iter().map(slot_key).collect();
+            let matches = match_existing_slots(&existing_keys, &run_keys);
+            let mut existing: Vec<Option<AllRunSlot>> = slots.into_iter().map(Some).collect();
+            let mut new_slots = Vec::with_capacity(runs.len());
+            for (run, matched) in runs.iter().zip(matches) {
+                match matched.and_then(|i| existing[i].take()) {
+                    Some(mut slot) => {
+                        slot.update_run(run.clone());
+                        new_slots.push(slot);
+                    }
+                    None => new_slots.push(AllRunSlot::new(run.clone())),
+                }
+            }
+            slots = new_slots;
+            disambiguate_tile_document_labels(&mut slots);
+            combined_state.cursor_run =
+                combined_state.cursor_run.min(slots.len().saturating_sub(1));
+            last_refresh = Instant::now();
+            needs_draw = true;
+        }
+        for slot in &mut slots {
+            slot.tick();
+        }
+        needs_draw |= !slots.is_empty();
+
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        match combined_state.handle_key(
+                            key.code,
+                            key.modifiers,
+                            slots.len(),
+                            last_now_col,
+                            last_max_col,
+                        ) {
+                            keys::CombinedKeyOutcome::Quit(code) => {
+                                break 'combined CombinedLegAction::Quit(code);
+                            }
+                            keys::CombinedKeyOutcome::BackToTiles => {
+                                break 'combined CombinedLegAction::BackToTiles;
+                            }
+                            keys::CombinedKeyOutcome::Open(index) => {
+                                if let Some(run) = runs.get(index) {
+                                    break 'combined CombinedLegAction::Open(Box::new(run.clone()));
+                                }
+                            }
+                            keys::CombinedKeyOutcome::None => {}
+                        }
+                        needs_draw = true;
+                    }
+                    CEvent::Resize(_, _) => needs_draw = true,
+                    _ => {}
+                },
+            }
+        }
+        if terminal_gone {
+            lost_terminal = true;
+            break 'combined CombinedLegAction::Quit(0);
+        }
+
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let now_str = now_rfc3339();
+            let slot_data: Vec<CombinedSlotData> = slots
+                .iter_mut()
+                .map(|s| s.build_combined_slot_data(&now_str))
+                .collect();
+            let inputs: Vec<oscilloscope_core::combined::CombinedRunInput> = slot_data
+                .iter()
+                .zip(slots.iter())
+                .map(|(d, s)| oscilloscope_core::combined::CombinedRunInput {
+                    document_label: d.document_label.clone(),
+                    config_label: d.config_label.clone(),
+                    engine_label: d.engine_label.clone(),
+                    rows: &d.rendered.unfolded_rows,
+                    flat: &d.flat,
+                    plan: &s.plan,
+                    model: &s.model,
+                    header: &d.rendered.header,
+                })
+                .collect();
+            let anchor = oscilloscope_core::combined::earliest_run_start(
+                inputs
+                    .iter()
+                    .filter_map(|i| i.header.run_start_ts.as_deref()),
+            )
+            .unwrap_or(now_str.as_str())
+            .to_string();
+            let screen = oscilloscope_core::combined::build_combined_signal(
+                &inputs,
+                &anchor,
+                all_state.combined_sent_top,
+                all_state.combined_received_top,
+                &now_str,
+            );
+            all_state.combined_sent_top = screen.sent_axis_top;
+            all_state.combined_received_top = screen.received_axis_top;
+            last_now_col = screen.now_col;
+            last_max_col = screen.now_col + 150;
+            combined_state.cursor_run = combined_state
+                .cursor_run
+                .min(screen.runs.len().saturating_sub(1));
+            let ctx = tui::DrawCtx {
+                theme: &theme,
+                theme_banner: None,
+                zone: &LocalZone,
+                no_animation: true,
+            };
+            let drew = terminal.draw(|f| {
+                tui::draw_combined_signal(
+                    f,
+                    f.area(),
+                    &screen,
+                    combined_state.cursor_run,
+                    combined_state.scrub_col,
+                    &now_str,
+                    &ctx,
+                );
+                if combined_state.help_open {
+                    tui::draw_combined_signal_help(f, &ctx);
+                }
+            });
+            last_draw = Instant::now();
+            needs_draw = false;
+            if drew.is_err() {
+                lost_terminal = true;
+                break 'combined CombinedLegAction::Quit(0);
             }
         }
     };

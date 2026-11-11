@@ -2971,8 +2971,8 @@ figures.
 
 **Part 5 groundwork (issue #698): the run registry, discovery and
 history's `config`/`run_dir`.** Part 5 of the epic (#677) is the
-Select and All screens and the Combined Signal; none of the three
-has shipped yet. What has is the groundwork those screens, and
+Select and All screens and the Combined Signal, all three now
+shipped (below). What shipped first is the groundwork those screens, and
 scripts, read from: `oscilloscope_core::registry` writes one `0600`
 JSON entry per run `osi` launches or watches, in a `0700` directory
 at `$OSI_RUNS_DIR`, else `$XDG_RUNTIME_DIR/circuitry/osi/runs`, else
@@ -3024,8 +3024,7 @@ registry entry's own `config`, else `run_start.config`, else the
 process's own arguments, else nothing.
 
 **The Select screen** (issue #698, part 5 of the epic -- the running
-list and the empty state's Recent Runs table; the All screen below
-has shipped, the Combined Signal has not). A bare `osi` on a TTY with
+list and the empty state's Recent Runs table). A bare `osi` on a TTY with
 no `--log` runs the same discovery as the groundwork above
 (`oscilloscope_core::select::build_rows`) and shows one of three
 shapes: with exactly one running orchestration, attaches to it
@@ -3258,9 +3257,8 @@ through the same `attach_discovered_run` Select's own run rows use
 the grid rather than to Select (one more leg of `main.rs`'s own
 `run_all_loop`, the same round-trip shape `run_select`'s already
 is); `esc` on the grid itself returns to Select; `q` quits at once
-everywhere on this screen (watching only, never a confirm); `u` (the
-Combined Signal) is inert -- Help says so -- since that screen is
-the epic's own next pull request, not this one.
+everywhere on this screen (watching only, never a confirm); `u`
+opens the Combined Signal (below).
 
 **Tile content:** a Tape tile keeps the Tape's
 own order (Run Started, the finished rows, the Now band, the
@@ -3410,6 +3408,139 @@ whichever run is focused, on Signal, proving the move really landed
 there rather than merely that the key was accepted; `esc` returns to
 the grid; a second `esc` returns to Select, both runs still listed;
 `q` quits at once.
+
+**The Combined Signal** (issue #698, part 5 of the epic's own last
+screen -- `u` on the grid). Every running run on one trace, stacked
+by run in launch order, sent tokens above a shared axis and received
+below it, one legend row per run, cross-run Totals, a Per Run table
+and Readings -- `oscilloscope_core::combined` carries the whole
+screen's own pure logic (`CombinedSignalScreen`/`CombinedRun`,
+built by `build_combined_signal`), read fresh from every discovered
+run's own `Row`/flattened-state pair regardless of whichever of the
+four screens the grid's own tiles happen to be showing -- the
+Combined Signal always needs every run's own Signal-shaped data at
+once, built with `render::build_folded` the same way a single-run
+attach is, from `unfolded_rows` rather than the folded `rows` a
+tile reads, since a loop's own several passes fold into one
+`QuickSteps` row there, dropping the individual rows this screen's
+own finished-prompt and running-step scans need. The chart's own
+time axis is anchored to the earliest of every run's own
+`run_start_ts` (`earliest_run_start`), not each run's own start,
+and never scrolls: 100 ms per column, a tick every second, the Now
+sweep and the dashed axis ahead exactly as the single-run Signal
+draws them, just stacked.
+
+**Stacking** (`combined::stack_column`): a column's own `rows` cells
+fill from the axis upward, in the caller's own run order -- a run's
+addition that completes a whole row claims it (the run active when
+the shared cumulative total first reaches that row's own
+threshold, the same rule a single run's own column already uses,
+just walked across every run in turn); the one partial cap row, when
+the column's own total never completes a whole row by itself, goes
+to whichever run contributes the larger *share of that one row*,
+not simply the last one added -- a column where two runs' tokens
+both land inside the same partial row, neither alone enough to fill
+it, still reads as the larger contributor's own colour. The shared
+scale (`multi::shared_signal_axis_top`, already built for the All
+grid's own Signal tiles) sizes off the largest *stacked* column
+across every run, sent and received separately, persisted across
+redraws through `keys::AllState`'s own `combined_sent_top`/
+`combined_received_top` fields so a Combined leg re-entered after
+an opened run's own `esc` keeps growing from where it left off,
+rather than collapsing back to the no-history floor.
+
+**The legend** (`combined::finished_legend_text`): one row per run,
+a `■` swatch in the run's own role colour, the document, the first
+finished prompt or reflector by real finish time (`+N` for every
+other one, the run's own total tokens so far appended only while
+the whole label still ends strictly before the running label's own
+column -- the token figure is always the first thing a cut label
+loses, never the name or the `+N`) at its own combined-time column,
+and the running label (`● <first running step>`, `+N` for the rest,
+`combined::running_step_labels`) fixed at the Now column. The Per
+Run table (`combined::join_steps_with_overflow`) joins every
+running step the same way, cut to a fixed-width budget narrower
+than the column's own full gap to TOKENS, inferred from the frame
+(`review.yml`'s own three running passes cut to two plus `+1`;
+`classify.yml`'s own two, never cut) since no single width the
+frame draws pins the real one exactly.
+
+**Totals and Readings**: Peak is the largest stacked column's own
+total (sent or received, whichever is larger) and its own elapsed
+time from the anchor; Rate is every run's own total tokens over the
+elapsed time since the anchor; Quiet is the time since the newest
+finished step across every run (`multi::newest_finished_across_runs`,
+the same figure the cross-run status line already reads). SHARE and
+the Largest reading both read `combined::format_share` (`§3.3`'s own
+`<1%` rounding, not a second copy of it). DONE uses the shipped
+effects counter (`header.effects_done`/`effects_planned_full`)
+unchanged, same as the All grid's own tiles.
+
+**Keys** (`keys::CombinedState`, pure and unit-tested the same way
+`AllState` is): `←→` scrub a column cursor, starting from Now the
+first time, never past either end; `n` returns to Now; `↑↓` move the
+Per Run table's own cursor, wrapping at its own edges; `enter` opens
+the selected run full-screen on its Signal screen (through the same
+`attach_discovered_run` the grid's own `enter` uses, but always on
+Signal regardless of whatever the grid's own tiles are showing), so
+`esc` from it returns to a fresh Combined leg (`run_combined_signal_
+leg`'s own re-entry, the same shape `run_all_grid_screen`'s already
+is); `esc` on the Combined Signal itself returns to the grid, with
+its own focus and page untouched, since the grid's own `AllState`
+never changes while a Combined leg runs; `q` quits at once
+everywhere on this screen (watching only, never a confirm); `?`
+shows this screen's own Help, which lists `c` as inert, the same as
+the grid's.
+
+**Sizes**: below 120 columns, or below the 30 rows the chart's own
+fixed-height trace, one legend row, a separator and Totals need
+alongside the chrome rows every screen already carries, the shared
+too-small notice shows naming 120 columns -- `design/tui-design.md`
+§5 names no narrower rule of its own for this screen, and falling
+back to the grid outright (as §5's own text for the screen in
+general suggests) is not yet implemented; this is reported as a
+residual gap, not bent into a redirect this pull request doesn't
+build. At 180x48 (the golden's own size) the chart and the Per Run
+table split 32/13 rows; past that the chart keeps growing with the
+extra height and the Per Run table with the extra width, both
+proven at 187x61 rather than pinned to the floor's own numbers.
+
+Goldens: `all--combined-signal--180x48`
+(`tui::tape_frame_goldens::all_combined_signal_180x48_matches_the_
+frame`), replayed from the same six-run fixture frozen at the same
+instant as both All frames. Every allow-listed cell: two sent
+columns where `summarize.yml`'s own stacked total completes a whole
+row a whole eighth short of this screen's own majority-contributor
+rule (`COMBINED_SIGNAL_STACK_ROUNDING`, reported rather than bent to
+match); the same `N/M Effects` counter discrepancy the All frames
+already carry, used unchanged (`COMBINED_SIGNAL_EFFECTS_DONE_
+COUNTER`); the cross-run status line's own `classify.yml` tie,
+broken by real microsecond precision underneath the frame's own
+hand-chosen row, the same reasoning the All frames' own status line
+allow-list already gives (`COMBINED_SIGNAL_STATUS_LINE_PRECISION`);
+and the frame's own `Largestsummarize.yml` reading, which lost the
+one space every other label here keeps, kept here and allow-listed
+rather than reproduced (`COMBINED_SIGNAL_READINGS_LABEL_GUTTER`).
+
+**From the frames, not from the design text.** The legend's own
+finished-prompt label sits at its own real finish column, cut to
+drop the token figure the instant it would reach the running
+label's own column, never short of it. The Per Run table's own NOW
+column cuts to two running steps plus `+N` at a width narrower than
+the column's own full gap to TOKENS, inferred from the frame as
+above. The lower half's own 136/44 column split is that exact
+ratio, not a rounder percentage that only coincidentally matches at
+180 columns. Run colours and the shared scale both already carry
+their own from-the-frames notes above (the All screen's own
+paragraph).
+
+A PTY end-to-end test, in the same file as the grid's own
+(`e2e_tui_pty_all.rs`): three live runs; Select lists all three and
+`All`; `g` then `enter` opens the grid; `u` opens the Combined
+Signal; `↓` selects the second run; `enter` opens it full-screen on
+Signal; `esc` returns to the Combined Signal; `esc` returns to the
+grid; `esc` returns to Select, all three runs still listed; `q`
+quits at once.
 
 **Browsing every effect after a run, with one selection across
 screens** (issue #704, beyond anything `design/tui-design.md` itself
