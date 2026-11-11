@@ -1,0 +1,1 @@
+{"runtime": {"plugins": {"gh": {"env": {"GH_PLUGIN_ENV_PROBE": "configured-only-value"}}}}}
