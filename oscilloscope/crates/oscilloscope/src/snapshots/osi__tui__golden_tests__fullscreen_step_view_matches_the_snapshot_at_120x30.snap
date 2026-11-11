@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 14044
 expression: "fullscreen_step_snapshot(120, 30)"
 ---
 " osi  do.yml · ✓ Ended 10.1s                                                                           TAPE    02:09:00 "

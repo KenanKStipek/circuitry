@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope-core/tests/golden.rs
-assertion_line: 302
 expression: rendered
 ---
 --- observation 0 ---
