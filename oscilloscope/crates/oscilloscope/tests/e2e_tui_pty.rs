@@ -1262,25 +1262,23 @@ fn pressing_1_during_a_live_run_opens_the_signal_screen() {
     let (mut master, _slave_path, child, captured_buf) =
         spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
 
-    let before_1 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"1");
-    wait_for_pattern(&captured_buf, b"Signal", Duration::from_secs(10));
-    {
-        let after = captured_buf.lock().unwrap()[before_1..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains("Signal"),
-            "expected the Signal screen's own chip/title after pressing 1; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains('┃'),
-            "expected the Now sweep on the trace; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains("slow"),
-            "expected the running step's own row; got:\n{rendered:?}"
-        );
-    }
+    // The replayed screen, not the bytes drawn since the key press: a
+    // screen switch redraws only the cells that changed, so text that
+    // sits in the same cells on both screens is never sent again.
+    let screen = wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(10));
+    assert!(
+        screen.contains("SIGNAL"),
+        "expected the Signal screen's own chip after pressing 1; got:\n{screen}"
+    );
+    assert!(
+        screen.contains('┃'),
+        "expected the Now sweep on the trace; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("slow"),
+        "expected the running step's own row; got:\n{screen}"
+    );
 
     // Scrub left, then right, then zoom in and out, then back to
     // Now -- this fixture's own single, always-running step gives
