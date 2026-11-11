@@ -3741,31 +3741,17 @@ fn large_token_figures_never_show_thousands_separators_on_any_screen() {
 
 /// A comma with a digit on both sides is a thousands separator in
 /// every token figure this screen ever draws -- nothing else in the
-/// chrome puts a digit directly against a comma. The Signal/Combined
-/// Signal axis labels (issue #715's own rule 3 exception, unchanged:
-/// `600 t`, `1,200 t`) are the one place a count still reads that
-/// way on purpose: a comma immediately followed by exactly three
-/// digits, a space, a bare `t` and a word boundary is that one shape
-/// and is not flagged -- every other count now carries a scale
-/// letter (`kt`/`Mt`/`Gt`/`Tt`) right before its own `t`.
+/// chrome puts a digit directly against a comma, and no axis label
+/// ever carries one either (`format_shared_axis_label` only ever
+/// prints a plain count or a `k`-scaled one, never a comma).
 fn assert_no_thousands_separator(screen: &str, screen_name: &str) {
     let chars: Vec<char> = screen.chars().collect();
     for (i, &c) in chars.iter().enumerate() {
         if c != ',' || i == 0 || i + 1 >= chars.len() {
             continue;
         }
-        if !(chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit()) {
-            continue;
-        }
-        let is_axis_label = i + 5 < chars.len()
-            && chars[i + 1].is_ascii_digit()
-            && chars[i + 2].is_ascii_digit()
-            && chars[i + 3].is_ascii_digit()
-            && chars[i + 4] == ' '
-            && chars[i + 5] == 't'
-            && chars.get(i + 6).is_none_or(|c| !c.is_ascii_alphanumeric());
         assert!(
-            is_axis_label,
+            !(chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit()),
             "expected no thousands-separated token figure on the {screen_name} screen; screen:\n{screen}"
         );
     }
