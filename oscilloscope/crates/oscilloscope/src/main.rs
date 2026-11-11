@@ -5252,7 +5252,7 @@ fn run_all_loop(
                     }
                     CombinedLegAction::BackToTiles => break 'combined,
                     CombinedLegAction::Open(run) => {
-                        // K7: `enter` on the Per Run table always
+                        // `enter` on the Per Run table always
                         // opens that run on its Signal screen,
                         // whatever the grid's own tiles happen to
                         // be showing -- and `esc` from it comes
@@ -5486,6 +5486,7 @@ fn run_all_grid_screen(
                 .fold(0.0_f64, f64::max);
             let running_count = runs.len();
             let tiles = &all_tiles[page_offset..page_offset + page_run_count];
+            let status_note = all_state.combined_too_small_note.take();
             let drew = terminal.draw(|f| {
                 tui::draw_all(
                     f,
@@ -5498,6 +5499,7 @@ fn run_all_grid_screen(
                     running_count,
                     status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
                     elapsed_s,
+                    status_note.as_deref(),
                     &now_str,
                     &ctx,
                 );
@@ -5641,6 +5643,19 @@ fn run_combined_signal_leg(
         }
 
         if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let term_size = terminal.size().unwrap_or_default();
+            if term_size.width < tui::COMBINED_MIN_WIDTH
+                || term_size.height < tui::COMBINED_MIN_HEIGHT
+            {
+                all_state.combined_too_small_note = Some(format!(
+                    "Combined Signal needs {}x{} · this terminal is {}x{}",
+                    tui::COMBINED_MIN_WIDTH,
+                    tui::COMBINED_MIN_HEIGHT,
+                    term_size.width,
+                    term_size.height
+                ));
+                break 'combined CombinedLegAction::BackToTiles;
+            }
             let now_str = now_rfc3339();
             let slot_data: Vec<CombinedSlotData> = slots
                 .iter_mut()
@@ -5673,11 +5688,14 @@ fn run_combined_signal_leg(
                 all_state.combined_sent_top,
                 all_state.combined_received_top,
                 &now_str,
+                combined_state.scrub_col,
             );
             all_state.combined_sent_top = screen.sent_axis_top;
             all_state.combined_received_top = screen.received_axis_top;
             last_now_col = screen.now_col;
-            last_max_col = screen.now_col + 150;
+            // The scrub cursor never moves past Now -- there's
+            // nothing ahead of it to scrub to.
+            last_max_col = screen.now_col;
             combined_state.cursor_run = combined_state
                 .cursor_run
                 .min(screen.runs.len().saturating_sub(1));

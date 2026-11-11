@@ -1695,7 +1695,7 @@ impl SelectState {
 /// index (`page_offset + focus`) and page transitions on its own,
 /// so a test drives every key with no real grid or terminal
 /// involved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AllState {
     pub screen: oscilloscope_core::screens::Screen,
     pub focus: usize,
@@ -1714,6 +1714,15 @@ pub struct AllState {
     /// run the same way the grid's own tiles' shared scale does.
     pub combined_sent_top: u64,
     pub combined_received_top: u64,
+    /// Set when `u` bounced straight back here because the
+    /// terminal was too small for the Combined Signal's own layout
+    /// -- shown once on the grid's own status line, then cleared,
+    /// the same shape the Signal screen's own bounce to the Tape
+    /// below 80 columns already has, just with a note where that
+    /// one needs none (a resize can put a user back on the Tape
+    /// with no explanation needed; here `u` looked like it did
+    /// nothing at all otherwise).
+    pub combined_too_small_note: Option<String>,
 }
 
 impl AllState {
@@ -1727,6 +1736,7 @@ impl AllState {
             shared_received_top: oscilloscope_core::multi::shared_signal_axis_starting_top(80),
             combined_sent_top: oscilloscope_core::multi::shared_signal_axis_starting_top(600),
             combined_received_top: oscilloscope_core::multi::shared_signal_axis_starting_top(80),
+            combined_too_small_note: None,
         }
     }
 }
@@ -1880,7 +1890,7 @@ impl AllState {
 /// Per Run table's own cursor, `enter` opens the selected run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct CombinedState {
-    /// `None` while following Now (K7: `n` returns to Now) -- a
+    /// `None` while following Now (`n` returns to it) -- a
     /// scrubbed column once `←→` has moved it away.
     pub scrub_col: Option<usize>,
     pub cursor_run: usize,
