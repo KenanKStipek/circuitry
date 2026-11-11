@@ -3666,6 +3666,39 @@ screen's own bindings while the full-screen step is open. Every
 screen's key bar reads this shared full-screen key bar instead of
 its own ordinary one for as long as it stays open.
 
+**On a run longer than the window (issue #734).** The text is
+silent: every frame is a short run, so none of this changes a single
+one. While the run is live and nothing is being scrubbed
+(`App::signal_cursor_col`, never `screens::SignalScreen::cursor_col`,
+which the previous paragraph's own `selection_col` can leave parked
+on a step that finished long ago), the single-run Signal's own
+window follows Now at the same share of the trace's own width the
+Combined Signal and the Signal tiles already use (`tui::
+trace_window_start`, shared by all three rather than copied). A
+scrub still moves the window exactly as `trace_window_start` already
+did; `n` returns it to following. A tool bar already running when
+the window scrolls past its own start still draws its own label,
+readable from the window's own left edge, clipped by the same
+per-span budget any other row's own over-long text already is
+(`draw_signal_step_rows`). Second marks on the single-run Signal, its
+tiles and the Combined Signal, and the Combined Totals' own `Peak`
+and `Quiet`, read in one elapsed-time format shared by all of them
+(`format::format_signal_elapsed`): whole seconds under a minute (a
+decimal only where one already showed, `0.5s`), `MMmSSs` from a
+minute, `HhMMmSSs` from an hour -- never a raw second count. Their
+own spacing (`format::signal_mark_step_s`) widens past one mark a
+second only once a run's own longest label would otherwise overlap
+its neighbour, and the single-run Signal and its tiles now keep the
+same one-column gap around the Now label the Combined Signal's own
+seconds row already kept. The Combined Signal's own Per Run table
+cuts the RUN, CONFIG and ENGINE columns with an ellipsis before the
+next one starts, rather than letting a long label run over it, the
+same rule the Largest Stores table's own `store_cut_label` already
+follows. Readings, on both the single-run Signal and the Combined
+Signal, never wraps a line: a long Largest label is cut with an
+ellipsis instead, and the token figure after it, and the share after
+that on the Combined Signal, always stay whole.
+
 ### 6.4 Tests
 
 - **Golden tests, with `insta`.** Each fixture is a recorded run: plan, snapshot sequence with times, events, stdout/stderr and exit code. The fixtures are the §1 probes, with paths scrubbed. Two outputs are checked against goldens:
