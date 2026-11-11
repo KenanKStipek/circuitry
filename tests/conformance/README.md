@@ -40,7 +40,7 @@ cases/<name>/
 | `engines` | `["python"]`, `["electricity"]`, or both — which runner(s) run this case |
 | `expect` | `"success"` or `"failure"` |
 | `cli_args` | extra argv appended after `--out <path>`, e.g. `["-e", "x=5"]` -- a `__MOCK_HTTP_PORT__` substring in any element is replaced with the mock server's real port, see "Mock HTTP server" below, and a `__CASE_DIR__` substring with the case directory's absolute path (the expected state carries it as `<CASE_DIR>`) |
-| `config` | filename (relative to the case dir) to pass as `--config`, or omitted |
+| `config` | filename (relative to the case dir) to pass as `--config`, or omitted -- a `__CASE_DIR__` substring anywhere in its content is replaced with the case directory's absolute path (same placeholder as `cli_args`), for a setting like `runtime.plugins.<name>.binary` that must be absolute and can't be committed with one |
 | `also_pretty` | success cases only — also capture `--out --pretty` (used by C23) |
 | `error_compare` | failure cases only — `"exact"` (Circuitry's own message, byte-for-byte) or `"location"` (a third-party library's message — CEL, YAML/JSON parse errors, JSON Schema — compared only for failing at the same place with a non-empty message, per §12) |
 | `location_pattern` | failure cases with `error_compare: "location"` — a regex both messages must match, with the same captured text, e.g. `"effects\\[\\d+\\]\\.name"` |
