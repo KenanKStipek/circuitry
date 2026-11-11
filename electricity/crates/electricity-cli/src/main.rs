@@ -714,6 +714,8 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         live_state_path: run_args.live_state.map(PathBuf::from),
         events_path: run_args.events.map(PathBuf::from),
         profile_path: run_args.profile.map(PathBuf::from),
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

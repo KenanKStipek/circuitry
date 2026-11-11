@@ -72,6 +72,8 @@ async fn run_case(case: &CorpusCase) -> Json {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
     let token = CancellationToken::new();

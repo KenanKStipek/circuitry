@@ -38,6 +38,8 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     }
 }
@@ -553,6 +555,8 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
         live_state_path: Some(live_state_path.clone()),
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
 
@@ -593,6 +597,8 @@ async fn run_start_names_only_the_config_files_own_file_name() {
         live_state_path: None,
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
 
@@ -635,6 +641,8 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
         live_state_path: None,
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
 
@@ -756,6 +764,8 @@ fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

@@ -564,6 +564,7 @@ fn build_runtime_config(
     effective_runtime: Option<&Value>,
     cfg: &CircuitryConfig,
     orchestration_dir: &str,
+    allow_capabilities: &[String],
 ) -> Value {
     let mut dict = effective_runtime
         .and_then(Value::as_dict)
@@ -596,7 +597,7 @@ fn build_runtime_config(
     dict.insert(
         Value::Str("_capability_allow".to_string()),
         Value::List(
-            electricity_config::capability_allow()
+            electricity_config::capability_allow(allow_capabilities)
                 .into_iter()
                 .map(Value::Str)
                 .collect(),
@@ -1275,6 +1276,7 @@ pub async fn run_orchestration_with_config(
         &loaded.document,
         document_name,
         profile.as_ref(),
+        req.adapter_override.as_deref(),
     ) {
         Ok(effective) => effective,
         Err(err) => fail!(err.0),
@@ -1443,8 +1445,12 @@ pub async fn run_orchestration_with_config(
     // private keys a tool dispatch and this run's own metadata both
     // read off the identical value.
     let orchestration_dir = orchestration_dir_string(&req.orchestration_path);
-    let runtime_config_value =
-        build_runtime_config(effective.runtime.as_ref(), &cfg, &orchestration_dir);
+    let runtime_config_value = build_runtime_config(
+        effective.runtime.as_ref(),
+        &cfg,
+        &orchestration_dir,
+        &req.allow_capabilities,
+    );
 
     // Step 12 (part 1): `state.setdefault("runtime", {})` -- Python's
     // own order has this *before* `_run_id`/`_timestamp` are assigned

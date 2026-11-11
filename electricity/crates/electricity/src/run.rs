@@ -31,7 +31,23 @@ pub struct RunRequest {
     /// only (DESIGN §1, §6.11: no name discovery, no
     /// `--profile-from-state`).
     pub profile_path: Option<PathBuf>,
-    /// `true` only for a CLI-driven run (`ToolCall::armed`'s own doc
+    /// `--allow-capabilities a,b` (issue #728), already split and
+    /// trimmed -- threaded into `runtime_config["_capability_allow"]`
+    /// (`electricity_config::allowlist::capability_allow`) exactly as
+    /// `cof run`'s own `RunRequest.allow_capabilities` is. Has no
+    /// observable effect on any document electricity runs today (that
+    /// module's own doc comment) -- ported for parity with `cof run`,
+    /// not because electricity's own capability-consent gate needs it
+    /// yet.
+    pub allow_capabilities: Vec<String>,
+    /// `--adapter <name>` (issue #728) -- this run's default adapter,
+    /// ranked above a loaded `--profile`/the orchestration's own
+    /// `adapter:`/the config's `default_adapter`, exactly as `cof
+    /// run`'s own `--adapter`/`RunRequest.adapter_override` ranks
+    /// (`cli` tier, `cli/effective_settings.py::
+    /// resolve_effective_settings`).
+    pub adapter_override: Option<String>,
+    /// `true` for a CLI-driven run (`ToolCall::armed`'s own doc
     /// comment, `electricity_tools::ToolCall`) -- a run option on
     /// *this* struct, not a literal `run_orchestration` hard-codes,
     /// so an embedding caller that isn't

@@ -504,6 +504,7 @@ dependencies = [
  "indexmap",
  "log",
  "regex",
+ "sha2",
 ]
 
 [[package]]

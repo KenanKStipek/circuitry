@@ -234,6 +234,8 @@ async fn run_case(name: &str, orchestration: &str, inputs: &[(&str, &str)]) -> R
         live_state_path: Some(live_state_path.clone()),
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
     let token = CancellationToken::new();

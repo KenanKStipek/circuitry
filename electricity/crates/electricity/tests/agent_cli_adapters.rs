@@ -68,6 +68,8 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        adapter_override: None,
         armed: true,
     }
 }
