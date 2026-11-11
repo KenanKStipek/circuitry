@@ -993,8 +993,9 @@ mod tests {
 
     #[test]
     fn finished_legend_text_drops_tokens_before_the_running_column() {
-        // Reaching exactly `limit_col` still loses the token figure
-        // (the frame's own classify row touches it exactly).
+        // Reaching exactly `limit_col` still loses the token figure,
+        // at a boundary chosen for this test alone -- the frame's
+        // own classify row sits at different columns and has room.
         let text = finished_legend_text("iter_0 \u{203a} label", 5, 1_152, 17, 45);
         assert_eq!(text, "\u{2713} iter_0 \u{203a} label +5");
     }
