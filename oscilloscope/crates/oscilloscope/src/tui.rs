@@ -4177,7 +4177,7 @@ fn draw_select_empty_panel(
             height: 1,
         },
         vec![Span::styled(
-            "      DOC      NAME          CONFIG         STARTED   TOOK  TOKENS OUTCOME",
+            "      DOC      NAME                CONFIG         STARTED   TOOK  TOKENS OUTCOME",
             header_style,
         )],
     );
@@ -4255,13 +4255,15 @@ fn render_line(frame: &mut Frame, rect: Rect, spans: Vec<Span<'static>>) {
 }
 
 /// One Recent Runs row's own spans (issue #698): DOC(9) NAME(14,
-/// issue #717) CONFIG(15) STARTED(10) then TOOK+TOKENS combined
-/// (13, `{:<5}{:>7} `) and OUTCOME -- field widths measured from
-/// `design/frames/select--empty--80x24`. At this width there is no
-/// slack left for NAME without something giving way, so the far
-/// right of OUTCOME is what gives: a terminal narrower than the
-/// row's own full content simply clips it, the same as every other
-/// field here already would.
+/// issue #717, [`SELECT_NAME_COL_WIDTH`] again so the longest
+/// possible name plus its collision suffix never runs into the next
+/// column) CONFIG(15) STARTED(10) then TOOK+TOKENS combined
+/// (13, `{:<5}{:>7} `) and OUTCOME -- the other field widths
+/// measured from `design/frames/select--empty--80x24`. At this
+/// width there is no slack left for NAME without something giving
+/// way, so the far right of OUTCOME is what gives: a terminal
+/// narrower than the row's own full content simply clips it, the
+/// same as every other field here already would.
 fn recent_row_spans(
     row: &oscilloscope_core::select::RecentRow,
     selected: bool,
@@ -4279,7 +4281,7 @@ fn recent_row_spans(
     let started =
         oscilloscope_core::format::format_clock_time(&row.started_at, zone).unwrap_or_default();
     let doc_field = format!("{:<9}", row.document_label);
-    let name_field = format!("{:<14}", row.name);
+    let name_field = format!("{:<nw$}", row.name, nw = SELECT_NAME_COL_WIDTH);
     let config_field = format!("{config_text:<15}");
     let started_field = format!("{started:<10}");
     let tokens_text = oscilloscope_core::format::format_tokens(row.tokens);
@@ -4657,8 +4659,9 @@ fn draw_all_status_line(
 }
 
 /// One tile's own mini document band (§2.6): `triage.yml
-/// config-triage.json · ● 2.2s   cof`, on the statusbar colours, the
-/// same band style the main header uses but scoped to one run.
+/// config-triage.json swift-eagle · ● 2.2s   cof` (the name, issue
+/// #717, after the config), on the statusbar colours, the same band
+/// style the main header uses but scoped to one run.
 fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawCtx) {
     let bg = ctx.theme.statusbar_bg;
     let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
@@ -4680,8 +4683,8 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         .unwrap_or(&header.engine)
         .to_string();
     let right_text = format!("{engine_word} ");
-    // Issue #717: the name comes right after the document and is
-    // never dropped; when the band is too narrow for everything,
+    // Issue #717: the name follows the document and its config, and
+    // is never dropped; when the band is too narrow for everything,
     // the config -- already optional -- gives way first.
     let build = |show_config: bool| -> Vec<Span<'static>> {
         let config_text = if show_config {
@@ -4700,11 +4703,11 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
                     .bg(bg)
                     .add_modifier(Modifier::BOLD),
             ),
+            Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
             Span::styled(
                 name_text.clone(),
                 Style::default().fg(ctx.theme.text).bg(bg),
             ),
-            Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
             Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
             Span::styled(
                 format!("{glyph} "),

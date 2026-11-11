@@ -463,12 +463,12 @@ the three ways to start one:
 │ Found  0 running                                                             │
 │                                                                              │
 │ Recent Runs · open read-only                                                 │
-│      DOC      NAME          CONFIG         STARTED   TOOK  TOKENS OUTCOME    │
-│  ❯ ✓ demo.yml fixed-prairie config-h3.json 14:14:09  5.0s  1.3 kt ok · 1 hand│
-│    ✓ demo.yml old-alpaca    config-h2.json 14:14:03  5.1s  1.4 kt ok · 1 hand│
-│    ✓ demo.yml spicy-merlin  config-h1.json 14:13:57  5.1s  1.3 kt ok · 1 hand│
-│    ✓ demo.yml wooly-ginger  config.json    12:50:47  5.1s  1.4 kt ok · 1 hand│
-│    ✗ demo.yml misty-valley  config.json    12:48:49  0.0s   215 t failed · te│
+│      DOC      NAME                CONFIG         STARTED   TOOK  TOKENS OUTCO│
+│  ❯ ✓ demo.yml fixed-prairie       config-h3.json 14:14:09  5.0s  1.3 kt ok · │
+│    ✓ demo.yml old-alpaca          config-h2.json 14:14:03  5.1s  1.4 kt ok · │
+│    ✓ demo.yml spicy-merlin        config-h1.json 14:13:57  5.1s  1.3 kt ok · │
+│    ✓ demo.yml wooly-ginger        config.json    12:50:47  5.1s  1.4 kt ok · │
+│    ✗ demo.yml misty-valley        config.json    12:48:49  0.0s   215 t faile│
 │                                                                              │
 │ Start One                                                                    │
 │ osi demo.yml config.json      run a document and attach                      │
@@ -495,8 +495,8 @@ clips at the border.
 **The grid.** One full osi per running orchestration. Columns are as many 56-cell tiles as fit the width, rows as
 many as the runs need, then fewer columns when that leaves fewer empty cells (six runs at 180×48 make 3 × 2; four
 make 2 × 2; three make one row). A tile is at least 56×20. Each tile has its own header band, `triage.yml
-swift-eagle config-triage.json · ● 2.2s   cof` (the name, §3.1, right after the document); the config gives
-way first when the band is too narrow for all three. Each tile also has its own panel and its own Totals row.
+config-triage.json swift-eagle · ● 2.2s   cof` (the name, §3.1, after the config); the config gives way first
+when the band is too narrow for all three. Each tile also has its own panel and its own Totals row.
 
 **One screen for every tile.** `0`–`3` switch the screen of every tile at once, so `1` turns the wall into
 Signal tiles on one shared scale. Arrows move the focus (the focused tile has the accent border and the
