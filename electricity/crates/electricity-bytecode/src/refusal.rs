@@ -84,12 +84,9 @@ const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
 /// field to this already-final struct rather than flip one lane A
 /// already named for it.
 const TOOL_VALIDATE_YAML_PROVIDERS: &[&str] = &["validate_yaml"];
-/// Issue #722's own native provider -- a pass-through to the `gh`
-/// binary, built on the same [`TOOLS_PROCESS_PROVIDERS`]-style
-/// machinery, but its own flag rather than folded into that set: that
-/// set is lane C's own M1 allow-list, and `gh` is a later, separate
-/// addition (part of #719's portability epic, after every M1 lane had
-/// already landed).
+/// The `gh` provider (#722): a pass-through to the `gh` binary, built
+/// on the same subprocess machinery as [`TOOLS_PROCESS_PROVIDERS`] but
+/// with its own flag, since it was added after that set (#719).
 const TOOL_GH_PROVIDERS: &[&str] = &["gh"];
 
 /// Why [`first_unsupported`] refused.
