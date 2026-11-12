@@ -72,7 +72,7 @@ fn within_param_errors(within: &Value) -> Vec<String> {
                 Vec::new()
             } else {
                 vec![format!(
-                    "params.within must be an absolute path, got {}.",
+                    "params.within must be an absolute path, got {}",
                     within.py_repr()
                 )]
             }
@@ -129,7 +129,7 @@ pub(crate) fn http_save_to_errors(
                 Value::Str(s) if !s.trim().is_empty() => {
                     if std::path::Path::new(s).is_absolute() {
                         errors.push(format!(
-                            "params.save_to must be a relative path, got {}.",
+                            "params.save_to must be a relative path, got {}",
                             save_to.py_repr()
                         ));
                     }
@@ -149,7 +149,7 @@ pub(crate) fn http_save_to_errors(
             || is_positive_int;
         if !ok {
             errors.push(format!(
-                "params.max_bytes must be a positive integer, got {}.",
+                "params.max_bytes must be a positive integer, got {}",
                 max_bytes.py_repr()
             ));
         }
@@ -159,7 +159,7 @@ pub(crate) fn http_save_to_errors(
             if parse.to_lowercase() != "auto" {
                 errors.push(
                     "params.parse must be auto (or unset) with params.save_to: the body is \
-                     saved as bytes, never parsed."
+                     saved as bytes, never parsed"
                         .to_string(),
                 );
             }
@@ -203,8 +203,10 @@ mod tests {
     fn an_absolute_save_to_is_an_error() {
         let params = params_with(&[("save_to", Value::from("/etc/passwd"))]);
         let errors = http_save_to_errors(&params, None, true);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("must be a relative path"));
+        assert_eq!(
+            errors,
+            vec!["params.save_to must be a relative path, got '/etc/passwd'".to_string()]
+        );
     }
 
     #[test]
@@ -226,18 +228,19 @@ mod tests {
             ("within", Value::from("relative/dir")),
         ]);
         let errors = http_save_to_errors(&params, None, true);
-        assert_eq!(errors.len(), 1);
-        assert!(errors[0].contains("must be an absolute path"));
+        assert_eq!(
+            errors,
+            vec!["params.within must be an absolute path, got 'relative/dir'".to_string()]
+        );
     }
 
     #[test]
     fn params_json_setting_within_is_an_error() {
         let params = params_with(&[("save_to", Value::from("a.png"))]);
         let errors = http_save_to_errors(&params, Some(r#"{"within": "/tmp"}"#), true);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("params_json must not set within"))
+        assert_eq!(
+            errors,
+            vec!["params_json must not set within: only the literal params may".to_string()]
         );
     }
 
@@ -248,10 +251,9 @@ mod tests {
             ("max_bytes", Value::from(0_i64)),
         ]);
         let errors = http_save_to_errors(&params, None, true);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("must be a positive integer"))
+        assert_eq!(
+            errors,
+            vec!["params.max_bytes must be a positive integer, got 0".to_string()]
         );
     }
 
@@ -274,10 +276,13 @@ mod tests {
             ("parse", Value::from("json")),
         ]);
         let errors = http_save_to_errors(&params, None, true);
-        assert!(
-            errors
-                .iter()
-                .any(|e| e.contains("params.parse must be auto"))
+        assert_eq!(
+            errors,
+            vec![
+                "params.parse must be auto (or unset) with params.save_to: the body is \
+                 saved as bytes, never parsed"
+                    .to_string()
+            ]
         );
     }
 
