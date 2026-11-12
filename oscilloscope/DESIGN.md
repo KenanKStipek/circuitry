@@ -3698,7 +3698,26 @@ itself now, from the same `header.history_step_usual` the Tokens
 line's own "usual" already reads). Once finished, an Exit field and
 `── Output ───`/`── Errors ───` sections follow, each the run's own
 last 20 lines of stdout/stderr -- neither shows before the tool
-finishes, since neither engine publishes one before then. The
+finishes, since neither engine publishes one before then -- except
+for a running subprocess tool's own `meta.live` (issue #741,
+`model::ToolLive`), told apart from the agent tool's own `meta.live`
+shape by its own `stdout_tail` key (the same way `PromptLive`'s own
+`adapter` key tells it apart from the agent's, and now excluded from
+`AgentLive::from_value`'s own permissive parse too, so a subprocess
+tool's running step never reads as a near-empty agent session to
+`StepTokensSoFar` and friends). `NodeMeta` grows a third parse of
+`meta.live`, `tool_live`, alongside `live`/`prompt_live`;
+`FocusDetail::Tool` grows its own `live: Option<Box<ToolLive>>`,
+read the same way `stdout`/`stderr` already are. `tool_output_
+sections` shows `── Output (live) ───`/`── Errors (live) ───`
+sections from `stdout_tail`/`stderr_tail` in place of the finished
+ones while the node has no `stdout`/`stderr` of its own yet, cut to
+the tail's own last-20-lines bound exactly like a finished section
+is cut to 20 under `full: false` (nothing to cut further: the tail
+is never longer than that to begin with); the title gets a
+`· {n} ago` suffix, the same `format_duration` phrasing a row's own
+age already uses, once `ToolLive::is_recent` (`AgentLive::is_recent`'s
+same 5-second rule) says the tail itself has gone stale. The
 Flow's own simpler Selected pane, out of this issue's scope, keeps
 its exit code in its own existing `produced:` line instead.
 

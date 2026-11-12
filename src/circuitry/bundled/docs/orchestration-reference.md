@@ -1812,6 +1812,29 @@ only after each turn, and `meta.raw` gains `context_tokens`,
 sets none, the model the CLI reports. See
 [`docs/plugins/agent.md`](./plugins/agent.md#live-progress-while-the-session-runs).
 
+**A running subprocess tool's live output.** While `shell`, or any other
+tool plugin that runs a program (every `GenericSubprocessTool`-based
+plugin — `awk`, `gh`, `imagemagick`, and the rest — plus `ffmpeg`; not
+the `agent` tool, which has its own `meta.live` above, nor `http`, which
+has no process), is still running, its node carries:
+
+```json
+{"v": 1, "started_at": "...", "updated_at": "...",
+ "stdout_tail": "...", "stderr_tail": "...", "stdout_bytes": 0, "stderr_bytes": 0}
+```
+
+`stdout_tail`/`stderr_tail` are each the last 20 lines written so far (a
+partial last line with no trailing newline yet counts as one), cut at a
+line or character boundary to stay within 4 KiB, decoded as UTF-8 with
+invalid bytes replaced — independent of, and never as strict as, the
+final `meta.stdout`/`meta.stderr` decode, which is unchanged by this
+feature. `stdout_bytes`/`stderr_bytes` are the total bytes read on each
+stream so far, not just the tail. Published through `Store.set` at most
+once a second, the same way the `agent` tool's own `meta.live` is, plus
+one more publish once output stops for a second; removed before the
+node's final write, so a finished node is byte-identical to one without
+this feature. `--events` gains nothing from it.
+
 ---
 
 ## Concurrency Limits
