@@ -412,6 +412,13 @@ pub enum FocusDetail {
         exit_code: Option<i64>,
         stdout: Option<String>,
         stderr: Option<String>,
+        /// `meta.live` while a subprocess tool is still running
+        /// (issue #741) -- `None` once the attempt has finished
+        /// (`meta.live` is removed then, the same way the agent
+        /// tool's own `meta.live` is) or for a tool that never had
+        /// one (a non-subprocess provider, or one that hasn't
+        /// published a first tail yet).
+        live: Option<Box<crate::model::ToolLive>>,
     },
     /// Issue #704's own Decision section, for an `if` row's own
     /// `FocusedStep` -- the same data `FlowScreen::selected_decision`
@@ -774,6 +781,7 @@ pub(crate) fn build_focused_step(
                 .and_then(Value::as_str)
                 .map(str::to_string)
                 .filter(|s| !s.is_empty()),
+            live: node.and_then(|n| n.tool_live.clone()).map(Box::new),
         }
     } else if row.kind == RowKind::Prompt || row.kind == RowKind::Reflector {
         FocusDetail::Prompt {
@@ -4995,6 +5003,7 @@ mod tests {
             progress_eta_s: None,
             live: None,
             prompt_live: None,
+            tool_live: None,
             value: Value::Null,
             meta: json!({}),
         }
