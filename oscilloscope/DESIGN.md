@@ -2923,8 +2923,9 @@ its content, capped at the screen, and splits onto as many pages as
 a small terminal needs (issue #738, also settling #684's own
 frame-locked blank rows and a regression a first fix pass left: below
 74 columns the close row -- the only hint a second page exists -- was
-cut from a fixed 18-row overlay). `?` always opens on the Key page
-(page `0`, `App::help_page`'s own default); `←→` moves a free-running
+cut from a fixed 18-row overlay). `?` always opens on the Keys page
+(page `0`, `App::help_page`'s own default), the same order the merged
+page reads in; `←→` moves a free-running
 counter the draw side wraps into whatever range the current page
 count actually is, so pressing it keeps working the same way however
 many pages that turns out to be. The close row names the other page

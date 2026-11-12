@@ -2965,14 +2965,8 @@ fn the_help_overlay_lists_the_tapes_own_key_and_pages_to_its_keys() {
     resize_pty(&slave_path, 80, 24);
     std::thread::sleep(Duration::from_millis(300));
 
+    // `?` opens on the Keys page, the same order the merged page reads in.
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Key", Duration::from_secs(10));
-    assert!(
-        screen.contains("done · failed") && screen.contains("running · ahead"),
-        "expected the Key page's own glyph legend; got:\n{screen}"
-    );
-
-    send_bytes(&mut master, "\x1b[C".as_bytes());
     let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
     assert!(
         screen.contains("tokens:") && screen.contains("usual"),
@@ -2983,8 +2977,19 @@ fn the_help_overlay_lists_the_tapes_own_key_and_pages_to_its_keys() {
         "expected the movement aliases' own / and e rows; got:\n{screen}"
     );
 
+    send_bytes(&mut master, "\x1b[C".as_bytes());
+    let screen = wait_for_screen_text(&captured_buf, "done · failed", Duration::from_secs(10));
+    assert!(
+        screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
+        "expected the Key page's own title; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("running · ahead"),
+        "expected the Key page's own glyph legend; got:\n{screen}"
+    );
+
     send_bytes(&mut master, "\x1b[D".as_bytes());
-    wait_for_screen_text(&captured_buf, "Help · Tape · Key", Duration::from_secs(10));
+    wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
 
     send_bytes(&mut master, b"\x1b");
     std::thread::sleep(Duration::from_millis(300));

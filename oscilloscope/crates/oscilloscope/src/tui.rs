@@ -10507,16 +10507,16 @@ fn help_page_index(help_page: i64, page_count: usize) -> usize {
 /// The close row's own wording for page `index` of `count` (issue
 /// #738): nothing to switch to on the one page a screen whose Keys
 /// and Key both fit together draws; the other page's name on
-/// exactly two (always `Key` then `Keys`, [`help_pages`]'s own
+/// exactly two (always `Keys` then `Key`, [`help_pages`]'s own
 /// order); `page N of M` once a screen's own Key or Keys needed more
 /// than one page on its own to fit a small enough terminal.
 fn help_close_row_for(ctx: &DrawCtx, index: usize, count: usize) -> Line<'static> {
     let other_page = match count {
         0 | 1 => None,
         2 => Some(if index == 0 {
-            "Keys".to_string()
-        } else {
             "Key".to_string()
+        } else {
+            "Keys".to_string()
         }),
         _ => Some(format!("page {} of {count}", index + 1)),
     };
@@ -10564,8 +10564,9 @@ fn help_key_header(ctx: &DrawCtx) -> Line<'static> {
 /// Lays a screen's own Keys rows and Key rows across as many pages
 /// as the popup's own interior (`capacity`) needs (issue #738): both
 /// groups merge onto a single page, sized to their combined content,
-/// when together they fit; otherwise each pages on its own, Key
-/// first (`?`'s own default page) then Keys.
+/// when together they fit; otherwise each pages on its own, Keys
+/// first (`?`'s own default page) then Key -- the same order the
+/// merged page reads in.
 fn help_pages(
     keys_blocks: Vec<Vec<Line<'static>>>,
     key_header: Line<'static>,
@@ -10590,8 +10591,8 @@ fn help_pages(
             return vec![merged];
         }
     }
-    let mut pages = key_pages;
-    pages.extend(keys_pages);
+    let mut pages = keys_pages;
+    pages.extend(key_pages);
     pages
 }
 
@@ -10612,8 +10613,8 @@ fn draw_paged_help(
     let mut lines = pages.into_iter().nth(index).unwrap_or_default();
     lines.push(help_close_row_for(ctx, index, page_count));
     let title = match page_count {
-        2 if index == 0 => format!("{screen_title} · Key"),
-        2 => format!("{screen_title} · Keys"),
+        2 if index == 0 => format!("{screen_title} · Keys"),
+        2 => format!("{screen_title} · Key"),
         _ => screen_title.to_string(),
     };
     let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
@@ -24718,7 +24719,7 @@ mod tape_frame_goldens {
                 .unwrap();
             terminal.backend().to_string()
         };
-        let key_page = draw_at(0);
+        let key_page = draw_at(1);
         assert!(
             key_page.contains("Help · Tape · Key") && !key_page.contains("Help · Tape · Keys"),
             "expected the Key page's own title:\n{key_page}"
@@ -24740,7 +24741,7 @@ mod tape_frame_goldens {
             "the Key page must not show the Keys page's own rows:\n{key_page}"
         );
 
-        let keys_page = draw_at(1);
+        let keys_page = draw_at(0);
         assert!(
             keys_page.contains("Help · Tape · Keys"),
             "expected the Keys page's own title:\n{keys_page}"
@@ -24872,28 +24873,34 @@ mod tape_frame_goldens {
             zone: &zone,
             no_animation: true,
         };
-        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    &mut app,
-                    None,
-                    &ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&signal_screen),
-                    None,
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
+        let mut draw_page = |page: i64| {
+            app.help_page = page;
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        None,
+                        None,
+                        None,
+                        Some(&signal_screen),
+                        None,
+                    )
+                })
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        // At 120x30 the Signal's Keys and Key don't fit one page together:
+        // `?` opens on Keys (page 0), the same order the merged page reads in.
+        let text = draw_page(0);
         assert!(text.contains("Help") && text.contains("Signal"), "{text}");
         assert!(text.contains("Scrub"), "{text}");
         assert!(text.contains("Zoom"), "{text}");
@@ -24910,6 +24917,7 @@ mod tape_frame_goldens {
         // the Now sweep, a finished prompt and a decision on the
         // axis, sent above/received below, a tool's own bar and
         // the axis's fixed scale.
+        let text = draw_page(1);
         assert!(text.contains("Key"), "expected a Key section:\n{text}");
         assert!(
             text.contains("axis ╌ ahead") && text.contains("finished prompt"),
