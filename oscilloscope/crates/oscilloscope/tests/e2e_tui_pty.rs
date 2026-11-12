@@ -2925,17 +2925,15 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #678's own `?`: the Help overlay opens over the Tape,
-/// listing its own key bar's keys and the glyph legend. Closing it
-/// (any key, `esc` included) is checked directly against `keys::
-/// App::handle_key`, with no pty involved, by `keys::tests::esc_
-/// closes_the_help_overlay` -- this run's own list is only two rows
-/// (`Run Started`, the running `slow` tool), both above the 72×18
-/// overlay's own vertical range at 120×30, so nothing in it is ever
-/// actually covered for a pty capture to prove got redrawn once the
-/// overlay closes.
+/// Issue #738: the Help overlay opens over the Tape on its Key page
+/// (§3.7's glyph/line/colour legend), and `←→` reaches its Keys
+/// page (the key bar's own keys, including the movement aliases and
+/// `/`/`e` the key bar itself does not show). Closing it (any key,
+/// `esc` included) is checked directly against `keys::App::
+/// handle_key`, with no pty involved, by `keys::tests::esc_closes_
+/// the_help_overlay`.
 #[test]
-fn the_help_overlay_lists_the_tapes_own_keys() {
+fn the_help_overlay_lists_the_tapes_own_key_and_pages_to_its_keys() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
@@ -2946,36 +2944,28 @@ fn the_help_overlay_lists_the_tapes_own_keys() {
     let (mut master, _slave_path, child, captured_buf) =
         spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
 
-    let before_help = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"?");
-    wait_for_pattern_since(&captured_buf, before_help, b"Help", Duration::from_secs(10));
-    {
-        let after = captured_buf.lock().unwrap()[before_help..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains("Help") && rendered.contains("Tape"),
-            "expected the Help overlay's own title; got:\n{rendered:?}"
-        );
-        // Words checked separately, never as one contiguous
-        // phrase: ratatui's own differential redraw gives each
-        // word on a styled line its own escape-positioned span,
-        // so two words a real line genuinely holds side by side
-        // can still land with a cursor-move escape between them
-        // in this buffer.
-        assert!(
-            rendered.contains("tokens:") && rendered.contains("usual"),
-            "expected the Tape's own t key listed; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains("Tokens") && rendered.contains("Glyphs"),
-            "expected the Tokens/Glyphs legend; got:\n{rendered:?}"
-        );
-    }
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Key", Duration::from_secs(10));
+    assert!(
+        screen.contains("done · failed") && screen.contains("running · ahead"),
+        "expected the Key page's own glyph legend; got:\n{screen}"
+    );
 
-    // Closed with `?` again, back to a plain key bar's own exit
-    // path below -- not asserted on here, for the reason this
-    // function's own doc comment gives.
-    send_bytes(&mut master, b"?");
+    send_bytes(&mut master, "\x1b[C".as_bytes());
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+    assert!(
+        screen.contains("tokens:") && screen.contains("usual"),
+        "expected the Tape's own t key listed; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("filter rows") && screen.contains("errors only"),
+        "expected the movement aliases' own / and e rows; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, "\x1b[D".as_bytes());
+    wait_for_screen_text(&captured_buf, "Help · Tape · Key", Duration::from_secs(10));
+
+    send_bytes(&mut master, b"\x1b");
     std::thread::sleep(Duration::from_millis(300));
 
     send_bytes(&mut master, b"q");

@@ -19,6 +19,20 @@ pub enum Pane {
     State,
 }
 
+/// Issue #738: which page of a screen's own Help overlay is on
+/// display -- `Key` (the §3.7 glyph/line/colour legend) is the
+/// default, since that is the content `?` is for; `←→` reaches
+/// `Keys` (the keyboard shortcuts) on a screen whose own Keys and
+/// Key don't both fit the fixed 72×18 overlay together. A screen
+/// whose own Keys and Key do both fit (every one but the Tape today)
+/// draws the same combined content on either page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum HelpPage {
+    #[default]
+    Key,
+    Keys,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dialog {
     None,
@@ -89,6 +103,11 @@ pub struct App {
     pub errors_only: bool,
     pub filter: Option<String>,
     pub dialog: Dialog,
+    /// Issue #738: which page the Help overlay currently open (or
+    /// last open) shows -- reset to [`HelpPage::default`] every time
+    /// `?` opens it, so a screen never reopens on whichever page a
+    /// previous screen's own Help was left on.
+    pub help_page: HelpPage,
     /// `osi watch`'s own flavour of quitting (§6.3): `q` never needs a
     /// confirm there, since watch owns no engine of its own to cancel
     /// — it only ever detaches.
@@ -313,6 +332,7 @@ impl App {
             errors_only: false,
             filter: None,
             dialog: Dialog::None,
+            help_page: HelpPage::default(),
             is_watch,
             opened_from_select: false,
             quit_when_finished: false,
@@ -787,6 +807,17 @@ impl App {
             // whatever's open where it is, and Help overlaying one
             // screen's own keys is no different.
             Dialog::Help if key.code == KeyCode::Char('T') => Action::CycleTheme,
+            // Issue #738: `←`/`→` switch the Help overlay between its
+            // Keys and Key pages rather than closing it -- harmless
+            // on a screen whose own Keys and Key both fit one page
+            // together, which draws the same content on either.
+            Dialog::Help if matches!(key.code, KeyCode::Left | KeyCode::Right) => {
+                self.help_page = match self.help_page {
+                    HelpPage::Key => HelpPage::Keys,
+                    HelpPage::Keys => HelpPage::Key,
+                };
+                Action::None
+            }
             Dialog::Help => {
                 self.dialog = Dialog::None;
                 Action::None
@@ -1150,7 +1181,10 @@ impl App {
                     FullValueField::Value
                 });
             }
-            KeyCode::Char('?') => self.dialog = Dialog::Help,
+            KeyCode::Char('?') => {
+                self.dialog = Dialog::Help;
+                self.help_page = HelpPage::default();
+            }
             KeyCode::Char('c') => {
                 if running {
                     self.dialog = Dialog::ConfirmCancel { quit_after: false };
