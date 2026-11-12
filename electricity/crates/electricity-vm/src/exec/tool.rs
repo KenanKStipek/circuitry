@@ -152,6 +152,7 @@ pub fn resolve_plugin<'a>(
 /// `Err` is the resolved plugin's own raised
 /// [`electricity_tools::ToolError`], unchanged. [`execute_tool`] is the
 /// one place this crate ever turns it into a [`VmError::Raised`].
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tool(
     plugin: &ResolvedPlugin<'_>,
     provider: &str,
@@ -160,6 +161,8 @@ pub async fn run_tool(
     timeout_seconds: u32,
     token: &CancellationToken,
     armed: bool,
+    limited: bool,
+    confine_to: Option<&str>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
     let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
@@ -168,6 +171,8 @@ pub async fn run_tool(
         config: &config,
         token,
         armed,
+        limited,
+        confine_to,
     };
     plugin.as_dyn().execute(params, &call).await
 }
@@ -420,6 +425,20 @@ fn reject_params_json_override(overlay: &Dict) -> Result<(), String> {
     ))
 }
 
+/// `plugins/systemone.py::reject_overlay_within` -- `params_json` is
+/// built at run time and can carry generated content, so it never sets
+/// `within`: only the document's own literal params do.
+fn reject_overlay_within(overlay: &Dict) -> Result<(), String> {
+    if overlay.contains_key(&Value::Str("within".to_string())) {
+        return Err(
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// `core/tool.py::_capped_raw` -- redacts *raw*, JSON-round-trips it
 /// (`core/tool.py`'s own docstring: callers serialize state with plain
 /// `json.dumps`, so a raw value only `default=str` can encode must
@@ -547,6 +566,9 @@ fn render_tool_call<R: ParamsCtx>(
         let overlay = render_params_json(&params_json.source, ctx, declared_prompts, effect_names)
             .map_err(|err: RenderParamsJsonError| err.to_string())?;
         reject_params_json_override(&overlay)?;
+        if electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "systemone" {
+            reject_overlay_within(&overlay)?;
+        }
         params = deep_merge_params(params, overlay);
     }
     for (key, value) in params {
@@ -906,6 +928,8 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 timeout_seconds,
                                                 token,
                                                 run_ctx.armed,
+                                                tool.limited,
+                                                tool.confine_to.as_deref(),
                                             ).await
                                         }
                                     } => Some(result),
@@ -1356,12 +1380,28 @@ pub async fn execute_tool<R: ParamsCtx>(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
-            // Unlike a prompt's own failure path, a tool failure never
-            // carries tokens (issue #724: only `systemone` ever reports
-            // any, and only on success) -- `record_totals` stays a
-            // success-only call here, matching this crate's own existing
-            // behaviour for every other tool failure rather than adding a
-            // new `Totals` event to a path no prior case expected one on.
+            // `core/tool.py`'s own exception-handler rewrite (`tool.py:
+            // 1104-1111`): a raised failure (or a result that failed
+            // `expect:`) never reached this attempt's own `Ok(result)`
+            // branch above, so the per-attempt reset at the top of this
+            // loop already popped `tokens_sent_total`/`.received_total`
+            // from `meta` -- carried forward from an earlier attempt that
+            // did report usage, they are written back here so the final
+            // failure still shows the pass's own total, same as cof.
+            if let Some(sent) = total_tokens_sent {
+                set_leaf(store, &meta_node, "tokens_sent_total", Value::from(sent));
+            }
+            if let Some(received) = total_tokens_received {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "tokens_received_total",
+                    Value::from(received),
+                );
+            }
+            if total_tokens_sent.is_some() || total_tokens_received.is_some() {
+                observer.record_totals(&store.snapshot(&meta_node));
+            }
             observer.effect_complete(
                 &effect_path,
                 instance,
@@ -1459,6 +1499,8 @@ mod tests {
             300,
             &token,
             false,
+            false,
+            None,
         )
         .await
         .unwrap_err();
@@ -1481,6 +1523,8 @@ mod tests {
             300,
             &token,
             false,
+            false,
+            None,
         )
         .await
         .unwrap_err();
@@ -1503,6 +1547,8 @@ mod tests {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -1884,6 +1930,51 @@ mod tests {
             err.to_string(),
             "params_json must not set ['allowed_commands']: security-sensitive \
              settings are only honoured from a document's literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn params_json_setting_within_on_a_systemone_effect_is_refused() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("model"), template("m"));
+        params.insert(Value::from("state"), template("s"));
+        let mut tool = tool_op(params);
+        tool.provider = "systemone".to_string();
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{\"within\": \"/tmp\"}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
         );
     }
 
@@ -3166,6 +3257,110 @@ mod tests {
         assert_eq!(message, "no reply from the server");
     }
 
+    /// A test-only [`electricity_tools::ToolPlugin`] that reports tokens
+    /// on a successful first attempt, then raises on every attempt
+    /// after -- `core/tool.py`'s own exception-handler rewrite
+    /// (`tool.py:1104-1111`, issue #724): the pass's own final failure
+    /// still carries the earlier attempt's own total.
+    struct TokensThenRaisingTool {
+        calls: std::cell::Cell<u32>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for TokensThenRaisingTool {
+        fn name(&self) -> &str {
+            "tokens_then_raising"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            let call = self.calls.get();
+            self.calls.set(call + 1);
+            if call == 0 {
+                let mut result =
+                    electricity_tools::ToolResult::new(Value::None, Value::Dict(Dict::new()));
+                result.ok = false;
+                result.stderr = Some("tokens_then_raising: attempt 0 failed".to_string());
+                result.tokens_sent = Some(5);
+                result.tokens_received = Some(7);
+                return Ok(result);
+            }
+            Err(electricity_tools::ToolError {
+                py_class: electricity_tools::PyExc::ValueError,
+                message: "no reply from the server".to_string(),
+                cause: electricity_tools::ErrorCause::NoReply,
+            })
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_raised_failure_after_an_earlier_successful_attempt_still_carries_its_tokens_total() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "tokens_then_raising".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(TokensThenRaisingTool {
+            calls: std::cell::Cell::new(0),
+        }));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("tokens_sent_total")),
+            Some(&Value::from(5))
+        );
+        assert_eq!(
+            meta.get(&Value::from("tokens_received_total")),
+            Some(&Value::from(7))
+        );
+    }
+
     #[tokio::test]
     async fn a_huge_raw_value_is_capped_through_execute_tools_own_wiring() {
         // The real `json` tool's own `ToolResult.raw` is always a tiny
@@ -3992,6 +4187,8 @@ mod tests {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -4011,6 +4208,8 @@ mod tests {
                     description: None,
                     group: None,
                     prompt_file: None,
+                    limited: false,
+                    confine_to: None,
                 }),
             )),
             ..tool_node(OnError::Continue)

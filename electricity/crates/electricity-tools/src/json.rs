@@ -284,6 +284,8 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            limited: false,
+            confine_to: None,
         };
         tool.execute(params, &call).await
     }

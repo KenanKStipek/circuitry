@@ -255,6 +255,14 @@ pub struct ToolCall<'a> {
     pub config: &'a Value,
     pub token: &'a CancellationToken,
     pub armed: bool,
+    /// `ToolDefinition.limited`: true for a tool effect compiled from a
+    /// document not run by path. Only [`crate::systemone::SystemOnePlugin`]
+    /// reads this.
+    pub limited: bool,
+    /// `ToolDefinition.confine_to`: the project a limited `systemone`
+    /// effect's `within` must stay inside; `None` when not limited, or a
+    /// limited document with no project of its own.
+    pub confine_to: Option<&'a str>,
 }
 
 /// DESIGN.md §8.1's shared tool-plugin trait, mirroring `plugins/
@@ -336,6 +344,8 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            limited: false,
+            confine_to: None,
         }
     }
 

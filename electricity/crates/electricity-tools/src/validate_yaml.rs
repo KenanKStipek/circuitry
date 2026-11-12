@@ -203,6 +203,8 @@ mod tests {
             config,
             token,
             armed: false,
+            limited: false,
+            confine_to: None,
         }
     }
 

@@ -770,6 +770,8 @@ mod tests {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
