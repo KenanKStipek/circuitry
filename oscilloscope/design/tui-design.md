@@ -660,7 +660,8 @@ Above · Received Below · Fixed Scale`). Counts in chrome are `6 Done · 2 Runn
 
 **Navigation.** `osi doc.yml` opens the run on Tape. `osi` alone opens Select (or attaches when one run is
 live, or shows the empty Select). Select → a run → `esc` → Select. Select → All → `enter` on a tile → that run →
-`esc` → All → `esc` → Select. `?` opens the help over the current screen. `q` asks for confirmation while a run is live
+`esc` → All → `esc` → Select. `?` opens the help over the current screen, showing its keys and a Key of the symbols, lines and colours
+it draws. `q` asks for confirmation while a run is live
 and quits at once otherwise. Below 80 columns only the Tape is offered, so its key bar drops `0-3`.
 
 **Keys the shipped TUI binds that the frames do not show** (`crates/oscilloscope/src/keys.rs`): `j`/`k`,
