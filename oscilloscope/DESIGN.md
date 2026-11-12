@@ -2921,9 +2921,8 @@ Starting, Ended and Failed states. The Help overlay (§3.7's glyph/
 line/colour Key, §4's own keyboard shortcuts) sizes its own popup to
 its content, capped at the screen, and splits onto as many pages as
 a small terminal needs (issue #738, also settling #684's own
-frame-locked blank rows and a regression a first fix pass left: below
-74 columns the close row -- the only hint a second page exists -- was
-cut from a fixed 18-row overlay). `?` always opens on the Keys page
+frame-locked blank rows), so the close row -- the only hint a second
+page exists -- shows on every page down to 60x24. `?` always opens on the Keys page
 (page `0`, `App::help_page`'s own default), the same order the merged
 page reads in; `←→` moves a free-running
 counter the draw side wraps into whatever range the current page

@@ -24762,14 +24762,11 @@ mod tape_frame_goldens {
         );
     }
 
-    /// The review's own regression on #748's first fix pass: below
-    /// 74 columns the Tape's Help fell back to a fixed 18-row
-    /// overlay, so at 60x24 the close row -- the only hint a second
-    /// page exists -- was cut from the Keys page, and the Key
-    /// page's own last line (the sparkline) was cut too. Every page
-    /// this now splits onto keeps its own close row, and both the
-    /// Keys page's own last row and the Key page's own last row
-    /// read in full on some page.
+    /// Issue #738: below 74 columns a fixed 18-row overlay would cut
+    /// the close row -- the only hint a second page exists -- and the
+    /// Key's last line (the sparkline). At 60x24 every page the
+    /// Tape's Help splits onto keeps its close row, and the last row
+    /// of both the Keys and the Key reads in full on some page.
     #[test]
     fn the_tapes_help_overlay_keeps_its_close_row_at_60x24() {
         let plan = demo_plan();
@@ -25238,8 +25235,8 @@ mod tape_frame_goldens {
         assert_eq!(help_page_index(5, 0), 0);
     }
 
-    /// Issue #738's layout rule (the findings behind #748's own
-    /// `the_tapes_help_overlay_pages_between_key_and_keys_at_80x24`
+    /// Issue #738's layout rule (like
+    /// `the_tapes_help_overlay_pages_between_key_and_keys_at_80x24`,
     /// but for every screen's own rows, not just whether the pages
     /// split): at 60 (the Tape only -- #738's own floor), 72, 73,
     /// 74, 80, 120 and 187 columns, no key:meaning pair ever gets

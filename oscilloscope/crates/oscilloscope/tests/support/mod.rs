@@ -511,17 +511,18 @@ pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
         .collect()
 }
 
-/// [`screen_grid`], but keeping each cell's own truecolor foreground
-/// (`ESC[38;2;r;g;bm`, what ratatui's `CrosstermBackend` emits for a
-/// `Color::Rgb`) instead of discarding every SGR sequence -- a PTY
+/// [`screen_grid`], but keeping each cell's own foreground as the SGR
+/// parameters that set it (`38;2;r;g;b` truecolor, `38;5;n` 256-colour,
+/// `31`/`92` basic) instead of discarding every SGR sequence -- a PTY
 /// check that a symbol's own *style*, not just its text, changed
 /// (issue #738's own `T` test) reads a specific cell's colour here,
-/// the same way `screen_grid` reads its character.
-pub fn screen_grid_fg(bytes: &[u8], cols: usize, rows: usize) -> Vec<Vec<Option<(u8, u8, u8)>>> {
+/// the same way `screen_grid` reads its character, whatever colour
+/// depth the terminal's own `COLORTERM` made osi pick.
+pub fn screen_grid_fg(bytes: &[u8], cols: usize, rows: usize) -> Vec<Vec<Option<String>>> {
     let text = String::from_utf8_lossy(bytes);
     let mut grid = vec![vec![None; cols]; rows];
     let (mut row, mut col) = (0usize, 0usize);
-    let mut fg: Option<(u8, u8, u8)> = None;
+    let mut fg: Option<String> = None;
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
     while i < chars.len() {
@@ -568,13 +569,19 @@ pub fn screen_grid_fg(bytes: &[u8], cols: usize, rows: usize) -> Vec<Vec<Option<
                             match nums[j] {
                                 0 => fg = None,
                                 38 if nums.get(j + 1) == Some(&2) && nums.len() > j + 4 => {
-                                    fg = Some((
-                                        nums[j + 2].max(0) as u8,
-                                        nums[j + 3].max(0) as u8,
-                                        nums[j + 4].max(0) as u8,
+                                    fg = Some(format!(
+                                        "38;2;{};{};{}",
+                                        nums[j + 2],
+                                        nums[j + 3],
+                                        nums[j + 4]
                                     ));
                                     j += 4;
                                 }
+                                38 if nums.get(j + 1) == Some(&5) && nums.len() > j + 2 => {
+                                    fg = Some(format!("38;5;{}", nums[j + 2]));
+                                    j += 2;
+                                }
+                                n @ (30..=37 | 90..=97) => fg = Some(n.to_string()),
                                 39 => fg = None,
                                 _ => {}
                             }
@@ -598,7 +605,7 @@ pub fn screen_grid_fg(bytes: &[u8], cols: usize, rows: usize) -> Vec<Vec<Option<
             _ => {
                 if !c.is_control() {
                     if row < rows && col < cols {
-                        grid[row][col] = fg;
+                        grid[row][col] = fg.clone();
                     }
                     col += 1;
                 }

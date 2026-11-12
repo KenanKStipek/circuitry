@@ -2941,15 +2941,15 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #738: the Help overlay opens over the Tape on its Key page
-/// (§3.7's glyph/line/colour legend), and `←→` reaches its Keys
-/// page (the key bar's own keys, including the movement aliases and
-/// `/`/`e` the key bar itself does not show). Closing it (any key,
+/// Issue #738: the Help overlay opens over the Tape on its Keys page
+/// (the key bar's own keys, including the movement aliases and
+/// `/`/`e` the key bar itself does not show), and `←→` reaches its
+/// Key page (§3.7's glyph/line/colour legend). Closing it (any key,
 /// `esc` included) is checked directly against `keys::App::
 /// handle_key`, with no pty involved, by `keys::tests::esc_closes_
 /// the_help_overlay`.
 #[test]
-fn the_help_overlay_lists_the_tapes_own_key_and_pages_to_its_keys() {
+fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
@@ -3039,16 +3039,21 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
         "expected §3.7's own glyph legend on the merged page; got:\n{screen}"
     );
 
-    // Issue #738's review: a Key symbol's own cell colour changes
-    // with the theme, not only the text around it staying put --
-    // this reads the same cell's own colour before and after T.
+    // Issue #738: a Key symbol's own cell colour changes with the
+    // theme, not only the text around it staying put -- this reads the
+    // same cell's own colour before and after T, at whatever colour
+    // depth the test terminal's own `COLORTERM` makes osi pick.
     let before_bytes = captured_buf.lock().unwrap().clone();
     let before_grid = screen_grid(&before_bytes, 200, 60);
     let (glyph_row, glyph_col) =
         find_glyph(&before_grid, "done · failed", '✓').unwrap_or_else(|| {
             panic!("expected a ✓ cell on the \"done · failed\" row:\n{before_grid:?}")
         });
-    let before_fg = screen_grid_fg(&before_bytes, 200, 60)[glyph_row][glyph_col];
+    let before_fg = screen_grid_fg(&before_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    assert!(
+        before_fg.is_some(),
+        "expected the ✓ Key symbol to carry a colour of its own before T"
+    );
 
     send_bytes(&mut master, b"T");
     let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
@@ -3062,7 +3067,7 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
         find_glyph(&after_grid, "done · failed", '✓').unwrap_or_else(|| {
             panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
         });
-    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col];
+    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col].clone();
     assert_ne!(
         before_fg, after_fg,
         "expected the ✓ Key symbol's own cell colour to change after T, not just the text around it"
