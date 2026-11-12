@@ -25,6 +25,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -56,6 +57,25 @@ SHELL_ORCHESTRATION = (
     "    type: tool\n"
     "    provider: shell\n"
     "    params: {command: 'true', allowed_commands: ['true']}\n"
+)
+
+#: A single slow `awk` step (issue #741/#751's own cross-engine `meta.live`
+#: parity requirement) -- two 0.6s `system("sleep ...")` calls between
+#: three `print`s, one of them to stderr, give a wide, deterministic
+#: window in which both engines have printed `line1` to stdout and
+#: nothing to stderr yet, long before `line2`/`line3` -- the same
+#: checkpoint `electricity/crates/electricity-cli/tests/live_state.rs`
+#: samples for the single-engine case.
+SLOW_AWK_ORCHESTRATION = (
+    "effects:\n"
+    "  - name: slow_awk\n"
+    "    type: tool\n"
+    "    provider: awk\n"
+    "    params:\n"
+    "      args:\n"
+    '        - \'BEGIN{print "line1"; fflush(); system("sleep 0.6"); '
+    'print "line2" > "/dev/stderr"; fflush("/dev/stderr"); '
+    'system("sleep 0.6"); print "line3"}\'\n'
 )
 
 _CREDENTIAL_ENV_VARS = (
@@ -555,3 +575,125 @@ def test_a_document_inside_the_library_cache_path_is_gated_on_both_engines(
         _effective_settings(electricity_allowed.stdout)["runtime"]["_capability_ceiling"]
         == ["shell"]
     )
+
+
+def _poll_live_state(
+    proc: subprocess.Popen[str], live_path: Path, *, timeout: float = 30.0,
+) -> tuple[list[dict], int]:
+    """Samples *live_path* at ~10ms while *proc* runs, returning every
+    distinct JSON-decoded version seen plus the process's own exit
+    code -- the Python-side counterpart of
+    `electricity/crates/electricity-cli/tests/live_state.rs::
+    observe_live_state`, polling a real file on disk rather than
+    reaching into either engine's own internals."""
+    observations: list[dict] = []
+    last_text: str | None = None
+
+    def sample() -> None:
+        nonlocal last_text
+        if not live_path.exists():
+            return
+        try:
+            text = live_path.read_text(encoding="utf-8")
+        except OSError:
+            return
+        if not text or text == last_text:
+            return
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return
+        observations.append(parsed)
+        last_text = text
+
+    deadline = time.monotonic() + timeout
+    while True:
+        sample()
+        returncode = proc.poll()
+        if returncode is not None:
+            break
+        assert time.monotonic() < deadline, "process did not exit within the bounded timeout"
+        time.sleep(0.01)
+    # One more read right after exit, same rationale as the Rust
+    # helper: the final `close()` write may have landed in the gap
+    # between the last poll and `proc.poll()` observing the exit.
+    sample()
+    return observations, returncode
+
+
+def _slow_awk_live_checkpoint(observations: list[dict]) -> dict | None:
+    """The first observed `prime.slow_awk.meta.live` with `line1` in
+    its stdout tail and nothing in its stderr tail yet -- a single,
+    deterministic point in the run (well before `line2`/`line3`) that
+    both engines pass through, so comparing it is comparing the same
+    moment on each side, not two independently-timed samples."""
+    for parsed in observations:
+        live = parsed.get("prime", {}).get("slow_awk", {}).get("meta", {}).get("live")
+        if live is None:
+            continue
+        stdout_tail = live.get("stdout_tail", "")
+        stderr_tail = live.get("stderr_tail", "")
+        if "line1" in stdout_tail and "line2" not in stdout_tail and stderr_tail == "":
+            return live
+    return None
+
+
+def test_a_running_tools_meta_live_tail_matches_byte_for_byte_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """Issue #741/#751's own cross-engine parity requirement: while the
+    same slow `awk` step runs, both engines' `--live-state` must show
+    the same `stdout_tail`/`stderr_tail`/`stdout_bytes`/`stderr_bytes`
+    at the same point in the run (`_slow_awk_live_checkpoint`), apart
+    from timestamps. Skips while the installed cof doesn't publish a
+    process-backed tool's `meta.live` at all yet -- `core/tool.py`
+    only ever passes `on_live` to an `AgentPlugin` today, so a
+    `GenericSubprocessTool` step like this one never gets a `meta.live`
+    on cof's side until #751 lands. Once it does, this must run and
+    pass, not skip."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    def run_and_sample(
+        binary_args: list[str], case_dir: Path, live_path: Path
+    ) -> tuple[list[dict], int]:
+        _write_case(case_dir, SLOW_AWK_ORCHESTRATION)
+        proc = subprocess.Popen(
+            [*binary_args, "--live-state", str(live_path)],
+            cwd=case_dir, env=_sandboxed_env(home_dir), stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            observations, returncode = _poll_live_state(proc, live_path)
+        finally:
+            proc.communicate(timeout=5)
+        return observations, returncode
+
+    cof_observations, cof_returncode = run_and_sample(
+        [sys.executable, "-m", "circuitry.cli.app", "run", "orchestration.yml", "--config", "config.json"],
+        tmp_path / "cof_case",
+        tmp_path / "cof_live.json",
+    )
+    assert cof_returncode == 0
+
+    cof_checkpoint = _slow_awk_live_checkpoint(cof_observations)
+    if cof_checkpoint is None:
+        pytest.skip(
+            "installed cof does not yet publish a process-backed tool's meta.live (#751); "
+            "once it does, this parity test must run and pass"
+        )
+
+    electricity_observations, electricity_returncode = run_and_sample(
+        [str(electricity_binary), "run", "orchestration.yml", "--config", "config.json"],
+        tmp_path / "electricity_case",
+        tmp_path / "electricity_live.json",
+    )
+    assert electricity_returncode == 0
+
+    electricity_checkpoint = _slow_awk_live_checkpoint(electricity_observations)
+    assert electricity_checkpoint is not None, (
+        "electricity never published a prime.slow_awk.meta.live with line1 alone"
+    )
+
+    for key in ("stdout_tail", "stderr_tail", "stdout_bytes", "stderr_bytes"):
+        assert cof_checkpoint[key] == electricity_checkpoint[key], key
