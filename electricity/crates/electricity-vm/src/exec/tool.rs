@@ -573,9 +573,13 @@ fn evaluate_cel_tool<R: ParamsCtx>(
         Some(Value::Bool(true))
     );
     let state = ctx.whole();
+    // `core/cel_eval.py::evaluate_cel_value` raises `CelEvaluationError` for
+    // every evaluation failure, including a strict unset path and a result
+    // with no JSON form; the schema mismatch below is a plain `ValueError`
+    // (`plugins/cel.py::CelPlugin.evaluate`).
     let value = electricity_cel::evaluate_value(expr, &state, strict).map_err(|err| {
         electricity_tools::ToolError {
-            py_class: electricity_tools::PyExc::RuntimeError,
+            py_class: electricity_tools::PyExc::CelEvaluationError,
             message: err.to_string(),
             cause: electricity_tools::ErrorCause::None,
         }
@@ -587,13 +591,21 @@ fn evaluate_cel_tool<R: ParamsCtx>(
         match electricity_schema::cel_schema_errors(schema, &value) {
             electricity_schema::CelSchemaCheck::Valid => {}
             electricity_schema::CelSchemaCheck::Invalid(errors) => {
-                return Err(electricity_tools::ToolError::message(format!(
-                    "cel: the result does not match params.schema: {}",
-                    errors.join("; ")
-                )));
+                return Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message: format!(
+                        "cel: the result does not match params.schema: {}",
+                        errors.join("; ")
+                    ),
+                    cause: electricity_tools::ErrorCause::None,
+                });
             }
             electricity_schema::CelSchemaCheck::SchemaError(message) => {
-                return Err(electricity_tools::ToolError::message(message));
+                return Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message,
+                    cause: electricity_tools::ErrorCause::None,
+                });
             }
         }
     }
