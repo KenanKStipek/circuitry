@@ -5784,7 +5784,64 @@ mod tests {
             tape_breadcrumb(&b.path, &flat, &plan),
             "their own full breadcrumbs differ by the outer loop's own pass"
         );
-        let _ = (a, b);
+
+        // The same, through `build_tape`'s own pipeline: both finished
+        // (never in the tree, which this fallback doesn't concern),
+        // their own `TapeRow::label` still reads apart.
+        let rows = vec![
+            tape_row(
+                "prime.groups.iter_0.files.iter_0.compile",
+                4,
+                "compile",
+                RowKind::Tool,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.groups.iter_1.files.iter_0.compile",
+                4,
+                "compile",
+                RowKind::Tool,
+                StatusKind::Done,
+            ),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.groups.iter_0.files.iter_0.compile".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        flat.insert(
+            "prime.groups.iter_1.files.iter_0.compile".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.status = RunStatus::Ok;
+        let model = RunModel::new();
+        let tape = build_tape(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            true,
+            "2026-01-01T00:00:01Z",
+        );
+        let labels: Vec<&str> = tape
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                TapeItem::Row(r) => Some(r.label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 2, "{labels:?}");
+        assert_ne!(
+            labels[0], labels[1],
+            "build_tape's own two finished rows must still read apart: {labels:?}"
+        );
     }
 
     /// Issue #737: a running row with no `created_at` of its
