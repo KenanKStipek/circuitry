@@ -463,6 +463,75 @@ fn mid_run_live_state_shows_a_finished_tree_loop_pass_before_it_merges() {
     );
 }
 
+/// A single `awk` step, slow enough (two 0.6s `system("sleep ...")`
+/// calls between three `print`s, one of them to stderr) to guarantee a
+/// mid-run `--live-state` write lands while it's still running (#741
+/// part B).
+const SLOW_AWK_DOC: &str = "\
+effects:
+  - name: slow_awk
+    type: tool
+    provider: awk
+    params:
+      args: ['BEGIN{print \"line1\"; fflush(); system(\"sleep 0.6\"); print \"line2\" > \"/dev/stderr\"; fflush(\"/dev/stderr\"); system(\"sleep 0.6\"); print \"line3\"}']
+";
+
+/// Issue #741 part B: a running process-backed tool (here, `awk`)
+/// publishes `meta.live` while it runs, in the same shape a streamed
+/// prompt's own `meta.live` already has (`v`/`started_at`/
+/// `updated_at`, plus this shape's own `stdout_tail`/`stderr_tail`/
+/// `stdout_bytes`/`stderr_bytes`) -- and `live` is gone from the final
+/// node, so `--live-state`'s last write still matches `--out` exactly.
+#[test]
+fn mid_run_live_state_shows_a_running_tools_meta_live_and_clears_it_at_the_end() {
+    let home = TempHome::new("slow-awk");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", SLOW_AWK_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 0, "the run itself must succeed");
+
+    fn live_meta(v: &serde_json::Value) -> Option<&serde_json::Value> {
+        get(v, &["prime", "slow_awk", "meta", "live"])
+    }
+
+    let mid_run_live = observations.iter().find_map(|(_, contents)| {
+        let parsed: serde_json::Value = serde_json::from_str(contents).unwrap();
+        live_meta(&parsed).cloned()
+    });
+    let live = mid_run_live.unwrap_or_else(|| {
+        panic!(
+            "expected at least one mid-run write with `prime.slow_awk.meta.live` present; \
+             observed {} versions: {:#?}",
+            observations.len(),
+            observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+        )
+    });
+    assert_eq!(live.get("v"), Some(&serde_json::json!(1)));
+    assert!(live.get("started_at").is_some_and(|v| v.is_string()));
+    assert!(live.get("updated_at").is_some_and(|v| v.is_string()));
+    assert!(live.get("stdout_tail").is_some_and(|v| v.is_string()));
+    assert!(live.get("stderr_tail").is_some_and(|v| v.is_string()));
+    assert!(live.get("stdout_bytes").is_some_and(|v| v.is_u64()));
+    assert!(live.get("stderr_bytes").is_some_and(|v| v.is_u64()));
+
+    let final_contents = &observations.last().unwrap().1;
+    let final_parsed: serde_json::Value = serde_json::from_str(final_contents).unwrap();
+    assert!(
+        live_meta(&final_parsed).is_none(),
+        "the final write must have no `meta.live` left at all: {final_contents}"
+    );
+
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_contents, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}
+
 /// A `use: {inline: ...}` child whose own document has a top-level
 /// `flow: tree` (two branches, one fast, one slow). The child frame
 /// maps the child's root to the `use` node's own path -- an
