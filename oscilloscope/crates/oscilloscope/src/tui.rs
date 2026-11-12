@@ -6574,8 +6574,16 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("q", "Quit"),
         Line::from(""),
         Line::from(Span::styled("Key", muted)),
-        key_row("●", running_style, "a running orchestration, one colour per run"),
-        key_row("— / gone", muted, "no config or run directory · directory gone"),
+        key_row(
+            "●",
+            running_style,
+            "a running orchestration, one colour per run",
+        ),
+        key_row(
+            "— / gone",
+            muted,
+            "no config or run directory · directory gone",
+        ),
         key_row("name", default, "a short name from the run's own id"),
     ];
     frame.render_widget(
@@ -7836,13 +7844,23 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("q", "Quit"),
         Line::from(""),
         Line::from(Span::styled("Key", muted)),
-        mixed_row("\u{2503}", now_style, "\u{254c}", dim, "Now \u{b7} dashed ahead"),
+        mixed_row(
+            "\u{2503}",
+            now_style,
+            "\u{254c}",
+            dim,
+            "Now \u{b7} dashed ahead",
+        ),
         key_row(
             "\u{2581}\u{2582}\u{2583}\u{2584}\u{2585}\u{2586}\u{2587}\u{2588}",
             legend_style,
             "tokens, stacked per run",
         ),
-        key_row("\u{2580} \u{2594}", legend_style, "the stack's own round top"),
+        key_row(
+            "\u{2580} \u{2594}",
+            legend_style,
+            "the stack's own round top",
+        ),
         Line::from(vec![
             Span::styled("\u{25a0}", legend_style),
             Span::raw(" "),
@@ -7862,7 +7880,11 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
             now_style,
             "a finished prompt \u{b7} the table's own cursor",
         ),
-        key_row("colour", default, "one colour per run, shared with the legend"),
+        key_row(
+            "colour",
+            default,
+            "one colour per run, shared with the legend",
+        ),
         key_row("scale", default, "one round top shared by every run's bars"),
         key_row("name", default, "a short name from the run's own id"),
     ];
@@ -10310,8 +10332,10 @@ fn help_cell_is_blank(cell: &HelpCell) -> bool {
 }
 
 fn help_cell_spans(cell: &HelpCell, width: usize) -> Vec<Span<'static>> {
-    let mut spans: Vec<Span<'static>> =
-        cell.iter().map(|(t, s)| Span::styled(t.clone(), *s)).collect();
+    let mut spans: Vec<Span<'static>> = cell
+        .iter()
+        .map(|(t, s)| Span::styled(t.clone(), *s))
+        .collect();
     // At least one trailing space always separates this cell from
     // whatever draws next, even when its own text already fills (or
     // overruns) its column -- a label as wide as its column never
@@ -10438,7 +10462,14 @@ fn tape_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'s
         .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
         .collect();
     lines.extend(if is_watch {
-        tape_help_row("q", "quit at once", "c", "inert · launched only", ctx, width)
+        tape_help_row(
+            "q",
+            "quit at once",
+            "c",
+            "inert · launched only",
+            ctx,
+            width,
+        )
     } else {
         tape_help_row(
             "q",
@@ -10559,7 +10590,11 @@ fn tape_help_key_rows(
     lines.extend(help_row(
         help_cell("↑ ↓", default),
         help_cell("Totals: sent · received", default),
-        vec![("┼".into(), muted), (" ".into(), default), ("▓".into(), above_usual)],
+        vec![
+            ("┼".into(), muted),
+            (" ".into(), default),
+            ("▓".into(), above_usual),
+        ],
         help_cell("the `t` view's own tick", default),
         width,
     ));
@@ -10583,10 +10618,7 @@ fn tape_help_lines(
 ) -> Vec<Line<'static>> {
     let (mut lines, other_page) = match page {
         crate::keys::HelpPage::Keys => (tape_help_keys_rows(ctx, is_watch, width), "Key"),
-        crate::keys::HelpPage::Key => (
-            tape_help_key_rows(ctx, unit, history_runs, width),
-            "Keys",
-        ),
+        crate::keys::HelpPage::Key => (tape_help_key_rows(ctx, unit, history_runs, width), "Keys"),
     };
     for _ in lines.len()..14 {
         lines.push(Line::from(""));
@@ -12191,12 +12223,8 @@ fn draw_dialog_overlay(
                 app.is_watch,
                 content_width,
             );
-            let available_merged = area
-                .height
-                .saturating_sub(5)
-                .saturating_sub(3) as usize; // the popup's own y offset, its top/bottom border, the close row
-            let merge_fits =
-                content_width >= HELP_NARROW_WIDTH && merged.len() <= available_merged;
+            let available_merged = area.height.saturating_sub(5).saturating_sub(3) as usize; // the popup's own y offset, its top/bottom border, the close row
+            let merge_fits = content_width >= HELP_NARROW_WIDTH && merged.len() <= available_merged;
             let (popup_height, page_title, mut lines) = if merge_fits {
                 let height = (merged.len() + 3) as u16; // body + close row + 2 borders
                 (height, "Help · Tape".to_string(), merged)
@@ -12277,12 +12305,9 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(signal_help_lines(
-                ctx,
-                app.is_watch,
-                content_area.width,
-            ))
-            .style(Style::default().bg(ctx.theme.bg_surface));
+            let paragraph =
+                Paragraph::new(signal_help_lines(ctx, app.is_watch, content_area.width))
+                    .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Flow => {
@@ -23899,7 +23924,12 @@ mod tape_frame_goldens {
     fn lines_text(lines: &[Line<'static>]) -> String {
         lines
             .iter()
-            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
             .collect::<Vec<_>>()
             .join("\n")
     }
@@ -24008,8 +24038,7 @@ mod tape_frame_goldens {
     /// Box-drawing chrome -- a screen's own border/rule drawing,
     /// never a symbol issue #738's Key owes a line of its own.
     const CHROME_GLYPHS: &[char] = &[
-        '─', '│', '╭', '╮', '╰', '╯', '┬', '┴', '├', '┤', '═', '║', '⋯', '…',
-        '└', '┘',
+        '─', '│', '╭', '╮', '╰', '╯', '┬', '┴', '├', '┤', '═', '║', '⋯', '…', '└', '┘',
     ];
 
     /// Prose punctuation every screen's own text uses constantly --
