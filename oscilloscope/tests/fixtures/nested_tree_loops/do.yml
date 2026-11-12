@@ -1,0 +1,63 @@
+interface:
+  inputs:
+    groups: {type: array, default: ["a", "b"]}
+    files: {type: array, default: [1, 2, 3, 4, 5]}
+effects:
+  - name: setup
+    type: tool
+    provider: shell
+    params:
+      command: sleep
+      args: ["1"]
+      allowed_commands: ["sleep"]
+  - name: work
+    type: dynamic
+    flow: tree
+    effects:
+      - name: groups
+        type: loop
+        flow: tree
+        max_concurrency: 2
+        each:
+          in: input.groups
+          as: g
+        body:
+          - name: files
+            type: loop
+            flow: tree
+            max_concurrency: 2
+            each:
+              in: input.files
+              as: f
+            body:
+              - name: build
+                type: dynamic
+                effects:
+                  - name: compile
+                    type: tool
+                    provider: shell
+                    params:
+                      command: sleep
+                      args: ["4"]
+                      allowed_commands: ["sleep"]
+                  - name: check
+                    type: tool
+                    provider: shell
+                    params:
+                      command: sleep
+                      args: ["2"]
+                      allowed_commands: ["sleep"]
+      - name: watcher
+        type: tool
+        provider: shell
+        params:
+          command: sleep
+          args: ["40"]
+          allowed_commands: ["sleep"]
+  - name: done
+    type: tool
+    provider: shell
+    params:
+      command: echo
+      args: ["done"]
+      allowed_commands: ["echo"]

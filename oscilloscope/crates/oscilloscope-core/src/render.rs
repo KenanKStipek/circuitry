@@ -1914,7 +1914,11 @@ pub(crate) fn missing_loop_pass_rows(
     out
 }
 
-fn row_kind_for(path: &str, plan: &PlanTree, flat: &BTreeMap<String, NodeMeta>) -> RowKind {
+pub(crate) fn row_kind_for(
+    path: &str,
+    plan: &PlanTree,
+    flat: &BTreeMap<String, NodeMeta>,
+) -> RowKind {
     let has_children = crate::model::subtree_entries(path, flat).any(|(p, _)| p != path);
     row_kind_for_with_has_children(path, plan, flat, has_children)
 }
@@ -2080,7 +2084,7 @@ fn child_segments(
     children
 }
 
-fn pass_index(segment: &str) -> Option<u64> {
+pub(crate) fn pass_index(segment: &str) -> Option<u64> {
     segment.strip_prefix("iter_").and_then(|n| n.parse().ok())
 }
 
