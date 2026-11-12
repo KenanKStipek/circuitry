@@ -30,7 +30,7 @@ fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
 
 fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
     RunRequest {
-        config_path,
+        config_path: Some(config_path),
         orchestration_path,
         inputs: IndexMap::new(),
         out_path: None,
@@ -38,6 +38,9 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
         armed: true,
     }
 }
@@ -545,7 +548,7 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
     let events_path = dir.join("events.jsonl");
     let live_state_path = dir.join("live-state.json");
     let req = RunRequest {
-        config_path: config,
+        config_path: Some(config),
         orchestration_path: doc,
         inputs: IndexMap::new(),
         out_path: None,
@@ -553,6 +556,9 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
         live_state_path: Some(live_state_path.clone()),
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
 
@@ -585,7 +591,7 @@ async fn run_start_names_only_the_config_files_own_file_name() {
     let doc = write(&dir, "doc.yml", "effects: []\n");
     let events_path = dir.join("events.jsonl");
     let req = RunRequest {
-        config_path: config,
+        config_path: Some(config),
         orchestration_path: doc,
         inputs: IndexMap::new(),
         out_path: None,
@@ -593,6 +599,9 @@ async fn run_start_names_only_the_config_files_own_file_name() {
         live_state_path: None,
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
 
@@ -627,7 +636,7 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
     );
     let events_path = dir.join("events.jsonl");
     let req = RunRequest {
-        config_path: config,
+        config_path: Some(config),
         orchestration_path: doc,
         inputs: IndexMap::new(),
         out_path: None,
@@ -635,6 +644,9 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
         live_state_path: None,
         events_path: Some(events_path.clone()),
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
 
@@ -748,7 +760,7 @@ fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
         "effects:\n  - name: a\n    type: tool\n    provider: json\n    params: {mode: stringify, input: {}}\n",
     );
     let req = RunRequest {
-        config_path: config,
+        config_path: Some(config),
         orchestration_path: doc,
         inputs: IndexMap::new(),
         out_path: None,
@@ -756,6 +768,9 @@ fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

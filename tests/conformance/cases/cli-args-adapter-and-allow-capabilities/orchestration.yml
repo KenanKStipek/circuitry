@@ -1,0 +1,8 @@
+name: cli-args-adapter-and-allow-capabilities
+effects:
+  - type: tool
+    name: result
+    provider: json
+    params:
+      mode: parse
+      input: "{}"
