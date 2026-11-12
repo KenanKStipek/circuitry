@@ -1,0 +1,54 @@
+name: c-http-save-to
+interface:
+  inputs:
+    base_url:
+      type: string
+      required: true
+    within:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: download
+    provider: http
+    params:
+      url: "{{input.base_url}}/a.bin"
+      save_to: out/a.bin
+      within: {from: input.within}
+  - type: tool
+    name: refuses_without_overwrite
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/a.bin"
+      save_to: out/a.bin
+      within: {from: input.within}
+  - type: tool
+    name: overwrite_replaces_it
+    provider: http
+    params:
+      url: "{{input.base_url}}/a-v2.bin"
+      save_to: out/a.bin
+      within: {from: input.within}
+      overwrite: true
+  - type: tool
+    name: over_max_bytes_leaves_no_file
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/big.bin"
+      save_to: out/big.bin
+      within: {from: input.within}
+      max_bytes: 5
+  - type: tool
+    name: non_2xx_writes_nothing
+    provider: http
+    on_error: continue
+    params:
+      url: "{{input.base_url}}/missing.bin"
+      save_to: out/missing.bin
+      within: {from: input.within}
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: out, recursive: true}

@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #602/#726 (http's save_to: within, overwrite, max_bytes, and a non-2xx status)",
+  "description": "`save_to` writes the body to a file within `within` (value: {path, bytes, sha256, content_type, status}); a second download to the same path without `overwrite` fails before any request and leaves the first file untouched; `overwrite: true` replaces it with the new body; `max_bytes` below the body's size fails and leaves no file; a 404 writes nothing and the effect's own value has a null path. The last effect removes the scratch directory it all wrote under.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": [
+    "-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__",
+    "-e", "within=__CASE_DIR__"
+  ]
+}
