@@ -25,17 +25,23 @@ from circuitry.core.tool import ToolDefinition, ToolRuntime
 #: A fake command: for each ``line`` in argv, waits for a file named
 #: ``<gate_dir>/<line>`` to exist, then prints ``line`` to stdout (or
 #: stderr, for an argument prefixed ``err:``) and flushes immediately.
-#: ``FAKE_GATE_DIR`` names *gate_dir*.
+#: ``FAKE_GATE_DIR`` names *gate_dir*. Bounds its own lifetime (#661): it
+#: exits once reparented (its starting pytest process died without
+#: killing it) or at a hard 120s deadline, never an unbounded wait.
 _FAKE_SCRIPT = """\
 #!{python}
 import os, sys, time
 
 gate_dir = os.environ["FAKE_GATE_DIR"]
+starting_parent = os.getppid()
+deadline = time.monotonic() + 120
 for arg in sys.argv[1:]:
     stream = sys.stderr if arg.startswith("err:") else sys.stdout
     text = arg[4:] if arg.startswith("err:") else arg
     gate = os.path.join(gate_dir, arg.replace(":", "_"))
     while not os.path.exists(gate):
+        if os.getppid() != starting_parent or time.monotonic() > deadline:
+            sys.exit(1)
         time.sleep(0.01)
     stream.write(text + "\\n")
     stream.flush()
@@ -79,7 +85,10 @@ def _run_shell(
         provider="shell",
         params={"command": "faketool", "allowed_commands": ["faketool"], "args": args},
     )
-    store = Store({})
+    # A live tracker is only ever built when something is watching
+    # (`store.on_write is not None`) -- a no-op observer here stands in
+    # for `--live-state`/an embedding caller's own state observer (#741).
+    store = Store({}, on_write=lambda _state: None)
     live_calls: list[dict[str, Any] | None] = []
     original_set = store.set
     original_unset = store.unset
@@ -152,16 +161,128 @@ def test_live_tail_stays_bounded_with_large_output(
     assert snapshots[-1]["stdout_bytes"] == sum(len(f"{line}\n") for line in lines)
 
 
+def test_live_tail_stays_bounded_with_a_line_longer_than_4kib(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single line far longer than the 4 KiB cap is clipped to its own
+    last 4096 bytes, at a character boundary, the moment it lands in the
+    tail -- never held in full, and never dropped as a fragment once it
+    is the only line left to keep (#741).
+    """
+    huge = "y" * 10000
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "hugeline"
+    script.write_text(
+        f"""#!{sys.executable}
+import sys
+sys.stdout.write({huge!r} + "\\n")
+sys.stdout.flush()
+""",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    defn = ToolDefinition(
+        name="x", provider="shell", params={"command": "hugeline", "allowed_commands": ["hugeline"]}
+    )
+    store = Store({}, on_write=lambda _state: None)
+    live_calls: list[dict[str, Any] | None] = []
+    original_set = store.set
+
+    def _rec(path: str, value: Any) -> None:
+        if path.endswith(".meta.live") and isinstance(value, dict):
+            live_calls.append(value)
+        original_set(path, value)
+
+    store.set = _rec  # type: ignore[method-assign]
+
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    snapshots = [c for c in live_calls if c is not None]
+    assert snapshots, "no live samples were published"
+    for snapshot in snapshots:
+        assert len(snapshot["stdout_tail"].encode("utf-8")) <= 4096
+    assert snapshots[-1]["stdout_tail"] == huge[-4096:]
+    assert store.state["x"]["meta"]["stdout"] == huge + "\n"
+
+
+def test_the_current_partial_line_shows_live_before_any_newline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A line with no newline yet (nothing printed to end it, and the
+    process hasn't exited either) still shows live, as the tail's own
+    last line -- the issue's own "printf 'working…'; sleep 60" case
+    (#741). Gated by files, like the rest of this module's own fake, so
+    the assertion can't race the write.
+    """
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gate_dir = tmp_path / "gates"
+    script = bin_dir / "partialtool"
+    script.write_text(
+        f"""#!{sys.executable}
+import os, sys, time
+sys.stdout.write("working...")
+sys.stdout.flush()
+gate = os.path.join({str(gate_dir)!r}, "go")
+while not os.path.exists(gate):
+    time.sleep(0.01)
+""",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    monkeypatch.setenv("PATH", f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={"command": "partialtool", "allowed_commands": ["partialtool"]},
+    )
+    store = Store({}, on_write=lambda _state: None)
+    live_calls: list[dict[str, Any] | None] = []
+    original_set = store.set
+
+    def _rec(path: str, value: Any) -> None:
+        if path.endswith(".meta.live") and isinstance(value, dict):
+            live_calls.append(value)
+        original_set(path, value)
+
+    store.set = _rec  # type: ignore[method-assign]
+
+    def _release() -> None:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if any(
+                isinstance(c, dict) and c.get("stdout_tail") == "working..." for c in live_calls
+            ):
+                break
+            time.sleep(0.01)
+        gate_dir.mkdir(parents=True, exist_ok=True)
+        (gate_dir / "go").touch()
+
+    releaser = threading.Thread(target=_release, daemon=True)
+    releaser.start()
+    ToolRuntime(defn).execute(store=store, ctx={})
+    releaser.join(10)
+
+    assert any(
+        isinstance(c, dict) and c.get("stdout_tail") == "working..." for c in live_calls
+    ), "the partial line never showed live before the process exited"
+
+
 def test_binary_output_is_decoded_with_replacement(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Invalid bytes mid-stream still fail the step at the end, a strict
     decode exactly like a run with no live wiring at all (#741's own
     ``run_tracked`` change never touches that) -- but the live tail
-    published for the valid line *before* them shows it was read and fed
-    to the tail as the run went, not only reconstructed from the final,
-    now-failed text. (``_TailBuffer`` itself, tested directly below,
-    covers the replacement decoding for invalid bytes.)
+    decodes the very same raw bytes separately and lossily
+    (``errors="replace"``), so it shows the invalid bytes too, as
+    U+FFFD, rather than stopping at the last valid line (#741).
+    (``_TailBuffer`` itself, tested directly below, covers the
+    replacement decoding for invalid bytes.)
     """
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -189,7 +310,7 @@ sys.stdout.buffer.flush()
             "allow_nonzero": True,
         },
     )
-    store = Store({})
+    store = Store({}, on_write=lambda _state: None)
     live_calls: list[dict[str, Any] | None] = []
     original_set = store.set
 
@@ -204,7 +325,7 @@ sys.stdout.buffer.flush()
         ToolRuntime(defn, verbose=False).execute(store=store, ctx={})
 
     assert live_calls, "no live sample was published before the decode error"
-    assert live_calls[-1]["stdout_tail"] == "before"
+    assert live_calls[-1]["stdout_tail"] == "before\n��after"
 
 
 def test_tail_buffer_decodes_binary_output_with_replacement() -> None:
@@ -234,6 +355,47 @@ def test_the_final_state_equals_a_run_without_live_wiring(tmp_path: Path) -> Non
     with_live = run_binary(binary=binary, args=["hello", "world"], on_live=calls.append)
     assert calls and calls[-1] is None
     assert with_live == without_live
+
+
+def test_the_final_state_equals_a_run_without_live_wiring_for_stderr_crlf_and_stdin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same byte-identical guarantee as the test above, but for the
+    paths that test's own ``echo`` call never exercises (#741): stderr,
+    CRLF translation, and input delivered over ``stdin`` -- each compared
+    with and without ``on_live`` wired.
+    """
+    from circuitry.plugins._subprocess import resolve_binary, run_binary
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    script = bin_dir / "stderrandcrlf"
+    script.write_text(
+        f"""#!{sys.executable}
+import sys
+sys.stdout.write("line one\\r\\nline two\\r\\n")
+sys.stderr.write("oops\\r\\n")
+sys.stdout.flush()
+sys.stderr.flush()
+""",
+        encoding="utf-8",
+    )
+    script.chmod(script.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+
+    without_live = run_binary(binary=str(script), args=[])
+    with_live = run_binary(binary=str(script), args=[], on_live=lambda _s: None)
+    assert with_live == without_live
+    assert with_live.stdout == "line one\nline two\n"
+    assert with_live.stderr == "oops\n"
+
+    cat_binary = resolve_binary(["cat"])
+    assert cat_binary is not None
+    without_live_stdin = run_binary(binary=cat_binary, args=[], stdin="from stdin\n")
+    with_live_stdin = run_binary(
+        binary=cat_binary, args=[], stdin="from stdin\n", on_live=lambda _s: None
+    )
+    assert with_live_stdin == without_live_stdin
+    assert with_live_stdin.stdout == "from stdin\n"
 
 
 @pytest.fixture(autouse=True)
