@@ -285,6 +285,71 @@ effects:
 """,
     ),
     Case(
+        # Issue #737: a loop inside a loop, each wide enough to run
+        # more than one pass at once, plus a plain step running
+        # alongside them -- the Tape's own Now area tree, exercised
+        # against a real recorded run rather than a hand-built one.
+        name="nested_tree_loops",
+        doc="""\
+interface:
+  inputs:
+    groups: {type: array, default: ["a", "b"]}
+    files: {type: array, default: [1, 2, 3]}
+effects:
+  - name: work
+    type: dynamic
+    flow: tree
+    effects:
+      - name: groups
+        type: loop
+        flow: tree
+        max_concurrency: 2
+        each:
+          in: input.groups
+          as: g
+        body:
+          - name: files
+            type: loop
+            flow: tree
+            max_concurrency: 2
+            each:
+              in: input.files
+              as: f
+            body:
+              - name: build
+                type: dynamic
+                effects:
+                  - name: compile
+                    type: tool
+                    provider: shell
+                    params:
+                      command: sleep
+                      args: ["2"]
+                      allowed_commands: ["sleep"]
+                  - name: check
+                    type: tool
+                    provider: shell
+                    params:
+                      command: sleep
+                      args: ["1"]
+                      allowed_commands: ["sleep"]
+      - name: watcher
+        type: tool
+        provider: shell
+        params:
+          command: sleep
+          args: ["7"]
+          allowed_commands: ["sleep"]
+  - name: done
+    type: tool
+    provider: shell
+    params:
+      command: echo
+      args: ["done"]
+      allowed_commands: ["echo"]
+""",
+    ),
+    Case(
         name="prompt_chain",
         doc="""\
 effects:
