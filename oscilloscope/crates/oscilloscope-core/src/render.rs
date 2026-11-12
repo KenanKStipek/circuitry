@@ -1196,7 +1196,10 @@ pub fn details_for(
             .get("prompt_sent")
             .and_then(Value::as_str)
             .map(|s| preview(s, DETAILS_PREVIEW_CHARS)),
-        value: Some(preview(&display_value(&node.value), DETAILS_PREVIEW_CHARS)),
+        value: Some(preview(
+            &crate::summary::json_value_summary(&node.value, DETAILS_PREVIEW_CHARS),
+            DETAILS_PREVIEW_CHARS,
+        )),
         sent,
         received,
     }
@@ -1333,7 +1336,8 @@ fn build_sent_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
 /// token bar's own estimate follows). Once it's answered: `meta.
 /// answer` when present (the raw reply for `boolean`/`number`
 /// prompts and model-mode conditions), else the node's own value (a
-/// string as is, anything else as compact JSON).
+/// string as is, anything else summarised by issue #739's one
+/// shared rule rather than shown as raw JSON).
 fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
     if node.is_running() {
         return TokenBlock {
@@ -1347,7 +1351,7 @@ fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
         .get("answer")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| display_value(&node.value));
+        .unwrap_or_else(|| crate::summary::json_value_summary(&node.value, DETAILS_PREVIEW_CHARS));
     let snippet = Some(preview(&collapse_whitespace(&text), DETAILS_PREVIEW_CHARS));
     let (_, received) = crate::model::node_tokens(meta);
     TokenBlock {
@@ -4400,6 +4404,24 @@ mod tests {
         assert_eq!(tail, "line 4\nline 5\nline 6\nline 7\nline 8");
     }
 
+    /// Issue #739: a non-prompt step's own JSON value (the Flow's
+    /// "produced:" line, via `FocusedStep::value`) reads a short
+    /// summary, never the raw JSON `details.value` used to show.
+    #[test]
+    fn details_for_a_tool_summarises_a_json_value_instead_of_showing_raw_json() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": {"edits": [1, 2], "files": [1, 2, 3]}, "meta": {
+                "created_at": "t0", "completed_at": "t1", "provider": "shell"
+            }}
+        }});
+        let details = details_for("prime.tool", &plan, &RunModel::new(), Some(&state_json));
+        assert_eq!(
+            details.value.as_deref(),
+            Some("edits 2 items · files 3 items")
+        );
+    }
+
     #[test]
     fn details_for_a_prompt_truncates_the_preview_but_full_value_does_not() {
         let plan = PlanTree::empty();
@@ -4545,8 +4567,9 @@ mod tests {
         let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         let received = details.received.unwrap();
         // no `meta.answer` here (not boolean/number), so the node's
-        // own value, as compact JSON, is the snippet.
-        assert_eq!(received.snippet.as_deref(), Some(r#"{"ok":true}"#));
+        // own value, summarised by its own first keys (issue #739)
+        // rather than shown as raw JSON, is the snippet.
+        assert_eq!(received.snippet.as_deref(), Some("ok true"));
         assert_eq!(received.tokens, Some(3));
         let sent = details.sent.unwrap();
         assert_eq!(sent.tokens, Some(9));

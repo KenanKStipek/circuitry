@@ -1457,8 +1457,15 @@ fn tape_running_agent_what(
 /// `meta.raw`, cut from the right in that order -- a failed session
 /// never reaches this at all, `tape_row_content`'s own Failed/
 /// Failed-handled branches keep today's error text for one of
-/// those.
-fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> String {
+/// those. Issue #739's rule 1: once the agent tool left nothing of
+/// that shape at all (`raw` has none of turns, tool calls or files
+/// changed), the duration alone falls through to the one shared
+/// summary function on the node's own value instead.
+fn tape_finished_agent_what(
+    duration_s: Option<f64>,
+    raw: &AgentRawSummary,
+    value: &Value,
+) -> String {
     let mut what = duration_s
         .map(crate::format::format_duration)
         .unwrap_or_default();
@@ -1485,6 +1492,14 @@ fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> S
                 raw.lines_added.unwrap_or(0),
                 raw.lines_removed.unwrap_or(0)
             ));
+        }
+    }
+    if raw.turns.is_none() && raw.tool_calls.is_none() && raw.files_changed.is_none() {
+        if let Some(words) = (!value.is_null())
+            .then(|| crate::summary::json_value_summary(value, 24))
+            .filter(|v| !v.is_empty())
+        {
+            what.push_str(&format!(" · {words}"));
         }
     }
     what
@@ -1684,55 +1699,6 @@ fn tape_row_tool_tokens(
             live: figures.live,
             ..Default::default()
         },
-    }
-}
-
-/// §3.4's "first words": the reply's own text, cut at the first
-/// sentence end or a fixed character budget, whichever comes first
-/// -- `Bug.`, `Thanks for the ⋯` (never the whole reply, which the
-/// detail pane shows in full). §3.8's row-text ellipsis (`⋯`), not
-/// a sentence's own `…`: every Tape row cut short, a preview line
-/// included, uses the same glyph.
-fn first_words(text: &str, max_chars: usize) -> String {
-    let text = text.trim();
-    if let Some(end) = first_sentence_end(text) {
-        let cut = &text[..=end];
-        if cut.chars().count() <= max_chars {
-            return cut.to_string();
-        }
-    }
-    let truncated: String = text.chars().take(max_chars).collect();
-    if truncated.chars().count() < text.chars().count() {
-        format!("{truncated}⋯")
-    } else {
-        truncated
-    }
-}
-
-/// The byte offset of the first real sentence end in `text`,
-/// skipping two shapes of punctuation that look like one but
-/// aren't: a list number's own period (`1.`, `12.` -- a run of
-/// nothing but digits before it is a list marker, not a sentence,
-/// so a reply that opens `1. Faster parser.` cuts at the real end
-/// instead of after the `1`), and a period embedded in a word
-/// (`api.py`, immediately followed by another letter or digit with
-/// no space, never a sentence's own end).
-fn first_sentence_end(text: &str) -> Option<usize> {
-    let mut search_from = 0;
-    loop {
-        let rel = text[search_from..].find(['.', '!', '?'])?;
-        let end = search_from + rel;
-        let prefix = &text[..end];
-        let is_list_marker = !prefix.is_empty() && prefix.chars().all(|c| c.is_ascii_digit());
-        let embedded_in_a_word = text[end + 1..]
-            .chars()
-            .next()
-            .is_some_and(|c| c.is_alphanumeric());
-        if is_list_marker || embedded_in_a_word {
-            search_from = end + 1;
-            continue;
-        }
-        return Some(end);
     }
 }
 
@@ -1964,9 +1930,9 @@ fn tape_row_content(
                         .map(|n| crate::model::node_tokens(&n.meta))
                         .unwrap_or((0, 0));
                     let reply_words = node
-                        .map(|n| crate::render::display_value(&n.value))
-                        .filter(|v| !v.is_empty())
-                        .map(|v| first_words(&v, 24));
+                        .filter(|n| !n.value.is_null())
+                        .map(|n| crate::summary::json_value_summary(&n.value, 24))
+                        .filter(|v| !v.is_empty());
                     let what = tape_prompt_what(sent, received, reply_words.as_deref());
                     let tokens = TapeTokens {
                         sent: Some(sent),
@@ -2134,7 +2100,12 @@ fn tape_row_content(
                     }
                 } else {
                     let raw = node.map(|n| agent_raw_summary(&n.meta)).unwrap_or_default();
-                    (tape_finished_agent_what(row.duration_s, &raw), None, tokens)
+                    let value = node.map(|n| &n.value).unwrap_or(&Value::Null);
+                    (
+                        tape_finished_agent_what(row.duration_s, &raw, value),
+                        None,
+                        tokens,
+                    )
                 }
             } else {
                 (tape_tool_what(row, node, plan), None, tokens)
@@ -4150,8 +4121,9 @@ pub fn build_signal(
                 let dev = usual
                     .filter(|&u| u > 0)
                     .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
-                let reply_words = crate::render::display_value(&node.value);
-                let reply_words = (!reply_words.is_empty()).then(|| first_words(&reply_words, 24));
+                let reply_words = (!node.value.is_null())
+                    .then(|| crate::summary::json_value_summary(&node.value, 24))
+                    .filter(|v| !v.is_empty());
                 let mut parts = vec![crate::format::format_tokens(total)];
                 if let Some(dev) = dev {
                     parts.push(format!("{dev:+.0}%"));
@@ -5081,57 +5053,6 @@ pub fn build_flow(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A list number's own period (`1.`, `12.`) is never a sentence
-    /// end, so `1. Faster parser.` cuts at the real one.
-    #[test]
-    fn first_sentence_end_skips_a_list_numbers_own_period() {
-        assert_eq!(
-            first_sentence_end("1. Faster parser. Also fixes a bug."),
-            Some(16)
-        );
-        assert_eq!(first_words("1. Faster parser.", 80), "1. Faster parser.");
-    }
-
-    /// A period embedded in a word (no space after it, followed by
-    /// another letter or digit) is never a sentence end either.
-    #[test]
-    fn first_sentence_end_skips_a_period_embedded_in_a_word() {
-        assert_eq!(first_sentence_end("See api.py.main for that."), Some(24));
-        assert_eq!(first_sentence_end("v1.2.0 shipped."), Some(14));
-        assert_eq!(
-            first_sentence_end("Read https://example.com/a.b for more."),
-            Some(37)
-        );
-        assert_eq!(first_sentence_end("It costs 3.14 dollars."), Some(21));
-    }
-
-    /// `e.g.`/`U.S.` aren't specially recognised at all -- the
-    /// period right after the first one-letter abbreviation is
-    /// itself followed immediately by another letter with no space
-    /// (`e`+`.`+`g`), so it's skipped as "embedded in a word" the
-    /// same as `api.py` would be; the *next* period (after `g`/the
-    /// second `S`) is followed by a space, so that one reads as the
-    /// real end. This just pins the actual, unchanged behaviour
-    /// rather than claiming a rule this function has never had.
-    #[test]
-    fn first_sentence_end_reads_an_abbreviations_period_as_a_real_one() {
-        assert_eq!(first_sentence_end("e.g. a cat."), Some(3));
-        assert_eq!(first_sentence_end("U.S. markets rose."), Some(3));
-    }
-
-    /// `...` and a trailing `?!` both still end at their own first
-    /// punctuation mark, same as before this fix.
-    #[test]
-    fn first_sentence_end_stops_at_the_first_punctuation_mark() {
-        assert_eq!(first_sentence_end("Wait... really?"), Some(4));
-        assert_eq!(first_sentence_end("Really?! Yes."), Some(6));
-    }
-
-    #[test]
-    fn first_sentence_end_is_none_with_no_sentence_end_at_all() {
-        assert_eq!(first_sentence_end("no punctuation here"), None);
-    }
 
     /// A tool with no `params_rendered` yet (a loop pass's own tool
     /// child, concurrently started with its siblings, before its own
@@ -6507,6 +6428,65 @@ mod tests {
         assert_eq!(what, "✗ the session failed");
     }
 
+    /// Issue #739: a finished prompt whose reply is JSON reads a
+    /// short summary, never the raw JSON.
+    #[test]
+    fn tape_row_content_summarises_a_json_reply_instead_of_showing_raw_json() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "edit": {"value": {"edits": [{"replace": "  const x = 1;"}]}, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": "2026-01-01T11:51:56Z",
+                    "tokens_sent": 31100, "tokens_received": 2300
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let row = tape_row("prime.edit", 1, "edit", RowKind::Prompt, StatusKind::Done);
+        let (what, _preview, _tokens) = tape_row_content(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:00Z",
+        );
+        assert_eq!(what, "↑31.1k ↓2.3k · edits 1 items");
+    }
+
+    /// Issue #739's rule 1 fallthrough: an agent step whose `meta.raw`
+    /// has none of turns, tool calls or files changed falls through
+    /// to the shared summary on its own value, rather than reading
+    /// only the bare duration.
+    #[test]
+    fn tape_row_content_agent_with_nothing_recorded_falls_through_to_the_value_summary() {
+        let flat = flat_from(
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": {"summary": "Fixed the bug. More detail."}, "meta": {
+                    "created_at": "2026-01-01T11:51:42Z", "completed_at": "2026-01-01T11:51:56.1Z",
+                    "provider": "agent"
+                }}
+            }}),
+        );
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let mut row = tape_row("prime.fixer", 1, "fixer", RowKind::Tool, StatusKind::Done);
+        row.duration_s = Some(14.1);
+        let (what, _preview, _tokens) = tape_row_content(
+            &row,
+            &flat,
+            &plan,
+            &model,
+            None,
+            false,
+            false,
+            "2026-01-01T11:52:00Z",
+        );
+        assert_eq!(what, "14.1s · Fixed the bug.");
+    }
+
     #[test]
     fn header_line_has_no_truncation_at_120_columns() {
         let header = base_header();
@@ -7654,6 +7634,51 @@ mod tests {
                 .iter()
                 .any(|b| b.sent > 0 || b.received > 0)
         );
+    }
+
+    /// Issue #739: a finished prompt's own step row reads a JSON
+    /// reply's short summary, never the raw JSON.
+    #[test]
+    fn build_signal_step_row_summarises_a_json_reply_instead_of_showing_raw_json() {
+        let rows = vec![tape_row(
+            "prime.a",
+            1,
+            "a",
+            RowKind::Prompt,
+            StatusKind::Done,
+        )];
+        let mut flat = BTreeMap::new();
+        let mut node = signal_node(
+            "2026-01-01T00:00:00.000Z",
+            Some("2026-01-01T00:00:03.050Z"),
+            100,
+            10,
+        );
+        node.value = json!({"edits": [1, 2], "files": [1, 2, 3]});
+        flat.insert("prime.a".to_string(), node);
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let signal = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            "2026-01-01T00:00:03.100Z",
+        );
+        match &signal.step_rows[0].kind {
+            SignalStepKind::Prompt { rest } => {
+                assert_eq!(rest, "110 t · edits 2 items · files 3 ⋯");
+            }
+            other => panic!("expected a Prompt step kind, got {other:?}"),
+        }
     }
 
     /// A decision's own mark wins over a finished prompt's `✓` when
