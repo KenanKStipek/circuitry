@@ -4,19 +4,28 @@
 //! the loopback/`allow_remote` host rule, the question/answer validation
 //! and the `raw` shape are all byte-for-byte with `plugins/systemone.py`.
 //!
-//! Not ported: `plugins/systemone.py::static_param_errors` (`cof check`'s
-//! own up-front validation of a literal `model`/`questions`/`within`,
-//! called again from `core/compiler.py` so `cof run` fails a malformed
-//! document before it starts) and the "limited document" `within`-must-
-//! stay-inside-its-own-project rule (`SystemOnePlugin.limited`/
-//! `.confine_to`, only ever non-default for a `use: inline`-nested `use:
-//! {path:}` child). Every check that actually decides what a run can
-//! read still runs here, at dispatch time, exactly as `execute()` itself
-//! re-checks it in cof regardless of whether `cof check` already passed
-//! -- a document this skips an up-front refusal for still fails the
-//! same way, just at the effect's own attempt instead of before the run
-//! starts, and a limited child's `within` is checked as if it were
-//! trusted (DESIGN.md §13, both documented divergences).
+//! A document with no file of its own cannot name `state_file`/`within`
+//! at all; a literal `within` must be an absolute path or `{from:
+//! input.<name>}`; a limited document's `within` must stay inside its
+//! own project, both at compile time
+//! (`electricity_compiler::compile::leaves::check_systemone_confinement`)
+//! for a literal value and here, at dispatch, for every read regardless
+//! of where `within` came from -- `read_state_file`'s own *limited*/
+//! *confine_to* arguments, carried from `ToolOp.limited`/`.confine_to`
+//! through `ToolCall`, exactly as `SystemOnePlugin.limited`/`.confine_to`
+//! do in cof. A profile cannot switch a tool to or from `systemone`
+//! (`electricity_compiler::overrides`), and `params_json` cannot set
+//! `within` (`electricity_vm::exec::tool::reject_overlay_within`).
+//!
+//! Not ported: `plugins/systemone.py::static_param_errors`'s own
+//! `model`/`questions` checks (`cof check`'s up-front validation of a
+//! literal `model`/`questions`, so `cof run` fails a malformed document
+//! before it starts) -- `execute()` here re-checks both before the
+//! request the same way cof's own `execute()` does regardless of
+//! whether `cof check` already passed, so a document this skips an
+//! up-front refusal for still fails the same way, just at the effect's
+//! own attempt instead of before the run starts (DESIGN.md §13, a
+//! documented divergence).
 
 use crate::fs::{as_bool, get, value_error};
 use crate::http_client::{self, ConnectTarget, RawRequest, Scheme, SendError, TimeoutModel};
@@ -98,6 +107,17 @@ struct Server {
     scheme: String,
     host: String,
     port: u16,
+    /// `base_url.strip().rstrip("/")`'s own `urlsplit().path` -- a prefix
+    /// the request target is sent under (`server + ENDPOINT_PATH`, cof's
+    /// own plain string concatenation): e.g. `/api` for a `base_url` of
+    /// `http://127.0.0.1:8080/api`, empty when `base_url` names no path.
+    path: String,
+    /// `urlsplit().netloc`, exactly as written in `base_url` -- the `Host`
+    /// header and the proxy bypass/target lookup both key off this, never
+    /// off *host*/*port* once parsed apart (`crate::http`'s own
+    /// `netloc_host_as_written`/`resolve_proxy_target`, issue #486):
+    /// brackets kept for an IPv6 literal, an explicit default port kept.
+    netloc: String,
     /// `base_url.strip().rstrip("/")` -- the text every error message
     /// below names, never re-derived from the parsed parts.
     display: String,
@@ -170,10 +190,13 @@ fn default_port(scheme: &str) -> u16 {
     if scheme == "https" { 443 } else { 80 }
 }
 
-/// `SystemOnePlugin._server`.
-fn validate_base_url(base_url: Option<&str>, allow_remote: bool) -> Result<Server, ToolError> {
+/// `SystemOnePlugin._server`. *base_url* is the raw config `Value` --
+/// `isinstance(base_url, str)` is false for anything but a string, cof's
+/// own `_server` has no separate "wrong type" message, so a non-string
+/// value hits the same "required" text a missing one does.
+fn validate_base_url(base_url: Option<&Value>, allow_remote: bool) -> Result<Server, ToolError> {
     let raw = match base_url {
-        Some(s) if !s.trim().is_empty() => s,
+        Some(Value::Str(s)) if !s.trim().is_empty() => s.as_str(),
         _ => {
             return Err(value_error(
                 "systemone: runtime.plugins.systemone.base_url is required \
@@ -218,6 +241,8 @@ fn validate_base_url(base_url: Option<&str>, allow_remote: bool) -> Result<Serve
         scheme: split.scheme,
         host: netloc.host,
         port,
+        path: split.path,
+        netloc: split.netloc,
         display,
     })
 }
@@ -235,11 +260,20 @@ fn ascii_printable(s: &str) -> bool {
     !s.is_empty() && s.chars().all(|c| c.is_ascii() && !c.is_ascii_control())
 }
 
-/// `SystemOnePlugin._api_key`.
-fn resolve_api_key(api_key_env: Option<&str>) -> Result<Option<String>, ToolError> {
+/// `SystemOnePlugin._api_key`. *api_key_env* is the raw config `Value` --
+/// a non-string, non-empty value raises the same "must be the NAME of
+/// an environment variable" text cof's own `isinstance` check does.
+fn resolve_api_key(api_key_env: Option<&Value>) -> Result<Option<String>, ToolError> {
     let name = match api_key_env {
-        None | Some("") => return Ok(None),
-        Some(name) => name,
+        None => return Ok(None),
+        Some(Value::Str(s)) if s.is_empty() => return Ok(None),
+        Some(Value::Str(s)) => s.as_str(),
+        Some(_) => {
+            return Err(value_error(
+                "systemone: runtime.plugins.systemone.api_key_env must be the NAME of an \
+                 environment variable, not the key itself",
+            ));
+        }
     };
     if !is_env_name(name) {
         return Err(value_error(
@@ -536,20 +570,10 @@ fn probability_errors(
     if errors.is_empty() && (total - 1.0).abs() > PROBABILITY_SUM_TOLERANCE {
         errors.push(format!(
             "{where_}: probabilities sum to {}, not 1 (\u{b1}0.01)",
-            format_g(total)
+            crate::agent_cli::py_format_g(total)
         ));
     }
     errors
-}
-
-/// Python's `f"{x:g}"` for the narrow range of values a probability sum
-/// ever actually produces -- not a general `%g` port.
-fn format_g(x: f64) -> String {
-    if x.is_finite() && x == x.trunc() && x.abs() < 1e16 {
-        format!("{}", x as i64)
-    } else {
-        format!("{x}")
-    }
 }
 
 fn single_answer_errors(qid: &str, question: &Dict, answer: &Value) -> Vec<String> {
@@ -800,11 +824,13 @@ fn decode_utf8_sig(bytes: &[u8]) -> Option<String> {
     String::from_utf8(bytes.to_vec()).ok()
 }
 
-/// `plugins/systemone.py::_read_state_file` -- this port's "limited
-/// document" divergence applies here: every read is checked against
-/// *within* alone (module doc), never against a project a limited
-/// document would otherwise also have to stay inside.
-fn read_state_file(path_text: &str, within_text: Option<&str>) -> Result<Value, StateFailure> {
+/// `plugins/systemone.py::_read_state_file`.
+fn read_state_file(
+    path_text: &str,
+    within_text: Option<&str>,
+    limited: bool,
+    confine_to: Option<&str>,
+) -> Result<Value, StateFailure> {
     let within_text = match within_text {
         Some(s) if !s.trim().is_empty() => s,
         _ => {
@@ -827,6 +853,22 @@ fn read_state_file(path_text: &str, within_text: Option<&str>) -> Result<Value, 
     let within = Path::new(within_text)
         .canonicalize()
         .unwrap_or_else(|_| Path::new(within_text).to_path_buf());
+    if limited {
+        let Some(confine_to) = confine_to else {
+            return Err(StateFailure::Error(value_error(
+                "systemone: this document has no project, so it cannot read a \
+                 params.state_file",
+            )));
+        };
+        let root = Path::new(confine_to)
+            .canonicalize()
+            .unwrap_or_else(|_| Path::new(confine_to).to_path_buf());
+        if within != root && !within.starts_with(&root) {
+            return Err(StateFailure::Error(value_error(format!(
+                "systemone: params.within: {OUTSIDE_PROJECT}"
+            ))));
+        }
+    }
     let resolved = match Path::new(path_text).canonicalize() {
         Ok(p) => p,
         Err(err) => {
@@ -895,8 +937,16 @@ fn read_state_file(path_text: &str, within_text: Option<&str>) -> Result<Value, 
     reject_non_finite_json(&text, path_text)
 }
 
+/// `plugins/systemone.py::_OUTSIDE_PROJECT`.
+const OUTSIDE_PROJECT: &str = "must lie inside the document's own project (a document the \
+     caller did not name by path is confined to it)";
+
 /// `SystemOnePlugin._state`.
-fn resolve_state(params: &Value) -> Result<Value, StateFailure> {
+fn resolve_state(
+    params: &Value,
+    limited: bool,
+    confine_to: Option<&str>,
+) -> Result<Value, StateFailure> {
     let has_state = get(params, "state").is_some();
     let has_file = get(params, "state_file").is_some();
     if has_state == has_file {
@@ -921,7 +971,7 @@ fn resolve_state(params: &Value) -> Result<Value, StateFailure> {
         }
     };
     let within_text = get(params, "within").and_then(Value::as_str);
-    read_state_file(&path_text, within_text)
+    read_state_file(&path_text, within_text, limited, confine_to)
 }
 
 // ---------------------------------------------------------------------
@@ -1010,8 +1060,8 @@ fn failed_result(raw: Dict, kind: &str, message: String, key: Option<&str>) -> T
 // ---------------------------------------------------------------------
 
 pub struct SystemOnePlugin {
-    base_url: Option<String>,
-    api_key_env: Option<String>,
+    base_url: Option<Value>,
+    api_key_env: Option<Value>,
     allow_remote: bool,
 }
 
@@ -1030,8 +1080,8 @@ impl ToolPlugin for SystemOnePlugin {
                 )));
             }
         }
-        let server = validate_base_url(self.base_url.as_deref(), self.allow_remote)?;
-        let key = resolve_api_key(self.api_key_env.as_deref())?;
+        let server = validate_base_url(self.base_url.as_ref(), self.allow_remote)?;
+        let key = resolve_api_key(self.api_key_env.as_ref())?;
 
         let model = match get(&params, "model") {
             Some(Value::Str(s)) if !py_strip(s).is_empty() => s.clone(),
@@ -1052,7 +1102,7 @@ impl ToolPlugin for SystemOnePlugin {
             Value::List(question_ids.iter().cloned().map(Value::Str).collect()),
         );
 
-        let state = match resolve_state(&params) {
+        let state = match resolve_state(&params, call.limited, call.confine_to) {
             Ok(state) => state,
             Err(StateFailure::TooLarge(message)) => {
                 return Ok(failed_result(raw, "too_large", message, None));
@@ -1094,19 +1144,24 @@ impl ToolPlugin for SystemOnePlugin {
     }
 
     fn check(&self) -> CheckResult {
-        let configured = self
-            .base_url
-            .as_deref()
-            .is_some_and(|s| !s.trim().is_empty());
-        if !configured {
+        // `SystemOnePlugin.check`: "not configured" only for an absent or
+        // empty-string `base_url` -- a present non-string value (e.g. a
+        // number) falls through to `validate_base_url`, which reports it
+        // as `ok: false` the same way a missing one would.
+        let not_configured = match &self.base_url {
+            None => true,
+            Some(Value::Str(s)) => s.trim().is_empty(),
+            Some(_) => false,
+        };
+        if not_configured {
             return CheckResult {
                 ok: true,
                 missing: Vec::new(),
                 message: Some("not configured (runtime.plugins.systemone.base_url)".to_string()),
             };
         }
-        match validate_base_url(self.base_url.as_deref(), self.allow_remote)
-            .and_then(|_| resolve_api_key(self.api_key_env.as_deref()))
+        match validate_base_url(self.base_url.as_ref(), self.allow_remote)
+            .and_then(|_| resolve_api_key(self.api_key_env.as_ref()))
         {
             Ok(_) => CheckResult {
                 ok: true,
@@ -1138,15 +1193,10 @@ impl SystemOnePlugin {
             Scheme::Http
         };
         let loopback = is_loopback_host(&server.host.to_lowercase());
-        let netloc = if server.port == default_port(&server.scheme) {
-            server.host.clone()
-        } else {
-            format!("{}:{}", server.host, server.port)
-        };
         let proxy = if loopback {
             None
         } else {
-            crate::http::resolve_proxy_target(&server.scheme, &netloc)
+            crate::http::resolve_proxy_target(&server.scheme, &server.netloc)
         };
 
         let mut headers: Vec<(String, String)> = vec![
@@ -1157,8 +1207,21 @@ impl SystemOnePlugin {
             headers.push(("Authorization".to_string(), format!("Bearer {k}")));
         }
         headers.push(("Content-Length".to_string(), payload.len().to_string()));
-        headers.push(("Host".to_string(), netloc));
+        headers.push((
+            "Host".to_string(),
+            crate::http::netloc_host_as_written(&server.netloc).to_string(),
+        ));
         headers.push(("Accept-Encoding".to_string(), "identity".to_string()));
+        // A plain `http://` request through a proxy has no `CONNECT`
+        // tunnel at all, so (unlike the tunneled `https://` case, where
+        // `http_client::send` puts this on the `CONNECT` line only)
+        // `Proxy-authorization` belongs in the regular header set here --
+        // same as `crate::http`'s own request builder (issue #486).
+        if scheme_enum == Scheme::Http {
+            if let Some(creds) = proxy.as_ref().and_then(|p| p.basic_auth.as_deref()) {
+                headers.push(("Proxy-authorization".to_string(), format!("Basic {creds}")));
+            }
+        }
         headers.push(("Connection".to_string(), "close".to_string()));
         headers.push((
             "User-Agent".to_string(),
@@ -1169,11 +1232,23 @@ impl SystemOnePlugin {
             scheme: scheme_enum,
             host: server.host.clone(),
             port: server.port,
-            proxy,
+            proxy: proxy.clone(),
+        };
+        let target_path = format!("{}{ENDPOINT_PATH}", server.path);
+        // Through an `http://` proxy the wire target stays absolute-form
+        // (`scheme://netloc/path`), the request this *is* the one sent to
+        // the proxy -- same as `crate::http`'s own request builder.
+        let wire_target = match &proxy {
+            Some(_) if scheme_enum == Scheme::Http => format!(
+                "{}://{}{target_path}",
+                server.scheme,
+                crate::http::netloc_host_as_written(&server.netloc)
+            ),
+            _ => target_path,
         };
         let raw_request = RawRequest {
             method: "POST".to_string(),
-            target: ENDPOINT_PATH.to_string(),
+            target: wire_target,
             headers,
             body: Some(payload),
         };
@@ -1181,7 +1256,17 @@ impl SystemOnePlugin {
         let timeout_seconds = call.timeout_seconds.max(1);
         let timeout = TimeoutModel::PerOperation(Duration::from_secs(u64::from(timeout_seconds)));
 
-        let send_result = http_client::send(&client, &connect_target, &raw_request, timeout).await;
+        // `response.read(_MAX_RESPONSE_BYTES + 1)` -- bounded the same
+        // way the request's own state is: a response bigger than the
+        // request limit is not a response worth reading in full.
+        let send_result = http_client::send_capped(
+            &client,
+            &connect_target,
+            &raw_request,
+            timeout,
+            MAX_BODY_BYTES + 1,
+        )
+        .await;
         if call.token.is_set() {
             return Err(ToolError::message("cancelled"));
         }
@@ -1222,7 +1307,40 @@ impl SystemOnePlugin {
             );
             raw.insert(Value::from("headers"), Value::Dict(headers_dict));
         }
-        let text = String::from_utf8_lossy(&response.body).into_owned();
+        // `with urlopen(...) as resp: ... resp.read()` -- a 2xx has no
+        // `except HTTPError` handler of its own to swallow a body-read
+        // failure into, unlike every other status below.
+        if (200..300).contains(&status) {
+            match &response.body_error {
+                Some(SendError::Timeout) => {
+                    return Err(no_reply_error(format!(
+                        "systemone request to {} timed out after {timeout_seconds}s",
+                        server.display
+                    )));
+                }
+                Some(SendError::RemoteDisconnected) | Some(SendError::Other(_)) => {
+                    return Err(no_reply_error(format!(
+                        "systemone server at {} dropped the connection",
+                        server.display
+                    )));
+                }
+                Some(SendError::Connect { .. }) => {
+                    return Err(no_reply_error(format!(
+                        "systemone server not reachable at {}",
+                        server.display
+                    )));
+                }
+                // `response.read(amt)` -- a `Content-Length` short read
+                // returns the bytes it did get rather than raising; the
+                // short body almost always then fails to parse as JSON.
+                Some(SendError::IncompleteRead { .. }) | None => {}
+            }
+        }
+        let text = if matches!(response.body_error, Some(SendError::IncompleteRead { .. })) {
+            String::from_utf8_lossy(&response.partial_body).into_owned()
+        } else {
+            String::from_utf8_lossy(&response.body).into_owned()
+        };
 
         if !(200..300).contains(&status) {
             let kind = error_kind(status, &text);
@@ -1323,12 +1441,17 @@ impl SystemOnePlugin {
 
 /// `plugins/systemone.py::build`.
 pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
+    // The raw config `Value`s, not just a `str` projection -- a non-string
+    // `base_url`/`api_key_env` is a distinct, reachable misconfiguration
+    // `validate_base_url`/`resolve_api_key` report on, same as cof's own
+    // `cfg.get(...)` (an explicit `null` and an absent key are both
+    // Python's `None`, so filtered out the same way here).
     let base_url = get(cfg, "base_url")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+        .filter(|v| !matches!(v, Value::None))
+        .cloned();
     let api_key_env = get(cfg, "api_key_env")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+        .filter(|v| !matches!(v, Value::None))
+        .cloned();
     let allow_remote = as_bool(get(cfg, "allow_remote"), false);
     Ok(Box::new(SystemOnePlugin {
         base_url,
@@ -1341,6 +1464,7 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
 mod tests {
     use super::*;
     use electricity_value::CancellationToken;
+    use std::io::{Read, Write};
 
     fn call<'a>(token: &'a CancellationToken, config: &'a Value) -> ToolCall<'a> {
         ToolCall {
@@ -1348,6 +1472,8 @@ mod tests {
             config,
             token,
             armed: false,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -1378,27 +1504,71 @@ mod tests {
 
     #[test]
     fn validate_base_url_refuses_a_remote_host_without_allow_remote() {
-        let err = validate_base_url(Some("http://example.com"), false).unwrap_err();
+        let err = validate_base_url(Some(&Value::from("http://example.com")), false).unwrap_err();
         assert!(err.message.contains("is not a loopback host"));
     }
 
     #[test]
     fn validate_base_url_accepts_a_remote_host_with_allow_remote() {
-        let server = validate_base_url(Some("https://example.com:8443/"), true).unwrap();
+        let server =
+            validate_base_url(Some(&Value::from("https://example.com:8443/")), true).unwrap();
         assert_eq!(server.host, "example.com");
         assert_eq!(server.port, 8443);
         assert_eq!(server.display, "https://example.com:8443");
     }
 
     #[test]
+    fn validate_base_url_keeps_a_path_prefix() {
+        let server =
+            validate_base_url(Some(&Value::from("http://127.0.0.1:8080/api")), false).unwrap();
+        assert_eq!(server.path, "/api");
+        assert_eq!(server.display, "http://127.0.0.1:8080/api");
+    }
+
+    #[test]
+    fn validate_base_url_refuses_a_non_string_value() {
+        let err = validate_base_url(Some(&Value::from(123)), false).unwrap_err();
+        assert!(err.message.contains("base_url is required"));
+    }
+
+    #[test]
+    fn resolve_api_key_refuses_a_non_string_value() {
+        let err = resolve_api_key(Some(&Value::from(123))).unwrap_err();
+        assert!(
+            err.message
+                .contains("must be the NAME of an environment variable")
+        );
+    }
+
+    #[test]
+    fn probability_errors_matches_cofs_g_format_for_an_inexact_sum() {
+        let mut probabilities = Dict::new();
+        probabilities.insert(Value::from("a"), Value::from(0.6));
+        probabilities.insert(Value::from("b"), Value::from(0.3));
+        let known: HashSet<String> = ["a".to_string(), "b".to_string()].into_iter().collect();
+        let errors = probability_errors(
+            "question 'q'",
+            Some(&Value::Dict(probabilities)),
+            &known,
+            "option",
+        );
+        assert_eq!(
+            errors,
+            vec!["question 'q': probabilities sum to 0.9, not 1 (\u{b1}0.01)".to_string()]
+        );
+    }
+
+    #[test]
     fn validate_base_url_refuses_credentials() {
-        let err = validate_base_url(Some("http://user:pass@127.0.0.1:8080"), false).unwrap_err();
+        let err = validate_base_url(Some(&Value::from("http://user:pass@127.0.0.1:8080")), false)
+            .unwrap_err();
         assert!(err.message.contains("must not carry credentials"));
     }
 
     #[test]
     fn validate_base_url_refuses_a_query_or_fragment() {
-        let err = validate_base_url(Some("http://127.0.0.1:8080/?x=1"), false).unwrap_err();
+        let err =
+            validate_base_url(Some(&Value::from("http://127.0.0.1:8080/?x=1")), false).unwrap_err();
         assert!(err.message.contains("must not have a query or fragment"));
     }
 
@@ -1478,7 +1648,7 @@ mod tests {
     #[tokio::test]
     async fn execute_refuses_a_host_setting_as_a_param() {
         let plugin = SystemOnePlugin {
-            base_url: Some("http://127.0.0.1:8080".to_string()),
+            base_url: Some(Value::from("http://127.0.0.1:8080")),
             api_key_env: None,
             allow_remote: false,
         };
@@ -1497,7 +1667,7 @@ mod tests {
     #[tokio::test]
     async fn execute_requires_exactly_one_of_state_and_state_file() {
         let plugin = SystemOnePlugin {
-            base_url: Some("http://127.0.0.1:8080".to_string()),
+            base_url: Some(Value::from("http://127.0.0.1:8080")),
             api_key_env: None,
             allow_remote: false,
         };
@@ -1547,7 +1717,7 @@ mod tests {
     #[tokio::test]
     async fn execute_returns_ok_false_too_large_when_the_request_payload_is_over_the_limit() {
         let plugin = SystemOnePlugin {
-            base_url: Some("http://127.0.0.1:8080".to_string()),
+            base_url: Some(Value::from("http://127.0.0.1:8080")),
             api_key_env: None,
             allow_remote: false,
         };
@@ -1590,12 +1760,235 @@ mod tests {
     #[test]
     fn check_reports_the_remote_refusal_when_configured_without_allow_remote() {
         let plugin = SystemOnePlugin {
-            base_url: Some("http://example.com".to_string()),
+            base_url: Some(Value::from("http://example.com")),
             api_key_env: None,
             allow_remote: false,
         };
         let result = plugin.check();
         assert!(!result.ok);
         assert!(result.message.unwrap().contains("is not a loopback host"));
+    }
+
+    /// A scratch directory under the process's own temp dir, never the
+    /// real `$HOME` -- removed on drop.
+    struct TempDir(std::path::PathBuf);
+
+    impl TempDir {
+        fn new() -> Self {
+            static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!(
+                "electricity-systemone-test-{}-{n}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn read_state_file_refuses_a_limited_document_with_no_project() {
+        let dir = TempDir::new();
+        let state_path = dir.0.join("state.json");
+        std::fs::write(&state_path, "{}").unwrap();
+        let err = read_state_file(
+            state_path.to_str().unwrap(),
+            Some(dir.0.to_str().unwrap()),
+            true,
+            None,
+        )
+        .unwrap_err();
+        let StateFailure::Error(err) = err else {
+            panic!("expected a plain error, not a too-large failure");
+        };
+        assert!(
+            err.message
+                .contains("this document has no project, so it cannot read a params.state_file")
+        );
+    }
+
+    #[test]
+    fn read_state_file_refuses_a_limited_documents_within_outside_its_project() {
+        let project = TempDir::new();
+        let outside = TempDir::new();
+        let state_path = outside.0.join("state.json");
+        std::fs::write(&state_path, "{}").unwrap();
+        let err = read_state_file(
+            state_path.to_str().unwrap(),
+            Some(outside.0.to_str().unwrap()),
+            true,
+            Some(project.0.to_str().unwrap()),
+        )
+        .unwrap_err();
+        let StateFailure::Error(err) = err else {
+            panic!("expected a plain error, not a too-large failure");
+        };
+        assert!(
+            err.message
+                .contains("params.within: must lie inside the document's own project")
+        );
+    }
+
+    #[test]
+    fn read_state_file_allows_a_limited_documents_within_inside_its_project() {
+        let project = TempDir::new();
+        let state_path = project.0.join("state.json");
+        std::fs::write(&state_path, "{\"a\":1}").unwrap();
+        let result = read_state_file(
+            state_path.to_str().unwrap(),
+            Some(project.0.to_str().unwrap()),
+            true,
+            Some(project.0.to_str().unwrap()),
+        );
+        let value = match result {
+            Ok(value) => value,
+            Err(_) => panic!("expected a within inside the project to be allowed"),
+        };
+        assert_eq!(
+            value.as_dict().unwrap().get(&Value::from("a")),
+            Some(&Value::from(1))
+        );
+    }
+
+    fn one_question() -> Dict {
+        let mut q = Dict::new();
+        q.insert(
+            Value::from("a"),
+            Value::Dict({
+                let mut d = Dict::new();
+                d.insert(Value::from("type"), Value::from("noul"));
+                d.insert(Value::from("instructions"), Value::from("x"));
+                d
+            }),
+        );
+        q
+    }
+
+    fn record_request(
+        response: &'static [u8],
+    ) -> (std::net::SocketAddr, std::sync::mpsc::Receiver<String>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 8192];
+            let n = stream.read(&mut buf).unwrap();
+            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).to_string());
+            let _ = stream.write_all(response);
+        });
+        (addr, rx)
+    }
+
+    #[tokio::test]
+    async fn execute_posts_to_the_path_prefix_in_base_url() {
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 58\r\nConnection: close\r\n\r\n{\"answers\":{\"a\":{\"type\":\"noul\",\"noul\":0.1}}}";
+        let (addr, rx) = record_request(response);
+        let plugin = SystemOnePlugin {
+            base_url: Some(Value::from(format!("http://{addr}/api"))),
+            api_key_env: None,
+            allow_remote: false,
+        };
+        let token = CancellationToken::new();
+        let config = Value::None;
+        let result = plugin
+            .execute(
+                params(vec![
+                    ("model", Value::from("m")),
+                    ("questions", Value::Dict(one_question())),
+                    ("state", Value::from("s")),
+                ]),
+                &call(&token, &config),
+            )
+            .await
+            .unwrap();
+        assert!(result.ok, "{:?}", result.stderr);
+        let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(
+            request.starts_with("POST /api/v1/systemone "),
+            "request line: {request:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_sends_a_bearer_header_and_scrubs_the_key_from_a_failure_message() {
+        let key = "s1-test-key-for-electricity-systemone-scrubbing";
+        unsafe {
+            std::env::set_var("ELECTRICITY_SYSTEMONE_TEST_KEY", key);
+        }
+        let body = format!("the key {key} is not valid");
+        let response = format!(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let response_bytes: &'static [u8] = Box::leak(response.into_bytes().into_boxed_slice());
+        let (addr, rx) = record_request(response_bytes);
+        let plugin = SystemOnePlugin {
+            base_url: Some(Value::from(format!("http://{addr}"))),
+            api_key_env: Some(Value::from("ELECTRICITY_SYSTEMONE_TEST_KEY")),
+            allow_remote: false,
+        };
+        let token = CancellationToken::new();
+        let config = Value::None;
+        let result = plugin
+            .execute(
+                params(vec![
+                    ("model", Value::from("m")),
+                    ("questions", Value::Dict(one_question())),
+                    ("state", Value::from("s")),
+                ]),
+                &call(&token, &config),
+            )
+            .await
+            .unwrap();
+        assert!(!result.ok);
+        let message = result.stderr.unwrap();
+        assert!(!message.contains(key), "leaked the key: {message}");
+        assert!(message.contains("[redacted]"), "{message}");
+        let request = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(
+            request.contains(&format!("Authorization: Bearer {key}")),
+            "request: {request}"
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_treats_a_short_2xx_body_as_invalid_response_not_a_raised_failure() {
+        // `Content-Length` promises more than the server actually sends,
+        // then closes -- `SendError::IncompleteRead` on a 2xx, which
+        // `http.client`'s own `read(amt)` would return as a short body
+        // rather than raise (module doc).
+        let response = b"HTTP/1.1 200 OK\r\nContent-Length: 1000\r\nConnection: close\r\n\r\nnot enough bytes here";
+        let (addr, _rx) = record_request(response);
+        let plugin = SystemOnePlugin {
+            base_url: Some(Value::from(format!("http://{addr}"))),
+            api_key_env: None,
+            allow_remote: false,
+        };
+        let token = CancellationToken::new();
+        let config = Value::None;
+        let result = plugin
+            .execute(
+                params(vec![
+                    ("model", Value::from("m")),
+                    ("questions", Value::Dict(one_question())),
+                    ("state", Value::from("s")),
+                ]),
+                &call(&token, &config),
+            )
+            .await
+            .unwrap();
+        assert!(!result.ok);
+        let raw = result.raw.as_dict().unwrap();
+        assert_eq!(
+            raw.get(&Value::from("error_kind")),
+            Some(&Value::from("invalid_response"))
+        );
     }
 }
