@@ -3755,12 +3755,13 @@ fn assert_no_thousands_separator(screen: &str, screen_name: &str) {
     }
 }
 
-/// Issue #737: the Now area's own tree over a real live run with a
-/// loop inside a loop, each wide enough to run more than one pass at
-/// once, plus a plain step beside them -- no row marked running sits
-/// above the Now band, two distinct `files` loops each read their own
-/// `2 of 2 Slots Busy`, and the plan's own queued pass drops out of
-/// that count once it starts.
+/// Issue #737's own document: the Now area's own tree over a real
+/// live run with a loop inside a loop, each wide enough to run more
+/// than one pass at once, plus a plain step beside them -- no row
+/// marked running sits above the Now band, two distinct `files`
+/// loops each read their own `2 of 2 Slots Busy`, their own labels
+/// stay distinct, and their own queued count drops from three to one
+/// as the first wave of passes finishes.
 #[test]
 fn nested_loops_now_area_is_a_tree_with_no_running_row_above_the_band() {
     if !e2e_enabled() {
@@ -3773,7 +3774,7 @@ fn nested_loops_now_area_is_a_tree_with_no_running_row_above_the_band() {
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "interface:\n  inputs:\n    groups: {type: array, default: [\"a\", \"b\"]}\n    files: {type: array, default: [1, 2, 3]}\neffects:\n  - name: work\n    type: dynamic\n    flow: tree\n    effects:\n      - name: groups\n        type: loop\n        flow: tree\n        max_concurrency: 2\n        each: {in: input.groups, as: g}\n        body:\n          - name: files\n            type: loop\n            flow: tree\n            max_concurrency: 2\n            each: {in: input.files, as: f}\n            body:\n              - name: build\n                type: dynamic\n                effects:\n                  - name: compile\n                    type: tool\n                    provider: shell\n                    params: {command: sleep, args: [\"2\"], allowed_commands: [\"sleep\"]}\n                  - name: check\n                    type: tool\n                    provider: shell\n                    params: {command: sleep, args: [\"1\"], allowed_commands: [\"sleep\"]}\n      - name: watcher\n        type: tool\n        provider: shell\n        params: {command: sleep, args: [\"7\"], allowed_commands: [\"sleep\"]}\n  - name: done\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"done\"], allowed_commands: [\"echo\"]}\n",
+        "interface:\n  inputs:\n    groups: {type: array, default: [\"a\", \"b\"]}\n    files: {type: array, default: [1, 2, 3, 4, 5]}\neffects:\n  - name: setup\n    type: tool\n    provider: shell\n    params: {command: sleep, args: [\"1\"], allowed_commands: [\"sleep\"]}\n  - name: work\n    type: dynamic\n    flow: tree\n    effects:\n      - name: groups\n        type: loop\n        flow: tree\n        max_concurrency: 2\n        each: {in: input.groups, as: g}\n        body:\n          - name: files\n            type: loop\n            flow: tree\n            max_concurrency: 2\n            each: {in: input.files, as: f}\n            body:\n              - name: build\n                type: dynamic\n                effects:\n                  - name: compile\n                    type: tool\n                    provider: shell\n                    params: {command: sleep, args: [\"4\"], allowed_commands: [\"sleep\"]}\n                  - name: check\n                    type: tool\n                    provider: shell\n                    params: {command: sleep, args: [\"2\"], allowed_commands: [\"sleep\"]}\n      - name: watcher\n        type: tool\n        provider: shell\n        params: {command: sleep, args: [\"40\"], allowed_commands: [\"sleep\"]}\n  - name: done\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"done\"], allowed_commands: [\"echo\"]}\n",
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
@@ -3800,48 +3801,102 @@ fn nested_loops_now_area_is_a_tree_with_no_running_row_above_the_band() {
     resize_pty(&slave_path, 187, 56);
     std::thread::sleep(SIGNAL_DELAY);
 
-    let early = wait_for_screen_text(&captured_buf, "Slots Busy", Duration::from_secs(10));
+    let early = wait_for_screen_text(&captured_buf, "Passes Queued", Duration::from_secs(10));
     assert_now_area_has_no_running_row_above_the_band(&early);
     let busy_lines: Vec<&str> = early.lines().filter(|l| l.contains("Slots Busy")).collect();
     assert!(
-        busy_lines.len() >= 2,
+        busy_lines.len() >= 3,
         "expected the groups loop and both files loops each to read their own Slots Busy; got:\n{early}"
     );
+    for want in ["iter_0", "iter_1"] {
+        assert!(
+            busy_lines
+                .iter()
+                .any(|l| l.contains(want) && l.contains("files") && l.contains("2 of 2")),
+            "expected a '{want} › files' loop row reading '2 of 2'; got:\n{early}"
+        );
+    }
     assert!(
         busy_lines
             .iter()
-            .any(|l| l.contains("iter_0") && l.contains("files")),
-        "expected an 'iter_0 › files' loop row; got:\n{early}"
+            .filter(|l| l.contains("files"))
+            .any(|l| l.contains("3 Passes Queued")),
+        "expected a files loop to read 3 Passes Queued before its first wave finishes; got:\n{early}"
     );
-    assert!(
-        busy_lines
-            .iter()
-            .any(|l| l.contains("iter_1") && l.contains("files")),
-        "expected an 'iter_1 › files' loop row; got:\n{early}"
-    );
+    assert_tree_rows_are_distinct(&early);
 
-    // Once the third (queued) pass of each files loop has started,
-    // its own files loop no longer reads any pass queued at all.
+    // Once the second wave (`iter_2`) of *both* files loops has
+    // started -- not just one of them, so a laggard loop can never
+    // make this flake -- each still-running files loop reads one
+    // pass left queued, never three.
     wait_for_step_start(
         &out_dir.path().join("events.jsonl"),
         "prime.work.groups.iter_0.files.iter_2.build.compile",
         Duration::from_secs(15),
     );
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.work.groups.iter_1.files.iter_2.build.compile",
+        Duration::from_secs(15),
+    );
     std::thread::sleep(SIGNAL_DELAY);
-    let later = wait_for_screen_text(&captured_buf, "Slots Busy", Duration::from_secs(10));
+    let later = wait_for_screen_text(&captured_buf, "1 Pass Queued", Duration::from_secs(10));
     assert_now_area_has_no_running_row_above_the_band(&later);
     let later_busy_lines: Vec<&str> = later.lines().filter(|l| l.contains("Slots Busy")).collect();
     assert!(
-        later_busy_lines.iter().all(|l| !l.contains("Pass Queued")),
-        "expected no loop to still read a pass queued once its third pass has started; got:\n{later}"
+        later_busy_lines
+            .iter()
+            .filter(|l| l.contains("files"))
+            .all(|l| !l.contains("3 Passes Queued") && !l.contains("2 Passes Queued")),
+        "expected every files loop to read at most one pass queued once both second waves have started; got:\n{later}"
     );
+    assert!(
+        later_busy_lines
+            .iter()
+            .filter(|l| l.contains("files"))
+            .any(|l| l.contains("1 Pass Queued")),
+        "expected a files loop to read 1 Pass Queued; got:\n{later}"
+    );
+    assert_tree_rows_are_distinct(&later);
 
-    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
+    // The document's own `watcher` (a 40s sleep, well past every
+    // loop pass above) is what the run's own end actually waits on.
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(60));
     send_bytes(&mut master, b"q");
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
     std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
+}
+
+/// No two running *loops* in the Now area's own tree (between the
+/// `━━ Now` band and the first row ahead) read the same line -- the
+/// list pane's own half only, the same cut
+/// [`assert_now_area_has_no_running_row_above_the_band`] already
+/// makes. A running *leaf*'s own relative label may legitimately
+/// coincide across two different loops (`iter_0 › build › compile`
+/// under both `iter_0 › files` and `iter_1 › files`, the same way
+/// two files in two different folders can share a name), so only a
+/// loop's own line -- `⟳` -- is ever checked here.
+fn assert_tree_rows_are_distinct(screen: &str) {
+    let lines: Vec<&str> = screen.lines().collect();
+    let now_row = lines
+        .iter()
+        .position(|l| l.contains("━━ Now"))
+        .unwrap_or_else(|| panic!("expected a Now band on screen; got:\n{screen}"));
+    let tree: Vec<&str> = lines[now_row + 1..]
+        .iter()
+        .map(|l| l.split("││").next().unwrap_or(l))
+        .take_while(|l| l.contains('●') || l.contains('⟳'))
+        .filter(|l| l.contains('⟳'))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for line in &tree {
+        assert!(
+            seen.insert(*line),
+            "two running loops read the same line {line:?}; got:\n{screen}"
+        );
+    }
 }
 
 /// No row marked running (`●`) sits above the `━━ Now` band -- every

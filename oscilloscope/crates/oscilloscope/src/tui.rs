@@ -1115,13 +1115,13 @@ fn tape_breadcrumb_spans(
     name_style: Style,
     dim_style: Style,
 ) -> Vec<Span<'static>> {
-    // At least two cells of the field stay a trailing gap no matter
+    // At least one cell of the field stays a trailing gap no matter
     // what fits (issue #737's "always leaves one space before the
     // next column", and never glued to it either) -- every branch
-    // below fits its own content into `budget`, two cells narrower
+    // below fits its own content into `budget`, one cell narrower
     // than `width` itself, and pads out to `width` whatever that
     // leaves.
-    let budget = width.saturating_sub(2);
+    let budget = width.saturating_sub(1);
     let segments: Vec<&str> = label.split(" › ").collect();
     let Some((last, parents)) = segments.split_last() else {
         return vec![Span::styled(" ".repeat(width), name_style)];
@@ -1381,24 +1381,72 @@ fn tape_row_line(
         format!("{} ", tape_glyph(row.kind, row.status.kind)),
         bg(tape_glyph_style(row.kind, row.status.kind, ctx.theme)),
     ));
-    spans.extend(
-        tape_breadcrumb_spans(
-            &row.label,
-            name_width.saturating_sub(indent_cells),
-            lead_segments,
-            name_style,
-            dim_style,
-        )
-        .into_iter()
-        .map(|s| Span::styled(s.content, bg(s.style))),
-    );
+    let loop_what = tape_loop_what(row, wide_detail);
+    let name_field_width = name_width.saturating_sub(indent_cells);
+    // Narrow (60-79 columns) has no `what` column of its own at all
+    // (`what_width` is 0 there, never just a small one -- a tile
+    // also passes `narrow: true`, for its own clock-less layout, but
+    // keeps a real `what_width` of its own) to carry a running
+    // loop's own counts -- the point of that line -- so a loop row
+    // with room to spare in its own name field (the plain name is
+    // almost always far short of it) gives up that slack to its own
+    // counts instead of leaving it blank (issue #737).
+    let narrow_loop_counts = (what_width == 0
+        && row.kind == oscilloscope_core::render::RowKind::Loop)
+        .then(|| tape_loop_counts(&loop_what))
+        .flatten();
+    match narrow_loop_counts {
+        Some(_) => {
+            // Far wider than any real breadcrumb or terminal column
+            // -- `tape_breadcrumb_spans`' own dynamic field width
+            // ends up in a `format!("{:<width$}", ...)`, which
+            // panics past `u16::MAX`, so this never passes
+            // `usize::MAX` itself.
+            let natural = tape_breadcrumb_preview(&row.label, 4096, lead_segments)
+                .chars()
+                .count();
+            let counts_budget = name_field_width.saturating_sub(natural + 1);
+            let counts_text = tape_loop_slots_text(&loop_what, counts_budget);
+            let name_render_width = name_field_width - counts_budget;
+            spans.extend(
+                tape_breadcrumb_spans(
+                    &row.label,
+                    name_render_width,
+                    lead_segments,
+                    name_style,
+                    dim_style,
+                )
+                .into_iter()
+                .map(|s| Span::styled(s.content, bg(s.style))),
+            );
+            spans.push(Span::styled(
+                format!("{counts_text:<counts_budget$}"),
+                bg(what_style),
+            ));
+        }
+        None => {
+            spans.extend(
+                tape_breadcrumb_spans(
+                    &row.label,
+                    name_field_width,
+                    lead_segments,
+                    name_style,
+                    dim_style,
+                )
+                .into_iter()
+                .map(|s| Span::styled(s.content, bg(s.style))),
+            );
+        }
+    }
     spans.push(Span::styled(
         format!(
             "{:<what_width$}",
-            if row.what_is_agent_text {
-                tape_agent_what_text(&tape_loop_what(row, wide_detail), what_width)
+            if row.kind == oscilloscope_core::render::RowKind::Loop {
+                tape_loop_slots_text(&loop_what, what_width)
+            } else if row.what_is_agent_text {
+                tape_agent_what_text(&loop_what, what_width)
             } else {
-                tape_what_text(&tape_loop_what(row, wide_detail), what_width)
+                tape_what_text(&loop_what, what_width)
             }
         ),
         bg(what_style),
@@ -1487,6 +1535,60 @@ fn tape_loop_what(
         }
         _ => std::borrow::Cow::Borrowed(&row.what),
     }
+}
+
+/// The three figures `screens.rs`'s own running-loop `what` text
+/// (`"{busy} of {slots} Slots Busy"`, optionally followed by
+/// `" \u{b7} {queued} Pass(es) Queued"`) carries, parsed back out of
+/// that finished string -- the one place in `tui.rs` that ever needs
+/// the loop's own numbers rather than the text itself, since every
+/// other row's own `what` is free-form by comparison. `None` for any
+/// other loop text (a row ahead's `"loop \u{b7} each g \u{b7} N passes"`,
+/// a finished loop's `"N passes \u{b7} M wide \u{b7} K done"`), which this
+/// never needs to shorten the same way.
+fn tape_loop_counts(what: &str) -> Option<(u64, u64, u64)> {
+    let (head, queued) = match what.split_once(" \u{b7} ") {
+        Some((h, rest)) => (h, rest.split_whitespace().next()?.parse::<u64>().ok()?),
+        None => (what, 0),
+    };
+    let mut parts = head.split_whitespace();
+    let busy: u64 = parts.next()?.parse().ok()?;
+    if parts.next()? != "of" {
+        return None;
+    }
+    let slots: u64 = parts.next()?.parse().ok()?;
+    Some((busy, slots, queued))
+}
+
+/// A running loop's own slots-and-queued text (issue #737), shortened
+/// to `"{busy}/{slots} busy \u{b7} {queued} queued"` once the full form
+/// doesn't fit `width` -- the point of this line is the numbers, so
+/// they are never the part that gets cut: a loop row with a real
+/// counts text always reads either the full form or this short one
+/// whole, in full, never a half-written number. Anything that isn't
+/// a counts text at all (`tape_loop_counts` returning `None`) falls
+/// through to the ordinary character cut every other row's own
+/// `what` text gets.
+fn tape_loop_slots_text(what: &str, width: usize) -> String {
+    // Same trailing-gap budget every other row's own `what` text
+    // reserves (`tape_what_text`'s own `width - 1`) -- a loop row's
+    // counts fill no more of the column than any other row's text
+    // would.
+    let budget = width.saturating_sub(1);
+    if what.chars().count() <= budget {
+        return what.to_string();
+    }
+    if let Some((busy, slots, queued)) = tape_loop_counts(what) {
+        let short = if queued > 0 {
+            format!("{busy}/{slots} busy \u{b7} {queued} queued")
+        } else {
+            format!("{busy}/{slots} busy")
+        };
+        if short.chars().count() <= budget {
+            return short;
+        }
+    }
+    tape_what_text(what, width)
 }
 
 fn tape_what_text(what: &str, what_width: usize) -> String {

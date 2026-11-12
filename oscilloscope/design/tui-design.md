@@ -54,7 +54,7 @@ model and the metadata around each step. Four screens look at one run; two more 
 │12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ▰▰▰▱▱▱▱▱   131 t││ Reply as the maintainer (kind: Bug.).    │
 │             › Write one sentence about dogs.                             ││ Issue: parse_duration fails on 1h30m     │
 │━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ with ValueError: invalid duration. 90m   │
-│12:50:50 ⟳ drafts             2 of 2 Slots Busy · 1 Pass⋯ ▃▃       130 t/p││ works.                                   │
+│12:50:50 ⟳ drafts             2/2 busy · 1 queued         ▃▃       130 t/p││ works.                                   │
 │12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││                                          │
 │12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││ Reply · 41 t                             │
 │         · iter_2 › draft     prompt · queued             usually 155 t   ││ Thanks for the report. We will look into │
@@ -110,7 +110,7 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 │12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ───▓┼────  -14% ││ Reply as the maintainer (kind: Bug.).    │
 │             › Write one sentence about dogs.                             ││ Issue: parse_duration fails on 1h30m     │
 │━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ with ValueError: invalid duration. 90m   │
-│12:50:50 ⟳ drafts             2 of 2 Slots Busy · 1 Pass⋯ ▃▃       130 t/p││ works.                                   │
+│12:50:50 ⟳ drafts             2/2 busy · 1 queued         ▃▃       130 t/p││ works.                                   │
 │12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││                                          │
 │12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││ Reply · 41 t                             │
 │         · iter_2 › draft     prompt · queued             usually 155 t   ││ Thanks for the report. We will look into │
@@ -164,7 +164,7 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 │12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sunbeam⋯ ▰▰▰▱▱▱▱▱   130 t│
 │12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the mail⋯ ▰▰▰▱▱▱▱▱   131 t│
 │━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│
-│12:50:50 ⟳ drafts             2 of 2 Slots Busy · 1 Pass Que⋯ ▃▃       130 t/p│
+│12:50:50 ⟳ drafts             2/2 busy · 1 queued             ▃▃       130 t/p│
 │12:50:50   ● iter_0 › pause   0.6s · sleep 1                                  │
 │12:50:50   ● iter_1 › pause   0.6s · sleep 1                                  │
 │         · iter_2 › draft     prompt · queued                 usually 155 t   │
@@ -193,7 +193,7 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 │✓ iter_0 › draft                          ▰▰▰▱▱▱▱▱   130 t│
 │✓ iter_1 › draft                          ▰▰▰▱▱▱▱▱   131 t│
 │━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━│
-│⟳ drafts                                  ▃▃       130 t/p│
+│⟳ drafts 2/2 busy · 1 queued              ▃▃       130 t/p│
 │  ● iter_0 › pause                                        │
 │  ● iter_1 › pause                                        │
 │· iter_2 › draft                          usually 155 t   │
