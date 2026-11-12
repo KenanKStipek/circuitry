@@ -7,15 +7,20 @@ to an internal bytecode and execute it, producing the same final state as
 tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
-**This is a preview.** `electricity <config.json> <orchestration.yml>` runs
-documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`, `prompt`
-and `reflector` effects and `finally:` blocks, with the `json`, `shell`, `awk`,
-`imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`, `clock`, `regex`,
-`http`, `validate_yaml`, `cel` and `gh` tool providers, aiming at the same final
-state, `--live-state` and `--events` output as `cof run`. A top-level
-`prompts:` map and `{{> name}}` composition run too, in every field that
-reaches them (a tool's `prompt`/`params`/`params_json`, a `use`'s
-`inputs`/`inline`, a `yield`'s `template`, a `prompt`'s own
+**This is a preview.** `electricity run <orchestration.yml>` -- cof's own `run` option names
+(`-e`, `--config`, `--out`, `--live-state`, `--events`, `--allow-capabilities`, `--adapter`,
+`--quiet`), with the same config discovery as `cof run` when `--config` is omitted
+(`CIRCUITRY_CONFIG`, a trusted project config in the working directory, the global config); the
+legacy `electricity <config.json> <orchestration.yml>` form (config always explicit) keeps
+working as an alias -- runs
+documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
+`prompt` and `reflector` effects and `finally:` blocks, with the `json`,
+`shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
+`clock`, `regex`, `http`, `validate_yaml`, `cel` and `gh` tool providers, aiming at the
+same final state, `--live-state` and `--events` output as `cof run`. A
+top-level `prompts:` map and `{{> name}}` composition run too, in every
+field that reaches them (a tool's `prompt`/`params`/`params_json`, a
+`use`'s `inputs`/`inline`, a `yield`'s `template`, a `prompt`'s own
 `template`/`messages`). A `prompt` effect runs for real against a
 document's own top-level `adapter:`/a prompt's own `provider:` (native
 Ollama, the OpenAI-compatible family, `openai`, `anthropic`, `replicate`,
@@ -74,11 +79,17 @@ release alongside the Python distributions, marked as a preview.
   no `--resume` or `--state` yet.
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
-- **CLI.** The config is a required argument: no config discovery, no
-  `cof trust`. `--profile` takes a path, not a name. There is no
-  `--dry-run`, `--validate-only`, `--verbose` or `--skip-preflight`.
-  `.toon` documents and `use: {ref: ...}` are refused. Windows isn't
-  supported.
+- **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
+  `--out`/`-o`, `--live-state`, `--events`, `--allow-capabilities`,
+  `--adapter` and `--quiet` -- the same names, meaning and config discovery.
+  Every other `cof run` option is engine-specific, not yet accepted:
+  `--resume`/`--state`/`-s`/`--force`/`--last` (#727); `--profile` (name,
+  not a path) and `--profile-from-state`; `--print`, `--dry-run`,
+  `--validate-only`, `--json`, `--verbose`/`-v`, `--tail`,
+  `--skip-preflight`; `--model`, `--explain-routing`, `--decompose-out`,
+  and the four complexity switches `--scoring`/`--routing`/`--decompose`/
+  `--split` (each with its own `--no-...` form). `.toon` documents and
+  `use: {ref: ...}` are refused. Windows isn't supported.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
   JSON Schema shapes (#507); a reflector plan containing a date (#512).
 

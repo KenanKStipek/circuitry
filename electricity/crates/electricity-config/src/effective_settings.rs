@@ -407,20 +407,22 @@ pub fn effective_settings(
     document: &Value,
     document_name: Option<&str>,
 ) -> Result<EffectiveSettings, ConfigError> {
-    effective_settings_with_profile(config, document, document_name, None)
+    effective_settings_with_profile(config, document, document_name, None, None)
 }
 
 /// [`effective_settings`], with a loaded `--profile` layered in at
 /// Python's own `profile > orchestration > config > default`
-/// precedence (issue #495, lane R) -- there is still no `cli` tier
-/// (electricity has no `--model`/`--adapter`/`--out` override flags of
-/// its own), so `profile` is the only rank above `orchestration` for
-/// `model`/`adapter`, and the only rank above `default` for `out`.
+/// precedence (#495), and `--adapter <name>` (issue
+/// #728) ranked above all of it (`cli/effective_settings.py::
+/// resolve_effective_settings`'s own `cli` tier) -- there is still no
+/// `--model`/`--out` override flag of electricity's own, so `cli_
+/// adapter` is the only `cli`-tier input this function takes.
 pub fn effective_settings_with_profile(
     config: &CircuitryConfig,
     document: &Value,
     document_name: Option<&str>,
     profile: Option<&ProfileSettings>,
+    cli_adapter: Option<&str>,
 ) -> Result<EffectiveSettings, ConfigError> {
     let empty = Dict::new();
     let doc_dict = document.as_dict().unwrap_or(&empty);
@@ -450,8 +452,11 @@ pub fn effective_settings_with_profile(
         }
     };
 
-    // adapter: profile > orchestration > config > default.
-    let adapter = if let Some(value) = profile.and_then(|p| p.adapter.as_ref()) {
+    // adapter: cli > profile > orchestration > config > default.
+    let adapter = if let Some(value) = cli_adapter {
+        sources.insert("adapter".to_string(), "cli".to_string());
+        Some(value.to_string())
+    } else if let Some(value) = profile.and_then(|p| p.adapter.as_ref()) {
         sources.insert("adapter".to_string(), "profile".to_string());
         Some(value.clone())
     } else {
@@ -856,6 +861,7 @@ mod tests {
             &doc(vec![("model", Value::from("doc-model"))]),
             None,
             Some(&profile),
+            None,
         )
         .unwrap();
         assert_eq!(settings.model, Some("profile-model".to_string()));
@@ -875,6 +881,7 @@ mod tests {
             &doc(vec![("adapter", Value::from("openai"))]),
             None,
             Some(&profile),
+            None,
         )
         .unwrap();
         assert_eq!(settings.adapter, Some("scripted".to_string()));
@@ -889,9 +896,29 @@ mod tests {
             ..empty_profile()
         };
         let settings =
-            effective_settings_with_profile(&config, &doc(vec![]), None, Some(&profile)).unwrap();
+            effective_settings_with_profile(&config, &doc(vec![]), None, Some(&profile), None)
+                .unwrap();
         assert_eq!(settings.out, Some(PathBuf::from("profile-out.json")));
         assert_eq!(settings.sources.get("out").unwrap(), "profile");
+    }
+
+    #[test]
+    fn a_cli_adapter_outranks_a_profile_and_the_orchestrations_own() {
+        let config = CircuitryConfig::default();
+        let profile = ProfileSettings {
+            adapter: Some("scripted".to_string()),
+            ..empty_profile()
+        };
+        let settings = effective_settings_with_profile(
+            &config,
+            &doc(vec![("adapter", Value::from("openai"))]),
+            None,
+            Some(&profile),
+            Some("claude_code"),
+        )
+        .unwrap();
+        assert_eq!(settings.adapter, Some("claude_code".to_string()));
+        assert_eq!(settings.sources.get("adapter").unwrap(), "cli");
     }
 
     #[test]
@@ -927,6 +954,7 @@ mod tests {
             &doc(vec![("runtime", Value::Dict(orch_runtime))]),
             None,
             Some(&profile),
+            None,
         )
         .unwrap();
         assert_eq!(settings.sources.get("persistence").unwrap(), "profile");
@@ -971,6 +999,7 @@ mod tests {
             &doc(vec![("runtime", Value::Dict(runtime))]),
             None,
             Some(&profile),
+            None,
         )
         .unwrap();
         assert_eq!(settings.model, Some("pinned-model".to_string()));

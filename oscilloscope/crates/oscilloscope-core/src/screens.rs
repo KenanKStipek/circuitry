@@ -1187,6 +1187,10 @@ pub struct TapeRow {
     pub preview: Option<String>,
     /// Bold: the running rows below the Now band (§3.4).
     pub bold: bool,
+    /// Levels deep in the Now area's own tree (issue #737), two
+    /// cells each -- always `0` outside the tree (every finished row
+    /// and every row ahead).
+    pub indent: usize,
     pub tokens: TapeTokens,
 }
 
@@ -1203,11 +1207,6 @@ pub enum TapeItem {
     NowBand {
         ts: Option<String>,
         elapsed_s: f64,
-    },
-    SlotsRule {
-        busy: u64,
-        slots: u64,
-        queued: u64,
     },
     /// The Starting/Ended/Failed head rule (§2.1), drawn as a full-
     /// width rule in the head's own colour (read straight off
@@ -1499,13 +1498,6 @@ fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> S
     what
 }
 
-/// A tool row's own "what" text once finished or running: `3.0s ·
-/// sleep 3` -- duration, then the rendered command and its args,
-/// straight from `meta.params_rendered` (the same field `render::
-/// details_for`'s own `meta_summary` reads, but read here directly
-/// off the already-flattened node so a row's own text costs no more
-/// than this one lookup -- `details_for` re-flattens the whole state
-/// on every call, which a per-row loop here must never pay for).
 /// A tool step's own full command and args, rendered -- `None` for
 /// anything but a tool leaf, or one whose own `start` event carries
 /// no rendered params yet (a loop pass's own tool child,
@@ -1540,13 +1532,31 @@ fn tool_rendered_command(path: &str, node: Option<&NodeMeta>, plan: &PlanTree) -
     })
 }
 
+/// A tool row's own "what" text once finished or running: `3.0s ·
+/// sleep 3` -- duration, then the rendered command and its args,
+/// straight from `meta.params_rendered` (the same field `render::
+/// details_for`'s own `meta_summary` reads, but read here directly
+/// off the already-flattened node so a row's own text costs no more
+/// than this one lookup -- `details_for` re-flattens the whole state
+/// on every call, which a per-row loop here must never pay for).
 fn tape_tool_what(row: &Row, node: Option<&NodeMeta>, plan: &PlanTree) -> String {
     let command = (row.kind == RowKind::Tool)
         .then(|| tool_rendered_command(&row.path, node, plan))
         .flatten();
+    // A running row with no duration at all -- neither the live
+    // state nor `--events` has a start for it yet (issue #737: a
+    // `LikelyRunning` row the status inference predicts ahead of
+    // the engine actually writing its own node) -- never shows a
+    // bare provider word with nothing beside it; it reads `starting`
+    // until a real start time arrives.
+    let running = matches!(
+        row.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
     match (row.duration_s, command) {
         (Some(d), Some(cmd)) => format!("{} · {cmd}", crate::format::format_duration(d)),
         (Some(d), None) => crate::format::format_duration(d),
+        (None, _) if running => "starting".to_string(),
         (None, Some(cmd)) => cmd,
         (None, None) => String::new(),
     }
@@ -2003,16 +2013,24 @@ fn tape_row_content(
             } else if pending {
                 let each = tape_loop_each_text(plan, &row.path, flat, state);
                 (format!("loop{each}"), None, TapeTokens::default())
+            } else if row.loop_progress.and_then(|p| p.total).is_none() {
+                // A loop already dispatched (it has a start time,
+                // or `pending` above would have caught it) whose own
+                // `each` hasn't resolved a pass count yet has no
+                // `done`/`total` to show at all -- `? passes · 0
+                // wide · 0 done` would read as a real count of zero,
+                // not "not known yet" (issue #737).
+                let wide = model.running_or_queued_bound(&row.path);
+                let what = match wide {
+                    Some(w) => format!("starting · {w} wide"),
+                    None => "starting".to_string(),
+                };
+                (what, None, TapeTokens::default())
             } else {
                 let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
-                let total = row.loop_progress.and_then(|p| p.total);
-                let slots = model
-                    .running_or_queued_bound(&row.path)
-                    .unwrap_or(total.unwrap_or(0));
-                let total_text = total
-                    .map(|t| format!("{t} passes"))
-                    .unwrap_or_else(|| "? passes".to_string());
-                let what = format!("{total_text} · {slots} wide · {done} done");
+                let total = row.loop_progress.and_then(|p| p.total).unwrap_or(0);
+                let slots = model.running_or_queued_bound(&row.path).unwrap_or(total);
+                let what = format!("{total} passes · {slots} wide · {done} done");
                 // The sparkline: one bar per pass index that has a
                 // token figure of its own so far, oldest first -- one
                 // pass over `flat`, grouped by index, rather than a
@@ -2195,6 +2213,112 @@ pub(crate) fn tape_row_label(
     } else {
         row.label.clone()
     }
+}
+
+/// Every segment the Tape's own breadcrumb keeps between the
+/// document root and `path` (issue #737): a loop pass (`iter_N`), a
+/// named loop immediately inside one (`iter_0 › files`, the same
+/// join [`tape_row_label`] already makes one level at a time), an
+/// `if`'s own taken branch, and a sequential container (`use`, a
+/// chain-flow `dynamic`, `try`/`finally`) -- the same set
+/// `tape_row_label` already treats as worth naming, generalized to
+/// every level rather than only `path`'s own direct parent, so a
+/// grandchild of a loop pass (`iter_2 › build › compile`, `compile`
+/// two containers under its own pass) still carries it. A tree-flow
+/// `dynamic` (the document root included) contributes nothing: it
+/// has no identity of its own to tell one run of its children from
+/// another's. The final element is always `path`'s own last
+/// segment, with the same if-branch arrow `tape_row_label` draws
+/// when `path` itself is a taken `if`.
+pub(crate) fn tape_breadcrumb_segments(
+    path: &str,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> Vec<String> {
+    let parts: Vec<&str> = path.split('.').collect();
+    let mut out = Vec::new();
+    let mut cumulative = String::new();
+    for (i, seg) in parts.iter().enumerate() {
+        if i > 0 {
+            cumulative.push('.');
+        }
+        cumulative.push_str(seg);
+        if i == 0 {
+            continue;
+        }
+        let is_last = i == parts.len() - 1;
+        if is_last {
+            let kind = crate::render::row_kind_for(&cumulative, plan, flat);
+            let display = if kind == RowKind::If {
+                flat.get(&cumulative)
+                    .and_then(|n| n.branch.clone())
+                    .map(|b| format!("{seg} → {b}"))
+                    .unwrap_or_else(|| seg.to_string())
+            } else {
+                seg.to_string()
+            };
+            out.push(display);
+            continue;
+        }
+        if crate::render::pass_index(seg).is_some() {
+            out.push(seg.to_string());
+            continue;
+        }
+        let entry_kind = plan
+            .match_path(&cumulative)
+            .and_then(|m| m.entries.first())
+            .map(|e| &e.kind);
+        match entry_kind {
+            Some(PlanEntryKind::If { .. }) => out.push(seg.to_string()),
+            Some(PlanEntryKind::Leaf(LeafEffectKind::Use)) | Some(PlanEntryKind::TryFinally) => {
+                out.push(seg.to_string());
+            }
+            Some(PlanEntryKind::Dynamic { flow: Flow::Chain }) => out.push(seg.to_string()),
+            Some(PlanEntryKind::Loop { .. })
+                if i > 0 && crate::render::pass_index(parts[i - 1]).is_some() =>
+            {
+                out.push(seg.to_string());
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// [`tape_breadcrumb_segments`], joined, for a row shown on its own
+/// (a finished row, a row ahead, the detail pane's title, the status
+/// line).
+pub(crate) fn tape_breadcrumb(
+    path: &str,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> String {
+    tape_breadcrumb_segments(path, flat, plan).join(" › ")
+}
+
+/// [`tape_breadcrumb_segments`] relative to `ancestor` (the tree row
+/// `path` hangs under in the Now area) -- every leading segment the
+/// two share dropped, so a line nested under `iter_0 › files` reads
+/// `iter_2 › build › compile`, never repeating what its own
+/// ancestor row already said.
+pub(crate) fn tape_breadcrumb_relative(
+    path: &str,
+    ancestor: Option<&str>,
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+) -> String {
+    let own = tape_breadcrumb_segments(path, flat, plan);
+    let Some(ancestor) = ancestor else {
+        return own.join(" › ");
+    };
+    let ancestor_segs = tape_breadcrumb_segments(ancestor, flat, plan);
+    let common = own
+        .iter()
+        .zip(ancestor_segs.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    let start = common.min(own.len().saturating_sub(1));
+    own[start..].join(" › ")
 }
 
 /// §3.5's unit rule applied to the run's own largest *actual* step
@@ -2654,6 +2778,211 @@ pub(crate) fn build_run_head(
     }
 }
 
+/// A loop row the status inference (`infer_absent`'s own chain/tree
+/// heuristics) has already called `LikelyRunning`/`RunningOrQueued`
+/// -- the next thing a running chain or a running tree container
+/// will probably reach -- but that has no node of its own yet, so
+/// nothing about it (its pass count, its width, even that it has
+/// truly begun) is actually known. The Tape must still read it as a
+/// row ahead (issue #737): a real start time, once the loop actually
+/// writes its own node, is what moves it into the running rows.
+fn tape_loop_not_yet_started(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> bool {
+    row.kind == RowKind::Loop
+        && matches!(
+            row.status.kind,
+            StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        )
+        && flat
+            .get(&row.path)
+            .and_then(|n| n.created_at.as_deref())
+            .is_none()
+}
+
+/// A loop's own real busy/done passes (issue #737): `meta["progress"]`
+/// (`core/loop.py`'s tree flow) is mutated the instant a pass
+/// finishes but deliberately not published until the next branch's
+/// own publish, or the final merge for the last one -- so `osi`'s own
+/// `--events`-driven live state can read a stale `done` for one or
+/// more publish cycles after a pass actually finished. Counted here
+/// instead straight from every row under each of this loop's own
+/// passes (grouped by pass index, at any depth -- a nested loop's
+/// own passes count once each toward their enclosing loop, never
+/// once per leaf under them), leaf or container alike: a pass is
+/// busy with any row still running under it (a container with no
+/// leaf of its own yet included -- an `if` deciding its branch, a
+/// nested loop before its own first pass has dispatched), done once
+/// every row under it has finished one way or another and none is
+/// still pending -- `(done, busy)`, busy never a count of steps. A
+/// pass whose only child is a container that finished without ever
+/// starting a leaf of its own (an `if` that took neither branch)
+/// still counts as done this way, since the container's own row is
+/// counted too, not only leaves.
+fn tape_loop_pass_counts(rows: &[Row], loop_path: &str) -> (u64, u64) {
+    let prefix = format!("{loop_path}.iter_");
+    // (any_running, all_terminal) per pass index.
+    let mut per_pass: BTreeMap<u64, (bool, bool)> = BTreeMap::new();
+    for r in rows {
+        if matches!(
+            r.kind,
+            RowKind::Pass
+                | RowKind::Root
+                | RowKind::QuickSteps
+                | RowKind::Report
+                | RowKind::Unknown
+        ) {
+            continue;
+        }
+        let Some(rest) = r.path.strip_prefix(prefix.as_str()) else {
+            continue;
+        };
+        let Some(idx) = rest.split('.').next().and_then(|s| s.parse::<u64>().ok()) else {
+            continue;
+        };
+        let entry = per_pass.entry(idx).or_insert((false, true));
+        match r.status.kind {
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued => {
+                entry.0 = true;
+            }
+            StatusKind::Done | StatusKind::FailedHandled | StatusKind::Failed => {}
+            _ => entry.1 = false,
+        }
+    }
+    let mut done = 0u64;
+    let mut busy = 0u64;
+    for (running, terminal) in per_pass.values() {
+        if *running {
+            busy += 1;
+        } else if *terminal {
+            done += 1;
+        }
+    }
+    (done, busy)
+}
+
+/// The Now area's own tree (issue #737): every running leaf and
+/// every running loop, grouped under
+/// its own nearest running Loop ancestor (`None` for a top-level
+/// one), each group in start order, each loop followed immediately
+/// by its own children, indented one level deeper. A plain container
+/// (`dynamic`, `use`, `try`/`finally`, a loop pass) is never a line
+/// of its own here -- it has no counts or sparkline worth a row, so
+/// it contributes at most a breadcrumb segment
+/// ([`tape_breadcrumb_relative`]) to whichever running leaf or loop
+/// actually sits where it would have.
+#[allow(clippy::too_many_arguments)]
+fn build_tape_now_tree(
+    bucket2: &[&Row],
+    running_loops: &[&Row],
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    model: &RunModel,
+    state: Option<&Value>,
+    previews_on: bool,
+    header: &Header,
+    now: &str,
+    elapsed_offset: &dyn Fn(&str) -> Option<f64>,
+) -> (Vec<TapeItem>, u64) {
+    let mut nodes: Vec<&Row> = Vec::with_capacity(bucket2.len() + running_loops.len());
+    nodes.extend(bucket2.iter().copied());
+    nodes.extend(running_loops.iter().copied());
+
+    // The nearest running Loop ancestor of `path` -- the longest
+    // loop path that is a strict prefix of it, `None` for a
+    // top-level node (no running loop encloses it at all).
+    let tree_parent = |path: &str| -> Option<&str> {
+        running_loops
+            .iter()
+            .filter(|l| path.starts_with(&format!("{}.", l.path)))
+            .max_by_key(|l| l.path.len())
+            .map(|l| l.path.as_str())
+    };
+    let start_key = |row: &Row| -> (f64, String) {
+        let ts = flat
+            .get(&row.path)
+            .and_then(|n| n.created_at.as_deref())
+            .and_then(elapsed_offset)
+            .unwrap_or(f64::INFINITY);
+        (ts, row.path.clone())
+    };
+
+    let mut children: BTreeMap<Option<String>, Vec<&Row>> = BTreeMap::new();
+    for row in &nodes {
+        children
+            .entry(tree_parent(&row.path).map(str::to_string))
+            .or_default()
+            .push(row);
+    }
+    for siblings in children.values_mut() {
+        siblings.sort_by(|a, b| start_key(a).partial_cmp(&start_key(b)).unwrap());
+    }
+
+    fn walk<'a>(
+        parent: &Option<String>,
+        depth: usize,
+        children: &BTreeMap<Option<String>, Vec<&'a Row>>,
+        out: &mut Vec<(usize, &'a Row)>,
+    ) {
+        if let Some(kids) = children.get(parent) {
+            for row in kids {
+                out.push((depth, row));
+                walk(&Some(row.path.clone()), depth + 1, children, out);
+            }
+        }
+    }
+    let mut ordered: Vec<(usize, &Row)> = Vec::new();
+    walk(&None, 0, &children, &mut ordered);
+
+    let mut items = Vec::with_capacity(ordered.len());
+    let mut usual_so_far = 0u64;
+    for (depth, row) in ordered {
+        let ancestor = tree_parent(&row.path);
+        let label = tape_breadcrumb_relative(&row.path, ancestor, flat, plan);
+        let ts = flat
+            .get(&row.path)
+            .and_then(|n| n.created_at.clone())
+            .or_else(|| model.event_started_at(&row.path).map(str::to_string));
+        let (what, preview, mut tokens) =
+            tape_row_content(row, flat, plan, model, state, previews_on, false, now);
+        let what = if row.kind == RowKind::Loop
+            && !matches!(
+                row.status.kind,
+                StatusKind::Done | StatusKind::FailedHandled
+            ) {
+            let total = row.loop_progress.and_then(|p| p.total);
+            let (done, busy) = tape_loop_pass_counts(rows, &row.path);
+            let slots = model.running_or_queued_bound(&row.path).unwrap_or(busy);
+            let mut text = format!("{busy} of {slots} Slots Busy");
+            if let Some(total) = total {
+                let queued = total.saturating_sub(done).saturating_sub(busy);
+                if queued > 0 {
+                    let word = if queued == 1 { "Pass" } else { "Passes" };
+                    text.push_str(&format!(" · {queued} {word} Queued"));
+                }
+            }
+            text
+        } else {
+            what
+        };
+        tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
+        usual_so_far += tokens.usual.unwrap_or(0);
+        items.push(TapeItem::Row(TapeRow {
+            path: row.path.clone(),
+            label,
+            kind: row.kind,
+            status: row.status.clone(),
+            ts,
+            what,
+            what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
+            preview,
+            bold: true,
+            indent: depth,
+            tokens,
+        }));
+    }
+    (items, usual_so_far)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_tape(
     rows: &[Row],
@@ -2702,7 +3031,27 @@ pub fn build_tape(
     let mut bucket1: Vec<&Row> = Vec::new();
     let mut bucket2: Vec<&Row> = Vec::new();
     let mut bucket3: Vec<&Row> = Vec::new();
-    for row in all_rows {
+    // Every loop currently running, in no particular order yet (the
+    // Now area's own tree, built below, orders and indents them) --
+    // issue #737 moved a running loop out of `bucket1` entirely: it
+    // is a line in the tree, never also a row above the band.
+    let mut running_loops: Vec<&Row> = Vec::new();
+    // Whether some OTHER row under `path` has already begun (running,
+    // finished, or failed) -- a plain container (`dynamic`, `use`,
+    // `try`/`finally`; a loop is handled separately, always its own
+    // tree row) with one of these underneath it is superseded by
+    // that descendant and never a row of its own, above the band or
+    // in the tree (issue #737: the earlier bug this generalizes,
+    // "a running dynamic sorts in among the finished rows").
+    let has_started_descendant = |path: &str| -> bool {
+        let prefix = format!("{path}.");
+        all_rows.iter().any(|r| {
+            r.path.starts_with(prefix.as_str())
+                && !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped)
+        })
+    };
+    for row in &all_rows {
+        let row = *row;
         // `RowKind::Pass` is a loop pass's own container row (`fold`'s
         // "pass N of 3"), not a step of its own -- the Tape already
         // shows that pass's children with their own `iter_N › ...`
@@ -2720,19 +3069,59 @@ pub fn build_tape(
         ) {
             continue;
         }
-        let is_active_leaf = row.kind.is_leaf()
-            && matches!(
-                row.status.kind,
-                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
-            );
+        let running_like = matches!(
+            row.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        );
+        // `RowKind::Use` writes its own state node like a leaf does
+        // (`is_leaf()`'s own reason to include it), but it is a
+        // container like `dynamic`/`try`/`finally` for this grouping:
+        // once its own loaded sub-document starts a child of its
+        // own, that child is the running row, never `use` as well.
+        let is_container_kind =
+            row.kind != RowKind::Loop && (!row.kind.is_leaf() || row.kind == RowKind::Use);
+        let is_active_leaf = running_like && row.kind.is_leaf() && row.kind != RowKind::Use;
+        let is_active_loop =
+            row.kind == RowKind::Loop && running_like && !tape_loop_not_yet_started(row, flat);
+        let is_superseded_container =
+            running_like && is_container_kind && has_started_descendant(&row.path);
+        // A running container with nothing yet started under it
+        // (its own node written, but no child of its own observed
+        // yet) is itself the deepest running node on its path, so it
+        // is the running row -- under the Now band, never among the
+        // finished rows above it (issue #737: "a running dynamic
+        // sorts in among the finished rows").
+        let is_active_container =
+            running_like && is_container_kind && !has_started_descendant(&row.path);
         if is_active_leaf {
             bucket2.push(row);
-        } else if matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped) {
+        } else if is_active_loop {
+            // A running loop is a line in the Now area's own tree
+            // (issue #737), never also a row above the band -- kept
+            // apart from `bucket1` (which only ever holds finished-
+            // looking rows) for exactly that reason.
+            running_loops.push(row);
+        } else if is_superseded_container {
+            // A running `dynamic`/`use`/`try`/`finally` with running
+            // or already-finished work under it is never a row of
+            // its own -- it has no counts or sparkline worth
+            // showing, and the design's own single-loop frames never
+            // draw one either (only ever the design's own `✓`/`✗`
+            // once it, too, has finished).
+            continue;
+        } else if is_active_container {
+            bucket2.push(row);
+        } else if matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped)
+            || tape_loop_not_yet_started(row, flat)
+        {
             // A failed run's own untaken rows (§2.1: "unreached rows
             // as skipped") draw exactly like a row ahead -- faint,
             // with "skipped · not reached · prompt" -- never in finish
             // order, which is bucket1's own place for anything that
-            // actually ran, finished or not.
+            // actually ran, finished or not. A predicted-running loop
+            // with no node of its own yet (`tape_loop_not_yet_started`)
+            // belongs here too, not among the finished rows its own
+            // sort key would otherwise push it to the very bottom of.
             bucket3.push(row);
         } else {
             bucket1.push(row);
@@ -2776,16 +3165,6 @@ pub fn build_tape(
     };
     bucket1.sort_by(|a, b| sort_key(a).total_cmp(&sort_key(b)));
 
-    // Loops with a running pass right now (bucket2 is never a
-    // container, so this groups each active leaf by its own nearest
-    // Loop ancestor among bucket1) -- the slots rule (§3.4's "2 of 2
-    // Slots Busy · 1 Pass Queued") is drawn once per such loop.
-    let running_loops: Vec<&Row> = bucket1
-        .iter()
-        .filter(|r| r.kind == RowKind::Loop && r.status.kind != StatusKind::Done)
-        .copied()
-        .collect();
-
     let head = build_run_head(run_start, header, rows, flat);
     // §2.1's own frames: a preview line (and the title's own
     // "Previews On/Off") is a Normal/Usual-state-only thing -- every
@@ -2820,13 +3199,50 @@ pub fn build_tape(
     // ever shown as "no history", never divided into.
     let mut usual_so_far: u64 = 0;
     for row in &bucket1 {
-        let (what, preview, mut tokens) =
-            tape_row_content(row, flat, plan, model, state, previews_on, false, now);
+        // A loop row's own `N done` reads off `row.loop_progress.done`
+        // inside `tape_row_content` -- patched here first with the
+        // greater of the engine's own `progress.done` and the real
+        // pass-status count (`tape_loop_pass_counts`): the engine's
+        // figure can lag a pass behind while the loop is still
+        // running (issue #737), but the counted figure can itself
+        // undercount a pass whose only child finished without ever
+        // starting a row of its own kind this function tracks (a
+        // nested loop's own last pass merging away its rows) -- once
+        // the loop itself is finished, the engine's own total is
+        // always the real one whenever counting falls short of it.
+        let patched_loop;
+        let content_row: &Row = if row.kind == RowKind::Loop {
+            if let Some(lp) = row.loop_progress {
+                let (done, _busy) = tape_loop_pass_counts(rows, &row.path);
+                patched_loop = Row {
+                    loop_progress: Some(crate::render::LoopProgress {
+                        done: done.max(lp.done),
+                        ..lp
+                    }),
+                    ..(*row).clone()
+                };
+                &patched_loop
+            } else {
+                row
+            }
+        } else {
+            row
+        };
+        let (what, preview, mut tokens) = tape_row_content(
+            content_row,
+            flat,
+            plan,
+            model,
+            state,
+            previews_on,
+            false,
+            now,
+        );
         tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         usual_so_far += tokens.usual.unwrap_or(0);
         items.push(TapeItem::Row(TapeRow {
             path: row.path.clone(),
-            label: tape_row_label(row, flat, plan),
+            label: tape_breadcrumb(&row.path, flat, plan),
             kind: row.kind,
             status: row.status.clone(),
             ts: flat
@@ -2836,6 +3252,7 @@ pub fn build_tape(
             what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
             preview,
             bold: false,
+            indent: 0,
             tokens,
         }));
     }
@@ -2849,70 +3266,74 @@ pub fn build_tape(
         TapeHead::Starting => {}
     }
 
-    for row in &bucket2 {
-        let (what, preview, mut tokens) =
-            tape_row_content(row, flat, plan, model, state, previews_on, false, now);
-        tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
-        usual_so_far += tokens.usual.unwrap_or(0);
-        items.push(TapeItem::Row(TapeRow {
-            path: row.path.clone(),
-            label: tape_row_label(row, flat, plan),
-            kind: row.kind,
-            status: row.status.clone(),
-            ts: flat.get(&row.path).and_then(|n| n.created_at.clone()),
-            what,
-            what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
-            preview,
-            bold: true,
-            tokens,
-        }));
-    }
+    let (tree_items, tree_usual) = build_tape_now_tree(
+        &bucket2,
+        &running_loops,
+        rows,
+        flat,
+        plan,
+        model,
+        state,
+        previews_on,
+        header,
+        now,
+        &elapsed_offset,
+    );
+    items.extend(tree_items);
+    usual_so_far += tree_usual;
     let usual_so_far_tokens = (usual_so_far > 0).then_some(usual_so_far);
-
-    for loop_row in &running_loops {
-        let total = loop_row.loop_progress.and_then(|p| p.total);
-        let done = loop_row.loop_progress.map(|p| p.done).unwrap_or(0);
-        let prefix = format!("{}.", loop_row.path);
-        let busy = bucket2
-            .iter()
-            .filter(|r| r.path.starts_with(&prefix))
-            .count() as u64;
-        let slots = model
-            .running_or_queued_bound(&loop_row.path)
-            .unwrap_or(busy);
-        let queued = total.map(|t| t.saturating_sub(done).saturating_sub(busy));
-        if let Some(queued) = queued {
-            items.push(TapeItem::SlotsRule {
-                busy,
-                slots,
-                queued,
-            });
-        }
-    }
 
     for row in &bucket3 {
         let queued = tape_row_is_under_a_queued_pass(&row.path)
             && running_loops
                 .iter()
                 .any(|l| row.path.starts_with(&format!("{}.", l.path)));
-        let (what, preview, mut tokens) =
-            tape_row_content(row, flat, plan, model, state, previews_on, queued, now);
+        // A loop predicted `LikelyRunning`/`RunningOrQueued` with no
+        // node of its own yet reads here exactly like any other row
+        // ahead (`tape_loop_not_yet_started`) -- its own inferred
+        // status would otherwise draw a running icon on a row this
+        // bucket already treats as not yet begun.
+        let patched_pending;
+        let content_row: &Row = if tape_loop_not_yet_started(row, flat) {
+            patched_pending = Row {
+                status: RowStatus {
+                    kind: StatusKind::Pending,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                ..(*row).clone()
+            };
+            &patched_pending
+        } else {
+            row
+        };
+        let (what, preview, mut tokens) = tape_row_content(
+            content_row,
+            flat,
+            plan,
+            model,
+            state,
+            previews_on,
+            queued,
+            now,
+        );
         // §2.1: a row ahead shows `usually N t` since it's still
         // expected to run; a failed run's own unreached rows, truly
         // skipped rather than merely not-yet-reached, never do.
-        if row.status.kind != StatusKind::Skipped {
+        if content_row.status.kind != StatusKind::Skipped {
             tokens.usual = tape_row_usual_tokens(&row.path, plan, header);
         }
         items.push(TapeItem::Row(TapeRow {
             path: row.path.clone(),
-            label: tape_row_label(row, flat, plan),
+            label: tape_breadcrumb(&row.path, flat, plan),
             kind: row.kind,
-            status: row.status.clone(),
+            status: content_row.status.clone(),
             ts: None,
             what,
             what_is_agent_text: tape_row_what_is_agent_text(row, flat, plan),
             preview,
             bold: false,
+            indent: 0,
             tokens,
         }));
     }
@@ -2923,6 +3344,54 @@ pub fn build_tape(
             usual_wall_s: header.history_usual_total_s,
             eta_ts: header.history_eta_ts.clone(),
         });
+    }
+
+    // No two finished or ahead rows ever read the same (issue #737):
+    // never the tree's own rows here, which already read apart from
+    // one another -- each one relative to its own ancestor loop row,
+    // and two different loops' own same-numbered pass (`groups.
+    // iter_0.files`'s own `iter_0` and `groups.iter_1.files`'s own
+    // `iter_0`) are never siblings of each other, only of their own
+    // loop's own other passes, which a loop's own body never repeats
+    // a name within. A colliding finished/ahead row falls back to
+    // its own full, absolute breadcrumb, which only ever repeats if
+    // that is ALSO ambiguous -- then the row's own dotted path,
+    // always unique.
+    {
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for item in &items {
+            if let TapeItem::Row(row) = item {
+                if !row.bold {
+                    *counts.entry(row.label.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+        for item in &mut items {
+            if let TapeItem::Row(row) = item {
+                if !row.bold && counts.get(&row.label).copied().unwrap_or(0) > 1 {
+                    row.label = tape_breadcrumb(&row.path, flat, plan);
+                }
+            }
+        }
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
+        for item in &items {
+            if let TapeItem::Row(row) = item {
+                if !row.bold {
+                    *counts.entry(row.label.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+        for item in &mut items {
+            if let TapeItem::Row(row) = item {
+                if !row.bold && counts.get(&row.label).copied().unwrap_or(0) > 1 {
+                    row.label = row
+                        .path
+                        .strip_prefix("prime.")
+                        .unwrap_or(&row.path)
+                        .replace('.', " › ");
+                }
+            }
+        }
     }
 
     let largest = tape_largest_tokens(&items);
@@ -3018,7 +3487,11 @@ pub fn build_tape(
             .then(|| (((total as f64 * 100.0) / run_total as f64).round() as u64).min(100))
     });
     let selected_row = selected_path.and_then(find_selected_row);
-    let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
+    // Issue #737: the detail pane's own title names the same step
+    // the Tape's own row does -- the full breadcrumb, never the
+    // plain relative label `tape_row_label` gives every other
+    // screen.
+    let selected_breadcrumb = selected_row.map(|row| tape_breadcrumb(&row.path, flat, plan));
     let selected_detail =
         selected_row.map(|row| build_tape_selected_detail(row, flat, model, now, plan));
 
@@ -3153,8 +3626,8 @@ pub enum SignalStepKind {
         released: Vec<SignalReleasedStep>,
         suffix: String,
     },
-    /// `2 Running · 1 Queued` (the same slots rule the Tape's own
-    /// `SlotsRule` already computes).
+    /// `2 Running · 1 Queued` (the same counts the Tape's own
+    /// running loop rows already compute).
     Loop { status_text: String },
 }
 
@@ -4712,6 +5185,31 @@ mod tests {
         );
     }
 
+    /// Issue #737: a `LikelyRunning` row with no duration at all --
+    /// no node of its own yet, and no `--events` start either --
+    /// reads `starting`, never a bare provider word with nothing
+    /// beside it.
+    #[test]
+    fn tape_tool_what_reads_starting_with_no_duration_at_all() {
+        let plan = PlanTree::empty();
+        let row = Row {
+            path: "prime.check".to_string(),
+            depth: 1,
+            label: "check".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::LikelyRunning,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        assert_eq!(tape_tool_what(&row, None, &plan), "starting");
+    }
+
     /// Issue #704 rule 4's own Meta section: `meta.error` is already
     /// its own Error section, never repeated here under its own raw
     /// key.
@@ -5091,10 +5589,11 @@ mod tests {
             "2026-01-01T00:00:02Z",
         );
 
-        // Finished rows (kind, the dispatched-but-unfinished loop,
-        // its one finished pass) all sit above the Now band, in
-        // finish/dispatch order; the running pause is below it; the
-        // pending sibling pass is ahead, after the slots rule.
+        // Finished rows (kind, the loop's own finished pass) sit
+        // above the Now band, in finish order; the running loop and
+        // its running pause are the Now area's own tree, the loop
+        // first and its pause indented under it; the pending sibling
+        // pass is ahead.
         let order: Vec<String> = tape
             .items
             .iter()
@@ -5102,7 +5601,6 @@ mod tests {
                 TapeItem::RunStarted { .. } => "start".to_string(),
                 TapeItem::Row(r) => r.path.clone(),
                 TapeItem::NowBand { .. } => "now".to_string(),
-                TapeItem::SlotsRule { .. } => "slots".to_string(),
                 TapeItem::RunEnd { .. } => "end".to_string(),
                 TapeItem::HeadRule => "head_rule".to_string(),
             })
@@ -5112,30 +5610,317 @@ mod tests {
             vec![
                 "start",
                 "prime.kind",
-                "prime.drafts",
                 "prime.drafts.iter_0.draft",
                 "now",
+                "prime.drafts",
                 "prime.drafts.iter_0.pause",
-                "slots",
                 "prime.drafts.iter_1.draft",
                 "end",
             ]
         );
-        match &tape.items[6] {
-            TapeItem::SlotsRule {
-                busy,
-                slots,
-                queued,
-            } => {
-                assert_eq!(*busy, 1);
-                assert_eq!(*slots, 1); // no dispatch event in this test: falls back to `busy`
-                assert_eq!(*queued, 1);
+        match &tape.items[4] {
+            TapeItem::Row(r) => {
+                assert_eq!(r.label, "drafts");
+                assert_eq!(r.indent, 0);
+                // No separate slots rule any more (issue #737's
+                // layout decision): a running loop's own counts sit
+                // in its own `what` column instead.
+                assert_eq!(r.what, "1 of 1 Slots Busy · 1 Pass Queued");
             }
-            other => panic!("expected a slots rule, got {other:?}"),
+            other => panic!("expected the drafts loop's own tree row, got {other:?}"),
+        }
+        match &tape.items[5] {
+            TapeItem::Row(r) => {
+                assert_eq!(r.label, "iter_0 › pause");
+                assert_eq!(r.indent, 1);
+            }
+            other => panic!("expected the pause row nested under drafts, got {other:?}"),
         }
         assert_eq!(tape.done, 2); // `kind` and the loop's own finished pass, `iter_0 › draft`
         assert_eq!(tape.running, 1);
         assert_eq!(tape.ahead, 1);
+    }
+
+    /// Issue #737: `tape_loop_pass_counts` reads a pass's own busy/
+    /// done straight off its own rows' already-derived status,
+    /// never off the engine's own `meta.progress.done` (which a
+    /// pass's own node here doesn't even carry a figure for at all --
+    /// only `loop_progress` does, and this function never reads
+    /// that field).
+    #[test]
+    fn tape_loop_pass_counts_reads_each_passs_own_leaves_never_a_step_count() {
+        let rows = vec![
+            tape_row(
+                "prime.drafts.iter_0.draft",
+                2,
+                "iter_0 › draft",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_0.pause",
+                2,
+                "iter_0 › pause",
+                RowKind::Tool,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.draft",
+                2,
+                "iter_1 › draft",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.pause",
+                2,
+                "iter_1 › pause",
+                RowKind::Tool,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.drafts.iter_2.draft",
+                2,
+                "iter_2 › draft",
+                RowKind::Prompt,
+                StatusKind::Pending,
+            ),
+        ];
+        // Pass 0: both its own leaves done -- counts as done, even
+        // with two steps under it (never "2 done" for one pass).
+        // Pass 1: one leaf still running -- busy, never counted done
+        // just because its first leaf already finished. Pass 2: not
+        // started at all -- neither.
+        assert_eq!(tape_loop_pass_counts(&rows, "prime.drafts"), (1, 1));
+    }
+
+    /// Issue #737: a pass whose only child is a container that
+    /// finished without ever starting a leaf of its own (an `if`
+    /// that took neither branch) still counts as done, since the
+    /// container's own row -- not only a leaf's -- counts toward the
+    /// pass's status.
+    #[test]
+    fn tape_loop_pass_counts_counts_a_pass_whose_only_child_is_a_finished_container() {
+        let rows = vec![
+            tape_row(
+                "prime.drafts.iter_0.gate",
+                2,
+                "iter_0 › gate",
+                RowKind::If,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.gate",
+                2,
+                "iter_1 › gate",
+                RowKind::If,
+                StatusKind::Running,
+            ),
+        ];
+        assert_eq!(tape_loop_pass_counts(&rows, "prime.drafts"), (1, 1));
+    }
+
+    /// Issue #737: a loop the status inference already calls
+    /// `LikelyRunning` (the next thing a running chain will reach)
+    /// but that has no node of its own yet reads as a row ahead, not
+    /// a finished-looking row sorted to the very bottom, and its own
+    /// text is `starting` rather than a `? passes` that looks like a
+    /// real, if odd, count.
+    #[test]
+    fn an_unstarted_predicted_loop_reads_as_a_row_ahead_and_starting() {
+        let rows = vec![
+            tape_row("prime.first", 1, "first", RowKind::Tool, StatusKind::Done),
+            tape_row(
+                "prime.drafts",
+                1,
+                "drafts",
+                RowKind::Loop,
+                StatusKind::LikelyRunning,
+            ),
+        ];
+        let flat = BTreeMap::new(); // no node at all for `prime.drafts`
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.status = RunStatus::Running;
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let tape = build_tape(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            true,
+            "2026-01-01T00:00:01Z",
+        );
+        let drafts = tape
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TapeItem::Row(r) if r.path == "prime.drafts" => Some(r),
+                _ => None,
+            })
+            .expect("drafts has a row");
+        assert_eq!(drafts.status.kind, StatusKind::Pending);
+        assert_eq!(drafts.what, "loop"); // §2.1's plain row-ahead text, the same as any other not-yet-started loop
+        assert!(!drafts.bold);
+    }
+
+    /// Issue #737: two rows whose own tree-relative label would read
+    /// the same (two different loops' own same-numbered pass, each
+    /// under its own files loop) fall back to their own full
+    /// breadcrumb, which differs because the outer loop's own pass
+    /// differs too.
+    #[test]
+    fn colliding_tree_labels_fall_back_to_their_own_full_breadcrumb() {
+        let tmp = std::env::temp_dir().join(format!(
+            "osi-screens-test-colliding-labels-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let path = tmp.join("doc.yml");
+        std::fs::write(
+            &path,
+            "interface:\n  inputs:\n    groups: {type: array, default: [\"a\", \"b\"]}\n    files: {type: array, default: [1, 2]}\neffects:\n  - name: groups\n    type: loop\n    flow: tree\n    max_concurrency: 2\n    each: {in: input.groups, as: g}\n    body:\n      - name: files\n        type: loop\n        flow: tree\n        max_concurrency: 2\n        each: {in: input.files, as: f}\n        body:\n          - name: compile\n            type: tool\n            provider: shell\n            params: {command: sleep, args: [\"1\"], allowed_commands: [\"sleep\"]}\n",
+        )
+        .unwrap();
+        let program = crate::plan::compile(&path, None, &indexmap::IndexMap::new())
+            .expect("document compiles");
+        std::fs::remove_dir_all(&tmp).ok();
+        let plan = PlanTree::from_program(&program);
+        let a = tape_row(
+            "prime.groups.iter_0.files.iter_0.compile",
+            4,
+            "compile",
+            RowKind::Tool,
+            StatusKind::Running,
+        );
+        let b = tape_row(
+            "prime.groups.iter_1.files.iter_0.compile",
+            4,
+            "compile",
+            RowKind::Tool,
+            StatusKind::Running,
+        );
+        let flat = BTreeMap::new();
+        assert_eq!(
+            tape_breadcrumb_relative(&a.path, Some("prime.groups.iter_0.files"), &flat, &plan),
+            tape_breadcrumb_relative(&b.path, Some("prime.groups.iter_1.files"), &flat, &plan),
+            "both read 'iter_0 › compile' relative to their own files loop"
+        );
+        assert_ne!(
+            tape_breadcrumb(&a.path, &flat, &plan),
+            tape_breadcrumb(&b.path, &flat, &plan),
+            "their own full breadcrumbs differ by the outer loop's own pass"
+        );
+
+        // The same, through `build_tape`'s own pipeline: both finished
+        // (never in the tree, which this fallback doesn't concern),
+        // their own `TapeRow::label` still reads apart.
+        let rows = vec![
+            tape_row(
+                "prime.groups.iter_0.files.iter_0.compile",
+                4,
+                "compile",
+                RowKind::Tool,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.groups.iter_1.files.iter_0.compile",
+                4,
+                "compile",
+                RowKind::Tool,
+                StatusKind::Done,
+            ),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.groups.iter_0.files.iter_0.compile".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        flat.insert(
+            "prime.groups.iter_1.files.iter_0.compile".to_string(),
+            tape_node("2026-01-01T00:00:00Z", Some("2026-01-01T00:00:01Z")),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.status = RunStatus::Ok;
+        let model = RunModel::new();
+        let tape = build_tape(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            true,
+            "2026-01-01T00:00:01Z",
+        );
+        let labels: Vec<&str> = tape
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                TapeItem::Row(r) => Some(r.label.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(labels.len(), 2, "{labels:?}");
+        assert_ne!(
+            labels[0], labels[1],
+            "build_tape's own two finished rows must still read apart: {labels:?}"
+        );
+    }
+
+    /// Issue #737: a running row with no `created_at` of its
+    /// own yet (the live state hasn't caught up) still shows a real
+    /// start time, read from `--events`' own `start` line for that
+    /// path.
+    #[test]
+    fn a_running_tree_rows_start_time_falls_back_to_the_events_start_line() {
+        let rows = vec![tape_row(
+            "prime.watcher",
+            1,
+            "watcher",
+            RowKind::Tool,
+            StatusKind::Running,
+        )];
+        let flat = BTreeMap::new(); // no node at all yet for `prime.watcher`
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Start {
+            ts: "2026-01-01T00:00:00.5Z".to_string(),
+            id: Some(1),
+            path: "prime.watcher".to_string(),
+        });
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.status = RunStatus::Running;
+        let plan = PlanTree::empty();
+        let tape = build_tape(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            None,
+            true,
+            "2026-01-01T00:00:01Z",
+        );
+        let watcher = tape
+            .items
+            .iter()
+            .find_map(|item| match item {
+                TapeItem::Row(r) if r.path == "prime.watcher" => Some(r),
+                _ => None,
+            })
+            .expect("watcher has a row");
+        assert_eq!(watcher.ts.as_deref(), Some("2026-01-01T00:00:00.5Z"));
     }
 
     /// Issue #704 rule 4: `[`/`]` names any effect in plan order,

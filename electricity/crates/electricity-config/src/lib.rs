@@ -35,9 +35,11 @@
 //! [mod]: crate::effective_settings
 
 mod allowlist;
+mod capabilities;
 mod capability_gate;
 mod complexity;
 mod config;
+pub mod config_trust;
 pub mod dotenv;
 mod effective_settings;
 mod merge;
@@ -54,6 +56,10 @@ pub use allowlist::{
     orchestration_denials, profile_provider_denials, provider_token_to_adapter, require_adapter,
     tool_denial, walk_orchestration_refs,
 };
+pub use capabilities::{
+    FS_WRITE, NETWORK, PYTHON_EVAL, SHELL, cache_root, capabilities_of, consented_capabilities,
+    is_cache_path, refusal_message,
+};
 pub use capability_gate::{
     CAPABILITY_CEILING_KEY, CapabilityConsentError, capabilities_beyond_ceiling,
     capability_ceiling, require_within_ceiling,
@@ -62,7 +68,10 @@ pub use complexity::{
     ComplexityBand, ComplexitySettings, DecompositionSettings, RoutingSettings, SCORE_MAX,
     SCORE_MIN, ScoringSettings, SplittingSettings, resolve_complexity_settings,
 };
-pub use config::{CircuitryConfig, ConfigError, resolve_config};
+pub use config::{
+    CircuitryConfig, ConfigError, ConfigForRun, discover_project_config, global_config_path,
+    resolve_config, resolve_config_for_run, trust_store_path,
+};
 pub use effective_settings::{
     EffectiveSettings, effective_settings, effective_settings_with_profile,
 };

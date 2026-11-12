@@ -92,7 +92,7 @@ async fn run_case(case: &CorpusCase) -> Ran {
 
     let out_path = dir.join("expected.out.json");
     let req = RunRequest {
-        config_path,
+        config_path: Some(config_path),
         orchestration_path: doc_path,
         inputs,
         out_path: Some(out_path.clone()),
@@ -100,6 +100,9 @@ async fn run_case(case: &CorpusCase) -> Ran {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
         armed: true,
     };
     let token = CancellationToken::new();
