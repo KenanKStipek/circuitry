@@ -4996,8 +4996,8 @@ pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
         key_row("✗", failed, "a failed run, in Recent Runs"),
         key_row("—", muted, "no config, or no run directory"),
         key_row("gone", muted, "its run directory is gone"),
-        key_row("❯", cursor, "the selected row's own cursor"),
-        key_row("name", default, "a short name from the run's own id"),
+        key_row("❯", cursor, "the selected row's cursor"),
+        key_row("name", default, "a short name from the run's id"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -6584,7 +6584,7 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
             muted,
             "no config or run directory · directory gone",
         ),
-        key_row("name", default, "a short name from the run's own id"),
+        key_row("name", default, "a short name from the run's id"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -7878,7 +7878,7 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
             done_style,
             "\u{276f}",
             now_style,
-            "a finished prompt \u{b7} the table's own cursor",
+            "a finished prompt \u{b7} the table's cursor (first run's colour)",
         ),
         key_row(
             "colour",
@@ -7886,7 +7886,7 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
             "one colour per run, shared with the legend",
         ),
         key_row("scale", default, "one round top shared by every run's bars"),
-        key_row("name", default, "a short name from the run's own id"),
+        key_row("name", default, "a short name from the run's id"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -8882,9 +8882,7 @@ fn signal_step_row_spans(
         SignalStepKind::Loop { status_text } => {
             spans.push((
                 format!("\u{27f3} {} ", row.label),
-                Style::default()
-                    .fg(ctx.theme.accent_primary)
-                    .add_modifier(Modifier::BOLD),
+                signal_loop_style(ctx.theme),
             ));
             spans.push((format!("{status_text}  "), bold));
             if is_last {
@@ -10359,6 +10357,11 @@ const HELP_NARROW_WIDTH: u16 = 69;
 /// from an older draft of this same screen, or one some *other*
 /// screen's own key bar still has.
 #[allow(clippy::too_many_arguments)]
+const HELP_KEY1_WIDTH: usize = 7;
+const HELP_DESC1_WIDTH: usize = 28;
+const HELP_KEY2_WIDTH: usize = 8;
+const HELP_DESC2_WIDTH: usize = 26;
+
 fn help_row(
     key1: HelpCell,
     desc1: HelpCell,
@@ -10367,24 +10370,35 @@ fn help_row(
     width: u16,
 ) -> Vec<Line<'static>> {
     let has_second = !help_cell_is_blank(&key2) || !help_cell_is_blank(&desc2);
-    if width >= HELP_NARROW_WIDTH {
-        let mut spans = help_cell_spans(&key1, 7);
-        spans.extend(help_cell_spans(&desc1, 28));
+    // issue #738's layout rule: a pair that doesn't fit its own
+    // column -- not just an overlay narrower than both columns
+    // together -- gets a full-width line of its own, and so does
+    // the other pair of that row, so the right column never shifts
+    // and nothing is ever cut at the border.
+    let fits_inline = width >= HELP_NARROW_WIDTH
+        && help_cell_len(&key1) <= HELP_KEY1_WIDTH
+        && help_cell_len(&desc1) <= HELP_DESC1_WIDTH
+        && (!has_second
+            || (help_cell_len(&key2) <= HELP_KEY2_WIDTH
+                && help_cell_len(&desc2) <= HELP_DESC2_WIDTH));
+    if fits_inline {
+        let mut spans = help_cell_spans(&key1, HELP_KEY1_WIDTH);
+        spans.extend(help_cell_spans(&desc1, HELP_DESC1_WIDTH));
         if has_second {
-            spans.extend(help_cell_spans(&key2, 8));
-            spans.extend(help_cell_spans(&desc2, 26));
+            spans.extend(help_cell_spans(&key2, HELP_KEY2_WIDTH));
+            spans.extend(help_cell_spans(&desc2, HELP_DESC2_WIDTH));
         }
         vec![Line::from(spans)]
     } else {
         let mut lines = vec![Line::from(
-            help_cell_spans(&key1, 7)
+            help_cell_spans(&key1, HELP_KEY1_WIDTH)
                 .into_iter()
                 .chain(desc1.iter().map(|(t, s)| Span::styled(t.clone(), *s)))
                 .collect::<Vec<_>>(),
         )];
         if has_second {
             lines.push(Line::from(
-                help_cell_spans(&key2, 7)
+                help_cell_spans(&key2, HELP_KEY1_WIDTH)
                     .into_iter()
                     .chain(desc2.iter().map(|(t, s)| Span::styled(t.clone(), *s)))
                     .collect::<Vec<_>>(),
@@ -10417,9 +10431,9 @@ fn tape_help_row(
 }
 
 /// The close row at the bottom of a screen's own Help -- `other_page`
-/// names the overlay's other page (issue #738's `HelpPage`), `None`
-/// for a screen whose own Keys and Key both fit one page together,
-/// so there is nothing else to switch to.
+/// names the overlay's other page, `None` for a screen whose Keys
+/// and Key both fit one page together, so there is nothing else to
+/// switch to.
 fn tape_help_close_row(ctx: &DrawCtx, other_page: Option<&str>) -> Line<'static> {
     let key_style = Style::default()
         .fg(ctx.theme.keyhint_key)
@@ -10438,11 +10452,167 @@ fn tape_help_close_row(ctx: &DrawCtx, other_page: Option<&str>) -> Line<'static>
     Line::from(spans)
 }
 
+/// Which page `help_page` (a free-running counter, issue #738: `←`/
+/// `→` move it without knowing yet how many pages a screen's own
+/// Help needs at its current size) actually lands on once there are
+/// `page_count` of them -- always in range, however far `help_page`
+/// has wrapped.
+fn help_page_index(help_page: i64, page_count: usize) -> usize {
+    if page_count == 0 {
+        return 0;
+    }
+    help_page.rem_euclid(page_count as i64) as usize
+}
+
+/// The close row's own wording for page `index` of `count` (issue
+/// #738): nothing to switch to on the one page a screen whose Keys
+/// and Key both fit together draws; the other page's name on
+/// exactly two (always `Key` then `Keys`, [`help_pages`]'s own
+/// order); `page N of M` once a screen's own Key or Keys needed more
+/// than one page on its own to fit a small enough terminal.
+fn help_close_row_for(ctx: &DrawCtx, index: usize, count: usize) -> Line<'static> {
+    let other_page = match count {
+        0 | 1 => None,
+        2 => Some(if index == 0 {
+            "Keys".to_string()
+        } else {
+            "Key".to_string()
+        }),
+        _ => Some(format!("page {} of {count}", index + 1)),
+    };
+    tape_help_close_row(ctx, other_page.as_deref())
+}
+
+/// The Help popup's own interior room for content, not counting its
+/// two borders or its own close row -- every screen's own paging
+/// (issue #738) sizes its popup, and splits onto this many pages, by
+/// this, so the close row -- the only hint a second page exists --
+/// is never cut, down to a bare 60×24 terminal.
+fn help_available_rows(area_height: u16, popup_y_offset: u16) -> usize {
+    area_height
+        .saturating_sub(popup_y_offset)
+        .saturating_sub(2) // the popup's own top/bottom border
+        .saturating_sub(1) // the close row
+        as usize
+}
+
+/// Packs complete rows (never a key:meaning pair split across a
+/// page break) onto as few pages as fit within `capacity` lines
+/// each (issue #738) -- a row wider than `capacity` on its own
+/// still gets a page to itself rather than being dropped.
+fn paginate_help_blocks(blocks: &[Vec<Line<'static>>], capacity: usize) -> Vec<Vec<Line<'static>>> {
+    let capacity = capacity.max(1);
+    let mut pages: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut current: Vec<Line<'static>> = Vec::new();
+    for block in blocks {
+        if !current.is_empty() && current.len() + block.len() > capacity {
+            pages.push(std::mem::take(&mut current));
+        }
+        current.extend(block.iter().cloned());
+    }
+    pages.push(current);
+    pages
+}
+
+/// The "Key" section header: a blank separator then the label, both
+/// glued to the first row beneath them so a page never ends with
+/// the header alone and nothing of its own below it.
+fn help_key_header(ctx: &DrawCtx) -> Line<'static> {
+    Line::from(Span::styled("Key", Style::default().fg(ctx.theme.fg_muted)))
+}
+
+/// Lays a screen's own Keys rows and Key rows across as many pages
+/// as the popup's own interior (`capacity`) needs (issue #738): both
+/// groups merge onto a single page, sized to their combined content,
+/// when together they fit; otherwise each pages on its own, Key
+/// first (`?`'s own default page) then Keys.
+fn help_pages(
+    keys_blocks: Vec<Vec<Line<'static>>>,
+    key_header: Line<'static>,
+    key_blocks: Vec<Vec<Line<'static>>>,
+    capacity: usize,
+) -> Vec<Vec<Line<'static>>> {
+    let mut headed_key_blocks: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut key_rows = key_blocks.into_iter();
+    if let Some(first) = key_rows.next() {
+        let mut glued = vec![Line::from(""), key_header];
+        glued.extend(first);
+        headed_key_blocks.push(glued);
+    }
+    headed_key_blocks.extend(key_rows);
+
+    let keys_pages = paginate_help_blocks(&keys_blocks, capacity);
+    let key_pages = paginate_help_blocks(&headed_key_blocks, capacity);
+    if let ([keys_only], [key_only]) = (keys_pages.as_slice(), key_pages.as_slice()) {
+        if keys_only.len() + key_only.len() <= capacity {
+            let mut merged = keys_only.clone();
+            merged.extend(key_only.clone());
+            return vec![merged];
+        }
+    }
+    let mut pages = key_pages;
+    pages.extend(keys_pages);
+    pages
+}
+
+/// Draws one screen's own paged Help overlay (issue #738): the popup
+/// sizes to the current page's own content, capped at the screen,
+/// and the close row names whichever page(s) a shorter terminal
+/// split this screen's Keys/Key onto.
+fn draw_paged_help(
+    frame: &mut Frame,
+    area: Rect,
+    ctx: &DrawCtx,
+    screen_title: &str,
+    pages: Vec<Vec<Line<'static>>>,
+    help_page: i64,
+) {
+    let page_count = pages.len();
+    let index = help_page_index(help_page, page_count);
+    let mut lines = pages.into_iter().nth(index).unwrap_or_default();
+    lines.push(help_close_row_for(ctx, index, page_count));
+    let title = match page_count {
+        2 if index == 0 => format!("{screen_title} · Key"),
+        2 => format!("{screen_title} · Keys"),
+        _ => screen_title.to_string(),
+    };
+    let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+    let popup_height = (lines.len() as u16 + 2).min(area.height.saturating_sub(5));
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 5,
+        width: popup_width,
+        height: popup_height,
+    };
+    frame.render_widget(Clear, popup);
+    let border = ctx.theme.border_focused;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+        popup,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border, ctx))
+        .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    fill_border_rows(frame, inner, border);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface));
+    frame.render_widget(paragraph, content_area);
+}
+
 /// §4's own Tape keys, plus the globals every key bar shares
 /// (`f`/`m`, folded into the `T` row since the overlay's own close
 /// row already covers `esc`) -- never the close row itself, added
 /// by whichever caller below actually lays out the page(s).
-fn tape_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'static>> {
+fn tape_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         ("↑ ↓", "select a row", "j k", "same as ↑ ↓"),
         ("PgUp PgDn", "move a page", "Home End", "first · last row"),
@@ -10457,11 +10627,11 @@ fn tape_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'s
         ("/", "filter rows", "e", "errors only"),
         ("T", "colour theme", "f m", "follow Now · unfold meta"),
     ];
-    let mut lines: Vec<Line<'static>> = ROWS
+    let mut blocks: Vec<Vec<Line<'static>>> = ROWS
         .iter()
-        .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
         .collect();
-    lines.extend(if is_watch {
+    blocks.push(if is_watch {
         tape_help_row(
             "q",
             "quit at once",
@@ -10480,7 +10650,19 @@ fn tape_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'s
             width,
         )
     });
-    lines
+    blocks
+}
+
+/// "median of N past runs", or just "median of past runs" with no
+/// history yet to measure -- `median of 0 past runs` read like
+/// there was a number worth noticing (issue #738). `None` reads as
+/// the design's own assumed floor ([`oscilloscope_core::history::
+/// P50_MIN_RUNS`]), same as always.
+fn tape_usual_runs_text(history_runs: Option<usize>) -> String {
+    match history_runs.unwrap_or(oscilloscope_core::history::P50_MIN_RUNS) {
+        0 => "median of past runs".to_string(),
+        n => format!("median of {n} past runs"),
+    }
 }
 
 /// §3.7's shared glyphs the Tape actually draws, each styled the way
@@ -10496,10 +10678,9 @@ fn tape_help_key_rows(
     unit: u64,
     history_runs: Option<usize>,
     width: u16,
-) -> Vec<Line<'static>> {
+) -> Vec<Vec<Line<'static>>> {
     use oscilloscope_core::render::RowKind;
     let theme = ctx.theme;
-    let runs = history_runs.unwrap_or(oscilloscope_core::history::P50_MIN_RUNS);
     let default = Style::default().fg(theme.text);
     let muted = Style::default().fg(theme.fg_muted);
     let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
@@ -10517,135 +10698,100 @@ fn tape_help_key_rows(
         .add_modifier(Modifier::BOLD);
     let bar_filled = Style::default().fg(theme.accent_primary);
     let bar_empty = Style::default().fg(theme.dim);
-    let mut lines = Vec::new();
-    lines.extend(help_row(
-        vec![
-            ("✓".into(), done),
-            (" ".into(), default),
-            ("✗".into(), failed),
-        ],
-        help_cell("done · failed", default),
-        vec![
-            ("●".into(), running),
-            (" ".into(), default),
-            ("·".into(), ahead),
-        ],
-        help_cell("running · ahead, queued", default),
-        width,
-    ));
-    lines.extend(help_row(
-        vec![
-            ("◆".into(), decision),
-            (" ".into(), default),
-            ("⟳".into(), loop_style),
-        ],
-        help_cell("decision · loop", default),
-        vec![
-            ("■".into(), muted),
-            (" ".into(), default),
-            ("◌".into(), muted),
-        ],
-        help_cell("run start/end · starting", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("✗", handled),
-        help_cell("a handled failure", default),
-        help_cell("-25%", below_usual),
-        help_cell("below usual", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("›", muted),
-        help_cell("path separator, dim parents", default),
-        help_cell("› preview", muted),
-        help_cell("a finished step preview", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("━━ Now", now_style),
-        help_cell("now band: clock · elapsed", default),
-        vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
-        help_cell(&format!("= {unit} t token bar, fixed"), default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("slots", muted),
-        help_cell("N of N Slots Busy at once", default),
-        help_cell("queued", muted),
-        help_cell("passes waiting to run", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("usual", muted),
-        help_cell(&format!("median of {runs} past runs"), default),
-        vec![
-            ("+25%".into(), above_usual),
-            (" ".into(), default),
-            ("+50%".into(), far_above_usual),
-        ],
-        help_cell("above usual: amber · red", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("↑ ↓", default),
-        help_cell("Totals: sent · received", default),
-        vec![
-            ("┼".into(), muted),
-            (" ".into(), default),
-            ("▓".into(), above_usual),
-        ],
-        help_cell("the `t` view's own tick", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("▁▂▃▄▅▆▇█", bar_filled),
-        help_cell("a loop's own pass sparkline", default),
-        help_cell("", default),
-        help_cell("", default),
-        width,
-    ));
-    lines
-}
-
-fn tape_help_lines(
-    ctx: &DrawCtx,
-    unit: u64,
-    history_runs: Option<usize>,
-    is_watch: bool,
-    page: crate::keys::HelpPage,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let (mut lines, other_page) = match page {
-        crate::keys::HelpPage::Keys => (tape_help_keys_rows(ctx, is_watch, width), "Key"),
-        crate::keys::HelpPage::Key => (tape_help_key_rows(ctx, unit, history_runs, width), "Keys"),
-    };
-    for _ in lines.len()..14 {
-        lines.push(Line::from(""));
-    }
-    lines.push(tape_help_close_row(ctx, Some(other_page)));
-    lines
-}
-
-/// Every key and the Key together, as one page: Keys, a blank
-/// separator, the "Key" header, then Key -- no close row, which
-/// whichever caller lays this out onto the overlay adds on its own
-/// (issue #738's merge, when the terminal is tall enough for it).
-fn tape_help_merged_lines(
-    ctx: &DrawCtx,
-    unit: u64,
-    history_runs: Option<usize>,
-    is_watch: bool,
-    width: u16,
-) -> Vec<Line<'static>> {
-    let mut lines = tape_help_keys_rows(ctx, is_watch, width);
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Key",
-        Style::default().fg(ctx.theme.fg_muted),
-    )));
-    lines.extend(tape_help_key_rows(ctx, unit, history_runs, width));
-    lines
+    // The same colour [`tape_deviation_style`] gives a figure above
+    // usual, without its own bold -- the `t` view's own tick
+    // (`tape_usual_deviation_bar`) draws this fill with colour alone
+    // (issue #738).
+    let tick_fill = Style::default().fg(above_usual.fg.unwrap_or(theme.text));
+    vec![
+        help_row(
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("✗".into(), failed),
+            ],
+            help_cell("done · failed", default),
+            vec![
+                ("●".into(), running),
+                (" ".into(), default),
+                ("·".into(), ahead),
+            ],
+            help_cell("running · ahead, queued", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("◆".into(), decision),
+                (" ".into(), default),
+                ("⟳".into(), loop_style),
+            ],
+            help_cell("decision · loop", default),
+            vec![
+                ("■".into(), muted),
+                (" ".into(), default),
+                ("◌".into(), muted),
+            ],
+            help_cell("run start/end · starting", default),
+            width,
+        ),
+        help_row(
+            help_cell("✗", handled),
+            help_cell("a handled failure", default),
+            help_cell("-25%", below_usual),
+            help_cell("below usual", default),
+            width,
+        ),
+        help_row(
+            help_cell("›", muted),
+            help_cell("path separator, dim parents", default),
+            help_cell("› preview", muted),
+            help_cell("shown under a finished step, toggled with p", default),
+            width,
+        ),
+        help_row(
+            help_cell("━━ Now", now_style),
+            help_cell("now band: clock · elapsed", default),
+            vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
+            help_cell(&format!("= {unit} t token bar, fixed"), default),
+            width,
+        ),
+        help_row(
+            help_cell("slots", muted),
+            help_cell("N of N Slots Busy at once", default),
+            help_cell("queued", muted),
+            help_cell("passes waiting to run", default),
+            width,
+        ),
+        help_row(
+            help_cell("usual", muted),
+            help_cell(&tape_usual_runs_text(history_runs), default),
+            vec![
+                ("+25%".into(), above_usual),
+                (" ".into(), default),
+                ("+50%".into(), far_above_usual),
+            ],
+            help_cell("above usual: amber · red", default),
+            width,
+        ),
+        help_row(
+            help_cell("↑ ↓", default),
+            help_cell("Totals: sent · received", default),
+            vec![
+                ("┼".into(), muted),
+                (" ".into(), default),
+                ("▓".into(), tick_fill),
+            ],
+            help_cell("the t view's tick", default),
+            width,
+        ),
+        help_row(
+            help_cell("▁▂▃▄▅▆▇█", bar_filled),
+            help_cell("a loop's pass sparkline", default),
+            help_cell("", default),
+            help_cell("", default),
+            width,
+        ),
+    ]
 }
 
 /// §4's own Signal keys, plus the globals every screen's key bar
@@ -10654,7 +10800,17 @@ fn tape_help_merged_lines(
 /// `q`/`c` behave differently on a watch, which owns no process of
 /// its own to confirm quitting or ever cancel) swaps the two rows
 /// that otherwise describe a run `osi` launched itself.
-fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'static>> {
+/// The Signal's own loop-station style (issue #738): the same
+/// `accent.primary` bold the Signal's own trace draws a loop
+/// station's glyph and label in, not [`tape_glyph_style`]'s own
+/// `accent.secondary`, which is the Tape's and Flow's.
+fn signal_loop_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.accent_primary)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn signal_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         (
             "← →",
@@ -10679,24 +10835,20 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
         ("c", "inert · launched only", "T", "colour theme"),
     ];
     let quit_rows: &[(&str, &str, &str, &str)] = if is_watch { WATCH_QUIT_ROWS } else { QUIT_ROWS };
-    let mut lines: Vec<Line<'static>> = ROWS
-        .iter()
+    ROWS.iter()
         .chain(quit_rows.iter())
-        .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
-        .collect();
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Key",
-        Style::default().fg(ctx.theme.fg_muted),
-    )));
-    // Issue #738 (§3.7's shared glyphs plus the Signal's own
-    // additions), each in the real style [`tape_glyph_style`]/
-    // [`tape_deviation_style`] draw it in: the Now sweep and its
-    // dashed axis ahead, a step's own done/failed/running/ahead
-    // marks and a loop station, sent above the axis and received
-    // below it, a tool's own duration bar, the second marks, the
-    // released tokens' own deviation colours and the axis's fixed
-    // scale.
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .collect()
+}
+
+/// §3.7's shared glyphs plus the Signal's own additions, each in
+/// the real style [`tape_glyph_style`]/[`tape_deviation_style`]/
+/// [`signal_loop_style`] draws it in (issue #738): the Now sweep
+/// and its dashed axis ahead, a step's own done/failed/running/
+/// ahead marks and a loop station, sent above the axis and received
+/// below it, a tool's duration bar, the second marks, the released
+/// tokens' deviation colours and the axis's fixed scale.
+fn signal_help_key_rows(ctx: &DrawCtx, width: u16) -> Vec<Vec<Line<'static>>> {
     use oscilloscope_core::render::RowKind;
     let theme = ctx.theme;
     let default = Style::default().fg(theme.text);
@@ -10707,7 +10859,7 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
     let running = tape_glyph_style(RowKind::Prompt, StatusKind::Running, theme);
     let ahead = tape_glyph_style(RowKind::Prompt, StatusKind::Pending, theme);
     let decision = tape_glyph_style(RowKind::If, StatusKind::Done, theme);
-    let loop_style = tape_glyph_style(RowKind::Loop, StatusKind::Done, theme);
+    let loop_style = signal_loop_style(theme);
     let now_style = Style::default()
         .fg(theme.accent_primary)
         .add_modifier(Modifier::BOLD);
@@ -10716,85 +10868,82 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
     let above_usual = tape_deviation_style(25.0, theme);
     let far_above_usual = tape_deviation_style(50.0, theme);
     let below_usual = tape_deviation_style(-25.0, theme);
-    lines.extend(help_row(
-        help_cell("┃", now_style),
-        help_cell("Now · axis ╌ ahead", default),
-        vec![
-            ("✓".into(), done),
-            (" ".into(), default),
-            ("◆".into(), decision),
-        ],
-        help_cell("finished prompt · decision", default),
-        width,
-    ));
-    lines.extend(help_row(
-        vec![
-            ("✗".into(), failed),
-            (" ".into(), default),
-            ("●".into(), running),
-            (" ".into(), default),
-            ("·".into(), ahead),
-        ],
-        help_cell("failed · running · ahead", default),
-        help_cell("⟳", loop_style),
-        help_cell("a loop station", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("above", sent_style),
-        help_cell("sent, above the axis", default),
-        help_cell("below", received_style),
-        help_cell("received, below the axis", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("━", running),
-        help_cell("a tool's own duration bar", default),
-        help_cell("seconds", dim),
-        help_cell("marks along the axis", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("-%", below_usual),
-        help_cell("below usual: accent colour", default),
-        vec![
-            ("+25%".into(), above_usual),
-            (" ".into(), default),
-            ("+50%".into(), far_above_usual),
-        ],
-        help_cell("amber · red, above usual", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("scale", muted),
-        help_cell("fixed for the whole run", default),
-        vec![
-            ("▁▂▃▄▅▆▇█".into(), sent_style),
-            (" ".into(), default),
-            ("▀▔".into(), received_style),
-        ],
-        help_cell("a column's own partial row", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("↑ ↓", default),
-        help_cell("Totals: tokens sent · received", default),
-        help_cell("■", muted),
-        help_cell("Run End, on the axis", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("›", dim),
-        help_cell("path separator, in a step's own name", default),
-        help_cell("", default),
-        help_cell("", default),
-        width,
-    ));
-    for _ in lines.len()..14 {
-        lines.push(Line::from(""));
-    }
-    lines.push(tape_help_close_row(ctx, None));
-    lines
+    vec![
+        help_row(
+            help_cell("┃", now_style),
+            help_cell("Now · axis ╌ ahead", default),
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("◆".into(), decision),
+            ],
+            help_cell("finished prompt · decision", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("✗".into(), failed),
+                (" ".into(), default),
+                ("●".into(), running),
+                (" ".into(), default),
+                ("·".into(), ahead),
+            ],
+            help_cell("failed · running · ahead", default),
+            help_cell("⟳", loop_style),
+            help_cell("a loop station", default),
+            width,
+        ),
+        help_row(
+            help_cell("above", sent_style),
+            help_cell("sent, above the axis", default),
+            help_cell("below", received_style),
+            help_cell("received, below the axis", default),
+            width,
+        ),
+        help_row(
+            help_cell("━", running),
+            help_cell("a tool's duration bar", default),
+            help_cell("seconds", dim),
+            help_cell("marks along the axis", default),
+            width,
+        ),
+        help_row(
+            help_cell("-%", below_usual),
+            help_cell("below usual: accent colour", default),
+            vec![
+                ("+25%".into(), above_usual),
+                (" ".into(), default),
+                ("+50%".into(), far_above_usual),
+            ],
+            help_cell("amber · red, above usual", default),
+            width,
+        ),
+        help_row(
+            help_cell("scale", muted),
+            help_cell("fixed for the whole run", default),
+            vec![
+                ("▁▂▃▄▅▆▇█".into(), sent_style),
+                (" ".into(), default),
+                ("▀▔".into(), received_style),
+            ],
+            help_cell("a column's partial row", default),
+            width,
+        ),
+        help_row(
+            help_cell("↑ ↓", default),
+            help_cell("Totals: tokens sent · received", default),
+            help_cell("■", dim),
+            help_cell("the run's end, in the list of steps ahead", default),
+            width,
+        ),
+        help_row(
+            help_cell("›", dim),
+            help_cell("path separator, in a step's name", default),
+            help_cell("", default),
+            help_cell("", default),
+            width,
+        ),
+    ]
 }
 
 /// The Flow's own Help (issue #691, design v1 part 3), the same
@@ -10802,7 +10951,7 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
 /// §4's own Flow keys and the globals every key bar shares -- never
 /// the movement aliases, `/`, `e`, `T`, `v`, `z`, `s`, `l`, `Tab`
 /// §4 already says are gone from the Flow.
-fn flow_help_lines(ctx: &DrawCtx, is_watch: bool, unit: u64, width: u16) -> Vec<Line<'static>> {
+fn flow_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         ("← →", "select a station", "+ -", "open / fold loop lanes"),
         (
@@ -10819,23 +10968,22 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool, unit: u64, width: u16) -> Vec<
     } else {
         ("q", "quit · confirms if running", "c", "cancel · confirms")
     };
-    let mut lines: Vec<Line<'static>> = ROWS
+    let mut blocks: Vec<Vec<Line<'static>>> = ROWS
         .iter()
         .chain(std::iter::once(&quit_row))
-        .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
         .collect();
     // Issue #714: `T` cycles the theme here too.
-    lines.extend(tape_help_row("T", "colour theme", "", "", ctx, width));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Key",
-        Style::default().fg(ctx.theme.fg_muted),
-    )));
-    // Issue #738, each in the real style [`tape_glyph_style`] draws
-    // it in: a station's own done/failed/running/ahead marks, a
-    // decision/loop station and the run's own start/end, folded
-    // lanes, the token bar at its real (history-derived) unit, a
-    // lane not taken once its own fork decided, and Following.
+    blocks.push(tape_help_row("T", "colour theme", "", "", ctx, width));
+    blocks
+}
+
+/// Issue #738, each in the real style [`tape_glyph_style`] draws it
+/// in: a station's done/failed/running/ahead marks, a decision/loop
+/// station and the run's start/end, folded lanes, the token bar at
+/// its real (history-derived) unit, a lane not taken once its fork
+/// decided, and the Now marker.
+fn flow_help_key_rows(ctx: &DrawCtx, unit: u64, width: u16) -> Vec<Vec<Line<'static>>> {
     use oscilloscope_core::render::RowKind;
     let theme = ctx.theme;
     let default = Style::default().fg(theme.text);
@@ -10849,72 +10997,69 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool, unit: u64, width: u16) -> Vec<
     let loop_style = tape_glyph_style(RowKind::Loop, StatusKind::Done, theme);
     let bar_filled = Style::default().fg(theme.accent_primary);
     let bar_empty = Style::default().fg(theme.dim);
-    lines.extend(help_row(
-        vec![
-            ("✓".into(), done),
-            (" ".into(), default),
-            ("✗".into(), failed),
-        ],
-        help_cell("a station: done · failed", default),
-        vec![
-            ("●".into(), running),
-            (" ".into(), default),
-            ("·".into(), ahead),
-        ],
-        help_cell("running · ahead", default),
-        width,
-    ));
-    lines.extend(help_row(
-        vec![
-            ("◆".into(), decision),
-            (" ".into(), default),
-            ("⟳".into(), loop_style),
-        ],
-        help_cell("decision · loop station", default),
-        help_cell("■", muted),
-        help_cell("run start / end", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("+N", dim),
-        help_cell("folded lanes, N more", default),
-        vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
-        help_cell(&format!("= {unit} t · token bar, fixed"), default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("lane", default),
-        help_cell("one lane per pass or branch", default),
-        help_cell("fork/join", default),
-        help_cell("paths split · rejoin", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("·", dim),
-        help_cell("not taken, once decided", default),
-        help_cell("▾", running),
-        help_cell("f toggles Following", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("◂ ▸", dim),
-        help_cell("stations scrolled past the edge", default),
-        help_cell("", default),
-        help_cell("", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("━", Style::default().fg(theme.accent_primary)),
-        help_cell("the rail's own visible window", default),
-        help_cell("›", dim),
-        help_cell("path separator, in the status line", default),
-        width,
-    ));
-    for _ in lines.len()..14 {
-        lines.push(Line::from(""));
-    }
-    lines.push(tape_help_close_row(ctx, None));
-    lines
+    vec![
+        help_row(
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("✗".into(), failed),
+            ],
+            help_cell("a station: done · failed", default),
+            vec![
+                ("●".into(), running),
+                (" ".into(), default),
+                ("·".into(), ahead),
+            ],
+            help_cell("running · ahead", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("◆".into(), decision),
+                (" ".into(), default),
+                ("⟳".into(), loop_style),
+            ],
+            help_cell("decision · loop station", default),
+            help_cell("■", muted),
+            help_cell("run start / end", default),
+            width,
+        ),
+        help_row(
+            help_cell("+N", dim),
+            help_cell("folded lanes, N more", default),
+            vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
+            help_cell(&format!("= {unit} t · token bar, fixed"), default),
+            width,
+        ),
+        help_row(
+            help_cell("lane", default),
+            help_cell("one lane per pass or branch", default),
+            help_cell("fork/join", default),
+            help_cell("paths split · rejoin", default),
+            width,
+        ),
+        help_row(
+            help_cell("·", dim),
+            help_cell("not taken, once decided", default),
+            help_cell("▾", running),
+            help_cell("Now: clock · elapsed", default),
+            width,
+        ),
+        help_row(
+            help_cell("◂ ▸", muted),
+            help_cell("stations scrolled past the edge", default),
+            help_cell("↑ ↓", default),
+            help_cell("sent · received", default),
+            width,
+        ),
+        help_row(
+            help_cell("━", Style::default().fg(theme.accent_primary)),
+            help_cell("the rail's visible window", default),
+            help_cell("›", dim),
+            help_cell("path separator, in the status line", default),
+            width,
+        ),
+    ]
 }
 
 /// The Store's own Help (issue #695, design v1 part 4), the same
@@ -10922,91 +11067,102 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool, unit: u64, width: u16) -> Vec<
 /// exactly §4's own Store keys (`↑↓`/its aliases, `enter`) and the
 /// globals every key bar shares -- never `i`/`o`/`$` (Cost's own
 /// measures, gone), `Tab`, `s`/`l`/`z`/`v`, `e` or `/`.
-fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool, width: u16) -> Vec<Line<'static>> {
+fn store_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     let mut rows: Vec<(&str, &str, &str, &str)> = vec![
         ("↑ ↓", "select a row", "enter", "open the selected store"),
         ("j k", "same as ↑ ↓", "PgUp PgDn", "move a page"),
         ("Home End", "first / last row", "g G", "same as Home/End"),
         ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
     ];
+    // Issue #738: `T` sits with the other keys, not off on its own
+    // between them and the Key.
     if is_watch {
         rows.push(("esc", "close · back", "q", "quit at once"));
-        rows.push(("c", "inert · launched only", "", ""));
+        rows.push(("c", "inert · launched only", "T", "colour theme"));
     } else {
         rows.push(("esc", "close · back", "q", "quit · confirms if running"));
-        rows.push(("c", "cancel · confirms", "", ""));
+        rows.push(("c", "cancel · confirms", "T", "colour theme"));
     }
-    let mut lines: Vec<Line<'static>> = rows
-        .iter()
-        .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
-        .collect();
-    lines.push(Line::from(""));
-    lines.extend(tape_help_row(
-        "▰ ▱",
-        &format!("= {unit} t · fixed scale"),
-        "",
-        "",
-        ctx,
-        width,
-    ));
-    // Issue #714: `T` cycles the theme here too.
-    lines.extend(tape_help_row("T", "colour theme", "", "", ctx, width));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        "Key",
-        Style::default().fg(ctx.theme.fg_muted),
-    )));
-    // Issue #738: a tile's own area is its share of tokens, the
-    // `check` tile is a container's own tokens, `… N more` folds
-    // the smaller stores together, a running container reads its
-    // own accent `●` and a live leaf reads dim (italic in the
-    // `terminal` theme, which paints no background of its own).
+    rows.iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .collect()
+}
+
+/// The live-leaf style issue #738 wants the Store's own `dim` Key
+/// line to match exactly: [`Modifier::DIM`], or [`Modifier::ITALIC`]
+/// under a theme that paints no background for dim text to read
+/// against (the `terminal` theme) -- [`store_leaf_lines`]'s own
+/// rule, shared rather than rebuilt a second time.
+fn store_live_leaf_modifier(theme: &Theme) -> Modifier {
+    if theme.background.is_none() {
+        Modifier::ITALIC
+    } else {
+        Modifier::DIM
+    }
+}
+
+/// Issue #738: a tile's area is its share of tokens, the `check`
+/// tile is a container's tokens, `… N more` folds the smaller
+/// stores together, a running container reads its accent `●`, a
+/// live leaf reads the same style [`store_leaf_lines`] really draws
+/// it in, and the token bar (moved here from its own row between
+/// the keys and the Key) shares the fixed scale every tile uses.
+fn store_help_key_rows(ctx: &DrawCtx, unit: u64, width: u16) -> Vec<Vec<Line<'static>>> {
     use oscilloscope_core::render::RowKind;
     let theme = ctx.theme;
     let default = Style::default().fg(theme.text);
     let dim = Style::default().fg(theme.dim);
+    let live_leaf = Style::default()
+        .fg(theme.text)
+        .add_modifier(store_live_leaf_modifier(theme));
     let running = Style::default()
         .fg(theme.accent_primary)
         .add_modifier(Modifier::BOLD);
+    let bar_filled = Style::default().fg(theme.accent_primary);
+    let bar_empty = Style::default().fg(theme.dim);
     let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
     let failed = tape_glyph_style(RowKind::Prompt, StatusKind::Failed, theme);
-    lines.extend(help_row(
-        help_cell("tile", default),
-        help_cell("area is its share of tokens", default),
-        help_cell("check", default),
-        help_cell("a container's own tokens", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("… N more", dim),
-        help_cell("the smaller stores, folded", default),
-        help_cell("●", running),
-        help_cell("a running container", default),
-        width,
-    ));
-    lines.extend(help_row(
-        help_cell("dim", dim),
-        help_cell("a live leaf, italic in `terminal`", default),
-        help_cell("❯", running),
-        help_cell("the Largest table's own cursor", default),
-        width,
-    ));
-    lines.extend(help_row(
-        vec![
-            ("✓".into(), done),
-            (" ".into(), default),
-            ("✗".into(), failed),
-        ],
-        help_cell("a finished/failed step, in the status line", default),
-        help_cell("›", dim),
-        help_cell("path separator, in that step's name", default),
-        width,
-    ));
-    for _ in lines.len()..14 {
-        lines.push(Line::from(""));
-    }
-    lines.push(tape_help_close_row(ctx, None));
-    lines
+    vec![
+        help_row(
+            help_cell("tile", default),
+            help_cell("area is its share of tokens", default),
+            help_cell("check", default),
+            help_cell("a container's tokens", default),
+            width,
+        ),
+        help_row(
+            help_cell("… N more", dim),
+            help_cell("the smaller stores, folded", default),
+            help_cell("●", running),
+            help_cell("a running container", default),
+            width,
+        ),
+        help_row(
+            help_cell("dim", live_leaf),
+            help_cell("a live leaf, dim (italic under terminal)", default),
+            help_cell("❯", running),
+            help_cell("the Largest table's cursor", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("✗".into(), failed),
+            ],
+            help_cell("a finished/failed step, in the status line", default),
+            help_cell("›", dim),
+            help_cell("path separator, in that step's name", default),
+            width,
+        ),
+        help_row(
+            help_cell("↑ ↓", default),
+            help_cell("sent · received, per store", default),
+            vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
+            help_cell(&format!("= {unit} t · fixed scale"), default),
+            width,
+        ),
+    ]
 }
 
 fn store_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
@@ -11169,10 +11325,8 @@ fn store_leaf_lines(
     // there instead.
     let faint = if !leaf.live {
         Modifier::empty()
-    } else if theme.background.is_none() {
-        Modifier::ITALIC
     } else {
-        Modifier::DIM
+        store_live_leaf_modifier(theme)
     };
     let name_style = Style::default()
         .fg(theme.text)
@@ -12205,182 +12359,60 @@ fn draw_dialog_overlay(
             frame.render_widget(paragraph, content_area);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
-            // §4/§5's own fixed 72-wide overlay, not centred like
+            // §4/§5's own fixed-width overlay, not centred like
             // every other dialog's own, and its own `bg.overlay`/
             // `border.focus` colours and bold title (`tape_block_
             // title`'s own convention), not the shared overlay's
-            // plain theme background and title. Tall enough to show
-            // every key and the Key together (issue #738's merge,
-            // `tape_help_merged_lines`) when the terminal has the
-            // room; otherwise it falls back to its own fixed 18-row
-            // height, paged with `←→` (`tape_help_lines`).
+            // plain theme background and title. Sized to its own
+            // content, capped at the screen, and paged with `←→`
+            // when the Keys and Key don't both fit one page together
+            // (issue #738).
             let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
             let content_width = popup_width.saturating_sub(3);
-            let merged = tape_help_merged_lines(
-                ctx,
-                tape_unit,
-                tape_history_runs,
-                app.is_watch,
-                content_width,
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                tape_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                tape_help_key_rows(ctx, tape_unit, tape_history_runs, content_width),
+                capacity,
             );
-            let available_merged = area.height.saturating_sub(5).saturating_sub(3) as usize; // the popup's own y offset, its top/bottom border, the close row
-            let merge_fits = content_width >= HELP_NARROW_WIDTH && merged.len() <= available_merged;
-            let (popup_height, page_title, mut lines) = if merge_fits {
-                let height = (merged.len() + 3) as u16; // body + close row + 2 borders
-                (height, "Help · Tape".to_string(), merged)
-            } else {
-                let page_title = match app.help_page {
-                    crate::keys::HelpPage::Key => "Help · Tape · Key",
-                    crate::keys::HelpPage::Keys => "Help · Tape · Keys",
-                };
-                (
-                    HELP_OVERLAY_HEIGHT,
-                    page_title.to_string(),
-                    tape_help_lines(
-                        ctx,
-                        tape_unit,
-                        tape_history_runs,
-                        app.is_watch,
-                        app.help_page,
-                        content_width,
-                    ),
-                )
-            };
-            if merge_fits {
-                lines.push(tape_help_close_row(ctx, None));
-            }
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: popup_width,
-                height: popup_height.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
-            );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title(&page_title, border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Tape", pages, app.help_page);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Signal => {
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                signal_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                signal_help_key_rows(ctx, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Signal", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph =
-                Paragraph::new(signal_help_lines(ctx, app.is_watch, content_area.width))
-                    .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Signal", pages, app.help_page);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Flow => {
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                flow_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                flow_help_key_rows(ctx, tape_unit, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Flow", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(flow_help_lines(
-                ctx,
-                app.is_watch,
-                tape_unit,
-                content_area.width,
-            ))
-            .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Flow", pages, app.help_page);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Store => {
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                store_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                store_help_key_rows(ctx, tape_unit, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Store", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(store_help_lines(
-                ctx,
-                tape_unit,
-                app.is_watch,
-                content_area.width,
-            ))
-            .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Store", pages, app.help_page);
         }
         // Every screen has its own guarded `Dialog::Help` arm above;
         // this never actually draws.
@@ -23895,7 +23927,7 @@ mod tape_frame_goldens {
         );
         assert!(
             select.contains("its run directory is gone")
-                && select.contains("a short name from the run's own id"),
+                && select.contains("a short name from the run's id"),
             "expected Select's own gone/name Key lines:\n{select}"
         );
 
@@ -23932,6 +23964,15 @@ mod tape_frame_goldens {
             })
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    /// A screen's own Key rows, flattened for `lines_text` -- issue
+    /// #738's own derived golden-symbol tests check against these
+    /// (the §3.7 glyph legend) alone, never a screen's own keyboard
+    /// shortcuts too, which can share a symbol (`↑ ↓`, say) with no
+    /// bearing on whether the legend itself explains it.
+    fn flatten_help_blocks(blocks: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+        blocks.iter().flatten().cloned().collect()
     }
 
     /// Every glyph [`tape_glyph`] can draw, across every `RowKind`
@@ -23988,7 +24029,12 @@ mod tape_frame_goldens {
             zone: &zone,
             no_animation: true,
         };
-        let key_text = lines_text(&tape_help_key_rows(&ctx, 50, Some(3), 72));
+        let key_text = lines_text(&flatten_help_blocks(&tape_help_key_rows(
+            &ctx,
+            50,
+            Some(3),
+            72,
+        )));
         for ch in derived_tape_glyphs() {
             assert!(
                 key_text.contains(ch),
@@ -24007,7 +24053,7 @@ mod tape_frame_goldens {
             zone: &zone,
             no_animation: true,
         };
-        let key_text = lines_text(&signal_help_lines(&ctx, false, 72));
+        let key_text = lines_text(&flatten_help_blocks(&signal_help_key_rows(&ctx, 72)));
         for ch in derived_tape_glyphs() {
             assert!(
                 key_text.contains(ch),
@@ -24026,7 +24072,7 @@ mod tape_frame_goldens {
             zone: &zone,
             no_animation: true,
         };
-        let key_text = lines_text(&flow_help_lines(&ctx, false, 50, 72));
+        let key_text = lines_text(&flatten_help_blocks(&flow_help_key_rows(&ctx, 50, 72)));
         for ch in derived_tape_glyphs() {
             assert!(
                 key_text.contains(ch),
@@ -24045,7 +24091,7 @@ mod tape_frame_goldens {
     /// never, on its own, a symbol issue #738's Key owes a line to.
     const PROSE_PUNCTUATION: &[char] = &[
         '.', ',', ':', ';', '\'', '"', '`', '-', '+', '=', '(', ')', '[', ']', '{', '}', '/', '\\',
-        '*', '#', '&', '$', '@', '!', '?', '<', '>', '|', '~', '_', '%', '—', '×', '→',
+        '*', '#', '&', '$', '@', '!', '?', '<', '>', '|', '~', '_', '%', '—', '×', '←', '→',
     ];
 
     /// Every non-alphanumeric glyph an already-committed `.mock`
@@ -24091,7 +24137,12 @@ mod tape_frame_goldens {
         ] {
             symbols.extend(symbols_in_mock(name, &theme));
         }
-        let key_text = lines_text(&tape_help_key_rows(&ctx, 50, Some(3), 72));
+        let key_text = lines_text(&flatten_help_blocks(&tape_help_key_rows(
+            &ctx,
+            50,
+            Some(3),
+            72,
+        )));
         for ch in symbols {
             assert!(
                 key_text.contains(ch),
@@ -24111,7 +24162,7 @@ mod tape_frame_goldens {
             no_animation: true,
         };
         let symbols = symbols_in_mock("signal--normal--120x30", &theme);
-        let key_text = lines_text(&signal_help_lines(&ctx, false, 72));
+        let key_text = lines_text(&flatten_help_blocks(&signal_help_key_rows(&ctx, 72)));
         for ch in symbols {
             assert!(
                 key_text.contains(ch),
@@ -24134,7 +24185,7 @@ mod tape_frame_goldens {
         for name in ["flow--normal--120x30", "flow--folded--120x30"] {
             symbols.extend(symbols_in_mock(name, &theme));
         }
-        let key_text = lines_text(&flow_help_lines(&ctx, false, 50, 72));
+        let key_text = lines_text(&flatten_help_blocks(&flow_help_key_rows(&ctx, 50, 72)));
         for ch in symbols {
             assert!(
                 key_text.contains(ch),
@@ -24154,7 +24205,7 @@ mod tape_frame_goldens {
             no_animation: true,
         };
         let symbols = symbols_in_mock("store--normal--120x30", &theme);
-        let key_text = lines_text(&store_help_lines(&ctx, 50, false, 72));
+        let key_text = lines_text(&flatten_help_blocks(&store_help_key_rows(&ctx, 50, 72)));
         for ch in symbols {
             assert!(
                 key_text.contains(ch),
@@ -24211,10 +24262,21 @@ mod tape_frame_goldens {
         // Key only owes a line for what it adds itself (the grid's
         // own `●`/`—`/`gone` and the run's own name).
         let mut key_text = terminal.backend().to_string();
-        key_text.push_str(&lines_text(&tape_help_key_rows(&ctx, 50, Some(3), 72)));
-        key_text.push_str(&lines_text(&signal_help_lines(&ctx, false, 72)));
-        key_text.push_str(&lines_text(&flow_help_lines(&ctx, false, 50, 72)));
-        key_text.push_str(&lines_text(&store_help_lines(&ctx, 50, false, 72)));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&tape_help_key_rows(
+            &ctx,
+            50,
+            Some(3),
+            72,
+        ))));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&signal_help_key_rows(
+            &ctx, 72,
+        ))));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&flow_help_key_rows(
+            &ctx, 50, 72,
+        ))));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&store_help_key_rows(
+            &ctx, 50, 72,
+        ))));
         for ch in symbols {
             assert!(
                 key_text.contains(ch),
@@ -24304,7 +24366,7 @@ mod tape_frame_goldens {
                 .unwrap();
             terminal.backend().to_string()
         };
-        for page in [crate::keys::HelpPage::Key, crate::keys::HelpPage::Keys] {
+        for page in [0, 1] {
             let merged = draw_at(page);
             assert!(
                 merged.contains("Help · Tape")
@@ -24401,7 +24463,7 @@ mod tape_frame_goldens {
                 .unwrap();
             terminal.backend().to_string()
         };
-        let key_page = draw_at(crate::keys::HelpPage::Key);
+        let key_page = draw_at(0);
         assert!(
             key_page.contains("Help · Tape · Key") && !key_page.contains("Help · Tape · Keys"),
             "expected the Key page's own title:\n{key_page}"
@@ -24423,7 +24485,7 @@ mod tape_frame_goldens {
             "the Key page must not show the Keys page's own rows:\n{key_page}"
         );
 
-        let keys_page = draw_at(crate::keys::HelpPage::Keys);
+        let keys_page = draw_at(1);
         assert!(
             keys_page.contains("Help · Tape · Keys"),
             "expected the Keys page's own title:\n{keys_page}"
@@ -24548,18 +24610,20 @@ mod tape_frame_goldens {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let to_blocks_text =
+            |blocks: Vec<Vec<Line<'static>>>| to_text(flatten_help_blocks(&blocks));
         for (launched, watch) in [
             (
-                to_text(signal_help_lines(&ctx, false, 72)),
-                to_text(signal_help_lines(&ctx, true, 72)),
+                to_blocks_text(signal_help_keys_rows(&ctx, false, 72)),
+                to_blocks_text(signal_help_keys_rows(&ctx, true, 72)),
             ),
             (
-                to_text(flow_help_lines(&ctx, false, 50, 72)),
-                to_text(flow_help_lines(&ctx, true, 50, 72)),
+                to_blocks_text(flow_help_keys_rows(&ctx, false, 72)),
+                to_blocks_text(flow_help_keys_rows(&ctx, true, 72)),
             ),
             (
-                to_text(store_help_lines(&ctx, 50, false, 72)),
-                to_text(store_help_lines(&ctx, 50, true, 72)),
+                to_blocks_text(store_help_keys_rows(&ctx, false, 72)),
+                to_blocks_text(store_help_keys_rows(&ctx, true, 72)),
             ),
         ] {
             assert!(launched.contains("confirms if running"), "{launched}");
@@ -24643,8 +24707,8 @@ mod tape_frame_goldens {
             "expected the station/folded-lane Key lines:\n{text}"
         );
         assert!(
-            text.contains("token bar, fixed") && text.contains("f toggles Following"),
-            "expected the token bar/Following Key lines:\n{text}"
+            text.contains("token bar, fixed") && text.contains("Now: clock · elapsed"),
+            "expected the token bar/Now Key lines:\n{text}"
         );
     }
 
@@ -24729,8 +24793,7 @@ mod tape_frame_goldens {
         // and a live leaf's own dim (italic in `terminal`) style.
         assert!(text.contains("Key"), "expected a Key section:\n{text}");
         assert!(
-            text.contains("area is its share of tokens")
-                && text.contains("a container's own tokens"),
+            text.contains("area is its share of tokens") && text.contains("a container's tokens"),
             "expected the tile/check Key lines:\n{text}"
         );
         assert!(

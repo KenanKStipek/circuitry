@@ -19,19 +19,14 @@ pub enum Pane {
     State,
 }
 
-/// Issue #738: which page of a screen's own Help overlay is on
-/// display -- `Key` (the §3.7 glyph/line/colour legend) is the
-/// default, since that is the content `?` is for; `←→` reaches
-/// `Keys` (the keyboard shortcuts) on a screen whose own Keys and
-/// Key don't both fit the fixed 72×18 overlay together. A screen
-/// whose own Keys and Key do both fit (every one but the Tape today)
-/// draws the same combined content on either page.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum HelpPage {
-    #[default]
-    Key,
-    Keys,
-}
+/// Issue #738: a free-running counter for which page of a screen's
+/// own Help overlay is on display -- `←`/`→` move it without
+/// knowing yet how many pages the current screen, at its current
+/// size, actually split its own Keys and Key rows onto; the draw
+/// side (`help_page_index`) wraps it into range once it knows. `0`
+/// is the default, since the Key (the §3.7 glyph/line/colour
+/// legend) is the content `?` is for and always comes first.
+pub type HelpPage = i64;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dialog {
@@ -807,15 +802,17 @@ impl App {
             // whatever's open where it is, and Help overlaying one
             // screen's own keys is no different.
             Dialog::Help if key.code == KeyCode::Char('T') => Action::CycleTheme,
-            // Issue #738: `←`/`→` switch the Help overlay between its
-            // Keys and Key pages rather than closing it -- harmless
+            // Issue #738: `←`/`→` move the Help overlay to its
+            // previous/next page rather than closing it -- harmless
             // on a screen whose own Keys and Key both fit one page
-            // together, which draws the same content on either.
-            Dialog::Help if matches!(key.code, KeyCode::Left | KeyCode::Right) => {
-                self.help_page = match self.help_page {
-                    HelpPage::Key => HelpPage::Keys,
-                    HelpPage::Keys => HelpPage::Key,
-                };
+            // together, which draws the same content wherever this
+            // counter lands.
+            Dialog::Help if key.code == KeyCode::Left => {
+                self.help_page = self.help_page.wrapping_sub(1);
+                Action::None
+            }
+            Dialog::Help if key.code == KeyCode::Right => {
+                self.help_page = self.help_page.wrapping_add(1);
                 Action::None
             }
             Dialog::Help => {
@@ -2622,17 +2619,17 @@ mod tests {
         let visible: Vec<&Row> = rows.iter().collect();
         let mut app = App::new(false);
         app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
-        assert_eq!(app.help_page, HelpPage::Key);
+        assert_eq!(app.help_page, 0);
         app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
         assert_eq!(
             app.dialog,
             Dialog::Help,
             "→ must leave Help open, unlike every other key"
         );
-        assert_eq!(app.help_page, HelpPage::Keys);
+        assert_eq!(app.help_page, 1);
         app.handle_key(key(KeyCode::Left), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::Help);
-        assert_eq!(app.help_page, HelpPage::Key);
+        assert_eq!(app.help_page, 0);
     }
 
     #[test]
@@ -2642,7 +2639,7 @@ mod tests {
         let mut app = App::new(false);
         app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
         app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
-        assert_eq!(app.help_page, HelpPage::Keys);
+        assert_eq!(app.help_page, 1);
         app.handle_key(key(KeyCode::Char('x')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::None);
         app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
