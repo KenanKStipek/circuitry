@@ -3271,24 +3271,29 @@ pub fn build_tape(
         });
     }
 
-    // No two rows ever read the same (issue #737): a tree row's own
-    // label is relative to its own ancestor row, so two different
-    // loops' own same-numbered pass (`groups.iter_0.files`'s own
-    // `iter_0` and `groups.iter_1.files`'s own `iter_0`) can read the
-    // same breadcrumb despite sitting at different paths. Colliding
-    // rows fall back to their own full, absolute breadcrumb, which
-    // only ever repeats if that is ALSO ambiguous -- then the row's
-    // own dotted path, always unique.
+    // No two finished or ahead rows ever read the same (issue #737):
+    // never the tree's own rows here, which already read apart from
+    // one another -- each one relative to its own ancestor loop row,
+    // and two different loops' own same-numbered pass (`groups.
+    // iter_0.files`'s own `iter_0` and `groups.iter_1.files`'s own
+    // `iter_0`) are never siblings of each other, only of their own
+    // loop's own other passes, which a loop's own body never repeats
+    // a name within. A colliding finished/ahead row falls back to
+    // its own full, absolute breadcrumb, which only ever repeats if
+    // that is ALSO ambiguous -- then the row's own dotted path,
+    // always unique.
     {
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for item in &items {
             if let TapeItem::Row(row) = item {
-                *counts.entry(row.label.clone()).or_insert(0) += 1;
+                if !row.bold {
+                    *counts.entry(row.label.clone()).or_insert(0) += 1;
+                }
             }
         }
         for item in &mut items {
             if let TapeItem::Row(row) = item {
-                if counts.get(&row.label).copied().unwrap_or(0) > 1 {
+                if !row.bold && counts.get(&row.label).copied().unwrap_or(0) > 1 {
                     row.label = tape_breadcrumb(&row.path, flat, plan);
                 }
             }
@@ -3296,12 +3301,14 @@ pub fn build_tape(
         let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for item in &items {
             if let TapeItem::Row(row) = item {
-                *counts.entry(row.label.clone()).or_insert(0) += 1;
+                if !row.bold {
+                    *counts.entry(row.label.clone()).or_insert(0) += 1;
+                }
             }
         }
         for item in &mut items {
             if let TapeItem::Row(row) = item {
-                if counts.get(&row.label).copied().unwrap_or(0) > 1 {
+                if !row.bold && counts.get(&row.label).copied().unwrap_or(0) > 1 {
                     row.label = row
                         .path
                         .strip_prefix("prime.")

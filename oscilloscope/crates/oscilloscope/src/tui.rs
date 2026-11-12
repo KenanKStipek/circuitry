@@ -1102,48 +1102,180 @@ fn tape_token_column(
 /// own colour -- padded or cut to exactly `width` cells either way,
 /// so the caller never has to pad the result itself. A label too
 /// long for `width` loses its middle segments first, shown as a
-/// single `⋯`, keeping its first segment and the step's own name;
-/// if even that doesn't fit, it falls back to an end cut of the
-/// step's own name alone.
+/// single `⋯`, keeping its first `lead_segments` and the step's own
+/// name (`lead_segments` grows past 1 only when the caller
+/// (`tape_breadcrumb_lead_segments`) found the plain one-segment cut
+/// would read the same as some other row on screen); if even that
+/// doesn't fit, it falls back to an end cut of the step's own name
+/// alone.
 fn tape_breadcrumb_spans(
     label: &str,
     width: usize,
+    lead_segments: usize,
     name_style: Style,
     dim_style: Style,
 ) -> Vec<Span<'static>> {
+    // At least two cells of the field stay a trailing gap no matter
+    // what fits (issue #737's "always leaves one space before the
+    // next column", and never glued to it either) -- every branch
+    // below fits its own content into `budget`, two cells narrower
+    // than `width` itself, and pads out to `width` whatever that
+    // leaves.
+    let budget = width.saturating_sub(2);
     let segments: Vec<&str> = label.split(" › ").collect();
     let Some((last, parents)) = segments.split_last() else {
         return vec![Span::styled(" ".repeat(width), name_style)];
     };
     if parents.is_empty() {
         return vec![Span::styled(
-            format!("{:<width$}", truncate_text(label, width)),
+            format!("{:<width$}", truncate_text(label, budget)),
             name_style,
         )];
     }
     let parents_text = format!("{} › ", parents.join(" › "));
     let full_len = parents_text.chars().count() + last.chars().count();
-    if full_len <= width {
+    if full_len <= budget {
         let pad = width - full_len;
         return vec![
             Span::styled(parents_text, dim_style),
             Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
         ];
     }
-    let first = parents[0];
-    let cut_len = first.chars().count() + 1 + last.chars().count();
-    if cut_len <= width {
-        let pad = width - cut_len;
-        return vec![
-            Span::styled(first.to_string(), dim_style),
-            Span::styled("⋯".to_string(), dim_style),
-            Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
-        ];
+    // The caller's own `lead_segments` is picked purely to avoid
+    // reading the same as some other row at its own width -- if
+    // that many segments don't themselves fit `budget`, fewer still
+    // keep *some* of the step's own ancestry on screen, which beats
+    // losing it all to a collision this narrow a column was never
+    // going to show anyway.
+    for lead in (1..=lead_segments.clamp(1, parents.len())).rev() {
+        // `⋯` reads as its own elided segment, `›` on both sides --
+        // never glued straight onto the step's own name, so a
+        // breadcrumb cut this way still ends in the same ` › ` any
+        // uncut one does, right before the name's own colour change.
+        // `tape_breadcrumb_kept_parents` picks which `lead` of the
+        // parent segments survive -- always the first, then every
+        // loop pass (`iter_N`) before a plain container's own name,
+        // since a pass is what tells two colliding siblings apart,
+        // never the generic container wrapping them.
+        let kept = tape_breadcrumb_kept_parents(parents, lead);
+        let dim_text = format!("{} › ⋯ › ", kept.join(" › "));
+        let cut_len = dim_text.chars().count() + last.chars().count();
+        if cut_len <= budget {
+            let pad = width - cut_len;
+            return vec![
+                Span::styled(dim_text, dim_style),
+                Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
+            ];
+        }
     }
     vec![Span::styled(
-        format!("{:<width$}", truncate_text(last, width)),
+        format!("{:<width$}", truncate_text(last, budget)),
         name_style,
     )]
+}
+
+/// Which `lead` of `parents` [`tape_breadcrumb_spans`] keeps when
+/// cutting: the first parent segment always, then every remaining
+/// loop-pass segment (`iter_N`) in its own original order before any
+/// plain container name, since a pass index is what actually tells
+/// two colliding siblings apart -- a generic container's own name
+/// (`files`, `build`) never does, so it only fills a slot `lead`
+/// still has room for once every pass is already kept. The result
+/// stays in the label's own original left-to-right order.
+fn tape_breadcrumb_kept_parents<'a>(parents: &[&'a str], lead: usize) -> Vec<&'a str> {
+    if lead >= parents.len() {
+        return parents.to_vec();
+    }
+    let is_pass = |s: &str| {
+        s.strip_prefix("iter_")
+            .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+    };
+    let mut chosen: Vec<usize> = vec![0];
+    for (i, s) in parents.iter().enumerate().skip(1) {
+        if chosen.len() >= lead {
+            break;
+        }
+        if is_pass(s) {
+            chosen.push(i);
+        }
+    }
+    if chosen.len() < lead {
+        for i in 1..parents.len() {
+            if chosen.len() >= lead {
+                break;
+            }
+            if !chosen.contains(&i) {
+                chosen.push(i);
+            }
+        }
+    }
+    chosen.sort_unstable();
+    chosen.into_iter().map(|i| parents[i]).collect()
+}
+
+/// The displayed text [`tape_breadcrumb_spans`] would draw for
+/// `label` at `width`/`lead_segments` -- no styling, no padding,
+/// just the characters a reader would actually see, for
+/// [`tape_breadcrumb_lead_segments`]'s own collision check.
+fn tape_breadcrumb_preview(label: &str, width: usize, lead_segments: usize) -> String {
+    tape_breadcrumb_spans(
+        label,
+        width,
+        lead_segments,
+        Style::default(),
+        Style::default(),
+    )
+    .into_iter()
+    .map(|s| s.content.into_owned())
+    .collect::<String>()
+    .trim_end()
+    .to_string()
+}
+
+/// How many of a row's own leading breadcrumb segments to keep
+/// before the `⋯` (issue #737's own "keep more segments when the
+/// short form would collide"): 1 for every row, except a row whose
+/// own one-segment cut would read the same as some other row's own
+/// cut at its own width -- each such row grows its own count until
+/// its cut reads apart from every other row that collided with it,
+/// or it runs out of its own parent segments to add.
+fn tape_breadcrumb_lead_segments(
+    rows: &[(&str, &str, usize)], // (path, label, width)
+) -> std::collections::HashMap<String, usize> {
+    let mut lead: std::collections::HashMap<String, usize> = rows
+        .iter()
+        .map(|(p, _, _)| ((*p).to_string(), 1usize))
+        .collect();
+    let max_lead: std::collections::HashMap<&str, usize> = rows
+        .iter()
+        .map(|(p, label, _)| (*p, label.split(" › ").count().saturating_sub(1).max(1)))
+        .collect();
+    for _ in 0..8 {
+        let mut previews: std::collections::HashMap<String, Vec<&str>> =
+            std::collections::HashMap::new();
+        for (path, label, width) in rows {
+            let text = tape_breadcrumb_preview(label, *width, lead[*path]);
+            previews.entry(text).or_default().push(path);
+        }
+        let mut grew = false;
+        for paths in previews.values() {
+            if paths.len() < 2 {
+                continue;
+            }
+            for path in paths {
+                let entry = lead.get_mut(*path).unwrap();
+                let cap = max_lead.get(path).copied().unwrap_or(1);
+                if *entry < cap {
+                    *entry += 1;
+                    grew = true;
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
+    lead
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1157,6 +1289,7 @@ fn tape_row_line(
     name_width: usize,
     what_width: usize,
     token_width: usize,
+    lead_segments: usize,
     border_color: Color,
     ctx: &DrawCtx,
 ) -> Line<'static> {
@@ -1252,6 +1385,7 @@ fn tape_row_line(
         tape_breadcrumb_spans(
             &row.label,
             name_width.saturating_sub(indent_cells),
+            lead_segments,
             name_style,
             dim_style,
         )
@@ -1750,7 +1884,7 @@ fn draw_tape_list(
             .max()
             .unwrap_or(0);
         let cap = ((inner.width as usize) / 3).max(1);
-        (longest + 1).max(19).min(cap)
+        (longest + 2).max(19).min(cap)
     };
     let what_width = if narrow {
         0
@@ -1759,6 +1893,24 @@ fn draw_tape_list(
         // space.
         (inner.width as usize).saturating_sub(9 + 2 + name_width + token_width)
     };
+    // Issue #737: "two different steps never read the same, so keep
+    // more segments when the short form would collide" -- computed
+    // once here, over every row's own already-cut-to-its-own-width
+    // preview, since two rows can only ever actually look the same
+    // once each has been cut to fit its own column.
+    let lead_rows: Vec<(&str, &str, usize)> = screen
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            TapeItem::Row(r) => Some((
+                r.path.as_str(),
+                r.label.as_str(),
+                name_width.saturating_sub(r.indent * 2),
+            )),
+            _ => None,
+        })
+        .collect();
+    let lead_segments = tape_breadcrumb_lead_segments(&lead_rows);
 
     let mut lines: Vec<(Option<String>, Line<'static>)> = Vec::new();
     let mut kinds: Vec<TapeListLineKind> = Vec::new();
@@ -1833,6 +1985,7 @@ fn draw_tape_list(
                         name_width,
                         what_width,
                         token_width,
+                        lead_segments.get(row.path.as_str()).copied().unwrap_or(1),
                         border_color,
                         ctx,
                     ),
@@ -4981,6 +5134,7 @@ fn draw_all_tape_tile(
                         name_width,
                         what_width,
                         token_width,
+                        1,
                         border_color,
                         ctx,
                     )),

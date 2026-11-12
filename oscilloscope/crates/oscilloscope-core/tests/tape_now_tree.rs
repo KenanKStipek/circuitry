@@ -200,13 +200,31 @@ fn the_now_area_is_a_tree_with_both_loops_busy_and_the_watcher_top_level() {
     );
     assert!(compiles.iter().all(|r| r.indent == 2));
 
-    // No two rows in the whole displayed list share a label, even
-    // though `groups.iter_0.files` and `groups.iter_1.files` each
-    // have their own `iter_0`/`iter_1` pass of `compile`.
+    // Two siblings under the same files loop never read the same
+    // (`groups.iter_0.files`'s own two compiles, `iter_0 › build ›
+    // compile` and `iter_1 › build › compile`) -- the two different
+    // files loops' own compiles are never siblings of each other, so
+    // their own relative labels are free to coincide (`iter_0 ›
+    // build › compile` under both), the same as two files in two
+    // different folders sharing a name.
+    for files_prefix in ["work.groups.iter_0.files.", "work.groups.iter_1.files."] {
+        let own: Vec<&str> = compiles
+            .iter()
+            .filter(|r| r.path.contains(files_prefix))
+            .map(|r| r.label.as_str())
+            .collect();
+        let unique: std::collections::BTreeSet<&str> = own.iter().copied().collect();
+        assert_eq!(own.len(), unique.len(), "{files_prefix}: {own:?}");
+    }
+
+    // No two finished or ahead rows (never the tree's own) share a
+    // label.
     let mut seen = std::collections::HashMap::new();
     for item in &tape.items {
         if let TapeItem::Row(r) = item {
-            *seen.entry(r.label.clone()).or_insert(0) += 1;
+            if !r.bold {
+                *seen.entry(r.label.clone()).or_insert(0) += 1;
+            }
         }
     }
     let dup: Vec<_> = seen.iter().filter(|(_, n)| **n > 1).collect();
