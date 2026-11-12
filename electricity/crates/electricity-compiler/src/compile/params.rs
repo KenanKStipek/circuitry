@@ -26,6 +26,7 @@ use crate::CompileError;
 use crate::compile::templates::check_templates;
 use crate::state_ns::{validate_cel_expr, validate_cel_syntax, validate_reference_path};
 use electricity_bytecode::{Escape, ParamNode, TemplateText};
+use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
@@ -279,7 +280,7 @@ pub(crate) fn build_cel_params(
     let expr_key = Value::Str("expr".to_string());
     let expr_value = params.get(&expr_key);
     let expr_text = match expr_value {
-        Some(Value::Str(s)) if !s.trim().is_empty() => Some(s.clone()),
+        Some(Value::Str(s)) if !py_strip(s).is_empty() => Some(s.clone()),
         _ => None,
     };
     if expr_text.is_none() {
@@ -291,15 +292,20 @@ pub(crate) fn build_cel_params(
         }
     }
     if let Some(schema_value) = params.get(&Value::Str("schema".to_string())) {
-        // A malformed-but-dict `schema` (one that is not itself a valid
-        // JSON Schema) is not checked here: `cof check` catches that at
-        // compile time too (`jsonschema.validators.validator_for(schema).
-        // check_schema(schema)`), but electricity only ever learns of it
-        // at the `cel` effect's own run, through `electricity_schema::
-        // cel_schema_errors`'s own `SchemaError` outcome -- a documented
-        // timing divergence (`DESIGN.md` §13), not a missing check.
         if !matches!(schema_value, Value::None | Value::Dict(_)) {
             problems.push("params.schema must be a JSON Schema object".to_string());
+        } else if let Value::Dict(_) = schema_value {
+            // `plugins/cel.py::static_param_errors` also runs
+            // `jsonschema.validators.validator_for(schema).check_schema
+            // (schema)` on a dict schema, at compile time -- the same
+            // well-formedness check `electricity_schema::cel_schema_
+            // errors` never repeats at run time, because by then this
+            // check has already refused a malformed one.
+            if let Some(message) = electricity_schema::schema_well_formedness_error(schema_value) {
+                problems.push(format!(
+                    "params.schema is not a valid JSON Schema: {message}"
+                ));
+            }
         }
     }
     if !problems.is_empty() {
@@ -934,6 +940,24 @@ mod tests {
         let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
         assert!(
             err.0.contains("params.schema must be a JSON Schema object"),
+            "{}",
+            err.0
+        );
+    }
+
+    #[test]
+    fn cel_schema_must_be_well_formed() {
+        let schema = dict(vec![
+            ("type", Value::Str("object".to_string())),
+            ("required", Value::Str("a".to_string())),
+        ]);
+        let params = dict(vec![
+            ("expr", Value::Str("true".to_string())),
+            ("schema", Value::Dict(schema)),
+        ]);
+        let err = build_cel_params(&params, None, "g", "p", &BTreeSet::new()).unwrap_err();
+        assert!(
+            err.0.contains("params.schema is not a valid JSON Schema"),
             "{}",
             err.0
         );

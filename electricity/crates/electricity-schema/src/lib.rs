@@ -983,6 +983,91 @@ pub fn validate_prompt_schema(
     })
 }
 
+/// Whether *schema* itself is a well-formed JSON Schema, with no instance
+/// involved -- `jsonschema.validators.validator_for(schema).check_schema
+/// (schema)`'s own structural check, the compile-time half of
+/// [`validate_prompt_schema_impl`]'s own early branches (its `find_
+/// invalid_pattern` call and the `jsonschema` crate's own `build` step,
+/// on whichever of the fully-supported/crate-fallback branches applies),
+/// with the instance evaluation that follows them left out: there is no
+/// instance yet to evaluate against. `None` means *schema* is well formed;
+/// `Some` carries the same text `jsonschema.SchemaError` would.
+///
+/// Used by the `cel` tool's own compile-time equivalent of `plugins/
+/// cel.py::static_param_errors`'s `check_schema` call -- unlike
+/// [`cel_schema_errors`], which never reports a malformed schema because
+/// by the time a `cel` effect's own schema check runs, `cof check`
+/// already refused one this function would reject.
+pub fn schema_well_formedness_error(schema: &electricity_value::Value) -> Option<String> {
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .stack_size(VALIDATION_THREAD_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                engine::set_stack_guard(VALIDATION_THREAD_STACK_GUARD_BYTES);
+                schema_well_formedness_error_impl(schema)
+            });
+        match spawned {
+            Ok(handle) => handle.join().unwrap(),
+            Err(_) => {
+                engine::set_stack_guard(FALLBACK_STACK_GUARD_BYTES);
+                schema_well_formedness_error_impl(schema)
+            }
+        }
+    })
+}
+
+fn schema_well_formedness_error_impl(schema: &electricity_value::Value) -> Option<String> {
+    engine::take_recursion_exceeded();
+    engine::take_python_exception();
+    engine::clear_pattern_cache();
+    engine::clear_fully_supported_cache();
+
+    if let Some(message) = engine::find_invalid_pattern(schema) {
+        return Some(message);
+    }
+
+    let fully_supported =
+        is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
+    let result = if engine::recursion_exceeded_peek() {
+        None
+    } else if fully_supported {
+        let probe_json = schema_json_for_well_formedness_probe(schema);
+        let probe_error = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&probe_json)
+            .err();
+        match probe_error {
+            Some(err)
+                if !matches!(
+                    err.kind,
+                    jsonschema::error::ValidationErrorKind::Referencing(_)
+                        | jsonschema::error::ValidationErrorKind::Format { .. }
+                ) =>
+            {
+                Some(err.to_string())
+            }
+            _ => None,
+        }
+    } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
+        Some("maximum recursion depth exceeded while calling a Python object".to_string())
+    } else {
+        let schema_json = value_to_json(schema);
+        jsonschema::options()
+            .should_validate_formats(false)
+            .build(&schema_json)
+            .err()
+            .map(|err| err.to_string())
+    };
+
+    if engine::take_recursion_exceeded() {
+        return Some("maximum recursion depth exceeded while calling a Python object".to_string());
+    }
+    if let Some(message) = engine::take_python_exception() {
+        return Some(message);
+    }
+    result
+}
+
 fn validate_prompt_schema_impl(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
@@ -1207,16 +1292,18 @@ pub enum CelSchemaCheck {
 /// [`validate_prompt_schema`] picks), sorted by `list(error.absolute_path)`
 /// and capped at [`CEL_SCHEMA_ERROR_CAP`].
 ///
-/// Unlike [`validate_prompt_schema`], this never reports a
-/// [`CelSchemaCheck::SchemaError`] for *schema* being malformed: by the
-/// time a `cel` effect's own schema check ever runs, that `schema:` has
-/// already passed `cof check`'s compile-time equivalent of
-/// `jsonschema.validators.validator_for(schema).check_schema(schema)`
-/// (`plugins/cel.py::static_param_errors`) -- there is no second,
-/// runtime check of the schema itself to reproduce. A pathological
-/// `$ref` chain is still a genuine runtime concern regardless
-/// (`validate_prompt_schema`'s own doc comment), so this still runs on
-/// the same dedicated, large-stack thread that guards against it.
+/// Also reports [`CelSchemaCheck::SchemaError`] for *schema* itself being
+/// malformed, the same two checks [`schema_well_formedness_error`] makes
+/// (`find_invalid_pattern`, then the well-formedness probe on the
+/// fully-supported path) -- in practice a `cel` effect's own `schema:`
+/// has already passed `build_cel_params`'s own compile-time call to that
+/// function (`cof check`'s equivalent of `jsonschema.validators.
+/// validator_for(schema).check_schema(schema)`, `plugins/cel.py::
+/// static_param_errors`), so this runtime path rarely finds one, but it
+/// is not assumed unreachable. A pathological `$ref` chain is still a
+/// genuine runtime concern regardless (`validate_prompt_schema`'s own
+/// doc comment), so this still runs on the same dedicated, large-stack
+/// thread that guards against it.
 pub fn cel_schema_errors(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
@@ -1284,19 +1371,41 @@ fn cel_schema_errors_impl(
     engine::clear_pattern_cache();
     engine::clear_fully_supported_cache();
 
-    let fully_supported =
-        is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
     let mut messages: Vec<(Vec<engine::PathSegment>, String)> = Vec::new();
-    let mut schema_error: Option<String> = None;
+    let mut schema_error: Option<String> = engine::find_invalid_pattern(schema);
 
-    if engine::recursion_exceeded_peek() {
+    let fully_supported = schema_error.is_none()
+        && is_2020_12_or_unset(schema)
+        && engine::schema_is_fully_supported(schema, schema);
+
+    if schema_error.is_some() {
+        // Handled uniformly below.
+    } else if engine::recursion_exceeded_peek() {
         // Handled uniformly below by `take_recursion_exceeded`, matching
         // `validate_prompt_schema_impl`'s own short-circuit.
     } else if fully_supported {
-        let mut violations = Vec::new();
-        engine::evaluate(schema, instance, schema, &[], &[], &mut violations);
-        for violation in &violations {
-            messages.push((violation.path.clone(), engine::render(violation)));
+        let probe_json = schema_json_for_well_formedness_probe(schema);
+        let probe_error = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&probe_json)
+            .err();
+        match probe_error {
+            Some(err)
+                if !matches!(
+                    err.kind,
+                    jsonschema::error::ValidationErrorKind::Referencing(_)
+                        | jsonschema::error::ValidationErrorKind::Format { .. }
+                ) =>
+            {
+                schema_error = Some(err.to_string());
+            }
+            _ => {
+                let mut violations = Vec::new();
+                engine::evaluate(schema, instance, schema, &[], &[], &mut violations);
+                for violation in &violations {
+                    messages.push((violation.path.clone(), engine::render(violation)));
+                }
+            }
         }
     } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
         schema_error =
