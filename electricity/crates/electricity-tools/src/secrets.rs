@@ -420,6 +420,92 @@ mod tests {
         assert_eq!(value, "token-xyz");
     }
 
+    /// A `{keychain: {service, account?}}` entry, resolved through a
+    /// fake `security` binary on a temp `PATH` prefix -- this crate's
+    /// test suite never runs the real `security find-generic-password`
+    /// against the account's own Keychain. The fake records the argv
+    /// it was called with (to a side-channel file this test reads
+    /// back), so the assertion also proves `-s`/`-a`'s own shape, not
+    /// just that *some* "security" ran.
+    ///
+    /// SAFETY/hazard: this mutates the whole process' own `PATH` for
+    /// the width of one `resolve_secret` call, restored before this
+    /// test's own assertions run -- a concurrent test in this same
+    /// binary that spawns a process by bare name during that narrow
+    /// window could see the prefixed `PATH` too (the same pre-existing
+    /// hazard this file's other tests already accept for `unsafe {
+    /// std::env::set_var }` on a secret value's own env var). `security`
+    /// is only ever prepended, never removed from the rest of `PATH`,
+    /// so nothing else this crate's own tests spawn by bare name (e.g.
+    /// `printf`) is affected either way.
+    #[tokio::test]
+    async fn resolves_from_the_keychain_through_a_fake_security_binary() {
+        let dir = std::env::temp_dir().join(format!(
+            "electricity-secrets-keychain-test-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let argv_log = dir.join("argv.txt");
+        let fake = dir.join("security");
+        std::fs::write(
+            &fake,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$*\" > {}\nprintf 'keychain-value-xyz'\n",
+                argv_log.display()
+            ),
+        )
+        .unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let original_path = std::env::var_os("PATH");
+        let new_path = match &original_path {
+            Some(existing) => {
+                let mut joined = dir.clone().into_os_string();
+                joined.push(":");
+                joined.push(existing);
+                joined
+            }
+            None => dir.clone().into_os_string(),
+        };
+        // SAFETY: restored immediately below, before this test's own
+        // assertions run.
+        unsafe {
+            std::env::set_var("PATH", &new_path);
+        }
+
+        let mut spec = Dict::new();
+        spec.insert(Value::Str("service".to_string()), Value::from("circuitry"));
+        spec.insert(Value::Str("account".to_string()), Value::from("github"));
+        let mut entry = Dict::new();
+        entry.insert(Value::Str("keychain".to_string()), Value::Dict(spec));
+        let runtime = runtime_with_secret("api", Value::Dict(entry));
+        let token = CancellationToken::new();
+        let result = resolve_secret("api", &runtime, &token).await;
+
+        // SAFETY: restoring the process' own PATH before this test
+        // looks at anything else.
+        unsafe {
+            match &original_path {
+                Some(existing) => std::env::set_var("PATH", existing),
+                None => std::env::remove_var("PATH"),
+            }
+        }
+
+        let value = result.unwrap();
+        assert_eq!(value, "keychain-value-xyz");
+        let argv_text = std::fs::read_to_string(&argv_log).unwrap();
+        assert_eq!(
+            argv_text.trim(),
+            "find-generic-password -w -s circuitry -a github"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn secret_values_scrubs_the_bare_value_and_a_prefixed_echo() {
         let mut values = SecretValues::new();
