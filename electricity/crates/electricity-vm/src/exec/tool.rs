@@ -2186,6 +2186,129 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn params_json_setting_within_on_an_http_effect_is_refused_even_rendered_from_state() {
+        // Issue #726: `within`/`save_to` is only ever honoured from the
+        // document's own literal `params`, never a `params_json` overlay --
+        // including one whose raw text is a template that only becomes the
+        // JSON object `{"within": ...}` once rendered, from a prior
+        // effect's own state, which the compiler's own literal-JSON sniff
+        // at compile time can never see.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("url"), template("http://127.0.0.1:1/"));
+        let mut tool = tool_op(params);
+        tool.provider = "http".to_string();
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{{{prime.payload.value}}}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        let mut prime = Dict::new();
+        let mut payload = Dict::new();
+        payload.insert(
+            Value::from("value"),
+            Value::from("{\"within\": \"/etc/circuitry-test-725\"}"),
+        );
+        prime.insert(Value::from("payload"), Value::Dict(payload));
+        let mut ctx = Dict::new();
+        ctx.insert(Value::from("prime"), Value::Dict(prime));
+        let ctx = Value::Dict(ctx);
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &ctx,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_limited_documents_rendered_params_json_naming_save_to_is_refused() {
+        // Issue #726: a limited document's `http` effect never saves a
+        // file -- `ToolOp::limited`, checked against the fully merged,
+        // rendered params, catches a `save_to` a templated `params_json`
+        // only introduces once rendered, which neither the compiler's
+        // literal-params check (nothing in this effect's own literal
+        // `params` ever names `save_to`) nor its literal-JSON `params_json`
+        // sniff (a raw template, not literal JSON, at compile time) can see.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("url"), template("http://127.0.0.1:1/"));
+        let mut tool = tool_op(params);
+        tool.provider = "http".to_string();
+        tool.limited = true;
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{{{prime.payload.value}}}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        let mut prime = Dict::new();
+        let mut payload = Dict::new();
+        payload.insert(
+            Value::from("value"),
+            Value::from("{\"save_to\": \"evil.bin\"}"),
+        );
+        prime.insert(Value::from("payload"), Value::Dict(payload));
+        let mut ctx = Dict::new();
+        ctx.insert(Value::from("prime"), Value::Dict(prime));
+        let ctx = Value::Dict(ctx);
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &ctx,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "HttpPlugin: params['save_to']: only a document run by path may save a \
+             response to a file (a limited document, a library entry or a generated \
+             plan cannot)."
+        );
+    }
+
+    #[tokio::test]
     async fn a_templated_allowed_commands_item_is_refused() {
         let allowed = vec![template("rm {{input.target}}")];
         let mut params = IndexMap::new();
