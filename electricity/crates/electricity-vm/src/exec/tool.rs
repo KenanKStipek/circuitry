@@ -803,7 +803,7 @@ async fn resolve_env_secrets(
             .filter(|_| electricity_bytecode::secrets::has_secret_key(value))
         {
             return Err(electricity_tools::ToolError::message(format!(
-                "runtime.plugins.{normalized}.env.{}: a secret reference {problem}.",
+                "runtime.plugins.{normalized}.env.{}: {problem}.",
                 var.py_str()
             )));
         }

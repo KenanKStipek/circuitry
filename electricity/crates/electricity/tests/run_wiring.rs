@@ -1118,6 +1118,71 @@ async fn a_secret_in_a_named_tools_host_env_fails_the_effect_when_undefined() {
     );
 }
 
+/// Issue #725: a malformed host-config `runtime.plugins.<name>.env`
+/// secret is never a run-start gate -- only the effect that actually
+/// dispatches through that plugin ever sees it, with cof's own
+/// dispatch-time text (`plugins/_subprocess.py::_runtime_with_env_secrets`:
+/// `f"{path}: {problem}."`, no "a secret reference" wording -- that
+/// phrasing belongs only to the document's own compile-time check).
+#[tokio::test]
+async fn a_malformed_host_config_env_secret_fails_only_the_effect_that_uses_it() {
+    let dir = temp_dir("malformed-secret-env");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"plugins": {"awk": {"env": {"TOKEN": {"secret": 5}}}}}}"#,
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - type: tool\n    name: unused\n    provider: json\n    params: {mode: parse, input: '{}'}\n",
+    );
+    let req = request(config.clone(), doc);
+
+    let result = run(&req).await;
+    assert!(
+        result.ok,
+        "an unused plugin's malformed env secret must not gate the run: {:?}",
+        result.error
+    );
+
+    let doc_using_it = write(
+        &dir,
+        "doc-using-it.yml",
+        "effects:\n  - type: tool\n    name: run_it\n    provider: awk\n    params: {args: [\"{print}\"]}\n",
+    );
+    let req = request(config, doc_using_it);
+    let result = run(&req).await;
+    assert!(!result.ok);
+    let state = result.state.expect("a dispatch failure still writes state");
+    let dict = state.as_dict().unwrap();
+    let prime = dict
+        .get(&electricity_value::Value::Str("prime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let run_it = prime
+        .get(&electricity_value::Value::Str("run_it".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let meta = run_it
+        .get(&electricity_value::Value::Str("meta".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let error = meta
+        .get(&electricity_value::Value::Str("error".to_string()))
+        .and_then(electricity_value::Value::as_str)
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        error.starts_with("runtime.plugins.awk.env.TOKEN:"),
+        "{error}"
+    );
+    assert!(!error.contains("a secret reference"), "{error}");
+}
+
 /// Issue #725's acceptance (2): a well-defined secret reaches the
 /// header, and the saved state, the events file, the live-state file
 /// and the error text each carry no part of it at all -- only the

@@ -107,18 +107,18 @@ pub fn plugin_binary_override(cfg: &Value) -> Option<String> {
 }
 
 /// `plugins/_subprocess.py::plugin_env_override` -- the mapping-shape
-/// validation and its exact error text. Issue #725: a well-formed
-/// `{secret: <name>, prefix?: <text>}` value is accepted here too,
-/// substituted with a placeholder text -- the one caller that never
-/// goes through the real dispatch's own resolution first
-/// (`electricity`'s own preflight, which only ever calls
-/// [`crate::ToolPlugin::check`] on the plugin this builds, never
-/// `execute`) has no secret to resolve it with anyway. The real
-/// dispatch (`electricity_vm::exec::tool`) always resolves every
-/// `runtime.plugins.<name>.env` secret into a plain string *before*
-/// calling [`crate::build_plugin`], so this function never actually
-/// sees an unresolved one on that path at all; a malformed one still
-/// fails here, the same backstop `electricity_config::
+/// validation and its exact error text. Issue #725: a `{secret: ...}`
+/// value, well-formed or not, is left out entirely -- never a
+/// placeholder in its place, which would override any inherited
+/// variable of the same name with literal placeholder text for a
+/// preflight `check()`'s own build (`electricity`'s own preflight
+/// never calls `execute`, so it has no secret to resolve one into
+/// anyway). The real dispatch (`electricity_vm::exec::tool`) always
+/// resolves every `runtime.plugins.<name>.env` secret into a plain
+/// string *before* calling [`crate::build_plugin`], so this function
+/// never actually sees an unresolved one on that path at all; a
+/// malformed one is left out here exactly like a well-formed one,
+/// never raised -- the same backstop `electricity_config::
 /// runtime_env_secret_errors` already is for everywhere else that
 /// reads this same config.
 pub fn plugin_env_override(
@@ -148,24 +148,7 @@ pub fn plugin_env_override(
     let mut map = HashMap::with_capacity(dict.len());
     for (k, v) in dict {
         if electricity_bytecode::secrets::has_secret_key(v) {
-            match electricity_bytecode::secrets::secret_ref(v) {
-                Some(secret_ref) => {
-                    map.insert(k.py_str(), secret_ref.placeholder());
-                    continue;
-                }
-                None => {
-                    let problem = electricity_bytecode::secrets::secret_ref_error(v)
-                        .expect("has_secret_key true and secret_ref None implies malformed");
-                    return Err(ToolError {
-                        py_class: PyExc::ValueError,
-                        message: format!(
-                            "runtime.plugins.{plugin_name}.env.{}: a secret reference {problem}.",
-                            k.py_str()
-                        ),
-                        cause: ErrorCause::None,
-                    });
-                }
-            }
+            continue;
         }
         map.insert(k.py_str(), v.py_str());
     }
@@ -612,26 +595,36 @@ mod tests {
     }
 
     #[test]
-    fn plugin_env_override_accepts_a_well_formed_secret_as_a_placeholder() {
-        // Issue #725: this function never resolves a secret (it has no
-        // `runtime.secrets` to resolve it from) -- a well-formed one is
-        // accepted as a placeholder, never an error; the real dispatch
-        // always resolves it into a plain string before this function
-        // ever sees the env map at all.
+    fn plugin_env_override_leaves_a_well_formed_secret_out_entirely() {
+        // Issue #725: `plugins/_subprocess.py::plugin_env_override` never
+        // puts a secret-shaped value into the overrides map at all --
+        // not even a placeholder, which `merged_env`'s own `{**os.
+        // environ, **overrides}` would otherwise use to override any
+        // inherited variable of the same name for a preflight `check()`
+        // build. The real dispatch always resolves it into a plain
+        // string before this function ever sees the env map.
         let mut reference = DictType::new();
         reference.insert(Value::from("secret"), Value::from("api"));
         let mut env = DictType::new();
         env.insert(Value::from("TOKEN"), Value::Dict(reference));
+        env.insert(Value::from("PLAIN"), Value::from("kept"));
         let mut cfg = DictType::new();
         cfg.insert(Value::from("env"), Value::Dict(env));
         let overrides = plugin_env_override(&Value::Dict(cfg), "awk")
             .unwrap()
             .unwrap();
-        assert_eq!(overrides.get("TOKEN").unwrap(), "[secret:api]");
+        assert_eq!(overrides.get("PLAIN").unwrap(), "kept");
+        assert!(!overrides.contains_key("TOKEN"));
     }
 
     #[test]
-    fn plugin_env_override_still_refuses_a_malformed_secret() {
+    fn plugin_env_override_leaves_a_malformed_secret_out_too_never_raising() {
+        // cof's own `plugin_env_override` has no well-formedness check
+        // at all -- `has_secret_key` alone decides whether an entry is
+        // left out, so a malformed one is silently skipped here exactly
+        // like a well-formed one; the malformed-reference error belongs
+        // to the document's own compile-time check and the dispatch-time
+        // one, never this preflight-only path.
         let mut malformed = DictType::new();
         malformed.insert(Value::from("secret"), Value::from("api"));
         malformed.insert(Value::from("extra"), Value::from("x"));
@@ -639,9 +632,10 @@ mod tests {
         env.insert(Value::from("TOKEN"), Value::Dict(malformed));
         let mut cfg = DictType::new();
         cfg.insert(Value::from("env"), Value::Dict(env));
-        let err = plugin_env_override(&Value::Dict(cfg), "awk").unwrap_err();
-        assert!(err.message.contains("runtime.plugins.awk.env.TOKEN"));
-        assert!(err.message.contains("unknown key"));
+        let overrides = plugin_env_override(&Value::Dict(cfg), "awk")
+            .unwrap()
+            .unwrap();
+        assert!(!overrides.contains_key("TOKEN"));
     }
 
     #[test]
