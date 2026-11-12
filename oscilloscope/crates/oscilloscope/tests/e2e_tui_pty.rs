@@ -22,10 +22,26 @@ use std::time::{Duration, Instant};
 
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command,
-    scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen_text,
-    wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout, write_doc,
+    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
+    screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
+    wait_for_screen_text, wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
+
+/// The `(row, col)` of the first `glyph` character on whichever grid
+/// row contains `line_needle` -- so a colour check reads the same
+/// cell its own text check already found, not a coordinate guessed
+/// from the layout.
+fn find_glyph(grid: &[String], line_needle: &str, glyph: char) -> Option<(usize, usize)> {
+    for (row, line) in grid.iter().enumerate() {
+        if line.contains(line_needle) {
+            if let Some(col) = line.chars().position(|c| c == glyph) {
+                return Some((row, col));
+            }
+        }
+    }
+    None
+}
 
 /// Waits until `pattern` has appeared anywhere in `buf` so far, or
 /// `timeout` runs out either way.
@@ -2925,17 +2941,158 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #678's own `?`: the Help overlay opens over the Tape,
-/// listing its own key bar's keys and the glyph legend. Closing it
-/// (any key, `esc` included) is checked directly against `keys::
-/// App::handle_key`, with no pty involved, by `keys::tests::esc_
-/// closes_the_help_overlay` -- this run's own list is only two rows
-/// (`Run Started`, the running `slow` tool), both above the 72×18
-/// overlay's own vertical range at 120×30, so nothing in it is ever
-/// actually covered for a pty capture to prove got redrawn once the
-/// overlay closes.
+/// Issue #738: the Help overlay opens over the Tape on its Keys page
+/// (the key bar's own keys, including the movement aliases and
+/// `/`/`e` the key bar itself does not show), and `←→` reaches its
+/// Key page (§3.7's glyph/line/colour legend). Closing it (any key,
+/// `esc` included) is checked directly against `keys::App::
+/// handle_key`, with no pty involved, by `keys::tests::esc_closes_
+/// the_help_overlay`.
 #[test]
-fn the_help_overlay_lists_the_tapes_own_keys() {
+fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+    // Below the room the merged page (issue #738) needs, the Tape's
+    // own Help stays paged -- this test is about that fallback, not
+    // the default 120x40 pty, which already has room to merge.
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // `?` opens on the Keys page, the same order the merged page reads in.
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+    assert!(
+        screen.contains("tokens:") && screen.contains("usual"),
+        "expected the Tape's own t key listed; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("filter rows") && screen.contains("errors only"),
+        "expected the movement aliases' own / and e rows; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, "\x1b[C".as_bytes());
+    let screen = wait_for_screen_text(&captured_buf, "done · failed", Duration::from_secs(10));
+    assert!(
+        screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
+        "expected the Key page's own title; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("running · ahead"),
+        "expected the Key page's own glyph legend; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, "\x1b[D".as_bytes());
+    wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: at 120x30 the Tape's own Help has the room to merge
+/// its keys and its Key onto one page -- the title carries no page
+/// suffix, both halves show together, and `T` still cycles the
+/// theme (and its own banner) with the overlay open.
+#[test]
+fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+    resize_pty(&slave_path, 120, 30);
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
+        "expected the merged page's own title, with no page suffix; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("select a row") && screen.contains("tokens:"),
+        "expected §4's own Tape keys on the merged page; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("done · failed") && screen.contains("running · ahead"),
+        "expected §3.7's own glyph legend on the merged page; got:\n{screen}"
+    );
+
+    // Issue #738: a Key symbol's own cell colour changes with the
+    // theme, not only the text around it staying put -- this reads the
+    // same cell's own colour before and after T, at whatever colour
+    // depth the test terminal's own `COLORTERM` makes osi pick.
+    let before_bytes = captured_buf.lock().unwrap().clone();
+    let before_grid = screen_grid(&before_bytes, 200, 60);
+    let (glyph_row, glyph_col) =
+        find_glyph(&before_grid, "done · failed", '✓').unwrap_or_else(|| {
+            panic!("expected a ✓ cell on the \"done · failed\" row:\n{before_grid:?}")
+        });
+    let before_fg = screen_grid_fg(&before_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    assert!(
+        before_fg.is_some(),
+        "expected the ✓ Key symbol to carry a colour of its own before T"
+    );
+
+    send_bytes(&mut master, b"T");
+    let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
+    assert!(
+        screen.contains("Key"),
+        "expected the Help overlay to stay open after T; got:\n{screen}"
+    );
+    let after_bytes = captured_buf.lock().unwrap().clone();
+    let after_grid = screen_grid(&after_bytes, 200, 60);
+    let (glyph_row, glyph_col) =
+        find_glyph(&after_grid, "done · failed", '✓').unwrap_or_else(|| {
+            panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
+        });
+    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    assert_ne!(
+        before_fg, after_fg,
+        "expected the ✓ Key symbol's own cell colour to change after T, not just the text around it"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: `?` on the Signal, the Flow and the Store each show
+/// that screen's own Help, named in the title, with that screen's
+/// own Key -- not the Tape's.
+#[test]
+fn the_help_overlay_lists_each_other_screens_own_key() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
@@ -2946,38 +3103,37 @@ fn the_help_overlay_lists_the_tapes_own_keys() {
     let (mut master, _slave_path, child, captured_buf) =
         spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
 
-    let before_help = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"1");
     send_bytes(&mut master, b"?");
-    wait_for_pattern_since(&captured_buf, before_help, b"Help", Duration::from_secs(10));
-    {
-        let after = captured_buf.lock().unwrap()[before_help..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains("Help") && rendered.contains("Tape"),
-            "expected the Help overlay's own title; got:\n{rendered:?}"
-        );
-        // Words checked separately, never as one contiguous
-        // phrase: ratatui's own differential redraw gives each
-        // word on a styled line its own escape-positioned span,
-        // so two words a real line genuinely holds side by side
-        // can still land with a cursor-move escape between them
-        // in this buffer.
-        assert!(
-            rendered.contains("tokens:") && rendered.contains("usual"),
-            "expected the Tape's own t key listed; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains("Tokens") && rendered.contains("Glyphs"),
-            "expected the Tokens/Glyphs legend; got:\n{rendered:?}"
-        );
-    }
-
-    // Closed with `?` again, back to a plain key bar's own exit
-    // path below -- not asserted on here, for the reason this
-    // function's own doc comment gives.
-    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Signal", Duration::from_secs(10));
+    assert!(
+        screen.contains("scrub the cursor") && screen.contains("finished prompt"),
+        "expected the Signal's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
     std::thread::sleep(Duration::from_millis(300));
 
+    send_bytes(&mut master, b"2");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Flow", Duration::from_secs(10));
+    assert!(
+        screen.contains("select a station") && screen.contains("a station: done"),
+        "expected the Flow's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"3");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Store", Duration::from_secs(10));
+    assert!(
+        screen.contains("select a row") && screen.contains("area is its share of tokens"),
+        "expected the Store's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"0");
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
     send_bytes(&mut master, b"y");
@@ -4028,6 +4184,170 @@ fn nested_loops_now_area_is_a_tree_with_no_running_row_above_the_band() {
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
     std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #739: a finished prompt whose reply is JSON reads a short
+/// summary on the Tape row, never raw JSON -- an object with a
+/// `summary` field, an object of lists (its own first keys), an
+/// array of strings (its own count, then the first item's own first
+/// words), a plain-text reply that merely holds JSON as a string
+/// (parsed and summarised the same as if it had arrived typed), and
+/// ordinary plain text (kept to today's first-words rule, unaffected).
+#[test]
+fn json_replies_read_as_short_summaries_not_raw_json() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        r#"prime.plan:
+  - {text: '{"summary": "Parser fixed."}', tokens_sent: 120, tokens_received: 30}
+prime.edits:
+  - {text: '{"edits": [1, 2], "files": [1, 2, 3]}', tokens_sent: 150, tokens_received: 40}
+prime.items:
+  - {text: '["first item text", "second"]', tokens_sent: 90, tokens_received: 12}
+prime.stringjson:
+  - {text: '{"summary": "Parsed ok."}', tokens_sent: 70, tokens_received: 10}
+prime.plain:
+  - {text: "Hello there. More words follow.", tokens_sent: 20, tokens_received: 3}
+"#,
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"adapter: scripted
+model: scripted-model
+effects:
+  - name: plan
+    type: prompt
+    prompt_type: json
+    template: "plan"
+    schema: {type: object}
+  - name: edits
+    type: prompt
+    prompt_type: json
+    template: "edits"
+    schema: {type: object}
+  - name: items
+    type: prompt
+    prompt_type: json
+    template: "items"
+    schema: {type: array}
+  - name: stringjson
+    type: prompt
+    template: "stringjson"
+  - name: plain
+    type: prompt
+    template: "plain"
+  - name: slow
+    type: tool
+    provider: shell
+    params:
+      command: tail
+      args: ["-f", "/dev/null"]
+      allowed_commands: ["tail"]
+"#,
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60).join("\n");
+
+    let row_text = |name: &str| -> String {
+        screen
+            .lines()
+            .find(|l| l.contains(&format!("✓ {name}")))
+            .map(|l| l.trim_end().to_string())
+            .unwrap_or_default()
+    };
+
+    let rows = [
+        ("plan", row_text("plan")),
+        ("edits", row_text("edits")),
+        ("items", row_text("items")),
+        ("stringjson", row_text("stringjson")),
+        ("plain", row_text("plain")),
+    ];
+    for (name, row) in &rows {
+        assert!(
+            !row.is_empty(),
+            "expected a finished row for {name}; screen:\n{screen}"
+        );
+        assert!(
+            !row.contains("{\"") && !row.contains("[\""),
+            "expected {name}'s own row to read a summary, never raw JSON; row: {row:?}"
+        );
+    }
+    let row = |name: &str| rows.iter().find(|(n, _)| *n == name).unwrap().1.as_str();
+
+    assert!(
+        row("plan").contains("Parser fixed."),
+        "expected plan's own summary field to lead; row: {:?}",
+        row("plan")
+    );
+    // The composite "first keys" result is never cut itself, only
+    // by the row's own real column downstream (DESIGN.md) -- at this
+    // width that leaves `edits`' own first key, `files`' second one
+    // cut away, same as any other reply long enough to hit the same
+    // column.
+    assert!(
+        row("edits").contains("edits 2 item"),
+        "expected edits' own first key; row: {:?}",
+        row("edits")
+    );
+    assert!(
+        row("items").contains("2 items") && row("items").contains("first"),
+        "expected items' own count and first item's own words; row: {:?}",
+        row("items")
+    );
+    assert!(
+        row("stringjson").contains("Parsed ok."),
+        "expected a plain-text reply holding JSON to be parsed and summarised; row: {:?}",
+        row("stringjson")
+    );
+    assert!(
+        row("plain").contains("Hello there."),
+        "expected plain text to keep its own first-words rule; row: {:?}",
+        row("plain")
+    );
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
     assert_no_leftover_process(work.path());
 }
 
