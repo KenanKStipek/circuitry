@@ -24,8 +24,13 @@ const SUMMARY_FIELD_ORDER: [&str; 6] =
 /// field or its first keys, an array's own item count (and, for its
 /// first item a string, that string's first words), and anything
 /// else -- plain text, or a string that only looks like JSON -- by
-/// today's first-words rule. `max_chars` bounds the whole result,
-/// cut with `⋯` the same way a plain reply already is (§3.8).
+/// today's first-words rule. `max_chars` bounds each individual
+/// string read by its own first words (a summary field, a nested
+/// string value, an array's first item), the same budget a plain
+/// reply already keeps to -- never the whole composed "first keys"
+/// or array result, which reads however much of it fits the row's
+/// own real column, cut downstream the same way a plain reply's
+/// own row text already is (§3.8).
 pub(crate) fn json_value_summary(value: &Value, max_chars: usize) -> String {
     match value {
         Value::Object(map) => object_summary(map, max_chars),
@@ -51,11 +56,16 @@ fn object_summary(map: &serde_json::Map<String, Value>, max_chars: usize) -> Str
             }
         }
     }
-    let parts: Vec<String> = map
-        .iter()
+    // No whole-composition cut here (unlike a plain reply's own
+    // first words): "the first keys" reads however many of them fit
+    // the row's own real column, which only the caller -- the row's
+    // own width-cut downstream -- knows; each field's own string
+    // value still gets the same first-words budget a plain reply
+    // would.
+    map.iter()
         .map(|(k, v)| format!("{k} {}", key_value_summary(v, max_chars)))
-        .collect();
-    cut_chars(&parts.join(" \u{b7} "), max_chars)
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
 }
 
 /// An object's "first keys" rule (rule 2): arrays and objects read
@@ -73,10 +83,9 @@ fn key_value_summary(value: &Value, max_chars: usize) -> String {
 fn array_summary(items: &[Value], max_chars: usize) -> String {
     let base = format!("{} items", items.len());
     match items.first() {
-        Some(Value::String(s)) if !s.trim().is_empty() => cut_chars(
-            &format!("{base} \u{b7} {}", first_words(s, max_chars)),
-            max_chars,
-        ),
+        Some(Value::String(s)) if !s.trim().is_empty() => {
+            format!("{base} \u{b7} {}", first_words(s, max_chars))
+        }
         _ => base,
     }
 }
@@ -307,10 +316,9 @@ mod tests {
     }
 
     #[test]
-    fn a_long_object_summary_cuts_to_width_with_an_ellipsis() {
+    fn an_object_summary_is_not_cut_to_max_chars_itself() {
         let value = json!({"aaaaaaaaaa": 1, "bbbbbbbbbb": 2, "cccccccccc": 3});
-        let out = json_value_summary(&value, 20);
-        assert_eq!(out.chars().count(), 21);
-        assert!(out.ends_with('\u{22ef}'));
+        let out = json_value_summary(&value, 5);
+        assert_eq!(out, "aaaaaaaaaa 1 \u{b7} bbbbbbbbbb 2 \u{b7} cccccccccc 3");
     }
 }

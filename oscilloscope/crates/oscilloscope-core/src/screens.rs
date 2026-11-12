@@ -7675,7 +7675,7 @@ mod tests {
         );
         match &signal.step_rows[0].kind {
             SignalStepKind::Prompt { rest } => {
-                assert_eq!(rest, "110 t · edits 2 items · files 3 ⋯");
+                assert_eq!(rest, "110 t · edits 2 items · files 3 items");
             }
             other => panic!("expected a Prompt step kind, got {other:?}"),
         }
