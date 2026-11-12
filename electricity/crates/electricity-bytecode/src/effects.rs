@@ -222,6 +222,13 @@ pub struct ToolOp {
     /// for parity with `cof check`; `prompt` is then absent from `params`.
     /// electricity refuses the cof-only `agent` plugin, so nothing reads it.
     pub prompt_file: Option<DispatchFile>,
+    /// Whether this effect's own document is untrusted (`DocumentOrigin::
+    /// LimitedFile`/`Generated`): `core/tool.py::reject_limited_save_to`'s own
+    /// check, ported -- an `http` effect on a limited document may never name
+    /// `save_to`/`within`, whether from its literal `params`, a rendered
+    /// `params_json` overlay, or a profile that switched the provider to
+    /// `http`, checked at dispatch against the fully rendered params.
+    pub limited: bool,
 }
 
 /// `UseDefinition.path`/`.orchestration`/`.inline` — exactly one present

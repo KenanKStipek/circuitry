@@ -2307,6 +2307,7 @@ mod tests {
             group: None,
             secret_headers: indexmap::IndexMap::new(),
             prompt_file: None,
+            limited: false,
         }
     }
 

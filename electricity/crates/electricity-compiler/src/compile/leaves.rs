@@ -600,6 +600,7 @@ pub(crate) fn compile_tool(
         description,
         group,
         prompt_file,
+        limited: !trusted,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Tool(op), on_error))
 }

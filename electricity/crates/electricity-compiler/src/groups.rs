@@ -131,6 +131,7 @@ mod tests {
                 group: group.map(|s| s.to_string()),
                 secret_headers: IndexMap::new(),
                 prompt_file: None,
+                limited: false,
             }))),
             on_error: OnError::Fail,
             labels: None,

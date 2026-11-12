@@ -181,6 +181,10 @@ const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 
+/// `plugins/http.py::_LIMITED_SAVE_TO`.
+const LIMITED_SAVE_TO: &str = "only a document run by path may save a response to a file (a \
+     limited document, a library entry or a generated plan cannot)";
+
 /// `core/tool.py::_HTTP_FAMILY_PROVIDERS` -- a local copy, not a call
 /// into `crate::retry`'s own private `is_http_family_provider` (issue
 /// #485's own scope note: `retry.rs` is final except for
@@ -420,6 +424,35 @@ fn reject_params_json_override(overlay: &Dict) -> Result<(), String> {
     ))
 }
 
+/// `plugins/systemone.py::reject_overlay_within` -- `params_json` is
+/// rendered at run time and can carry generated content, so it never
+/// sets `within`: only a document's own literal params do. Checked for
+/// `http` and `systemone` only, the same two providers `within` ever
+/// applies to.
+fn reject_overlay_within(overlay: &Dict) -> Result<(), String> {
+    if overlay.contains_key(&Value::Str("within".to_string())) {
+        return Err(
+            "params_json must not set 'within': it is only honoured from a \
+             document's literal params block."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// `plugins/http.py::reject_limited_save_to` -- a limited document's
+/// `http` effect never saves a file, whatever supplied `save_to` or
+/// `within` (`params_json`, or a profile that switched the provider to
+/// `http`), checked against the fully rendered params at dispatch.
+fn reject_limited_save_to(params: &Dict) -> Result<(), String> {
+    for key in ["save_to", "within"] {
+        if params.contains_key(&Value::Str(key.to_string())) {
+            return Err(format!("HttpPlugin: params['{key}']: {LIMITED_SAVE_TO}."));
+        }
+    }
+    Ok(())
+}
+
 /// `core/tool.py::_capped_raw` -- redacts *raw*, JSON-round-trips it
 /// (`core/tool.py`'s own docstring: callers serialize state with plain
 /// `json.dumps`, so a raw value only `default=str` can encode must
@@ -563,7 +596,17 @@ fn render_tool_call<R: ParamsCtx>(
         let overlay = render_params_json(&params_json.source, ctx, declared_prompts, effect_names)
             .map_err(|err: RenderParamsJsonError| err.to_string())?;
         reject_params_json_override(&overlay)?;
+        let normalized_provider =
+            electricity_value::pycompat::py_strip(&tool.provider).to_lowercase();
+        if normalized_provider == "systemone" || normalized_provider == "http" {
+            reject_overlay_within(&overlay)?;
+        }
         params = deep_merge_params(params, overlay);
+    }
+    if tool.limited
+        && electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http"
+    {
+        reject_limited_save_to(&params)?;
     }
     for (key, value) in params {
         rendered.insert(key, value);
@@ -635,61 +678,96 @@ fn evaluate_cel_tool<R: ParamsCtx>(
     Ok(ToolResult::new(value, Value::Dict(raw)))
 }
 
-/// `core/tool.py::ToolRuntime._secret_headers` (issue #725): resolves
-/// *compiled*'s literal `params.headers` references actually present in
-/// *rendered*'s own `headers`, caching each resolved secret in *secrets*
-/// for the rest of this dispatch. `Ok(None)` when `headers` names no
-/// secret at all (the common case, including every non-`http` tool,
+/// `core/tool.py::ToolRuntime._secret_headers` (issue #725): which of
+/// *compiled*'s literal `params.headers` references are actually
+/// present in *rendered*'s own `headers`, by header name -- the
+/// detection half only, no resolution (cof's own split: `_secret_headers`
+/// never calls `dispatch_secrets.resolve`, so `meta.params_rendered` can
+/// already show the placeholder before any resolution is attempted,
+/// below). Runs for every `http` dispatch, not only when *compiled* is
+/// non-empty: `headers` can still name a `{secret: ...}`-shaped value
+/// some other way (`params_json`, a list of pairs instead of a
+/// mapping), which is always an error. `Ok(None)` when `headers` names
+/// no secret at all (the common case, including every non-`http` tool,
 /// whose `compiled` is always empty); `Err` when a header's rendered
-/// value looks like a reference but doesn't match a literal one at the
-/// same header name exactly -- reached only when `params_json` (the one
-/// thing that can still change `headers` after compile time) adds or
-/// overrides one, since the compiler's own placement check already
-/// guarantees every literal one is well-formed and exactly here.
-async fn resolve_secret_headers(
+/// value looks like a reference but isn't honoured -- a mapping's value
+/// that doesn't match a literal one at the same header name exactly, or
+/// any secret-shaped value reached through a list of pairs instead of a
+/// mapping at all.
+fn find_secret_headers(
     name: &str,
     compiled: &IndexMap<String, electricity_bytecode::secrets::SecretRef>,
     rendered: &Value,
-    runtime_config: &Value,
-    token: &CancellationToken,
-    secrets: &mut electricity_tools::secrets::SecretValues,
-) -> Result<Option<Dict>, electricity_tools::ToolError> {
-    let Some(Value::Dict(headers)) = rendered
+) -> Result<
+    Option<IndexMap<String, electricity_bytecode::secrets::SecretRef>>,
+    electricity_tools::ToolError,
+> {
+    let headers_value = rendered
         .as_dict()
-        .and_then(|d| d.get(&Value::Str("headers".to_string())))
-    else {
-        return Ok(None);
+        .and_then(|d| d.get(&Value::Str("headers".to_string())));
+    let is_dict = matches!(headers_value, Some(Value::Dict(_)));
+    let pairs: Vec<(Value, Value)> = match headers_value {
+        Some(Value::Dict(headers)) => headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        Some(Value::List(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::List(pair) if pair.len() == 2 => Some((pair[0].clone(), pair[1].clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
     };
-    let mut any = false;
-    for (key, value) in headers {
+    let mut found: IndexMap<String, electricity_bytecode::secrets::SecretRef> = IndexMap::new();
+    for (key, value) in &pairs {
         if !electricity_bytecode::secrets::has_secret_key(value) {
             continue;
         }
-        any = true;
         let header_name = key.py_str();
         let rendered_ref = electricity_bytecode::secrets::secret_ref(value);
-        if compiled.get(&header_name) != rendered_ref.as_ref() {
+        let compiled_ref = compiled.get(&header_name);
+        if !is_dict || rendered_ref.is_none() || compiled_ref != rendered_ref.as_ref() {
             return Err(electricity_tools::ToolError::message(format!(
                 "Tool effect '{name}' params.headers.{header_name}: a {{secret: ...}} \
                  value is honoured only when the document writes it in params.headers \
                  itself."
             )));
         }
+        found.insert(
+            header_name,
+            compiled_ref
+                .cloned()
+                .expect("compiled_ref == rendered_ref.as_ref(), checked above"),
+        );
     }
-    if !any {
+    if found.is_empty() {
         return Ok(None);
     }
+    Ok(Some(found))
+}
+
+/// The second half of [`find_secret_headers`]'s own split: actually
+/// resolves *detected*'s references (caching each in *secrets* for the
+/// rest of this dispatch), replacing their values in *headers* --
+/// *rendered*'s own `headers`, already known to be a mapping (the only
+/// shape [`find_secret_headers`] ever returns `Some` for).
+async fn resolve_detected_headers(
+    headers: &Dict,
+    detected: &IndexMap<String, electricity_bytecode::secrets::SecretRef>,
+    runtime_config: &Value,
+    token: &CancellationToken,
+    secrets: &mut electricity_tools::secrets::SecretValues,
+) -> Result<Dict, electricity_tools::ToolError> {
     let mut new_headers = headers.clone();
-    for (header_name, secret_ref) in compiled {
-        if !headers.contains_key(&Value::Str(header_name.clone())) {
-            continue;
-        }
+    for (header_name, secret_ref) in detected {
         let resolved = secrets
             .resolve(&secret_ref.name, &secret_ref.prefix, runtime_config, token)
             .await?;
         new_headers.insert(Value::Str(header_name.clone()), Value::Str(resolved));
     }
-    Ok(Some(new_headers))
+    Ok(new_headers)
 }
 
 /// `core/tool.py::ToolRuntime._runtime_with_env_secrets` (issue #725):
@@ -923,40 +1001,22 @@ pub async fn execute_tool<R: ParamsCtx>(
                 let is_http =
                     electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http";
 
-                // Issue #725: an `http` effect's literal `params.headers`
-                // secret reference(s), resolved (and validated against
-                // whatever `params_json` may have changed about `headers`
-                // since compile time) before anything else this attempt
-                // does.
-                let secret_headers_result = if is_http && !tool.secret_headers.is_empty() {
-                    resolve_secret_headers(
-                        name,
-                        &tool.secret_headers,
-                        &rendered_value,
-                        run_ctx.runtime_config,
-                        token,
-                        &mut dispatch_secrets,
-                    )
-                    .await
+                // Issue #725: which of an `http` effect's literal
+                // `params.headers` secret reference(s) are present this
+                // attempt (and validated against whatever `params_json`
+                // may have changed about `headers` since compile time) --
+                // detection only, so the placeholder below can be written
+                // into `meta.params_rendered` before any resolution is
+                // even attempted, matching cof's own ordering.
+                let detected_headers = if is_http {
+                    find_secret_headers(name, &tool.secret_headers, &rendered_value)
                 } else {
                     Ok(None)
                 };
-                if let Err(err) = &secret_headers_result {
+                if let Err(err) = &detected_headers {
                     secret_unresolved = true;
                     failure = Some(err.clone());
                 }
-
-                // The (lower-cased) header names a secret actually
-                // resolved this attempt -- `HttpPlugin`'s own redirect
-                // default and cross-origin header-stripping set
-                // (`ToolCall::secret_headers`).
-                let secret_header_names: Vec<String> = match &secret_headers_result {
-                    Ok(Some(new_headers)) => new_headers
-                        .keys()
-                        .map(|key| key.py_str().to_lowercase())
-                        .collect(),
-                    _ => Vec::new(),
-                };
 
                 // `plugin_params` in `core/tool.py`: the headers a resolved
                 // secret actually dispatches with; `rendered_value` itself
@@ -965,29 +1025,65 @@ pub async fn execute_tool<R: ParamsCtx>(
                 let mut dispatch_value = rendered_value.clone();
                 let mut params_rendered_record =
                     electricity_redaction::redact(rendered_value.clone());
-                if let Ok(Some(new_headers)) = &secret_headers_result {
-                    if let Value::Dict(dict) = &mut dispatch_value {
-                        dict.insert(
-                            Value::Str("headers".to_string()),
-                            Value::Dict(new_headers.clone()),
-                        );
-                    }
+                if let Ok(Some(detected)) = &detected_headers {
                     if let Value::Dict(record) = &mut params_rendered_record {
                         if let Some(Value::Dict(headers_record)) =
                             record.get_mut(&Value::Str("headers".to_string()))
                         {
-                            for (header_name, secret_ref) in &tool.secret_headers {
-                                if new_headers.contains_key(&Value::Str(header_name.clone())) {
-                                    headers_record.insert(
-                                        Value::Str(header_name.clone()),
-                                        Value::Str(secret_ref.placeholder()),
-                                    );
-                                }
+                            for (header_name, secret_ref) in detected {
+                                headers_record.insert(
+                                    Value::Str(header_name.clone()),
+                                    Value::Str(secret_ref.placeholder()),
+                                );
                             }
                         }
                     }
                 }
                 set_leaf(store, &meta_node, "params_rendered", params_rendered_record);
+
+                // The actual resolution, only once detection succeeded --
+                // a value that fails to resolve (the Keychain, a command
+                // or an environment variable) never reaches the plugin,
+                // but the placeholder above is already written.
+                let mut secret_header_names: Vec<String> = Vec::new();
+                if failure.is_none() {
+                    if let Ok(Some(detected)) = &detected_headers {
+                        let headers_dict = rendered_value
+                            .as_dict()
+                            .and_then(|d| d.get(&Value::Str("headers".to_string())))
+                            .and_then(Value::as_dict)
+                            .expect("find_secret_headers only returns Some when headers is a Dict");
+                        match resolve_detected_headers(
+                            headers_dict,
+                            detected,
+                            run_ctx.runtime_config,
+                            token,
+                            &mut dispatch_secrets,
+                        )
+                        .await
+                        {
+                            Ok(new_headers) => {
+                                // The (lower-cased) header names a secret
+                                // actually resolved this attempt --
+                                // `HttpPlugin`'s own redirect default and
+                                // cross-origin header-stripping set
+                                // (`ToolCall::secret_headers`).
+                                secret_header_names =
+                                    detected.keys().map(|key| key.to_lowercase()).collect();
+                                if let Value::Dict(dict) = &mut dispatch_value {
+                                    dict.insert(
+                                        Value::Str("headers".to_string()),
+                                        Value::Dict(new_headers),
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                secret_unresolved = true;
+                                failure = Some(err);
+                            }
+                        }
+                    }
+                }
 
                 // Issue #725: this provider's own `runtime.plugins.<name>.
                 // env` secret reference(s), resolved the same way, for
@@ -1704,6 +1800,7 @@ mod tests {
             group: None,
             secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
         }
     }
 
@@ -4194,6 +4291,7 @@ mod tests {
             group: None,
             secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
         }
     }
 
@@ -4214,6 +4312,7 @@ mod tests {
                     group: None,
                     secret_headers: IndexMap::new(),
                     prompt_file: None,
+                    limited: false,
                 }),
             )),
             ..tool_node(OnError::Continue)

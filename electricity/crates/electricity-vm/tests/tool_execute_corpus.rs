@@ -256,6 +256,7 @@ async fn golden_corpus_execute_tool() {
             group: None,
             secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
         };
         let op = Op {
             path: EffectPath::root().push_name(&name),

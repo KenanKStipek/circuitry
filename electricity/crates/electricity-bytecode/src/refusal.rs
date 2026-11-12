@@ -781,6 +781,7 @@ mod tests {
             group: None,
             secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
         }
     }
 
