@@ -12,6 +12,16 @@ effects:
         params:
           expr: "state.iter.index"
       - type: tool
+        name: before_write_bare
+        provider: cel
+        params:
+          expr: "state.prime.own_write.value"
+      - type: tool
+        name: before_write_via_prev
+        provider: cel
+        params:
+          expr: "state.prime.counter.prev.own_write.value"
+      - type: tool
         name: own_write
         provider: cel
         params:
