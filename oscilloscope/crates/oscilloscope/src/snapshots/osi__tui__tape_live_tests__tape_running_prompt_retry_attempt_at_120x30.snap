@@ -4,7 +4,7 @@ expression: "tape_snapshot_at(120, 30, &retry_attempt_state(), \"2026-10-08T11:4
 ---
 " ⠔⠒⠒⠤⠤⠔⠒⠒  do-thing.yml · ● Running 8.0s                                                               TAPE    11:46:51 "
 "╭─ Tape · 0 Done · 1 Running · 0 Ahead · ▰ = 50 t · Previews On ───────────╮╭─ ask · Selected ─────────────────────────╮"
-"│                                                                          ││      Status  ● Running 8.0s              │"
+"│                                                                          ││      Status  ● Running · 8.0s            │"
 "│                                                                          ││        Type  prompt · m                  │"
 "│                                                                          ││ First token  waiting · 1.0s              │"
 "│                                                                          ││        Sent  ≈350 t                      │"

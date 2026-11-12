@@ -271,6 +271,89 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #716: `Tab` moves focus from the Tape's own list to its
+/// detail pane -- down-arrow then scrolls the pane while the list's
+/// own selection stays exactly where it was, proven by the detail
+/// pane's own title (`breadcrumb (dot) Selected`) still naming the
+/// same row; `Tab` again gives down-arrow back to the list, which
+/// now does move the selection, naming the next row in plan order
+/// instead.
+#[test]
+fn tab_focuses_the_detail_pane_and_down_scrolls_it_while_the_list_stays() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[A\x1b[A");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "alpha \u{b7} Selected",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("alpha \u{b7} Selected"),
+        "expected alpha selected before Tab; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\t");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[B");
+    std::thread::sleep(SIGNAL_DELAY);
+    let screen = support::screen_grid(&captured_buf.lock().unwrap(), 120, 40).join("\n");
+    assert!(
+        screen.contains("alpha \u{b7} Selected"),
+        "expected the list's own selection to stay on alpha while the pane has focus; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\t");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[B");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "beta \u{b7} Selected",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("beta \u{b7} Selected"),
+        "expected down-arrow to move the list's own selection again once Tab gave it back; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
 /// Issue #710: while a run is live, the Tape's own Now band sits at
 /// the list's own vertical centre -- `(L - h) / 2` rows down from the
 /// list's own first content row, `L` the list's own height (33, at
