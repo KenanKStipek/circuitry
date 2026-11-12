@@ -244,8 +244,8 @@ impl PromptLive {
 }
 
 /// A running subprocess tool's own `meta.live` (issue #741,
-/// `docs/orchestration-reference.md`'s "A running tool's latest
-/// output" table) -- `shell` and every tool built on
+/// `docs/orchestration-reference.md`'s "A running subprocess tool's
+/// live output" section) -- `shell` and every tool built on
 /// `plugins/_subprocess.py` (not the agent tool, [`AgentLive`], nor
 /// `http`, which has no process). Told apart from both other live
 /// shapes by its own `stdout_tail` key, which neither carries.

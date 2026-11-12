@@ -2602,9 +2602,10 @@ fn tail_20_lines(text: &str) -> (&str, Option<usize>) {
 /// running subprocess tool has neither yet (`stdout`/`stderr` are
 /// only ever set on the finished node) -- issue #741's own `── Output
 /// (live) ───`/`── Errors (live) ───` sections, from `meta.live`'s
-/// own bounded tail, stand in for them instead, with `· {n}s ago`
-/// appended to the title once the tail itself has gone stale (more
-/// than 5 seconds since its own last write, [`ToolLive::is_recent`]).
+/// own bounded tail, stand in for them instead, with a muted
+/// `updated {n} ago` line under the rule once the tail itself has
+/// gone stale (more than 5 seconds since its own last write,
+/// [`ToolLive::is_recent`]).
 fn tool_output_sections(
     step: &oscilloscope_core::screens::FocusedStep,
     width: usize,
@@ -2628,9 +2629,15 @@ fn tool_output_sections(
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
     let mut lines = Vec::new();
-    let section = |lines: &mut Vec<Line<'static>>, title: &str, text: &str| {
+    let section = |lines: &mut Vec<Line<'static>>, title: &str, age: Option<&str>, text: &str| {
         lines.push(Line::from(""));
         lines.push(detail_section_rule(title, width, title_bold));
+        if let Some(age) = age {
+            lines.push(tape_detail_line(
+                vec![Span::styled(format!("updated {age} ago"), muted)],
+                width,
+            ));
+        }
         let (text, earlier) = if full {
             (text, None)
         } else {
@@ -2647,39 +2654,25 @@ fn tool_output_sections(
         }
     };
     if let Some(stdout) = stdout {
-        section(&mut lines, "Output", stdout);
+        section(&mut lines, "Output", None, stdout);
     }
     if let Some(stderr) = stderr {
-        section(&mut lines, "Errors", stderr);
+        section(&mut lines, "Errors", None, stderr);
     }
     if let Some(live) = live {
         let age = if live.is_recent(now) {
-            String::new()
+            None
         } else {
             live.updated_at
                 .as_deref()
                 .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
-                .map(|secs| {
-                    format!(
-                        " · {} ago",
-                        oscilloscope_core::format::format_duration(secs)
-                    )
-                })
-                .unwrap_or_default()
+                .map(oscilloscope_core::format::format_duration)
         };
         if !live.stdout_tail.is_empty() {
-            section(
-                &mut lines,
-                &format!("Output (live){age}"),
-                &live.stdout_tail,
-            );
+            section(&mut lines, "Output (live)", age.as_deref(), &live.stdout_tail);
         }
         if !live.stderr_tail.is_empty() {
-            section(
-                &mut lines,
-                &format!("Errors (live){age}"),
-                &live.stderr_tail,
-            );
+            section(&mut lines, "Errors (live)", age.as_deref(), &live.stderr_tail);
         }
     }
     lines
@@ -14717,12 +14710,13 @@ mod golden_tests {
     }
 
     /// Issue #741: once a live tail's own `updated_at` is more than 5
-    /// seconds old, the section title gets a `· {n} ago` suffix --
-    /// the same heartbeat rule `AgentLive::is_recent` already uses,
-    /// applied to a subprocess tool's tail instead. An empty
-    /// `stderr_tail` gets no `── Errors (live) ───` section at all.
+    /// seconds old, a muted `updated {n} ago` line appears right under
+    /// the section's own rule -- the same heartbeat rule
+    /// `AgentLive::is_recent` already uses, applied to a subprocess
+    /// tool's tail instead. An empty `stderr_tail` gets no
+    /// `── Errors (live) ───` section at all.
     #[test]
-    fn tool_detail_pane_marks_a_stale_live_tail_with_an_ago_suffix() {
+    fn tool_detail_pane_marks_a_stale_live_tail_with_an_updated_ago_line() {
         use oscilloscope_core::model::ToolLive;
         use oscilloscope_core::screens::FocusDetail;
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
@@ -14755,7 +14749,9 @@ mod golden_tests {
             false,
             &ctx,
         ));
-        assert!(text.contains("── Output (live) · 54.0s ago "), "{text}");
+        assert!(text.contains("── Output (live) ─"), "{text}");
+        assert!(text.contains("updated 54.0s ago"), "{text}");
+        assert!(!text.contains("· 54.0s ago"), "{text}");
         assert!(!text.contains("Errors"), "{text}");
     }
 

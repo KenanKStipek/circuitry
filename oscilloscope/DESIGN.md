@@ -3714,10 +3714,11 @@ sections from `stdout_tail`/`stderr_tail` in place of the finished
 ones while the node has no `stdout`/`stderr` of its own yet, cut to
 the tail's own last-20-lines bound exactly like a finished section
 is cut to 20 under `full: false` (nothing to cut further: the tail
-is never longer than that to begin with); the title gets a
-`· {n} ago` suffix, the same `format_duration` phrasing a row's own
-age already uses, once `ToolLive::is_recent` (`AgentLive::is_recent`'s
-same 5-second rule) says the tail itself has gone stale. The
+is never longer than that to begin with); a muted `updated {n} ago`
+line appears directly under the section's own rule, the same
+`format_duration` phrasing a row's own age already uses, once
+`ToolLive::is_recent` (`AgentLive::is_recent`'s same 5-second rule)
+says the tail itself has gone stale. The
 Flow's own simpler Selected pane, out of this issue's scope, keeps
 its exit code in its own existing `produced:` line instead.
 
