@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`gh api <repo>/timeline --paginate -H ... --slurp` failing (the fake answers it with a non-zero exit), absorbed by `on_error: continue`: the run still succeeds, with `meta.error`/`meta.exit_code`/`meta.stderr` recorded on the effect itself.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

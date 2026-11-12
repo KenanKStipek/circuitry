@@ -44,22 +44,22 @@ model and the metadata around each step. Four screens look at one run; two more 
 ```text
  osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t · Previews On ───────────╮╭─ gate › reply · Selected ────────────────╮
-│                                                                          ││ Status  ✓ Done  0.0s · 12:50:50          │
-│12:50:50 ✓ tests              3.0s · sleep 3                              ││ Type    prompt · scripted-model          │
-│12:50:50 ◆ gate → then        kind != ""                                  ││ Tokens  ↑348 ↓41 · 389 t                 │
-│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ▰▰▰▰▰▰▰▰   389 t││ Usual   265 t  +47% · median of 3 runs   │
-│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││ Share   45% of this run so far           │
-│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ▰▰▰▱▱▱▱▱   130 t││                                          │
-│             › Write one sentence about cats.                             ││ Prompt Sent · 348 t                      │
-│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ▰▰▰▱▱▱▱▱   131 t││ Reply as the maintainer (kind: Bug.).    │
-│             › Write one sentence about dogs.                             ││ Issue: parse_duration fails on 1h30m     │
-│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ with ValueError: invalid duration. 90m   │
-│12:50:50 ⟳ drafts             2/2 busy · 1 queued         ▃▃       130 t/p││ works.                                   │
-│12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││                                          │
-│12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││ Reply · 41 t                             │
-│         · iter_2 › draft     prompt · queued             usually 155 t   ││ Thanks for the report. We will look into │
-│             › Write one sentence about {{topic}}.                        ││ why 1h30m fails while 90m works and fix  │
-│         · iter_2 › pause     tool · sleep 1 · queued                     ││ it in the next release.                  │
+│                                                                          ││      Status  ✓ Done · 0.0s · 12:50:50    │
+│12:50:50 ✓ tests              3.0s · sleep 3                              ││        Type  prompt · scripted-model     │
+│12:50:50 ◆ gate → then        kind != ""                                  ││      Tokens  ↑348 ↓41 · 389 t            │
+│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ▰▰▰▰▰▰▰▰   389 t││       Usual  265 t +47% · median of 3    │
+│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││              runs                        │
+│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ▰▰▰▱▱▱▱▱   130 t││       Share  45% of this run so far      │
+│             › Write one sentence about cats.                             ││                                          │
+│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ▰▰▰▱▱▱▱▱   131 t││ ── Prompt Sent · 348 t ──────────────────│
+│             › Write one sentence about dogs.                             ││ Reply as the maintainer (kind: Bug.).    │
+│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ Issue: parse_duration fails on 1h30m     │
+│12:50:50 ⟳ drafts             2/2 busy · 1 queued         ▃▃       130 t/p││ with ValueError: invalid duration. 90m   │
+│12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││ works.                                   │
+│12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││                                          │
+│         · iter_2 › draft     prompt · queued             usually 155 t   ││ ── Reply · 41 t ─────────────────────────│
+│             › Write one sentence about {{topic}}.                        ││ Thanks for the report. We will look into │
+│         · iter_2 › pause     tool · sleep 1 · queued                     ││ why 1h30m fails while 90m works and fix  │
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
@@ -71,7 +71,7 @@ model and the metadata around each step. Four screens look at one run; two more 
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
  ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago
- ↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens                                                ? Help  q Quit
+ ↑↓ Select  enter Open  tab Focus  p Previews  t Tokens  0-3 Screens                                     ? Help  q Quit
 ```
 *`frames/tape--normal--120x30.mock` · [png](frames/tape--normal--120x30.png)*
 
@@ -100,22 +100,22 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 ```text
  osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · vs Usual · 3 Runs · Previews On ──╮╭─ gate › reply · Selected ────────────────╮
-│                                                                          ││ Status  ✓ Done  0.0s · 12:50:50          │
-│12:50:50 ✓ tests              3.0s · sleep 3                              ││ Type    prompt · scripted-model          │
-│12:50:50 ◆ gate → then        kind != ""                                  ││ Tokens  ↑348 ↓41 · 389 t                 │
-│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ────┼▓▓▓▓  +47% ││ Usual   265 t  +47% · median of 3 runs   │
-│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││ Share   45% of this run so far           │
-│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ───▓┼────  -16% ││                                          │
-│             › Write one sentence about cats.                             ││ Prompt Sent · 348 t                      │
-│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ───▓┼────  -14% ││ Reply as the maintainer (kind: Bug.).    │
-│             › Write one sentence about dogs.                             ││ Issue: parse_duration fails on 1h30m     │
-│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ with ValueError: invalid duration. 90m   │
-│12:50:50 ⟳ drafts             2/2 busy · 1 queued         ▃▃       130 t/p││ works.                                   │
-│12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││                                          │
-│12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││ Reply · 41 t                             │
-│         · iter_2 › draft     prompt · queued             usually 155 t   ││ Thanks for the report. We will look into │
-│             › Write one sentence about {{topic}}.                        ││ why 1h30m fails while 90m works and fix  │
-│         · iter_2 › pause     tool · sleep 1 · queued                     ││ it in the next release.                  │
+│                                                                          ││      Status  ✓ Done · 0.0s · 12:50:50    │
+│12:50:50 ✓ tests              3.0s · sleep 3                              ││        Type  prompt · scripted-model     │
+│12:50:50 ◆ gate → then        kind != ""                                  ││      Tokens  ↑348 ↓41 · 389 t            │
+│12:50:50 ✓ gate › reply       ↑348 ↓41 · Thanks for the ⋯ ────┼▓▓▓▓  +47% ││       Usual  265 t +47% · median of 3    │
+│             › Reply as the maintainer (kind: Bug.). Iss⋯                 ││              runs                        │
+│12:50:50 ✓ iter_0 › draft     ↑118 ↓12 · Cats nap in sun⋯ ───▓┼────  -16% ││       Share  45% of this run so far      │
+│             › Write one sentence about cats.                             ││                                          │
+│12:50:50 ✓ iter_1 › draft     ↑118 ↓13 · Dogs greet the ⋯ ───▓┼────  -14% ││ ── Prompt Sent · 348 t ──────────────────│
+│             › Write one sentence about dogs.                             ││ Reply as the maintainer (kind: Bug.).    │
+│━━ Now 12:50:50 · 3.6s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││ Issue: parse_duration fails on 1h30m     │
+│12:50:50 ⟳ drafts             2/2 busy · 1 queued         ▃▃       130 t/p││ with ValueError: invalid duration. 90m   │
+│12:50:50   ● iter_0 › pause   0.6s · sleep 1                              ││ works.                                   │
+│12:50:50   ● iter_1 › pause   0.6s · sleep 1                              ││                                          │
+│         · iter_2 › draft     prompt · queued             usually 155 t   ││ ── Reply · 41 t ─────────────────────────│
+│             › Write one sentence about {{topic}}.                        ││ Thanks for the report. We will look into │
+│         · iter_2 › pause     tool · sleep 1 · queued                     ││ why 1h30m fails while 90m works and fix  │
 │         · flaky              tool · ls /nonexistent-osi⋯                 ││                                          │
 │         · summary            prompt                      usually 402 t   ││                                          │
 │             › Summarize the drafts in one line.                          ││                                          │
@@ -127,14 +127,28 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │
 ╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯
  ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago
- ↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens                                                ? Help  q Quit
+ ↑↓ Select  enter Open  tab Focus  p Previews  t Tokens  0-3 Screens                                     ? Help  q Quit
 ```
 *`frames/tape--usual--120x30.mock` · [png](frames/tape--usual--120x30.png)*
 
-**Detail pane** (right, 44 columns at 120). The selected row, title `gate › reply · Selected`: Status, Type,
-Tokens (`↑348 ↓41 · 389 t`), Usual (`265 t  +47% · median of 3 runs`), Share of the run so far, then the
-prompt sent and the reply in full, each headed with its token count. Arrow keys move the selection; `enter`
-opens the step full-screen (the same content with room for the whole prompt and reply).
+**Detail pane** (right, 44 columns at 120). The selected row's own `description:`, wrapped in full, ahead of
+everything else when the effect has one. Title `gate › reply · Selected`: Status (`✓ Done · 0.0s · 12:50:50`),
+Type, Tokens (`↑348 ↓41 · 389 t`), Usual (`265 t +47% · median of 3 runs`), Share of the run so far, a tool
+step's own Command (and, once finished, Exit), then the prompt sent and the reply in full, each headed by a
+titled rule carrying its own token count (`── Reply · 41 t ───`). Keys are right-aligned, two spaces before
+the value; a value wraps under its own column with a hanging indent, never under the key. A step's own key
+column keeps one width for its whole lifetime -- the widest key that step's own kind could ever show, not
+only the ones a given draw happens to have, so a running prompt's own `First token`/`Received`/`Sent`
+fields never widen or narrow it as they come and go. A tool step's own stdout/stderr here read only their
+last 20 lines, with a `… n earlier lines` row above them once there were more; the full-screen step (below)
+keeps the whole output. An agent's own transcript section reads `Transcript · N calls` when the read window
+reaches the session's own start, else `Transcript · last N of M calls`, `M` the session's own whole total.
+`Tab` moves focus between the list and this pane (the pane gets the accent border); focused, `↑↓`/`PgUp`/
+`PgDn`/`Home`/`End` scroll it while the list selection stays put, and `esc` or `Tab` again gives focus back --
+below 100 columns, where this pane never draws, `Tab` does nothing and isn't on the key bar either. Its own
+top and bottom borders read `↑ n above` and `↓ n more` once the content overflows it; choosing another row
+resets the scroll to the top. `enter` opens the step full-screen (the same content with room for the whole
+prompt and reply, and a tool step's own whole stdout/stderr, nothing cut).
 
 **Totals row**, pinned above the bottom border and identical on every single-run screen:
 `Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —`. Cost shows a figure once an engine
@@ -612,7 +626,7 @@ Above · Received Below · Fixed Scale`). Counts in chrome are `6 Done · 2 Runn
 | Where | Keys |
 | --- | --- |
 | Everywhere | `0`–`3` Screens (Tape, Signal, Flow, Store) · `T` Colour theme · `?` Help · `q` Quit, confirms while a run is live · `c` Cancel the run, confirms (listed in Help) · `esc` closes the help, or goes back to where the screen was opened from |
-| Tape | `↑↓` Select · `enter` Open the step · `p` Previews on or off · `t` Tokens: units or vs usual |
+| Tape | `↑↓` Select · `enter` Open the step · `tab` Focus the detail pane (`↑↓`/`PgUp`/`PgDn`/`Home`/`End` scroll it, `esc` or `tab` again gives focus back; below 100 columns, where the pane never draws, neither does this key) · `p` Previews on or off · `t` Tokens: units or vs usual |
 | Signal | `←→` Scrub · `+/-` Zoom · `n` Now · `enter` Open the step under the cursor |
 | Flow | `←→` Scroll · `↑↓` Lane · `+/-` Lanes · `f` Follow · `enter` Open |
 | Store | `↑↓` Select · `enter` Open |
@@ -626,11 +640,12 @@ live, or shows the empty Select). Select → a run → `esc` → Select. Select 
 and quits at once otherwise. Below 80 columns only the Tape is offered, so its key bar drops `0-3`.
 
 **Keys the shipped TUI binds that the frames do not show** (`crates/oscilloscope/src/keys.rs`): `j`/`k`,
-`PageUp`/`PageDown`, `Home`/`End`, `g`/`G` keep working as movement aliases and belong in Help. `/` filter and
-`e` errors-only act on the Tape's rows and belong in Help. `t` cycles the theme today; the design uses `t`
-for the token column, so theme cycling moves to `T`. `s` (state tree) and `l` (log) swapped panes on the shipped
-Flow; this design has no such panes, so they go, as does `z` (folding is the Flow's `+/-`) and `v`. `Tab` between
-panes is unnecessary: each screen has one list with a cursor.
+`PageUp`/`PageDown`, `Home`/`End`, `g`/`G` keep working as movement aliases (also binding the Tape's own
+detail pane, once `tab` has given it focus) and belong in Help. `/` filter and `e` errors-only act on the
+Tape's rows and belong in Help. `t` cycles the theme today; the design uses `t` for the token column, so
+theme cycling moves to `T`. `s` (state tree) and `l` (log) swapped panes on the shipped Flow; this design has
+no such panes, so they go, as does `z` (folding is the Flow's `+/-`) and `v`. `Tab` is otherwise unnecessary:
+every other screen has one list with a cursor, nothing of its own to focus.
 
 ---
 

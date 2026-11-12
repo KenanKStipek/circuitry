@@ -70,7 +70,7 @@
 //! date/time type `_to_cel` special-cases) — collapses the same way in
 //! this crate: `convert::to_cel` routes every such key to one reserved
 //! sentinel [`cel::objects::Key::String`] (`convert::NULL_KEY_SENTINEL`),
-//! so a plain `HashMap::insert` collapses them exactly like Python's own
+//! so a plain `IndexMap::insert` collapses them exactly like Python's own
 //! dict assignment does (last value wins), `size()` counts the slot
 //! once, and `null in state.m` finds it (`equality`'s own `in` arm
 //! special-cases the sentinel back into a `null` match). This is
@@ -140,8 +140,7 @@
 //! CEL's error-absorbing `&&`, where a `false` anywhere wins over an
 //! error anywhere else, and a `Map` comparison checks both sides hold
 //! the same key set before comparing any value, so neither result can
-//! depend on a `HashMap`'s own unspecified iteration order
-//! (`equality` module docs).
+//! depend on the map's own iteration order (`equality` module docs).
 //!
 //! The `map` macro only accepts the two-argument form
 //! (`target.map(x, transform)`): the `cel` crate's own copied expander
@@ -604,8 +603,8 @@ fn truthy(value: &cel::Value) -> bool {
 /// evaluates to `false` — that would be indistinguishable from a
 /// legitimately false condition.
 pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<bool, CelError> {
-    match evaluate_condition_inner(expr, state, strict)? {
-        ConditionOutcome::Value(value) => Ok(value),
+    match evaluate_condition_inner(expr, state, strict, "condition is false")? {
+        ConditionOutcome::Value(value) => Ok(truthy(&value)),
         ConditionOutcome::Unset(_) => Ok(false),
     }
 }
@@ -622,17 +621,49 @@ pub fn evaluate_condition(expr: &str, state: &Value, strict: bool) -> Result<boo
 /// Every failure [`evaluate_condition`] raises on, raises here too.
 #[doc(hidden)]
 pub fn unset_path(expr: &str, state: &Value, strict: bool) -> Result<Option<String>, CelError> {
-    match evaluate_condition_inner(expr, state, strict)? {
+    match evaluate_condition_inner(expr, state, strict, "condition is false")? {
         ConditionOutcome::Value(_) => Ok(None),
         ConditionOutcome::Unset(path) => Ok(Some(path)),
     }
 }
 
+/// Evaluates a `cel` tool expression against *state* and returns its
+/// result as a JSON-shaped [`Value`] -- the `cel` tool's own evaluator
+/// (`plugins/cel.py::evaluate_cel_value`, issue #723). The same binding
+/// (`state`) and the same absent-state rule as [`evaluate_condition`],
+/// except the result is the expression's own value
+/// ([`convert::to_json`]) rather than coerced to a bool: an unguarded
+/// `state.` path that is unset makes the result [`Value::None`] (JSON
+/// `null`), with a warning naming the path, unless `strict`.
+///
+/// # Errors
+///
+/// Every failure [`evaluate_condition`] raises on, raises here too, plus
+/// [`convert::to_json`]'s own failure for a result JSON cannot carry
+/// (bytes, a non-finite double, or anything else with no JSON form).
+pub fn evaluate_value(expr: &str, state: &Value, strict: bool) -> Result<Value, CelError> {
+    match evaluate_condition_inner(expr, state, strict, "value is null")? {
+        ConditionOutcome::Value(value) => convert::to_json(value).map_err(|message| {
+            CelError::new(
+                expr,
+                format!(
+                    "CEL expression {} has no JSON value: {message}",
+                    py_repr(expr)
+                ),
+            )
+        }),
+        ConditionOutcome::Unset(_) => Ok(Value::None),
+    }
+}
+
 /// [`evaluate_condition`]'s own result, before the unset-path rule's
-/// path is collapsed into a plain `false` -- shared with [`unset_path`]
-/// so the rule's decision is computed once.
+/// path is collapsed into a plain `false` (or, for [`evaluate_value`],
+/// `null`) -- shared by every caller so the rule's decision is computed
+/// once, carrying the raw [`cel::Value`] result rather than an
+/// already-coerced bool so [`evaluate_value`] can convert it to JSON
+/// instead of applying [`truthy`].
 enum ConditionOutcome {
-    Value(bool),
+    Value(cel::Value),
     Unset(String),
 }
 
@@ -640,6 +671,7 @@ fn evaluate_condition_inner(
     expr: &str,
     state: &Value,
     strict: bool,
+    unset_outcome: &str,
 ) -> Result<ConditionOutcome, CelError> {
     check_length(expr)?;
     check_stack_safety(expr)?;
@@ -738,7 +770,7 @@ fn evaluate_condition_inner(
                     ));
                 }
                 log::warn!(
-                    "CEL expression {} reads unset state path {}; condition is false",
+                    "CEL expression {} reads unset state path {}; {unset_outcome}",
                     py_repr(expr),
                     py_repr(path)
                 );
@@ -759,7 +791,7 @@ fn evaluate_condition_inner(
             ));
         }
     };
-    Ok(ConditionOutcome::Value(truthy(&result)))
+    Ok(ConditionOutcome::Value(result))
 }
 
 /// Evaluates a tool/use `expect:` CEL expression and returns a bool.
@@ -1704,6 +1736,170 @@ mod tests {
         assert_eq!(
             evaluate_condition("state.input.s.matches('^h.*d$')", &state, false),
             Ok(true)
+        );
+    }
+}
+
+#[cfg(test)]
+mod evaluate_value_tests {
+    use super::*;
+    use electricity_value::Dict;
+
+    fn dict(pairs: Vec<(&str, Value)>) -> Value {
+        let mut d = Dict::new();
+        for (k, v) in pairs {
+            d.insert(Value::Str(k.to_string()), v);
+        }
+        Value::Dict(d)
+    }
+
+    #[test]
+    fn a_boolean_result() {
+        let state = dict(vec![("input", dict(vec![("ok", Value::Bool(true))]))]);
+        assert_eq!(
+            evaluate_value("state.input.ok", &state, false),
+            Ok(Value::Bool(true))
+        );
+    }
+
+    #[test]
+    fn a_list_result() {
+        let state = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_value("[1, 2, 3]", &state, false),
+            Ok(Value::List(vec![
+                Value::from(1_i64),
+                Value::from(2_i64),
+                Value::from(3_i64),
+            ]))
+        );
+    }
+
+    #[test]
+    fn a_map_literal_result_keeps_its_source_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::Dict(ref result) = evaluate_value("{'b': 2, 'a': 1}", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            result.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("b"), Value::from("a")]
+        );
+    }
+
+    #[test]
+    fn a_map_read_from_state_keeps_states_own_order() {
+        let mut inner = Dict::new();
+        inner.insert(Value::from("z"), Value::from(1_i64));
+        inner.insert(Value::from("m"), Value::from(2_i64));
+        inner.insert(Value::from("a"), Value::from(3_i64));
+        let mut prime = Dict::new();
+        prime.insert(Value::Str("gate".to_string()), Value::Dict(inner));
+        let mut state_dict = Dict::new();
+        state_dict.insert(Value::Str("prime".to_string()), Value::Dict(prime));
+        let state = Value::Dict(state_dict);
+        let Value::Dict(ref result) = evaluate_value("state.prime.gate", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            result.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("z"), Value::from("m"), Value::from("a")]
+        );
+    }
+
+    #[test]
+    fn a_map_nested_inside_a_list_keeps_its_own_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::List(ref items) = evaluate_value("[{'y': 1, 'x': 2}]", &state, false).unwrap()
+        else {
+            panic!("expected a list");
+        };
+        let Value::Dict(ref inner) = items[0] else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            inner.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("y"), Value::from("x")]
+        );
+    }
+
+    #[test]
+    fn a_map_nested_inside_a_map_keeps_its_own_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::Dict(ref outer) =
+            evaluate_value("{'outer': {'y': 1, 'x': 2}}", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        let Value::Dict(ref inner) = outer[&Value::from("outer")] else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            inner.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("y"), Value::from("x")]
+        );
+    }
+
+    #[test]
+    fn a_map_chosen_by_a_ternary_keeps_its_own_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::Dict(ref result) =
+            evaluate_value("true ? {'b': 1, 'a': 2} : {'x': 3}", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            result.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("b"), Value::from("a")]
+        );
+    }
+
+    #[test]
+    fn a_timestamp_result_is_an_iso_8601_string() {
+        let state = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_value("timestamp('2024-07-04T12:30:45Z')", &state, false),
+            Ok(Value::from("2024-07-04T12:30:45Z"))
+        );
+    }
+
+    #[test]
+    fn a_duration_result_is_an_iso_8601_duration() {
+        let state = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_value("duration('90m')", &state, false),
+            Ok(Value::from("PT1H30M"))
+        );
+    }
+
+    #[test]
+    fn an_unset_path_is_null_without_strict() {
+        let state = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_value("state.prime.missing.value", &state, false),
+            Ok(Value::None)
+        );
+    }
+
+    #[test]
+    fn an_unset_path_raises_under_strict() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_value("state.prime.missing.value", &state, true).unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("state.prime.missing.value"));
+        assert!(message.contains("strict"));
+    }
+
+    #[test]
+    fn bytes_have_no_json_form() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_value("b'x'", &state, false).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "CEL expression \"b'x'\" has no JSON value: bytes have no JSON form; \
+             convert them with string()"
         );
     }
 }

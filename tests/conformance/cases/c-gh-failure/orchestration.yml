@@ -1,0 +1,7 @@
+name: c-gh-failure
+effects:
+  - type: tool
+    name: close
+    provider: gh
+    params:
+      args: ["issue", "close", "999"]

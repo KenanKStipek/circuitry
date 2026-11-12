@@ -1114,9 +1114,6 @@ set a literal.
   evaluated again on [`--resume`](#resuming-a-run-cof-run---resume), like any
   other finished effect.
 
-electricity does not run the `cel` tool yet: a document that names it is
-refused with the preview message.
-
 #### Secrets in `http` headers and a subprocess tool's `env`
 
 A credential belongs in host configuration, not in a document's data flow.

@@ -30,7 +30,7 @@
 {fg.faint}│1{/}{border.focus on:bg.surface}│ {/}{fg.muted on:bg.surface}usual  {/}{fg.default on:bg.surface}median of 3 past runs       {/}{fg.muted on:bg.surface}● ·     {/}{fg.default on:bg.surface}running · ahead           {/}{border.focus on:bg.surface}│{/} {fg.faint}││                                          │{/}
 {fg.faint}│1{/}{border.focus on:bg.surface}│ {/}{fg.muted on:bg.surface}+25%   {/}{fg.default on:bg.surface}above usual · red past +50% {/}{fg.muted on:bg.surface}◆ ⟳ ■   {/}{fg.default on:bg.surface}decision · loop · run     {/}{border.focus on:bg.surface}│{/} {fg.faint}││                                          │{/}
 {fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{fg.muted on:bg.surface}T      {/}{fg.default on:bg.surface}colour theme                {/}{fg.muted on:bg.surface}        {/}{fg.default on:bg.surface}                          {/}{border.focus on:bg.surface}│{/} {fg.faint}││                                          │{/}
-{fg.faint}│ {/}{border.focus on:bg.surface}│                                                                      │{/} {fg.faint}││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{fg.muted on:bg.surface}tab    {/}{fg.default on:bg.surface}focus the detail pane       {/}{fg.muted on:bg.surface}        {/}{fg.default on:bg.surface}                          {/}{border.focus on:bg.surface}│{/} {fg.faint}││                                          │{/}
 {fg.faint}│ {/}{border.focus on:bg.surface}│                                                                      │{/} {fg.faint}││                                          │{/}
 {fg.faint}│ {/}{border.focus on:bg.surface}│                                                                      │{/} {fg.faint}││                                          │{/}
 {fg.faint}│ {/}{border.focus on:bg.surface}│                                                                      │{/} {fg.faint}││                                          │{/}
@@ -43,4 +43,4 @@
 {fg.faint}│ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │{/}
 {fg.faint}╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯{/}
  {fg.faint}✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago{/}                                                                        
- {fg.faint}↑↓ Select  enter Open  p Previews  t Tokens  0-3 Screens                                                ? Help  q Quit {/}
+ {fg.faint}↑↓ Select  enter Open  tab Focus  p Previews  t Tokens  0-3 Screens                                     ? Help  q Quit {/}

@@ -22,7 +22,7 @@
 //! of the *other* integer type rather than silently finding it the way
 //! `cel`'s own map indexing's implicit int/uint cross-conversion does.
 //! [`python_index`]'s `Value::Map` arm looks a key up through the
-//! underlying `HashMap` directly ([`cel::objects::Map`]'s own `map`
+//! underlying `IndexMap` directly ([`cel::objects::Map`]'s own `map`
 //! field, already public — `equality.rs`'s own map-equality arm reads
 //! it the same way), bypassing [`Map::get`](cel::objects::Map::get)
 //! specifically to avoid that cross-conversion. An `int`/`uint` probe
@@ -131,7 +131,7 @@ fn python_index(container: &dyn Val, index: &Value) -> Result<Value, ()> {
 }
 
 /// [`python_index`]'s `map` arm: a strict (non-cross-converting) key
-/// match through the underlying `HashMap` directly -- celpy's own
+/// match through the underlying `IndexMap` directly -- celpy's own
 /// `MapType.__getitem__` raises on an `int`/`uint` key mismatch rather
 /// than finding the entry the way `cel`'s own, cross-converting
 /// [`cel::objects::Map::get`] does (module docs) -- reading only the

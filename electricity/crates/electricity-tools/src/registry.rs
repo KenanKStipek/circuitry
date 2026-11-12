@@ -132,6 +132,16 @@ fn builders() -> HashMap<&'static str, Builder> {
             Ok(Box::new(crate::validate_yaml::ValidateYamlPlugin))
         },
     );
+    map.insert(
+        "cel",
+        |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
+            Ok(Box::new(crate::cel::CelPlugin))
+        },
+    );
+    map.insert(
+        "gh",
+        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::gh::make_plugin(cfg) },
+    );
     #[cfg(feature = "test-tools")]
     {
         map.insert(
@@ -327,6 +337,7 @@ mod tests {
             "regex",
             "http",
             "validate_yaml",
+            "gh",
         ] {
             let plugin = build_plugin(name, &Value::None)
                 .unwrap_or_else(|err| panic!("{name}: expected a stub plugin, got {err:?}"));

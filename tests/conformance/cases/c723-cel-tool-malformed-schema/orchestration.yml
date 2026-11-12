@@ -1,0 +1,8 @@
+name: c723-cel-tool-malformed-schema
+effects:
+  - type: tool
+    name: gate
+    provider: cel
+    params:
+      expr: "true"
+      schema: {type: object, required: a}
