@@ -471,8 +471,19 @@ pub fn tile_now_pane_rows(
     items: &[TapeItem],
 ) -> (Option<String>, Vec<TileNowRow>, Vec<TileNowRow>) {
     let mut slots_text = None;
-    let mut running = Vec::new();
+    // Every running leaf's own relative label, alongside the
+    // nearest enclosing loop still on `loop_stack` when it was seen
+    // (by its own indent -- a tree row's own label is relative to
+    // its immediate parent in the tree only, `screens.rs`'s own
+    // `tape_breadcrumb_relative`): resolved into `running` only
+    // after every row has been seen, so a plain, single-loop
+    // document's own already-unique relative labels never gain a
+    // prefix they don't need -- only two rows that would otherwise
+    // read identically (issue #737: two different `files` loops'
+    // own same-numbered pass, `iter_2 › build › compile`) ever do.
+    let mut pending_running: Vec<(String, Option<String>, String)> = Vec::new();
     let mut ahead = Vec::new();
+    let mut loop_stack: Vec<(usize, String)> = Vec::new();
     for item in items {
         match item {
             // A running loop's own row carries its counts in `what`
@@ -490,6 +501,8 @@ pub fn tile_now_pane_rows(
                             | StatusKind::RunningOrQueued
                     ) =>
             {
+                loop_stack.retain(|(depth, _)| *depth < row.indent);
+                loop_stack.push((row.indent, row.label.clone()));
                 if slots_text.is_none() {
                     slots_text = row.what.split(" · ").next().map(str::to_string);
                 }
@@ -502,10 +515,9 @@ pub fn tile_now_pane_rows(
                 StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
                     if row.kind.is_leaf() =>
                 {
-                    running.push(TileNowRow {
-                        label: row.label.clone(),
-                        what: row.what.clone(),
-                    });
+                    loop_stack.retain(|(depth, _)| *depth < row.indent);
+                    let parent = loop_stack.last().map(|(_, l)| l.clone());
+                    pending_running.push((row.label.clone(), parent, row.what.clone()));
                 }
                 StatusKind::Pending | StatusKind::Skipped => {
                     // The frame's own ahead `if` row drops its
@@ -527,6 +539,21 @@ pub fn tile_now_pane_rows(
             _ => {}
         }
     }
+    let mut label_counts: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
+    for (label, _, _) in &pending_running {
+        *label_counts.entry(label.clone()).or_insert(0) += 1;
+    }
+    let running = pending_running
+        .into_iter()
+        .map(|(label, parent, what)| {
+            let label = match parent {
+                Some(parent) if label_counts[&label] > 1 => format!("{parent} › {label}"),
+                _ => label,
+            };
+            TileNowRow { label, what }
+        })
+        .collect();
     (slots_text, running, ahead)
 }
 
@@ -890,6 +917,130 @@ mod tests {
             indent: 0,
             tokens: Default::default(),
         }
+    }
+
+    fn tree_row(path: &str, label: &str, kind: RowKind, indent: usize, what: &str) -> TapeRow {
+        TapeRow {
+            path: path.to_string(),
+            label: label.to_string(),
+            kind,
+            status: RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            ts: None,
+            what: what.to_string(),
+            what_is_agent_text: false,
+            preview: None,
+            bold: true,
+            indent,
+            tokens: Default::default(),
+        }
+    }
+
+    /// Issue #737: two different `files` loops' own same-numbered
+    /// pass reads identically relative to its own tree row (`iter_2
+    /// › build › compile` under both) -- flattened into this pane's
+    /// own plain list, each still carries its own nearest loop's own
+    /// label, so the two never actually collide once drawn here.
+    #[test]
+    fn tile_now_pane_rows_keeps_two_different_loops_own_colliding_leaves_apart() {
+        let items = vec![
+            TapeItem::NowBand {
+                ts: None,
+                elapsed_s: 1.0,
+            },
+            TapeItem::Row(tree_row(
+                "prime.groups",
+                "groups",
+                RowKind::Loop,
+                0,
+                "2 of 2 Slots Busy",
+            )),
+            TapeItem::Row(tree_row(
+                "prime.groups.iter_0.files",
+                "iter_0 › files",
+                RowKind::Loop,
+                1,
+                "2 of 2 Slots Busy",
+            )),
+            TapeItem::Row(tree_row(
+                "prime.groups.iter_0.files.iter_2.build.compile",
+                "iter_2 › build › compile",
+                RowKind::Tool,
+                2,
+                "0.4s · sleep 4",
+            )),
+            TapeItem::Row(tree_row(
+                "prime.groups.iter_1.files",
+                "iter_1 › files",
+                RowKind::Loop,
+                1,
+                "2 of 2 Slots Busy",
+            )),
+            TapeItem::Row(tree_row(
+                "prime.groups.iter_1.files.iter_2.build.compile",
+                "iter_2 › build › compile",
+                RowKind::Tool,
+                2,
+                "0.4s · sleep 4",
+            )),
+        ];
+        let (slots_text, running, _ahead) = tile_now_pane_rows(&items);
+        assert_eq!(slots_text.as_deref(), Some("2 of 2 Slots Busy"));
+        assert_eq!(running.len(), 2, "{running:?}");
+        assert_ne!(
+            running[0].label, running[1].label,
+            "two different files loops' own compiles must read apart: {running:?}"
+        );
+        assert_eq!(
+            running[0].label,
+            "iter_0 › files › iter_2 › build › compile"
+        );
+        assert_eq!(
+            running[1].label,
+            "iter_1 › files › iter_2 › build › compile"
+        );
+    }
+
+    /// A single loop's own children never gain a loop prefix their
+    /// own relative label didn't already need -- only two rows that
+    /// would otherwise read identically ever do.
+    #[test]
+    fn tile_now_pane_rows_leaves_a_single_loops_own_unique_children_alone() {
+        let items = vec![
+            TapeItem::NowBand {
+                ts: None,
+                elapsed_s: 1.0,
+            },
+            TapeItem::Row(tree_row(
+                "prime.drafts",
+                "drafts",
+                RowKind::Loop,
+                0,
+                "2 of 2 Slots Busy",
+            )),
+            TapeItem::Row(tree_row(
+                "prime.drafts.iter_0.pause",
+                "iter_0 › pause",
+                RowKind::Tool,
+                1,
+                "0.6s · sleep 1",
+            )),
+            TapeItem::Row(tree_row(
+                "prime.drafts.iter_1.pause",
+                "iter_1 › pause",
+                RowKind::Tool,
+                1,
+                "0.6s · sleep 1",
+            )),
+        ];
+        let (_, running, _ahead) = tile_now_pane_rows(&items);
+        assert_eq!(
+            running.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(),
+            vec!["iter_0 › pause", "iter_1 › pause"]
+        );
     }
 
     fn sample_items(finished: usize, running: usize, ahead: usize) -> Vec<TapeItem> {
