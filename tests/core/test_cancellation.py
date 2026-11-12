@@ -1258,6 +1258,7 @@ def test_run_tracked_does_not_repeat_the_group_kill_when_communicate_promptly_al
         timeout: Any,
         pgid: int | None,
         pgid_seen_gone: list[bool] | None = None,
+        reader_done_events: Any = (),
     ) -> tuple[str, str]:
         if pgid_seen_gone is not None:
             pgid_seen_gone.append(True)

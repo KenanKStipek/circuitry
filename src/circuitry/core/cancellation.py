@@ -1066,6 +1066,7 @@ def _read_raw_for_live_promptly(
     stream_name: str,
     on_chunk: Callable[[str, bytes], None],
     chunks: list[bytes],
+    done: threading.Event,
 ) -> None:
     """Read *buffer* -- a pipe's own raw ``BufferedReader`` (``proc.stdout.
     buffer``/``proc.stderr.buffer`` of a ``text=True`` ``Popen``) -- in
@@ -1080,23 +1081,38 @@ def _read_raw_for_live_promptly(
     subprocess_live.SubprocessLiveTracker`) decodes this same raw chunk a
     second time, on its own and lossily, independent of this one.
 
-    Reads until EOF with no join timeout of its own (#741 follow-up to an
-    earlier version that capped the join at 5s): the only bound is the
-    process's own group being killed (a timeout or cancellation) or the
-    pipe's write end actually closing -- the same as a plain
-    ``communicate()`` would wait for. A background child that inherits
-    this pipe and keeps its write end open past the tracked process's own
-    exit blocks this exactly as it would block ``communicate()``, not for
-    a bounded 5s before silently truncating.
+    Reads *buffer*'s own raw file descriptor directly, with ``os.read``,
+    never ``BufferedReader.read1``: ``read1`` takes the buffer's internal
+    lock for the duration of its own blocking read, and a daemon thread
+    parked there when the interpreter starts shutting down aborts the
+    process outright (``Fatal Python error: _enter_buffered_busy``) the
+    moment some other shutdown-time cleanup needs that same lock --
+    exactly the case a background grandchild holding this pipe open past
+    a timed-out or cancelled step leaves behind (#741 follow-up). Reading
+    the fd directly takes no Python-level lock at all, so a thread still
+    blocked here when the interpreter exits is simply abandoned, the way
+    any other daemon thread is.
+
+    Reads until EOF, the only bound being the process group being killed
+    (a timeout or cancellation) or the pipe's write end actually closing
+    -- the same as a plain ``communicate()`` would wait for. *done* is
+    set in every case, including an ``OSError`` partway through, so a
+    caller (:func:`_communicate_promptly`) waiting on it against the
+    step's own deadline is never left waiting on a thread that has
+    already stopped reading.
 
     *on_chunk* is never allowed to stop this loop, for the same reason
     ``on_line`` isn't (see :func:`_read_lines_promptly`): a failing
     publish must not leave the child's pipe undrained.
     """
     callback_failed = False
+    fd = buffer.fileno()
     try:
         while True:
-            chunk = buffer.read1(_LIVE_READ_CHUNK_BYTES)
+            try:
+                chunk = os.read(fd, _LIVE_READ_CHUNK_BYTES)
+            except OSError:
+                break
             if not chunk:
                 break
             chunks.append(chunk)
@@ -1109,13 +1125,12 @@ def _read_raw_for_live_promptly(
                 logger.exception(
                     "run_tracked on_live_chunk callback failed; no longer calling it"
                 )
-    except OSError:
-        pass
     finally:
         try:
             buffer.close()
         except OSError:
             pass
+        done.set()
 
 
 def _translate_newlines(data: bytes, encoding: str, errors: str) -> str:
@@ -1140,6 +1155,7 @@ def _communicate_promptly(
     pgid: int | None = None,
     poll_seconds: float = _SIGNAL_POLL_SECONDS,
     pgid_seen_gone: list[bool] | None = None,
+    reader_done_events: Sequence[threading.Event] = (),
 ) -> tuple[Any, Any]:
     """``proc.communicate()``, but never in one single wait as long as
     *timeout* itself (#385 follow-up).
@@ -1208,6 +1224,19 @@ def _communicate_promptly(
     exception unwinds through this function, and ``run_tracked``'s own
     ``except`` blocks need to know not to send one more ``killpg`` to a
     pgid this call already confirmed empty (#411 follow-up).
+
+    *reader_done_events*, when given (``run_tracked``'s own live-chunk
+    readers -- #741), must also all be set before this returns: the
+    step's own deadline covers process exit and EOF on every pipe, the
+    single wait a plain ``communicate()`` itself makes, rather than
+    stopping at process exit and leaving the readers joined separately
+    with no deadline at all. Once ``communicate()`` has returned, each
+    further slice instead waits on whichever of these events isn't set
+    yet, still bounded by *poll_seconds* against the same deadline and
+    still repeat-killing *pgid* on the same cadence -- a background
+    child that inherited the pipe and kept its write end open is exactly
+    what this keeps waiting for, and what blows the deadline and raises
+    ``TimeoutExpired`` here, the same as a slow process itself would.
     """
     # getattr, not proc.stdin: a Popen-like test double that never
     # models a `stdin` attribute at all (most of this catalog's own
@@ -1265,6 +1294,7 @@ def _communicate_promptly(
         full_timeout = timeout
     first = True
     pgid_gone = False
+    result: tuple[Any, Any] | None = None
     while True:
         if deadline is None:
             slice_timeout = poll_seconds
@@ -1273,19 +1303,47 @@ def _communicate_promptly(
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(proc.args, full_timeout)
             slice_timeout = min(poll_seconds, remaining)
-        try:
-            if threaded_stdin:
-                return proc.communicate(timeout=slice_timeout)
-            return proc.communicate(
-                input=input if first else None, timeout=slice_timeout
-            )
-        except subprocess.TimeoutExpired:
-            first = False
-            token = get_token()
-            if pgid is not None and not pgid_gone and token.is_set() and not token.in_cleanup():
-                pgid_gone = _repeat_group_kill(pgid)
-                if pgid_gone and pgid_seen_gone is not None:
-                    pgid_seen_gone.append(True)
+        if result is None:
+            try:
+                if threaded_stdin:
+                    result = proc.communicate(timeout=slice_timeout)
+                else:
+                    result = proc.communicate(
+                        input=input if first else None, timeout=slice_timeout
+                    )
+            except subprocess.TimeoutExpired:
+                first = False
+                token = get_token()
+                if pgid is not None and not pgid_gone and token.is_set() and not token.in_cleanup():
+                    pgid_gone = _repeat_group_kill(pgid)
+                    if pgid_gone and pgid_seen_gone is not None:
+                        pgid_seen_gone.append(True)
+                continue
+        if all(event.is_set() for event in reader_done_events):
+            return result
+        # The process has already exited, but a reader thread hasn't
+        # reached EOF on its own pipe yet -- the same case `communicate()`
+        # itself would still be waiting for. Keep repeat-killing *pgid*
+        # on the same cadence as the process-wait phase above, and wait
+        # for the first not-yet-done reader for this slice; the `while`
+        # above re-checks the deadline on every iteration either way.
+        token = get_token()
+        if pgid is not None and not pgid_gone and token.is_set() and not token.in_cleanup():
+            pgid_gone = _repeat_group_kill(pgid)
+            if pgid_gone and pgid_seen_gone is not None:
+                pgid_seen_gone.append(True)
+        for event in reader_done_events:
+            if not event.is_set():
+                # `Event.wait` is `Condition`-backed, the same #555-style
+                # exposure `acquire_promptly` wraps its own `Semaphore.
+                # acquire` in -- a first signal's handler raising between
+                # `Condition.__exit__`'s own frame being entered and the
+                # line inside it that releases the lock would otherwise
+                # leak it held forever, wedging the reader thread's own
+                # `done.set()` call against it next.
+                with deferred_signal_region():
+                    event.wait(slice_timeout)
+                break
 
 
 def run_tracked(
@@ -1350,11 +1408,11 @@ def run_tracked(
     with no live wiring at all, CRLF and any ``UnicodeDecodeError`` (text,
     position, and which stream's error wins when both have one) included
     (#741). Each reader thread reads until its pipe's write end actually
-    closes, with no join timeout of its own -- a background grandchild
-    that keeps a pipe open blocks this exactly as it would block a plain
-    ``communicate()``, not for some bounded interval before truncating.
-    Never combined with ``on_line`` — nothing in this catalog needs both
-    at once.
+    closes -- a background grandchild that keeps a pipe open blocks this
+    exactly as it would block a plain ``communicate()``, bounded only by
+    this call's own *timeout*/cancellation, never by some shorter interval
+    before truncating (#741 follow-up). Never combined with ``on_line`` —
+    nothing in this catalog needs both at once.
     """
     token = get_token()
     token.check()
@@ -1399,9 +1457,15 @@ def run_tracked(
     stdout_chunks: list[bytes] | None = None
     stderr_chunks: list[bytes] | None = None
     stdout_encoding = stdout_errors = stderr_encoding = stderr_errors = ""
-    # `(thread, join_timeout)`: `on_line`'s own reader keeps its original
-    # 5s join bound; a live-chunk reader has none -- it reads to real EOF,
-    # the same as a plain `communicate()` would (#741).
+    # Set by a live-chunk reader thread in its own `finally`, once it has
+    # truly reached EOF (or stopped reading on an `OSError`) -- the step's
+    # deadline, not an unbounded wait, is what `_communicate_promptly`
+    # bounds waiting for these by (#741 follow-up).
+    reader_done_events: list[threading.Event] = []
+    # `(thread, join_timeout)`: the final join below, after the deadline
+    # has already been kept by `_communicate_promptly` or an except
+    # block's own kill, is only ever a brief formality -- every reader
+    # keeps the same short bound now, `on_line`'s own original 5s included.
     reader_threads: list[tuple[threading.Thread, float | None]] = []
     if on_line is not None and proc.stdout is not None:
         stdout_lines = []
@@ -1422,13 +1486,15 @@ def run_tracked(
             stdout_encoding, stdout_errors = text_stdout.encoding, text_stdout.errors
             raw_stdout_buffer = text_stdout.buffer
             proc.stdout = None
+            stdout_done = threading.Event()
+            reader_done_events.append(stdout_done)
             reader_threads.append((
                 threading.Thread(
                     target=_read_raw_for_live_promptly,
-                    args=(raw_stdout_buffer, "stdout", on_live_chunk, stdout_chunks),
+                    args=(raw_stdout_buffer, "stdout", on_live_chunk, stdout_chunks, stdout_done),
                     daemon=True,
                 ),
-                None,
+                _SIGNAL_POLL_SECONDS,
             ))
         if proc.stderr is not None:
             stderr_chunks = []
@@ -1436,13 +1502,15 @@ def run_tracked(
             stderr_encoding, stderr_errors = text_stderr.encoding, text_stderr.errors
             raw_stderr_buffer = text_stderr.buffer
             proc.stderr = None
+            stderr_done = threading.Event()
+            reader_done_events.append(stderr_done)
             reader_threads.append((
                 threading.Thread(
                     target=_read_raw_for_live_promptly,
-                    args=(raw_stderr_buffer, "stderr", on_live_chunk, stderr_chunks),
+                    args=(raw_stderr_buffer, "stderr", on_live_chunk, stderr_chunks, stderr_done),
                     daemon=True,
                 ),
-                None,
+                _SIGNAL_POLL_SECONDS,
             ))
     # Only threads whose own `.start()` actually succeeded land here --
     # joining one that never started raises `RuntimeError: cannot join
@@ -1466,8 +1534,19 @@ def run_tracked(
                 stdout, stderr = _communicate_promptly(
                     proc, input=input, timeout=timeout, pgid=pgid,
                     pgid_seen_gone=pgid_seen_gone,
+                    reader_done_events=reader_done_events,
                 )
             except subprocess.TimeoutExpired:
+                # Never waits for a reader's own EOF (#741 follow-up) --
+                # exactly like a plain `communicate()` timing out never
+                # does either. Killing the group closes the write end of
+                # a pipe a same-group background child was still holding
+                # open, which is what lets the reader thread actually
+                # finish during the brief join below; a child outside the
+                # group (a detached session) is left exactly as it would
+                # be left with no live wiring at all -- still running,
+                # its reader thread still blocked, abandoned as a daemon
+                # thread rather than waited on.
                 kill_process_group(proc)
                 proc.wait()
                 # One more, after the process we were tracking has actually
@@ -1484,6 +1563,8 @@ def run_tracked(
                 # Cancellation already killed this process's group from the
                 # signal handler; this is the fallback for anything else
                 # that unwinds through here, the same as ``run_binary``.
+                # Never waits for a reader's own EOF either, for the same
+                # reason as the timeout path above.
                 kill_process_group(proc)
                 proc.wait()
                 if not pgid_seen_gone:
@@ -1492,11 +1573,14 @@ def run_tracked(
         finally:
             # The process has been waited on by now on every path above
             # (normally inside `communicate()`, or by the `except` blocks'
-            # own `proc.wait()`), so the child's stdout/stderr write ends
-            # are closed and `on_line`'s own reader (5s join) is at or near
-            # EOF already. A live-chunk reader has no join timeout at all
-            # (#741) -- it only returns once its pipe's write end actually
-            # closes, same as `communicate()` itself would wait for.
+            # own `proc.wait()`). On the success path, `_communicate_promptly`
+            # already waited for every live-chunk reader's own EOF against
+            # the step's deadline (#741 follow-up), so this join is only
+            # ever a brief formality there; on a timeout/cancellation/other
+            # exception, a reader can still be blocked reading a pipe this
+            # step's own kill never reached (a detached session) -- this
+            # never waits for it either, leaving it running as an abandoned
+            # daemon thread rather than joining it unboundedly.
             for reader_thread, join_timeout in started_threads:
                 reader_thread.join(timeout=join_timeout)
 
