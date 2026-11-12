@@ -259,16 +259,60 @@ pub fn match_scanned_process(
 /// one level of subdirectories) must be to count as running.
 const LIVE_STATE_FRESHNESS: Duration = Duration::from_secs(10);
 
-/// The document named by `events`'s own first line, when it parses
-/// as a `run_start` event carrying one -- `None` for a missing,
-/// empty or unparseable file, or a first line that isn't a
-/// `run_start` at all (never read any further into the file: the
-/// first line is always `run_start` when the stream has one).
-fn orchestration_from_events_first_line(events: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(events).ok()?;
-    let first_line = text.lines().next()?;
-    let value: serde_json::Value = serde_json::from_str(first_line).ok()?;
-    value.get("orchestration")?.as_str().map(str::to_string)
+/// `events`'s own first line, parsed once as JSON -- `None` for a
+/// missing, empty or unparseable file, or a first line that isn't
+/// valid JSON at all. Reads only that one line (a `BufRead`, never
+/// the whole file into memory): the first line is always `run_start`
+/// when the stream has one, so nothing here ever reads any further.
+fn first_event(events: &Path) -> Option<serde_json::Value> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(events).ok()?;
+    let mut first_line = String::new();
+    std::io::BufReader::new(file)
+        .read_line(&mut first_line)
+        .ok()?;
+    serde_json::from_str(first_line.trim_end()).ok()
+}
+
+/// The document and `run_id` (issue #717) `events`'s own first line
+/// names, read together off one [`first_event`] call rather than two
+/// separate reads of the same file.
+fn orchestration_and_run_id_from_events_first_line(
+    events: &Path,
+) -> (Option<String>, Option<String>) {
+    let Some(value) = first_event(events) else {
+        return (None, None);
+    };
+    let orchestration = value
+        .get("orchestration")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let run_id = value
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    (orchestration, run_id)
+}
+
+/// `run_id`, from `state.live.json`'s own top-level `_run_id` (both
+/// engines write it, `cli/runtime_shim.py`'s own `state["_run_id"]`)
+/// -- the fallback issue #717 names for a run found with no
+/// `--events` stream of its own at all (`osi watch` of a bare
+/// `state.live.json`).
+fn run_id_from_state_file(live_state: &Path) -> Option<String> {
+    let bytes = std::fs::read(live_state).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    value.get("_run_id")?.as_str().map(str::to_string)
+}
+
+/// `run_id` (issue #717), events' own first line preferred over
+/// `state.live.json`'s `_run_id` -- either, both or neither of
+/// `events`/`live_state` may be known, and this never fails just
+/// because one is absent or unreadable.
+fn discovered_run_id(events: Option<&Path>, live_state: Option<&Path>) -> Option<String> {
+    events
+        .and_then(|e| orchestration_and_run_id_from_events_first_line(e).1)
+        .or_else(|| live_state.and_then(run_id_from_state_file))
 }
 
 fn live_state_run_if_fresh(dir: &Path, now: SystemTime) -> Option<DiscoveredRun> {
@@ -280,10 +324,13 @@ fn live_state_run_if_fresh(dir: &Path, now: SystemTime) -> Option<DiscoveredRun>
     }
     let events = dir.join("events.jsonl");
     let events = events.exists().then_some(events);
-    let orchestration = events
-        .as_deref()
-        .and_then(orchestration_from_events_first_line);
+    let (orchestration, run_id) = match events.as_deref() {
+        Some(e) => orchestration_and_run_id_from_events_first_line(e),
+        None => (None, None),
+    };
+    let run_id = run_id.or_else(|| run_id_from_state_file(&live_state));
     Some(DiscoveredRun {
+        run_id,
         run_dir: Some(dir.to_path_buf()),
         live_state: Some(live_state),
         events,
@@ -316,10 +363,14 @@ pub fn scan_live_state_in_cwd(cwd: &Path, now: SystemTime) -> Vec<DiscoveredRun>
 
 /// One plain line per running run (bare `osi` without a TTY, or
 /// with `--log`, prints one of these per [`discover_runs`] result
-/// and exits 0) -- document, config, engine, pid, run directory,
-/// `"—"` for anything not known.
-pub fn format_plain_line(run: &DiscoveredRun) -> String {
+/// and exits 0) -- document, its own short name (issue #717,
+/// `—` before its `run_start` has arrived), config, engine, pid, run
+/// directory, `"—"` for anything not known. `name` is the caller's
+/// own, already [`crate::names::disambiguated_names`]'d against
+/// every other run in the same listing.
+pub fn format_plain_line(run: &DiscoveredRun, name: Option<&str>) -> String {
     let document = run.orchestration.as_deref().unwrap_or("—");
+    let name = name.unwrap_or("—");
     let config = run.config.as_deref().unwrap_or("—");
     let engine = run.engine.as_deref().unwrap_or("—");
     let pid = run
@@ -331,7 +382,7 @@ pub fn format_plain_line(run: &DiscoveredRun) -> String {
         .as_deref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "—".to_string());
-    format!("{document}  {config}  {engine}  pid {pid}  {run_dir}")
+    format!("{document}  {name}  {config}  {engine}  pid {pid}  {run_dir}")
 }
 
 /// Merges the registry, a process scan and a `state.live.json` scan
@@ -365,7 +416,7 @@ pub fn discover_runs(
         if runs.iter().any(|r| r.pid == Some(pid)) {
             continue;
         }
-        let Some(discovered) =
+        let Some(mut discovered) =
             match_scanned_process(pid, &args_line, process_cwd.cwd_of(pid).as_deref())
         else {
             continue;
@@ -375,6 +426,16 @@ pub fn discover_runs(
         {
             continue;
         }
+        // `match_scanned_process` is a pure function (never touches
+        // the filesystem, so a test exercises it from a canned
+        // command line alone) and so never learns `run_id` from the
+        // command line itself -- backfilled here, the one place this
+        // source is allowed to read the events/live-state files its
+        // own match already pointed at.
+        discovered.run_id = discovered_run_id(
+            discovered.events.as_deref(),
+            discovered.live_state.as_deref(),
+        );
         runs.push(discovered);
     }
 
@@ -455,7 +516,10 @@ mod tests {
             run_dir: Some(PathBuf::from("/work/run-dir")),
             ..Default::default()
         };
-        assert_eq!(format_plain_line(&run), "—  —  —  pid 42  /work/run-dir");
+        assert_eq!(
+            format_plain_line(&run, None),
+            "—  —  —  —  pid 42  /work/run-dir"
+        );
     }
 
     #[test]
@@ -469,8 +533,8 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            format_plain_line(&run),
-            "/work/doc.yml  /work/cfg.json  cof  pid 42  /work/run-dir"
+            format_plain_line(&run, Some("amber-falcon")),
+            "/work/doc.yml  amber-falcon  /work/cfg.json  cof  pid 42  /work/run-dir"
         );
     }
 

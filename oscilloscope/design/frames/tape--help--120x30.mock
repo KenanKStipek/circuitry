@@ -14,7 +14,7 @@
 #! region r4 keybar 0,29,120,1
 #! region r5 modal 2,5,72,18 Help · Tape
 #! focus r5
-{fg.faint} osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50{/}
+{fg.faint} osi  demo.yml · ochre-desert · ● Running 3.6s                                                         TAPE    12:50:50 {/}
 {fg.faint}╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t ─────────────────────────╮╭─ gate › reply · Selected ────────────────╮{/}
 {fg.faint}│                                                                          ││                                          │{/}
 {fg.faint}│12:50:47 ■ Run Started        demo.yml · cof 0.1.0                        ││                                          │{/}

@@ -222,8 +222,13 @@ fn print_discovered_runs() -> ExitCode {
         scan_enabled.then_some(cwd.as_path()),
         std::time::SystemTime::now(),
     );
-    for run in &runs {
-        println!("{}", oscilloscope_core::discovery::format_plain_line(run));
+    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
+    let names = oscilloscope_core::names::disambiguated_names(&run_ids);
+    for (run, name) in runs.iter().zip(names.iter()) {
+        println!(
+            "{}",
+            oscilloscope_core::discovery::format_plain_line(run, name.as_deref())
+        );
     }
     ExitCode::from(0)
 }
@@ -4817,6 +4822,11 @@ struct AllRunSlot {
     run: oscilloscope_core::discovery::DiscoveredRun,
     document_label: String,
     config_label: Option<String>,
+    /// This run's own short name (issue #717), already
+    /// disambiguated against every other slot by
+    /// [`disambiguate_tile_labels`] -- `None` until that runs, and
+    /// until this run's own `run_id` is known.
+    name: Option<String>,
     plan: PlanTree,
     model: RunModel,
     live_poller: LiveStatePoller,
@@ -5027,7 +5037,7 @@ mod all_run_slot_tests {
             AllRunSlot::new(run("/b/triage.yml")),
             AllRunSlot::new(run("/c/digest.yml")),
         ];
-        disambiguate_tile_document_labels(&mut slots);
+        disambiguate_tile_labels(&mut slots);
         assert_eq!(slots[0].document_label, "a/triage.yml");
         assert_eq!(slots[1].document_label, "b/triage.yml");
         assert_eq!(
@@ -5053,6 +5063,7 @@ impl AllRunSlot {
             run,
             document_label,
             config_label,
+            name: None,
             plan,
             model: RunModel::new(),
             live_poller: LiveStatePoller::new(&live_state_path),
@@ -5145,6 +5156,7 @@ impl AllRunSlot {
         tui::AllTile {
             document_label: self.document_label.clone(),
             config_label: self.config_label.clone(),
+            name: self.name.clone(),
             render,
             run_index,
         }
@@ -5331,14 +5343,19 @@ enum AllAction {
 /// rows would read identically) -- two slots that happen to watch
 /// the same document from different directories would otherwise
 /// draw identical tile bands, with nothing on screen to tell them
-/// apart at all.
-fn disambiguate_tile_document_labels(slots: &mut [AllRunSlot]) {
+/// apart at all. Also sets each slot's own short name (issue #717),
+/// disambiguated the same way across every running slot, not just
+/// `slots`'s own current page.
+fn disambiguate_tile_labels(slots: &mut [AllRunSlot]) {
     let runs: Vec<oscilloscope_core::discovery::DiscoveredRun> =
         slots.iter().map(|s| s.run.clone()).collect();
     let config_labels: Vec<Option<String>> = slots.iter().map(|s| s.config_label.clone()).collect();
     let labels = oscilloscope_core::select::disambiguated_document_labels(&runs, &config_labels);
-    for (slot, label) in slots.iter_mut().zip(labels) {
+    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
+    let names = oscilloscope_core::names::disambiguated_names(&run_ids);
+    for ((slot, label), name) in slots.iter_mut().zip(labels).zip(names) {
         slot.document_label = label;
+        slot.name = name;
     }
 }
 
@@ -5374,7 +5391,7 @@ fn run_all_grid_screen(
 
     let mut runs = discover_running();
     let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
-    disambiguate_tile_document_labels(&mut slots);
+    disambiguate_tile_labels(&mut slots);
     let mut last_refresh = Instant::now();
     let mut signals = SignalWatcher::new().ok();
     let mut needs_draw = true;
@@ -5405,7 +5422,7 @@ fn run_all_grid_screen(
                 }
             }
             slots = new_slots;
-            disambiguate_tile_document_labels(&mut slots);
+            disambiguate_tile_labels(&mut slots);
             last_refresh = Instant::now();
             needs_draw = true;
         }
@@ -5604,7 +5621,7 @@ fn run_combined_signal_leg(
 
     let mut runs = discover_running();
     let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
-    disambiguate_tile_document_labels(&mut slots);
+    disambiguate_tile_labels(&mut slots);
     let mut combined_state = keys::CombinedState::new();
     let mut last_refresh = Instant::now();
     let mut signals = SignalWatcher::new().ok();
@@ -5638,7 +5655,7 @@ fn run_combined_signal_leg(
                 }
             }
             slots = new_slots;
-            disambiguate_tile_document_labels(&mut slots);
+            disambiguate_tile_labels(&mut slots);
             combined_state.cursor_run =
                 combined_state.cursor_run.min(slots.len().saturating_sub(1));
             last_refresh = Instant::now();
@@ -7624,7 +7641,10 @@ mod tests {
 
         let text = String::from_utf8(buf).unwrap();
         let printed: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
-        assert!(printed.last().unwrap().contains("■ run ok"), "{printed:?}");
+        assert!(
+            printed.last().unwrap().contains("■ run") && printed.last().unwrap().contains("ok"),
+            "{printed:?}"
+        );
         assert!(
             printed[printed.len() - 2].contains("✓ prime.hello"),
             "{printed:?}"
@@ -7690,7 +7710,10 @@ mod tests {
 
         let text = String::from_utf8(buf).unwrap();
         let printed: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
-        assert!(printed.last().unwrap().contains("■ run ok"), "{printed:?}");
+        assert!(
+            printed.last().unwrap().contains("■ run") && printed.last().unwrap().contains("ok"),
+            "{printed:?}"
+        );
         assert!(
             printed[printed.len() - 2].contains("✓ prime.hello"),
             "{printed:?}"

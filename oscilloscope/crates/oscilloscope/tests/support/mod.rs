@@ -294,6 +294,28 @@ pub fn last_event(path: &Path) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("{} last line is not JSON: {e}", path.display()))
 }
 
+/// Whether `text` (a `--log` stdout capture) shows the run's own exit
+/// summary ending `ok` -- never the `■ run started` line, and never
+/// fooled by a run's own name that happens to contain the substring
+/// `ok` (`*-brook`, say): the summary's own fields (an optional name,
+/// the status, optional totals) are always joined with a double
+/// space, so splitting on that and requiring one field to equal `ok`
+/// exactly finds the real status wherever it landed, whether or not a
+/// name precedes it. `split_once` rather than `strip_prefix`: every
+/// `--log` line carries its own `HH:MM:SS ` clock prefix ahead of the
+/// `■ run ` marker, not just at the very start of the line.
+pub fn log_shows_run_ok(text: &str) -> bool {
+    text.lines().any(|line| {
+        let Some(after_marker) = line.split_once("■ run ").map(|(_, rest)| rest) else {
+            return false;
+        };
+        if after_marker.starts_with("started ") {
+            return false;
+        }
+        after_marker.split("  ").any(|field| field == "ok")
+    })
+}
+
 pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, contents).unwrap();

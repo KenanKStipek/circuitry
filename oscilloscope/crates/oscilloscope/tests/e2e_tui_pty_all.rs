@@ -560,3 +560,124 @@ fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
     assert_no_leftover_process(out_a.path());
     assert_no_leftover_process(out_b.path());
 }
+
+/// Every token right after a standalone occurrence of `document` on
+/// `screen`, wherever it appears -- Select's own running list has
+/// one occurrence per line, but the All grid draws every tile's own
+/// band on the *same* screen row, side by side, so a caller can't
+/// just filter to the one line that "contains" it and assume there
+/// is only one match there.
+fn names_following_document<'a>(screen: &'a str, document: &str) -> Vec<&'a str> {
+    let mut found = Vec::new();
+    for line in screen.lines() {
+        let tokens: Vec<&str> = line.split_whitespace().collect();
+        for i in 0..tokens.len() {
+            if tokens[i] == document {
+                if let Some(next) = tokens.get(i + 1) {
+                    found.push(*next);
+                }
+            }
+        }
+    }
+    found
+}
+
+/// Issue #717: two live runs of the *same* document and the *same*
+/// config -- nothing else on screen tells them apart -- still read
+/// as two distinct rows, because each gets its own short name from
+/// its own run id. Checked on both Select's own running list and on
+/// the All grid's own tile bands, the same way the design issue's
+/// own test asks for.
+#[test]
+fn two_runs_of_the_same_document_and_config_get_different_names_on_select_and_all() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let _guard = ALL_LOCK.lock().unwrap();
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+
+    let doc = write_doc(work.path(), "same.yml", SELECT_SLOW_DOC);
+    let config = write_doc(work.path(), "same-config.json", SCRIPTED_CONFIG);
+    let out_a = tempfile::tempdir().unwrap();
+    let out_b = tempfile::tempdir().unwrap();
+    let child_a = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc,
+        &config,
+        out_a.path(),
+    ));
+    let child_b = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc,
+        &config,
+        out_b.path(),
+    ));
+
+    for out in [&out_a, &out_b] {
+        wait_for_step_start(
+            &out.path().join("events.jsonl"),
+            "prime.slow",
+            Duration::from_secs(20),
+        );
+    }
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
+
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let names = names_following_document(&screen, "same.yml");
+    assert_eq!(
+        names.len(),
+        2,
+        "expected two rows naming same.yml on Select:\n{screen}"
+    );
+    assert_ne!(
+        names[0], names[1],
+        "expected the two same.yml rows to carry different names on Select:\n{screen}"
+    );
+    assert_ne!(
+        names[0], "same-config.json",
+        "expected a name, not the config, right after the document"
+    );
+
+    send_bytes(&mut master, b"g");
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(20));
+    let tile_names = names_following_document(&screen, "same.yml");
+    assert_eq!(
+        tile_names.len(),
+        2,
+        "expected two tile bands naming same.yml on All:\n{screen}"
+    );
+    assert_ne!(
+        tile_names[0], tile_names[1],
+        "expected the two same.yml tile bands to carry different names on All:\n{screen}"
+    );
+    assert_eq!(
+        names.into_iter().collect::<std::collections::HashSet<_>>(),
+        tile_names
+            .into_iter()
+            .collect::<std::collections::HashSet<_>>(),
+        "expected All's own two names to be the same pair Select showed:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(20));
+    assert!(
+        status.success(),
+        "q on the grid should quit at once with exit 0, got {status:?}"
+    );
+
+    drop(child_a);
+    drop(child_b);
+    assert_no_leftover_process(out_a.path());
+    assert_no_leftover_process(out_b.path());
+}

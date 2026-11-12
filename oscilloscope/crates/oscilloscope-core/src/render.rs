@@ -1420,7 +1420,18 @@ fn build_header(
 ) -> Header {
     let engine_alive = matches!(process, ProcessState::Running);
     let status = run_status(state, process.clone());
-    let run_id = model.run_start_id().map(str::to_string);
+    // Issue #717: a run's own name needs its id even with no
+    // `--events` stream at all (`osi watch` of a bare
+    // `state.live.json`) -- both engines write the same id into
+    // state's own top-level `_run_id` (`cli/runtime_shim.py`'s
+    // `state["_run_id"]`), so this falls back to it exactly where
+    // `run_start` never arrived to set `model`'s own copy.
+    let run_id = model.run_start_id().map(str::to_string).or_else(|| {
+        state
+            .and_then(|s| s.get("_run_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
 
     // Issue #613's "one clock": the run's own start, from the first
     // `--events` `run_start` when one arrived, else the earliest
