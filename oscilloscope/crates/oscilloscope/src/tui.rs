@@ -22695,6 +22695,60 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #738: Select's, All's and the Combined Signal's own Help
+    /// overlays each gained a Key (§3.7's shared `●` running glyph,
+    /// `—`/`gone`, run colours, the shared scale and a run's own
+    /// name) alongside their own keys.
+    #[test]
+    fn select_all_and_combined_signal_help_overlays_each_list_a_key() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let render = |f: fn(&mut Frame, &DrawCtx)| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal.draw(|frame| f(frame, &ctx)).unwrap();
+            terminal.backend().to_string()
+        };
+        let select = render(draw_select_help);
+        assert!(select.contains("Key"), "expected a Key section:\n{select}");
+        assert!(
+            select.contains("a running orchestration")
+                && select.contains("no config, or no run directory"),
+            "expected Select's own Key lines:\n{select}"
+        );
+        assert!(
+            select.contains("its run directory is gone")
+                && select.contains("a short name from the run's own id"),
+            "expected Select's own gone/name Key lines:\n{select}"
+        );
+
+        let all = render(draw_all_help);
+        assert!(all.contains("Key"), "expected a Key section:\n{all}");
+        assert!(
+            all.contains("a running orchestration") && all.contains("colour per run"),
+            "expected All's own Key lines:\n{all}"
+        );
+        assert!(
+            all.contains("no config or run directory") && all.contains("directory gone"),
+            "expected All's own dash/gone Key line:\n{all}"
+        );
+
+        let combined = render(draw_combined_signal_help);
+        assert!(
+            combined.contains("Key"),
+            "expected a Key section:\n{combined}"
+        );
+        assert!(
+            combined.contains("one colour per run") && combined.contains("one round top shared"),
+            "expected the Combined Signal's own colour/scale Key lines:\n{combined}"
+        );
+    }
+
     /// Issue #738: the Tape's own Help opens on its Key page (§3.7's
     /// glyph legend plus the Tape's own additions -- breadcrumbs,
     /// previews, the Now band and a loop's slots/queue), and `←→`
