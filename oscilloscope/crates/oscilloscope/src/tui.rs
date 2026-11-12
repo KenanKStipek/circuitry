@@ -3152,10 +3152,20 @@ fn tool_output_sections(
                 .map(oscilloscope_core::format::format_duration)
         };
         if !live.stdout_tail.is_empty() {
-            section(&mut lines, "Output (live)", age.as_deref(), &live.stdout_tail);
+            section(
+                &mut lines,
+                "Output (live)",
+                age.as_deref(),
+                &live.stdout_tail,
+            );
         }
         if !live.stderr_tail.is_empty() {
-            section(&mut lines, "Errors (live)", age.as_deref(), &live.stderr_tail);
+            section(
+                &mut lines,
+                "Errors (live)",
+                age.as_deref(),
+                &live.stderr_tail,
+            );
         }
     }
     lines
