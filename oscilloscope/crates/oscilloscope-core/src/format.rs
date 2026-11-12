@@ -46,15 +46,15 @@ pub fn format_duration(secs: f64) -> String {
     format!("{}d{:02}h", hours_total / 24, hours_total % 24)
 }
 
-/// A Signal chart's own second mark, and the Combined Totals' own
-/// `Peak … at` (issue #734): every second shown, never a raw count
-/// past a minute -- `0s`/`0.5s` (a decimal only when `secs` itself
-/// isn't a whole second, the same as `format_duration` already
-/// shows under a minute), `13m33s` from a minute, `1h02m03s` from an
-/// hour, with the hour count never padded or rolled into a further
-/// day unit the way `format_duration` does. Rounds `secs` to whole
-/// seconds once, directly, the same "never round an already-rounded
-/// value again" rule `format_duration` follows.
+/// A Signal chart's own second mark (issue #734): every second
+/// shown, never a raw count past a minute -- `0s`/`0.5s` (a decimal
+/// only when `secs` itself isn't a whole second, the same as
+/// `format_duration` already shows under a minute), `13m33s` from a
+/// minute, `1h02m03s` from an hour, with the hour count never
+/// padded or rolled into a further day unit the way
+/// `format_duration` does. Rounds `secs` to whole seconds once,
+/// directly, the same "never round an already-rounded value again"
+/// rule `format_duration` follows.
 pub fn format_signal_elapsed(secs: f64) -> String {
     let secs = secs.max(0.0);
     let tenths = (secs * 10.0).round() as u64;
@@ -65,6 +65,27 @@ pub fn format_signal_elapsed(secs: f64) -> String {
             format!("{}.{}s", tenths / 10, tenths % 10)
         };
     }
+    format_signal_elapsed_minutes_and_up(secs)
+}
+
+/// The Combined Totals' own `Peak … at` (issue #734): the same
+/// `MMmSSs`/`HhMMmSSs` text from a minute on, but under a minute it
+/// always keeps its own decimal (`3.0s`, `at 0.5s`), the reading
+/// Peak has always shown -- unlike the second marks, which drop the
+/// decimal on a whole second.
+pub fn format_signal_elapsed_with_decimal(secs: f64) -> String {
+    let secs = secs.max(0.0);
+    let tenths = (secs * 10.0).round() as u64;
+    if tenths < 600 {
+        return format!("{}.{}s", tenths / 10, tenths % 10);
+    }
+    format_signal_elapsed_minutes_and_up(secs)
+}
+
+/// The minute-and-up tail both of the above share: rounds `secs` to
+/// whole seconds once, directly, the same "never round an
+/// already-rounded value again" rule `format_duration` follows.
+fn format_signal_elapsed_minutes_and_up(secs: f64) -> String {
     let total_seconds = secs.round() as u64;
     if total_seconds < 3600 {
         let minutes = total_seconds / 60;
@@ -453,6 +474,20 @@ mod tests {
     #[test]
     fn signal_elapsed_past_an_hour_always_shows_its_own_seconds() {
         assert_eq!(format_signal_elapsed(3723.0), "1h02m03s");
+    }
+
+    /// Peak's own reading (issue #734, finding 6): a decimal under
+    /// a minute even on a whole second, unlike the plain second
+    /// marks above -- the same boundaries, `0`, `59`, `59.5`, `60`,
+    /// `3599` and `3600` seconds.
+    #[test]
+    fn signal_elapsed_with_decimal_pinned_boundaries() {
+        assert_eq!(format_signal_elapsed_with_decimal(0.0), "0.0s");
+        assert_eq!(format_signal_elapsed_with_decimal(59.0), "59.0s");
+        assert_eq!(format_signal_elapsed_with_decimal(59.5), "59.5s");
+        assert_eq!(format_signal_elapsed_with_decimal(60.0), "1m00s");
+        assert_eq!(format_signal_elapsed_with_decimal(3599.0), "59m59s");
+        assert_eq!(format_signal_elapsed_with_decimal(3600.0), "1h00m00s");
     }
 
     /// At the default 100 ms per column (ten columns a second), an

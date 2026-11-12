@@ -64,6 +64,28 @@ fn rfc3339(t: chrono::DateTime<chrono::Utc>) -> String {
     t.format("%Y-%m-%dT%H:%M:%S.%3fZ").to_string()
 }
 
+/// The marks row itself -- the one line carrying `Now HH:MM:SS` --
+/// never the header, which shows its own, separately formatted
+/// elapsed time too and would make a comparison against the whole
+/// screen pass even with a frozen trace underneath it.
+fn now_marks_row(screen: &str) -> Option<&str> {
+    screen.lines().find(|line| {
+        let Some(idx) = line.find("Now ") else {
+            return false;
+        };
+        let clock: Vec<char> = line[idx + 4..].chars().take(8).collect();
+        clock.len() == 8
+            && clock[0].is_ascii_digit()
+            && clock[1].is_ascii_digit()
+            && clock[2] == ':'
+            && clock[3].is_ascii_digit()
+            && clock[4].is_ascii_digit()
+            && clock[5] == ':'
+            && clock[6].is_ascii_digit()
+            && clock[7].is_ascii_digit()
+    })
+}
+
 #[test]
 fn osi_watch_signal_follows_now_an_hour_into_a_run() {
     let home = TestHome::new();
@@ -137,13 +159,15 @@ fn osi_watch_signal_follows_now_an_hour_into_a_run() {
         screen_a.contains('\u{2503}'),
         "expected the Now sweep on screen an hour into the run; screen:\n{screen_a}"
     );
+    let marks_a = now_marks_row(&screen_a)
+        .unwrap_or_else(|| panic!("expected a marks row with a Now label; screen:\n{screen_a}"));
     assert!(
-        screen_a.contains("1h00m"),
-        "expected a second mark or the Now label in the elapsed format; screen:\n{screen_a}"
+        marks_a.contains("1h00m"),
+        "expected the marks row itself, not the header, in the elapsed format; row:\n{marks_a}"
     );
     assert!(
-        !screen_a.contains("3600s") && !screen_a.contains("3601s"),
-        "a mark must never read as a bare second count; screen:\n{screen_a}"
+        !marks_a.contains("3600s") && !marks_a.contains("3601s"),
+        "a mark must never read as a bare second count; row:\n{marks_a}"
     );
 
     std::thread::sleep(Duration::from_secs(2));
@@ -151,9 +175,11 @@ fn osi_watch_signal_follows_now_an_hour_into_a_run() {
         let whole = captured_buf.lock().unwrap().clone();
         screen_grid(&whole, 200, 60).join("\n")
     };
+    let marks_b = now_marks_row(&screen_b)
+        .unwrap_or_else(|| panic!("expected a marks row with a Now label; screen:\n{screen_b}"));
     assert_ne!(
-        screen_a, screen_b,
-        "expected the marks to have moved between two screens two seconds apart"
+        marks_a, marks_b,
+        "expected the marks row itself to have moved between two screens two seconds apart"
     );
 
     send_bytes(&mut master, b"q");
