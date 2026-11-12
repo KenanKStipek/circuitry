@@ -1,0 +1,18 @@
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"model":"typesafe-1","usage":{"input_tokens":2,"output_tokens":1},"answers":{"risky":{"type":"noul","noul":0.2,"confidence":0.7}}}'
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"model":"typesafe-1","usage":{"input_tokens":2,"output_tokens":1},"answers":{"risky":{"type":"noul","noul":0.2,"confidence":0.7}}}'

@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #724",
+  "description": "params.state_file + params.within, resolved inside the run directory -- the file's own JSON content is sent as state, never the state text itself in params_rendered.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "state_file=__CASE_DIR__/data/state.json", "-e", "within=__CASE_DIR__/data"]
+}
