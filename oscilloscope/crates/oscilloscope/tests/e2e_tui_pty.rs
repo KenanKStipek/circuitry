@@ -22,10 +22,26 @@ use std::time::{Duration, Instant};
 
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command,
-    scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen_text,
-    wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout, write_doc,
+    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
+    screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
+    wait_for_screen_text, wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
+
+/// The `(row, col)` of the first `glyph` character on whichever grid
+/// row contains `line_needle` -- so a colour check reads the same
+/// cell its own text check already found, not a coordinate guessed
+/// from the layout.
+fn find_glyph(grid: &[String], line_needle: &str, glyph: char) -> Option<(usize, usize)> {
+    for (row, line) in grid.iter().enumerate() {
+        if line.contains(line_needle) {
+            if let Some(col) = line.chars().position(|c| c == glyph) {
+                return Some((row, col));
+            }
+        }
+    }
+    None
+}
 
 /// Waits until `pattern` has appeared anywhere in `buf` so far, or
 /// `timeout` runs out either way.
@@ -3018,11 +3034,33 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
         "expected §3.7's own glyph legend on the merged page; got:\n{screen}"
     );
 
+    // Issue #738's review: a Key symbol's own cell colour changes
+    // with the theme, not only the text around it staying put --
+    // this reads the same cell's own colour before and after T.
+    let before_bytes = captured_buf.lock().unwrap().clone();
+    let before_grid = screen_grid(&before_bytes, 200, 60);
+    let (glyph_row, glyph_col) =
+        find_glyph(&before_grid, "done · failed", '✓').unwrap_or_else(|| {
+            panic!("expected a ✓ cell on the \"done · failed\" row:\n{before_grid:?}")
+        });
+    let before_fg = screen_grid_fg(&before_bytes, 200, 60)[glyph_row][glyph_col];
+
     send_bytes(&mut master, b"T");
     let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
     assert!(
         screen.contains("Key"),
         "expected the Help overlay to stay open after T; got:\n{screen}"
+    );
+    let after_bytes = captured_buf.lock().unwrap().clone();
+    let after_grid = screen_grid(&after_bytes, 200, 60);
+    let (glyph_row, glyph_col) =
+        find_glyph(&after_grid, "done · failed", '✓').unwrap_or_else(|| {
+            panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
+        });
+    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col];
+    assert_ne!(
+        before_fg, after_fg,
+        "expected the ✓ Key symbol's own cell colour to change after T, not just the text around it"
     );
 
     send_bytes(&mut master, b"\x1b");
