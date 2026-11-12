@@ -4098,6 +4098,170 @@ fn nested_loops_now_area_is_a_tree_with_no_running_row_above_the_band() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #739: a finished prompt whose reply is JSON reads a short
+/// summary on the Tape row, never raw JSON -- an object with a
+/// `summary` field, an object of lists (its own first keys), an
+/// array of strings (its own count, then the first item's own first
+/// words), a plain-text reply that merely holds JSON as a string
+/// (parsed and summarised the same as if it had arrived typed), and
+/// ordinary plain text (kept to today's first-words rule, unaffected).
+#[test]
+fn json_replies_read_as_short_summaries_not_raw_json() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        r#"prime.plan:
+  - {text: '{"summary": "Parser fixed."}', tokens_sent: 120, tokens_received: 30}
+prime.edits:
+  - {text: '{"edits": [1, 2], "files": [1, 2, 3]}', tokens_sent: 150, tokens_received: 40}
+prime.items:
+  - {text: '["first item text", "second"]', tokens_sent: 90, tokens_received: 12}
+prime.stringjson:
+  - {text: '{"summary": "Parsed ok."}', tokens_sent: 70, tokens_received: 10}
+prime.plain:
+  - {text: "Hello there. More words follow.", tokens_sent: 20, tokens_received: 3}
+"#,
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"adapter: scripted
+model: scripted-model
+effects:
+  - name: plan
+    type: prompt
+    prompt_type: json
+    template: "plan"
+    schema: {type: object}
+  - name: edits
+    type: prompt
+    prompt_type: json
+    template: "edits"
+    schema: {type: object}
+  - name: items
+    type: prompt
+    prompt_type: json
+    template: "items"
+    schema: {type: array}
+  - name: stringjson
+    type: prompt
+    template: "stringjson"
+  - name: plain
+    type: prompt
+    template: "plain"
+  - name: slow
+    type: tool
+    provider: shell
+    params:
+      command: tail
+      args: ["-f", "/dev/null"]
+      allowed_commands: ["tail"]
+"#,
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60).join("\n");
+
+    let row_text = |name: &str| -> String {
+        screen
+            .lines()
+            .find(|l| l.contains(&format!("✓ {name}")))
+            .map(|l| l.trim_end().to_string())
+            .unwrap_or_default()
+    };
+
+    let rows = [
+        ("plan", row_text("plan")),
+        ("edits", row_text("edits")),
+        ("items", row_text("items")),
+        ("stringjson", row_text("stringjson")),
+        ("plain", row_text("plain")),
+    ];
+    for (name, row) in &rows {
+        assert!(
+            !row.is_empty(),
+            "expected a finished row for {name}; screen:\n{screen}"
+        );
+        assert!(
+            !row.contains("{\"") && !row.contains("[\""),
+            "expected {name}'s own row to read a summary, never raw JSON; row: {row:?}"
+        );
+    }
+    let row = |name: &str| rows.iter().find(|(n, _)| *n == name).unwrap().1.as_str();
+
+    assert!(
+        row("plan").contains("Parser fixed."),
+        "expected plan's own summary field to lead; row: {:?}",
+        row("plan")
+    );
+    // The composite "first keys" result is never cut itself, only
+    // by the row's own real column downstream (DESIGN.md) -- at this
+    // width that leaves `edits`' own first key, `files`' second one
+    // cut away, same as any other reply long enough to hit the same
+    // column.
+    assert!(
+        row("edits").contains("edits 2 item"),
+        "expected edits' own first key; row: {:?}",
+        row("edits")
+    );
+    assert!(
+        row("items").contains("2 items") && row("items").contains("first"),
+        "expected items' own count and first item's own words; row: {:?}",
+        row("items")
+    );
+    assert!(
+        row("stringjson").contains("Parsed ok."),
+        "expected a plain-text reply holding JSON to be parsed and summarised; row: {:?}",
+        row("stringjson")
+    );
+    assert!(
+        row("plain").contains("Hello there."),
+        "expected plain text to keep its own first-words rule; row: {:?}",
+        row("plain")
+    );
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
 /// No two running *loops* in the Now area's own tree (between the
 /// `━━ Now` band and the first row ahead) read the same line -- the
 /// list pane's own half only, the same cut
