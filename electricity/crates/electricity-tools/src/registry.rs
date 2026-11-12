@@ -133,6 +133,12 @@ fn builders() -> HashMap<&'static str, Builder> {
         },
     );
     map.insert(
+        "cel",
+        |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
+            Ok(Box::new(crate::cel::CelPlugin))
+        },
+    );
+    map.insert(
         "gh",
         |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::gh::make_plugin(cfg) },
     );

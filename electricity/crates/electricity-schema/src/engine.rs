@@ -173,7 +173,7 @@ pub(crate) fn format_as_index(segments: &[PathSegment]) -> String {
 /// and `"a"`, don't order at all), and `str()` is what the one real
 /// caller of this comparison ([`relevance`]) would reach for ties among
 /// same-shape keys too.
-fn compare_paths(a: &[PathSegment], b: &[PathSegment]) -> std::cmp::Ordering {
+pub(crate) fn compare_paths(a: &[PathSegment], b: &[PathSegment]) -> std::cmp::Ordering {
     fn rank(segment: &PathSegment) -> u8 {
         match segment {
             PathSegment::Index(_) => 0,

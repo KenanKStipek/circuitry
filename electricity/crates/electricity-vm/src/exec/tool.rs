@@ -64,7 +64,7 @@ use crate::params::{
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
-use electricity_tools::{ToolCall, ToolRegistry};
+use electricity_tools::{ToolCall, ToolRegistry, ToolResult};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 
@@ -518,6 +518,19 @@ fn render_tool_call<R: ParamsCtx>(
         rendered.insert(Value::Str("model".to_string()), Value::Str(model.clone()));
     }
 
+    // A `cel` effect's own params are literal (#723): `electricity-compiler::
+    // compile::params::build_cel_params` already parsed and scope-checked
+    // `expr` as written, so they are never rendered -- no `{from: ...}` read,
+    // no Mustache render, never set by `params_json` (`build_cel_params`
+    // rejects that at compile time, so `tool.params_json` is always `None`
+    // here). `dict(self.defn.params)` in `core/tool.py::ToolRuntime.execute`.
+    if let ParamNode::Literal(Value::Dict(literal)) = &tool.params {
+        for (key, value) in literal {
+            rendered.insert(key.clone(), value.clone());
+        }
+        return Ok(rendered);
+    }
+
     reject_security_sensitive_literal(tool_params_map(&tool.params))?;
     let mut params = render_params(
         name,
@@ -537,6 +550,70 @@ fn render_tool_call<R: ParamsCtx>(
         rendered.insert(key, value);
     }
     Ok(rendered)
+}
+
+/// The `cel` tool's own dispatch (#723): `plugins/cel.py::CelPlugin.
+/// evaluate`, called by `core/tool.py::ToolRuntime.execute` directly
+/// (`isinstance(plugin, CelPlugin)`) instead of through `plugin.execute`
+/// -- *rendered* is this effect's own literal params
+/// ([`render_tool_call`]'s own cel branch above), *ctx* the same live
+/// scope an `if`/`while` CEL condition at this position would see
+/// ([`ParamsCtx::cel_state`], the same narrowed read an `if`/`while`
+/// CEL condition at this position gets). No I/O, no capability, no
+/// plugin registry.
+fn evaluate_cel_tool<R: ParamsCtx>(
+    rendered: &Value,
+    ctx: &R,
+) -> Result<ToolResult, electricity_tools::ToolError> {
+    let dict = rendered.as_dict();
+    let expr = dict
+        .and_then(|d| d.get(&Value::Str("expr".to_string())))
+        .and_then(Value::as_str)
+        .expect("build_cel_params guarantees params.expr is a non-empty string");
+    let strict = matches!(
+        dict.and_then(|d| d.get(&Value::Str("strict".to_string()))),
+        Some(Value::Bool(true))
+    );
+    let state = ctx.cel_state(expr);
+    // `core/cel_eval.py::evaluate_cel_value` raises `CelEvaluationError` for
+    // every evaluation failure, including a strict unset path and a result
+    // with no JSON form; the schema mismatch below is a plain `ValueError`
+    // (`plugins/cel.py::CelPlugin.evaluate`).
+    let value = electricity_cel::evaluate_value(expr, &state, strict).map_err(|err| {
+        electricity_tools::ToolError {
+            py_class: electricity_tools::PyExc::CelEvaluationError,
+            message: err.to_string(),
+            cause: electricity_tools::ErrorCause::None,
+        }
+    })?;
+    if let Some(Value::Dict(_)) = dict.and_then(|d| d.get(&Value::Str("schema".to_string()))) {
+        let schema = dict
+            .and_then(|d| d.get(&Value::Str("schema".to_string())))
+            .expect("just matched Some(Value::Dict(_)) above");
+        match electricity_schema::cel_schema_errors(schema, &value) {
+            electricity_schema::CelSchemaCheck::Valid => {}
+            electricity_schema::CelSchemaCheck::Invalid(errors) => {
+                return Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message: format!(
+                        "cel: the result does not match params.schema: {}",
+                        errors.join("; ")
+                    ),
+                    cause: electricity_tools::ErrorCause::None,
+                });
+            }
+            electricity_schema::CelSchemaCheck::SchemaError(message) => {
+                return Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message,
+                    cause: electricity_tools::ErrorCause::None,
+                });
+            }
+        }
+    }
+    let mut raw = Dict::new();
+    raw.insert(Value::Str("expr".to_string()), Value::Str(expr.to_string()));
+    Ok(ToolResult::new(value, Value::Dict(raw)))
 }
 
 /// A single `tool` effect's own owning entry point -- a close port of
@@ -791,17 +868,26 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 // cancellation check once a dispatched call has
                                 // actually returned, only before the next attempt.
                                 //
+                                let is_cel = electricity_value::pycompat::py_strip(&tool.provider)
+                                    .to_lowercase()
+                                    == "cel";
                                 let dispatch = tokio::select! {
                                     biased;
-                                    result = run_tool(
-                                        &resolved,
-                                        &tool.provider,
-                                        rendered_value,
-                                        run_ctx.runtime_config,
-                                        timeout_seconds,
-                                        token,
-                                        run_ctx.armed,
-                                    ) => Some(result),
+                                    result = async {
+                                        if is_cel {
+                                            evaluate_cel_tool(&rendered_value, ctx)
+                                        } else {
+                                            run_tool(
+                                                &resolved,
+                                                &tool.provider,
+                                                rendered_value,
+                                                run_ctx.runtime_config,
+                                                timeout_seconds,
+                                                token,
+                                                run_ctx.armed,
+                                            ).await
+                                        }
+                                    } => Some(result),
                                     () = token.cancelled() => None,
                                 };
                                 // Released before this attempt's own backoff
@@ -3809,6 +3895,147 @@ mod tests {
         assert_eq!(
             meta.get(&Value::from("retries_used")),
             Some(&Value::from(1i64))
+        );
+    }
+
+    fn cel_params(pairs: Vec<(&str, Value)>) -> Dict {
+        let mut dict = Dict::new();
+        for (key, value) in pairs {
+            dict.insert(Value::Str(key.to_string()), value);
+        }
+        dict
+    }
+
+    fn cel_tool_op(params: Dict) -> ToolOp {
+        ToolOp {
+            provider: "cel".to_string(),
+            params: ParamNode::Literal(Value::Dict(params)),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries: electricity_bytecode::RetryPolicy::default(),
+            expect: None,
+            description: None,
+            group: None,
+            prompt_file: None,
+        }
+    }
+
+    async fn run_cel(ctx: &Value, params: Dict) -> IndexMap<Value, Value> {
+        let tool = cel_tool_op(params);
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(ToolOp {
+                    provider: tool.provider.clone(),
+                    params: tool.params.clone(),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: electricity_bytecode::RetryPolicy::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    prompt_file: None,
+                }),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            ctx,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+        let snapshot = store.snapshot(&store.root);
+        snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn cel_sets_value_and_raw_from_the_enclosing_scope() {
+        let mut input = Dict::new();
+        input.insert(Value::from("a"), Value::from(1i64));
+        let mut state = Dict::new();
+        state.insert(Value::from("input"), Value::Dict(input));
+        let ctx = Value::Dict(state);
+
+        let params = cel_params(vec![("expr", Value::from("state.input.a == 1"))]);
+        let node = run_cel(&ctx, params).await;
+        assert_eq!(node.get(&Value::from("value")), Some(&Value::from(true)));
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        let raw = meta.get(&Value::from("raw")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            raw.get(&Value::from("expr")),
+            Some(&Value::from("state.input.a == 1"))
+        );
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+    }
+
+    #[tokio::test]
+    async fn cel_an_unset_path_is_null_without_strict() {
+        let ctx = Value::Dict(Dict::new());
+        let params = cel_params(vec![("expr", Value::from("state.prime.missing.value"))]);
+        let node = run_cel(&ctx, params).await;
+        assert_eq!(node.get(&Value::from("value")), Some(&Value::None));
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+    }
+
+    #[tokio::test]
+    async fn cel_an_unset_path_fails_under_strict() {
+        let ctx = Value::Dict(Dict::new());
+        let params = cel_params(vec![
+            ("expr", Value::from("state.prime.missing.value")),
+            ("strict", Value::from(true)),
+        ]);
+        let node = run_cel(&ctx, params).await;
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from(
+                "CEL expression 'state.prime.missing.value' reads unset state path \
+                 'state.prime.missing.value' and is marked strict."
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn cel_a_schema_mismatch_fails_naming_the_path() {
+        let ctx = Value::Dict(Dict::new());
+        let mut schema = Dict::new();
+        schema.insert(Value::from("type"), Value::from("number"));
+        let params = cel_params(vec![
+            ("expr", Value::from("'not a number'")),
+            ("schema", Value::Dict(schema)),
+        ]);
+        let node = run_cel(&ctx, params).await;
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from(
+                "cel: the result does not match params.schema: (root): 'not a number' is not of type 'number'"
+            ))
         );
     }
 }

@@ -1,0 +1,12 @@
+name: c723-cel-tool-expr-not-literal
+interface:
+  inputs:
+    e:
+      type: string
+      default: "true"
+effects:
+  - type: tool
+    name: gate
+    provider: cel
+    params:
+      expr: {from: input.e}
