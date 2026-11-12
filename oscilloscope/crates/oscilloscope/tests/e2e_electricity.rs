@@ -231,7 +231,13 @@ fn an_invalid_document_fails_and_still_writes_state() {
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
+    // The summary names the run (#717): `■ run <name>  failed: …`.
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("■ run ") && l.contains("failed")),
+        "stdout:\n{stdout}"
+    );
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(run_dir.join("state.json").is_file());
     assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");
@@ -279,7 +285,13 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
+    // The summary names the run (#717): `■ run <name>  failed: …`.
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("■ run ") && l.contains("failed")),
+        "stdout:\n{stdout}"
+    );
     assert!(stdout.contains(PREVIEW_MARKER), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(!run_dir.join("state.json").is_file());
