@@ -178,7 +178,7 @@ impl Drop for KillGroupOnDrop {
 }
 
 /// A process-backed tool's running output, for a running [`crate::
-/// ToolCall::on_live`] callback (#741 part B) -- the tail/byte-count
+/// ToolCall::on_live`] callback (#741) -- the tail/byte-count
 /// figures `meta.live` needs; `v`/`started_at`/`updated_at` are the
 /// caller's own, assembled once it has these.
 pub struct LiveTail {
@@ -188,10 +188,11 @@ pub struct LiveTail {
     pub stderr_bytes: u64,
 }
 
-/// `meta.live`'s own tail cap (#741 part B) -- the same shape the agent
-/// tool (#636) and streamed prompts (#674) already publish: the last
-/// [`LIVE_TAIL_MAX_LINES`] lines (a trailing, newline-less line counts
-/// as one), never more than [`LIVE_TAIL_MAX_BYTES`] bytes.
+/// `meta.live`'s own tail cap (#741): the last [`LIVE_TAIL_MAX_LINES`]
+/// lines (a trailing, newline-less line counts as one), never more
+/// than [`LIVE_TAIL_MAX_BYTES`] bytes -- the envelope around it
+/// (`v`/`started_at`/`updated_at`) is the same shape the agent tool
+/// (#636) and streamed prompts (#674) already publish.
 const LIVE_TAIL_MAX_LINES: usize = 20;
 const LIVE_TAIL_MAX_BYTES: usize = 4096;
 
@@ -229,13 +230,49 @@ fn tail_slice(buf: &[u8], max_lines: usize, max_bytes: usize) -> &[u8] {
     &window[start..]
 }
 
-/// [`tail_slice`], decoded the way `meta.live`'s own tails are --
+/// *text*'s own last *max_bytes* bytes, cut at a `char` boundary (never
+/// mid-character) -- the start is dropped, never the end, matching
+/// `tail -c`'s own convention. A no-op once *text* is already within
+/// the cap.
+fn cap_to_last_bytes(text: &str, max_bytes: usize) -> &str {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut start = text.len() - max_bytes;
+    while start < text.len() && !text.is_char_boundary(start) {
+        start += 1;
+    }
+    &text[start..]
+}
+
+/// *buf*'s own tail, decoded the way `meta.live`'s own tails are --
 /// UTF-8 with invalid bytes replaced (never the final output's own
 /// strict [`decode_text`]: a tail is a display value, cut at an
 /// arbitrary byte boundary that can split a multi-byte character, and
-/// must never fail a running tool over that).
+/// must never fail a running tool over that) -- with the same
+/// universal-newline translation (`\r\n`/a lone `\r` both become
+/// `\n`) [`decode_text`] applies to the final output, so a tail is
+/// always a true suffix of the same text `meta.stdout`/`meta.stderr`
+/// end up holding, never split on a `\r` the final text never kept as
+/// its own line break (ffmpeg's own `\r`-separated progress lines,
+/// for one). Decoded, then translated, then line-capped, then
+/// byte-capped again, in that order: translation only ever shrinks
+/// text, but lossy replacement of invalid bytes can grow it (one
+/// invalid byte becomes a 3-byte replacement character), so the
+/// result is only guaranteed within [`LIVE_TAIL_MAX_BYTES`] once the
+/// last cap runs after that expansion, not before it.
 fn tail_text(buf: &[u8]) -> String {
-    String::from_utf8_lossy(tail_slice(buf, LIVE_TAIL_MAX_LINES, LIVE_TAIL_MAX_BYTES)).into_owned()
+    let window = &buf[buf.len().saturating_sub(LIVE_TAIL_MAX_BYTES)..];
+    let decoded = String::from_utf8_lossy(window);
+    let translated = universal_newlines(&decoded);
+    // `tail_slice` only ever cuts at a `\n` byte, which a multi-byte
+    // UTF-8 character never contains, so reusing it on *translated*'s
+    // own bytes (line cap only -- `usize::MAX` keeps the byte window
+    // from trimming anything here) can never land mid-character.
+    let line_capped = tail_slice(translated.as_bytes(), LIVE_TAIL_MAX_LINES, usize::MAX);
+    let line_capped = std::str::from_utf8(line_capped)
+        .expect("cutting translated text at a newline byte stays valid utf-8");
+    cap_to_last_bytes(line_capped, LIVE_TAIL_MAX_BYTES).to_string()
 }
 
 fn live_tail(stdout_buf: &[u8], stderr_buf: &[u8]) -> LiveTail {
@@ -247,7 +284,7 @@ fn live_tail(stdout_buf: &[u8], stderr_buf: &[u8]) -> LiveTail {
     }
 }
 
-/// `on_live`'s own cadence (#741 part B, `exec/prompt.rs`'s own
+/// `on_live`'s own cadence (#741, `exec/prompt.rs`'s own
 /// `meta.live` throttle for #674/#676, ported): `true` at most once a
 /// second. A call that isn't due only records that a publish is
 /// *pending*, for [`run_tracked`]'s own periodic tick to flush once a
@@ -268,7 +305,7 @@ fn live_due(published_at: &mut Option<std::time::Instant>, pending: &mut bool) -
 /// stdin-writer task, universal-newline/locale decoding, and the
 /// token-tracked wait/kill loop. *on_live*, when given, is called with
 /// this run's current output tails/byte counts while it runs, already
-/// throttled to [`live_due`]'s own cadence (#741 part B) -- `None` for
+/// throttled to [`live_due`]'s own cadence (#741) -- `None` for
 /// every caller that never publishes `meta.live` (the agent CLIs,
 /// `http`).
 pub async fn run_tracked(
@@ -431,7 +468,7 @@ pub async fn run_tracked(
     let mut child_status: Option<std::process::ExitStatus> = None;
     // Read straight into these in the loop below, not through a
     // separate `tokio::spawn`'d reader task the way a `read_to_end`
-    // only handed back at EOF would need (#741 part B: `on_live` needs
+    // only handed back at EOF would need (#741: `on_live` needs
     // the bytes as they arrive, not just the final total) -- this loop
     // already multiplexes `child.wait()`/the poll timer through the
     // same `tokio::select!`, so reading each pipe inline here, re-
@@ -444,7 +481,7 @@ pub async fn run_tracked(
     let mut stdout_chunk = [0u8; 8192];
     let mut stderr_chunk = [0u8; 8192];
     // `on_live`'s own publish-pending state across loop iterations
-    // (#741 part B) -- unused, and left at its initial `None`/`false`,
+    // (#741) -- unused, and left at its initial `None`/`false`,
     // for every call `on_live` is `None` for.
     let mut live_published_at: Option<std::time::Instant> = None;
     let mut live_pending = false;
@@ -517,7 +554,7 @@ pub async fn run_tracked(
                         repeat_group_kill(pgid);
                     }
                 }
-                // This loop's own trailing publish (#741 part B): a
+                // This loop's own trailing publish (#741): a
                 // pending update from inside the 1 s throttle window
                 // above still goes out within about a second of it even
                 // if no further output ever arrives, the same way
@@ -988,23 +1025,84 @@ mod tests {
         assert_eq!(tail_text(&buf), "a\u{fffd}b");
     }
 
+    #[test]
+    fn tail_text_translates_crlf_and_a_lone_cr_the_same_way_the_final_output_does() {
+        // ffmpeg's own stderr progress is `\r`-separated, with no `\n`
+        // at all; `tail_slice`'s own byte-level line cap would see it
+        // as one giant line unless this translation runs first.
+        assert_eq!(tail_text(b"line1\rline2\rline3"), "line1\nline2\nline3");
+        assert_eq!(tail_text(b"a\r\nb\r\nc"), "a\nb\nc");
+    }
+
+    #[test]
+    fn tail_text_stays_within_the_byte_cap_even_when_every_byte_is_invalid() {
+        // Every byte here is its own invalid UTF-8 lead byte, so lossy
+        // decoding alone would expand this window to 3x its own size
+        // (one 3-byte replacement character per byte) -- well past
+        // `LIVE_TAIL_MAX_BYTES` unless the byte cap is re-applied after
+        // that expansion, not only before it.
+        let buf = vec![0xffu8; LIVE_TAIL_MAX_BYTES * 2];
+        let text = tail_text(&buf);
+        assert!(
+            text.len() <= LIVE_TAIL_MAX_BYTES,
+            "got {} bytes",
+            text.len()
+        );
+        assert!(text.chars().all(|c| c == '\u{fffd}'));
+    }
+
+    #[test]
+    fn tail_text_cuts_valid_multibyte_text_cleanly_at_the_byte_cap() {
+        // 3-byte CJK characters whose own byte length never divides
+        // evenly into `LIVE_TAIL_MAX_BYTES`, so the raw window taken
+        // before decoding lands mid-character; the lossy decode turns
+        // that lone fragment into one replacement character, and the
+        // byte cap re-applied after decoding must drop exactly that
+        // fragment, never keep it or cut a *whole* character in half.
+        let buf: Vec<u8> = std::iter::repeat('\u{6587}')
+            .take(2000)
+            .collect::<String>()
+            .into_bytes();
+        let text = tail_text(&buf);
+        assert!(
+            text.len() <= LIVE_TAIL_MAX_BYTES,
+            "got {} bytes",
+            text.len()
+        );
+        assert!(text.chars().all(|c| c == '\u{6587}'), "got {text:?}");
+    }
+
+    #[test]
+    fn tail_text_treats_a_crlf_split_across_two_pipe_reads_as_one_line_end() {
+        // Simulates a `\r\n` arriving split across two separate pipe
+        // reads -- the first read's own chunk ends in `\r`, the next
+        // one starts with `\n`. Both chunks land in the same
+        // accumulated buffer `run_tracked` holds before this ever
+        // runs, so there is no separate incremental-decoder state to
+        // get this wrong; this pins that the whole-buffer re-decode on
+        // every call still sees the join as one line end, not two.
+        let mut buf = b"line1\r".to_vec();
+        buf.extend_from_slice(b"\nline2");
+        assert_eq!(tail_text(&buf), "line1\nline2");
+    }
+
     #[tokio::test]
     async fn run_tracked_calls_on_live_with_growing_separate_tails_and_a_trailing_flush() {
-        // `printf` of each stream's own line is unbuffered (unlike a
-        // libc-buffered `echo` inside a script that might coalesce
-        // both writes into one pipe read), so the main loop's own
-        // first `read()` reliably sees stdout alone, publishing it at
-        // once (#741 part B: no prior publish this call, so the first
-        // update is never throttled) -- the child then sleeps past the
-        // 1 s throttle window with nothing further written, so the
-        // *second* line (stderr) is only ever picked up by this loop's
-        // own trailing-publish tick, never a third, immediate publish
-        // of its own.
+        // Each `printf` is unbuffered, and separated from the next by
+        // a sleep well past the main loop's own 200ms poll tick, so
+        // the stdout write is always read, and published, on its own
+        // before the stderr write happens at all -- `calls[0]` is
+        // pinned to stdout alone regardless of which pipe `select!`
+        // happens to poll first on a loaded machine. The child then
+        // sleeps past the 1 s throttle window with nothing further
+        // written, so the *second* line (stderr) is only ever picked
+        // up by this loop's own trailing-publish tick, never a third,
+        // immediate publish of its own.
         let token = CancellationToken::new();
         let cmd = vec![
             "sh".to_string(),
             "-c".to_string(),
-            "printf out1; printf out2 1>&2; sleep 1.5".to_string(),
+            "printf out1; sleep 0.3; printf out2 1>&2; sleep 1.5".to_string(),
         ];
         let calls: Rc<RefCell<Vec<LiveTail>>> = Rc::new(RefCell::new(Vec::new()));
         let calls_for_callback = Rc::clone(&calls);
