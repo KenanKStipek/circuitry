@@ -975,6 +975,42 @@ fn tape_rule_line(
     ])
 }
 
+/// Issue #745: the detail pane's own title, cut from the middle with
+/// `⋯` rather than running into the border and losing its own right
+/// edge to a hard clip -- the breadcrumb's first segment survives,
+/// then as many of its trailing segments, including the step's own
+/// name, as still fit alongside the fixed `suffix` (` · Selected`),
+/// never cut itself; when even the first segment doesn't fit
+/// alongside it, `⋯ › {step's own name}` drops the first segment too
+/// rather than hard-clipping the step's own name from the right.
+/// `max_chars` is the title line's own full budget (`tape_block_
+/// title`'s `"─ " + text + " "`), not the pane's raw width.
+fn tape_detail_title_cut(breadcrumb: &str, suffix: &str, max_chars: usize) -> String {
+    let reserved = 2 + 1 + suffix.chars().count(); // "─ " prefix, trailing space, the fixed suffix.
+    let budget = max_chars.saturating_sub(reserved);
+    if breadcrumb.chars().count() <= budget {
+        return format!("{breadcrumb}{suffix}");
+    }
+    let segments: Vec<&str> = breadcrumb.split(" › ").collect();
+    let Some((first, rest)) = segments.split_first() else {
+        return format!("{}{suffix}", truncate_text(breadcrumb, budget));
+    };
+    if let Some((&last, _)) = rest.split_last() {
+        for keep in (1..rest.len()).rev() {
+            let tail = rest[rest.len() - keep..].join(" › ");
+            let candidate = format!("{first} › ⋯ › {tail}");
+            if candidate.chars().count() <= budget {
+                return format!("{candidate}{suffix}");
+            }
+        }
+        let fallback = format!("⋯ › {last}");
+        if fallback.chars().count() <= budget {
+            return format!("{fallback}{suffix}");
+        }
+    }
+    format!("{}{suffix}", truncate_text(breadcrumb, budget))
+}
+
 /// A Tape pane's own block title (§2.1): the border's own top-left
 /// rule shows through as `─` for one cell before the title text
 /// starts (`╰─ Tape · ... ────╯`) -- `Block::title`'s own left
@@ -2274,7 +2310,7 @@ fn draw_tape_list(
                     ));
                 } else {
                     spans.push(Span::styled(
-                        "■ Run Started        ",
+                        format!("■ {:<name_width$}", "Run Started"),
                         Style::default().fg(ctx.theme.fg_muted),
                     ));
                     let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -2465,7 +2501,7 @@ fn draw_tape_list(
                     now_area_end = Some(lines.len());
                     in_now_area = false;
                 }
-                let mut text = "Run End            ".to_string();
+                let mut text = format!("{:<name_width$}", "Run End");
                 // §5: 60-79 columns drops the usual total, the
                 // duration and the ETA here -- the Totals row below
                 // already carries the ETA; the leading gap matches
@@ -4616,7 +4652,11 @@ fn draw_tape_detail(
         TapeHead::Failed { .. } if ended_row_selected => "Run · Failed".to_string(),
         TapeHead::Ended { .. } | TapeHead::Failed { .. } | TapeHead::Normal => {
             match &screen.selected_breadcrumb {
-                Some(breadcrumb) => format!("{breadcrumb} · Selected"),
+                Some(breadcrumb) => tape_detail_title_cut(
+                    breadcrumb,
+                    " · Selected",
+                    (area.width as usize).saturating_sub(2),
+                ),
                 None => "Tape".to_string(),
             }
         }
@@ -6129,7 +6169,7 @@ fn draw_all_tape_tile(
         use oscilloscope_core::screens::TapeItem;
         match line {
             TapeTileLine::Item(TapeItem::RunStarted { ts, engine, .. }) => {
-                let prefix = "■ Run Started        ";
+                let prefix = format!("■ {:<name_width$}", "Run Started");
                 let used = prefix.chars().count();
                 let ts_text = ts
                     .as_deref()
@@ -6265,7 +6305,7 @@ fn draw_all_tape_tile(
                 let eta_text = eta_ts
                     .as_deref()
                     .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-                let mut text = "Run End            ".to_string();
+                let mut text = format!("{:<name_width$}", "Run End");
                 match eta_text {
                     Some(eta) => text.push_str(&format!("ETA {eta}")),
                     None => text.push_str("ETA — · no history yet"),
@@ -15599,6 +15639,221 @@ mod golden_tests {
                 && text.contains("scripted-model")
                 && text.contains("succeeded"),
             "{text}"
+        );
+    }
+
+    fn nested_tree_loops_plan() -> PlanTree {
+        let doc = agent_fixtures_dir().join("nested_tree_loops/do.yml");
+        let program = oscilloscope_core::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .unwrap_or_else(|e| panic!("nested_tree_loops/do.yml doesn't compile: {e}"));
+        PlanTree::from_program(&program)
+    }
+
+    fn nested_tree_loops_snapshot(index: usize) -> (Value, String) {
+        let dir = agent_fixtures_dir().join("nested_tree_loops");
+        let text = std::fs::read_to_string(dir.join("snapshots.jsonl")).expect("snapshots.jsonl");
+        let line = text
+            .lines()
+            .nth(index)
+            .unwrap_or_else(|| panic!("no snapshot at index {index}"));
+        let wrapper: Value = serde_json::from_str(line).expect("valid JSON line");
+        let state = wrapper["state"].clone();
+        let t = wrapper["t"].as_f64().expect("snapshot has its own t");
+        let created_at = state["prime"]["meta"]["created_at"]
+            .as_str()
+            .expect("snapshot has a run start");
+        let run_start =
+            chrono::DateTime::parse_from_rfc3339(created_at).expect("run_start is RFC-3339");
+        let now = run_start + chrono::Duration::milliseconds((t * 1000.0).round() as i64);
+        (
+            state,
+            now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        )
+    }
+
+    fn nested_tree_loops_events_up_to(now: &str) -> Vec<Value> {
+        let now_dt = chrono::DateTime::parse_from_rfc3339(now).expect("now is RFC-3339");
+        let dir = agent_fixtures_dir().join("nested_tree_loops");
+        std::fs::read_to_string(dir.join("events.jsonl"))
+            .expect("events.jsonl")
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| serde_json::from_str::<Value>(l).expect("valid JSON line"))
+            .filter(|e| {
+                e.get("ts")
+                    .and_then(Value::as_str)
+                    .and_then(|ts| chrono::DateTime::parse_from_rfc3339(ts).ok())
+                    .is_some_and(|ts| ts <= now_dt)
+            })
+            .collect()
+    }
+
+    /// The Tape, built from a mid-run snapshot of `nested_tree_loops`
+    /// (issues #744/#745: a deep nested loop still running, long
+    /// enough breadcrumbs to widen the name column and overflow the
+    /// detail pane's own title).
+    fn nested_tree_loops_tape_at(
+        index: usize,
+        selected: Option<&str>,
+    ) -> (
+        oscilloscope_core::render::RenderState,
+        oscilloscope_core::screens::TapeScreen,
+        String,
+    ) {
+        let plan = nested_tree_loops_plan();
+        let (state, now) = nested_tree_loops_snapshot(index);
+        let mut model = RunModel::new();
+        for raw in nested_tree_loops_events_up_to(&now) {
+            if let Some(event) = oscilloscope_core::observe::parse_event(&raw) {
+                model.observe_event(&event);
+            }
+        }
+        let rendered = render::build_folded(
+            "nested_tree_loops/do.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            &now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let tape_screen = oscilloscope_core::screens::build_tape(
+            &rendered.rows,
+            &rendered.rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            selected,
+            true,
+            &now,
+        );
+        (rendered, tape_screen, now)
+    }
+
+    /// Renders `nested_tree_loops`' own Tape, 120x30, as the rows a
+    /// reader would actually see (issues #744/#745): row `y`'s whole
+    /// text, border characters included.
+    fn nested_tree_loops_tape_rows(index: usize, selected: Option<&str>) -> Vec<String> {
+        let (rendered, tape_screen, now) = nested_tree_loops_tape_at(index, selected);
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut app = App::new(false);
+        app.selected_path = selected.map(str::to_string);
+        app.follow = false;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_tape(
+                    f,
+                    f.area(),
+                    &tape_screen,
+                    &rendered.header,
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    &now,
+                )
+            })
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        (0..30)
+            .map(|y| (0..120).map(|x| buf[(x, y)].symbol()).collect::<String>())
+            .collect()
+    }
+
+    /// Issue #745 rule 1: a long breadcrumb in the detail pane's own
+    /// title is cut from the middle with `⋯`, keeping the step's own
+    /// name, rather than running into the border with a hard clip and
+    /// no `⋯` at all.
+    #[test]
+    fn the_detail_panes_title_cuts_a_long_breadcrumb_from_the_middle_with_an_ellipsis() {
+        let rows = nested_tree_loops_tape_rows(
+            7,
+            Some("prime.work.groups.iter_1.files.iter_3.build.compile"),
+        );
+        let text = rows.join("\n");
+        assert!(
+            text.contains("iter_1 › ⋯ › build › compile · Selected"),
+            "expected the title cut from the middle, keeping the step's own name; got:\n{text}"
+        );
+        assert!(
+            !text.contains("iter_1 › files › iter_3 › build › compile"),
+            "the uncut breadcrumb must never reach the title; got:\n{text}"
+        );
+        assert!(
+            !text.contains("compil╮") && !text.contains("compil "),
+            "the title must never hard-clip the step's own name with no ⋯; got:\n{text}"
+        );
+    }
+
+    /// Issue #745 rule 1, a two-segment breadcrumb: there is only one
+    /// segment to drop before the step's own name, so the cut drops
+    /// the first segment entirely (`⋯ › name`) rather than hard-
+    /// clipping the name itself from the right.
+    #[test]
+    fn tape_detail_title_cut_keeps_the_steps_own_name_with_only_two_segments() {
+        let cut = tape_detail_title_cut(
+            "a_very_long_first_segment_indeed › build",
+            " · Selected",
+            40,
+        );
+        assert_eq!(cut, "⋯ › build · Selected");
+    }
+
+    /// Issue #745 rule 2: `■ Run Started` and `■ Run End` follow the
+    /// same widened name column every other row does, never the old
+    /// 19-cell floor -- here widened by the deep nested loop's own
+    /// long breadcrumbs.
+    #[test]
+    fn run_started_and_run_end_follow_the_same_widened_name_column_as_other_rows() {
+        let rows = nested_tree_loops_tape_rows(5, None);
+        let run_started = rows
+            .iter()
+            .find(|r| r.contains("Run Started"))
+            .expect("a Run Started row");
+        let run_end = rows
+            .iter()
+            .find(|r| r.contains("Run End"))
+            .expect("a Run End row");
+        let other_row = rows
+            .iter()
+            .find(|r| r.contains("setup"))
+            .expect("the finished setup row");
+        let name_width_col = other_row.find("1.0s").expect("setup's own what text");
+        assert_eq!(
+            run_started.find("do.yml"),
+            Some(name_width_col),
+            "Run Started's own column must match the widened one every row uses;\nRun Started: {run_started:?}\nother: {other_row:?}"
+        );
+        assert_eq!(
+            run_end.find("ETA"),
+            Some(name_width_col),
+            "Run End's own column must match the widened one every row uses;\nRun End: {run_end:?}\nother: {other_row:?}"
+        );
+        // The default 19-cell floor (glyph + 19) would have put
+        // these two columns well before the widened one -- in cells,
+        // not `name_width_col`'s own byte offset, which the glyph
+        // and clock's own multi-byte characters already inflate well
+        // past the floor on their own.
+        let name_width_cells = other_row[..name_width_col].chars().count();
+        assert!(
+            name_width_cells > 1 + 9 + 2 + 19,
+            "expected the name column to have widened past the 19-cell floor; got {name_width_cells} cells"
         );
     }
 
