@@ -310,6 +310,8 @@ impl ToolPlugin for FfmpegPlugin {
             exit_code: Some(completed.exit_code),
             ok: true,
             stdout_parsed: false,
+            tokens_sent: None,
+            tokens_received: None,
         })
     }
 

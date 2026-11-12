@@ -1139,6 +1139,8 @@ fn finalize_response(
         exit_code: None,
         ok,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
     })
 }
 

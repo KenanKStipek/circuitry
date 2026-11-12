@@ -1,5 +1,5 @@
 //! electricity-tools: the `ToolPlugin` trait, the per-attempt plugin
-//! builder, the process API, and electricity's 15 native tool
+//! builder, the process API, and electricity's 16 native tool
 //! providers (DESIGN.md §8.1) -- [`ToolPlugin`] v2, [`ToolCall`],
 //! [`ToolError`], [`PyExc`], [`ErrorCause`], [`ToolResult::validate`],
 //! [`registry::build_plugin`], and one module per provider: [`shell`],
@@ -7,7 +7,8 @@
 //! [`env_vars`], [`hash`], [`uuid`], [`clock`] (lane D1, #460/#464);
 //! [`regex`] (lane D2, #479/#480); [`http`]/[`http_client`] (lane E,
 //! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); [`gh`] (issue
-//! #722); [`cel`] (issue #723); plus [`json`] (issue #449's gate lane) and [`agent_cli`],
+//! #722); [`cel`] (issue #723); [`systemone`] (issue #724); plus [`json`]
+//! (issue #449's gate lane) and [`agent_cli`],
 //! the shared half `electricity-adapters`' `claude_code`/`pi` build on
 //! (issue #520).
 //!
@@ -47,6 +48,7 @@ pub mod regex;
 pub mod registry;
 pub mod shell;
 pub mod subprocess_tool;
+pub mod systemone;
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
 pub mod uuid;
@@ -79,6 +81,15 @@ pub struct ToolResult {
     /// `runtime.state.parsed_stdout: drop` keeps such a `stdout` out of
     /// state (#592).
     pub stdout_parsed: bool,
+    /// `plugins/base.py::ToolResult.tokens_sent`/`.tokens_received` --
+    /// `None` for every provider but `systemone` (issue #724), which
+    /// reports a server's own `usage.input_tokens`/`usage.output_tokens`
+    /// on a successful answer only, never on a returned failure or a
+    /// raised one. `exec/tool.rs` writes these into `meta.tokens_sent`/
+    /// `meta.tokens_received` and the run's own token totals the same
+    /// way a prompt's adapter reply does.
+    pub tokens_sent: Option<i64>,
+    pub tokens_received: Option<i64>,
 }
 
 impl ToolResult {
@@ -93,6 +104,8 @@ impl ToolResult {
             exit_code: None,
             ok: true,
             stdout_parsed: false,
+            tokens_sent: None,
+            tokens_received: None,
         }
     }
 

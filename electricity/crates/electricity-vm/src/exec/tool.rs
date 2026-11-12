@@ -190,7 +190,10 @@ const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 /// `crate::retry::is_tool_failure_retryable` already keeps for any
 /// non-HTTP-family provider.
 fn http_family_provider(provider: &str) -> bool {
-    matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
+    matches!(
+        provider,
+        "http" | "web_fetch" | "webhook" | "linear" | "systemone"
+    )
 }
 
 /// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
@@ -681,6 +684,13 @@ pub async fn execute_tool<R: ParamsCtx>(
     }
 
     let mut next_delay_ms = base_backoff_ms;
+    // `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`
+    // locals (issue #724): accumulated across every attempt of this
+    // pass, written to `meta.tokens_sent_total`/`.tokens_received_total`
+    // whenever a plugin result carries a token count -- `systemone` is
+    // the only provider that ever does.
+    let mut total_tokens_sent: Option<i64> = None;
+    let mut total_tokens_received: Option<i64> = None;
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -714,6 +724,10 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "raw");
         pop_leaf(&meta_node, "expect");
         pop_leaf(&meta_node, "retries_used");
+        pop_leaf(&meta_node, "tokens_sent");
+        pop_leaf(&meta_node, "tokens_received");
+        pop_leaf(&meta_node, "tokens_sent_total");
+        pop_leaf(&meta_node, "tokens_received_total");
         pop_leaf(&meta_node, "stdout_chars");
         pop_leaf(&meta_node, "stdout_sha256");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
@@ -741,6 +755,13 @@ pub async fn execute_tool<R: ParamsCtx>(
         // set on an `ok: false` returned result -- never a raised
         // failure or a failed `expect:` (issue #485's own ruling).
         let mut retry_after_for_backoff: Option<String> = None;
+        // Issue #724: this attempt's own `result.tokens_sent`/
+        // `.tokens_received`, threaded past the big `match` below the
+        // same way -- written to `meta.tokens_sent`/`.tokens_received`
+        // only once this attempt is the one that decided the pass's
+        // outcome (the tail end below, success only).
+        let mut attempt_tokens_sent: Option<i64> = None;
+        let mut attempt_tokens_received: Option<i64> = None;
         // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
         // `expect:` check, raised or not, overriding whatever this
         // provider's own HTTP-family status/cause classification would
@@ -1062,6 +1083,34 @@ pub async fn execute_tool<R: ParamsCtx>(
                                             set_leaf(store, &meta_node, "binary", binary);
                                         }
                                         set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+                                        // Issue #724: spent whether this attempt
+                                        // succeeds or not -- an earlier, failed
+                                        // attempt's usage still counts toward this
+                                        // pass's total.
+                                        attempt_tokens_sent = result.tokens_sent;
+                                        attempt_tokens_received = result.tokens_received;
+                                        if let Some(sent) = result.tokens_sent {
+                                            total_tokens_sent =
+                                                Some(total_tokens_sent.unwrap_or(0) + sent);
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_sent_total",
+                                                Value::from(total_tokens_sent.expect("just set")),
+                                            );
+                                        }
+                                        if let Some(received) = result.tokens_received {
+                                            total_tokens_received =
+                                                Some(total_tokens_received.unwrap_or(0) + received);
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_received_total",
+                                                Value::from(
+                                                    total_tokens_received.expect("just set"),
+                                                ),
+                                            );
+                                        }
 
                                         if !result.ok {
                                             let message = result
@@ -1307,6 +1356,12 @@ pub async fn execute_tool<R: ParamsCtx>(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
+            // Unlike a prompt's own failure path, a tool failure never
+            // carries tokens (issue #724: only `systemone` ever reports
+            // any, and only on success) -- `record_totals` stays a
+            // success-only call here, matching this crate's own existing
+            // behaviour for every other tool failure rather than adding a
+            // new `Totals` event to a path no prior case expected one on.
             observer.effect_complete(
                 &effect_path,
                 instance,
@@ -1332,6 +1387,24 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "retries_used",
                 Value::from(i64::from(attempt_index)),
             );
+        }
+        // Issue #724: the attempt that decided this pass's own outcome --
+        // unlike `tokens_sent_total`/`tokens_received_total` above, only
+        // ever written once the attempt actually succeeds. `record_totals`
+        // is only called here when this provider actually reported a
+        // token count (`systemone` is the only one that ever does) --
+        // every other tool's own success stays exactly as it was before,
+        // with no new `Totals` event, matching this crate's own pinned
+        // call counts for a loop/if's own model-mode condition.
+        let reported_tokens = attempt_tokens_sent.is_some() || attempt_tokens_received.is_some();
+        if let Some(sent) = attempt_tokens_sent {
+            set_leaf(store, &meta_node, "tokens_sent", Value::from(sent));
+        }
+        if let Some(received) = attempt_tokens_received {
+            set_leaf(store, &meta_node, "tokens_received", Value::from(received));
+        }
+        if reported_tokens {
+            observer.record_totals(&store.snapshot(&meta_node));
         }
         observer.effect_complete(
             &effect_path,
