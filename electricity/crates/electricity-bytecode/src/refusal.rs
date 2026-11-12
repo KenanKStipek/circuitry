@@ -86,9 +86,9 @@ const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
 const TOOL_VALIDATE_YAML_PROVIDERS: &[&str] = &["validate_yaml"];
 /// Issue #723's own native provider -- a `cel` tool effect, built
 /// straight off the condition-evaluation CEL already wired for `if`/
-/// `while`, so it gets its own flag the same way L2's `validate_yaml`
-/// did rather than joining one of the four process/stdlib/regex/http
-/// sets above.
+/// `while`, so it gets its own flag the same way `validate_yaml`'s
+/// own does (#448) rather than joining one of the four process/
+/// stdlib/regex/http sets above.
 const TOOL_CEL_PROVIDERS: &[&str] = &["cel"];
 
 /// Why [`first_unsupported`] refused.
