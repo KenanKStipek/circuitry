@@ -21896,6 +21896,7 @@ mod tape_frame_goldens {
             .unwrap();
         assert_matches_mock(terminal.backend().buffer(), &mock, name, allowed_cells);
     }
+
     #[test]
     fn tape_starting_120x30_matches_the_frame() {
         let plan = demo_plan();
