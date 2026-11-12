@@ -1,0 +1,20 @@
+name: c723-cel-tool-boolean
+interface:
+  inputs:
+    a:
+      type: integer
+      default: 1
+    b:
+      type: integer
+      default: 1
+effects:
+  - type: tool
+    name: equal
+    provider: cel
+    params:
+      expr: "state.input.a == state.input.b"
+  - type: tool
+    name: not_equal
+    provider: cel
+    params:
+      expr: "state.input.a != state.input.b + 1"

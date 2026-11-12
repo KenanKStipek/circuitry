@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #723",
+  "description": "A `cel` row whose result does not validate against its own `schema:` fails the effect naming each mismatch -- one acceptance item of #723's own list.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

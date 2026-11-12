@@ -1,0 +1,7 @@
+name: c723-cel-tool-expr-never-rendered
+effects:
+  - type: tool
+    name: literal
+    provider: cel
+    params:
+      expr: "'{{ state.input.x }}'"
