@@ -17,8 +17,15 @@ documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `prompt` and `reflector` effects and `finally:` blocks, with the `json`,
 `shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
 `clock`, `regex`, `http`, `validate_yaml`, `cel` and `gh` tool providers, aiming at the
-same final state, `--live-state` and `--events` output as `cof run`. A
-top-level `prompts:` map and `{{> name}}` composition run too, in every
+same final state, `--live-state` and `--events` output as `cof run`.
+`runtime.secrets.<name>` (the Keychain, a command or an environment
+variable) and a document's own `{secret: <name>}` resolve at dispatch, in
+an `http` effect's `params.headers` or a subprocess tool's host `env`,
+the same way as `cof run` -- only a document run by path may name one,
+and the value never reaches state, events, logs or an error; an echo of
+it is replaced with `[secret:<name>]`. `http`'s own `save_to` writes a
+2xx body to a file as raw bytes, with `within`, `overwrite` and
+`max_bytes`. A top-level `prompts:` map and `{{> name}}` composition run too, in every
 field that reaches them (a tool's `prompt`/`params`/`params_json`, a
 `use`'s `inputs`/`inline`, a `yield`'s `template`, a `prompt`'s own
 `template`/`messages`). A `prompt` effect runs for real against a
@@ -62,17 +69,6 @@ release alongside the Python distributions, marked as a preview.
   bridge, which brings `python_eval` and the rest, isn't either.
 - **Text encodings.** In `fs` and `hash`, any encoding other than UTF-8,
   ASCII or Latin-1 fails the effect with the preview message.
-- **Secrets.** electricity resolves no `{secret: <name>}` (issue #598). A
-  document whose tool params name one, or whose tools' host `env` holds
-  one, is refused before the run starts. A host `env` secret for a tool
-  that only a `use` child or a generated plan names fails that effect
-  with the preview message instead, like a text encoding, so `on_error`
-  can absorb it.
-- **`http`'s `save_to`.** electricity does not save a response body to a
-  file (issue #602). A document whose `http` params name `save_to` is
-  refused before the run starts; one that `params_json` adds fails that
-  effect with the preview message before any request, so `on_error` can
-  absorb it.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
 - **Persistence and resume.** `runtime.persistence` is refused. There is
