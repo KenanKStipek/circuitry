@@ -71,19 +71,25 @@ impl ProcessScanner for NullProcessScanner {
     }
 }
 
-/// [`ProcessScanner`] backed by a real `ps -axo pid=,args=` call.
+/// [`ProcessScanner`] backed by a real `ps -ww -axo pid=,args=` call.
 pub struct RealProcessScanner;
 
 impl ProcessScanner for RealProcessScanner {
     fn scan(&self) -> Vec<(u32, String)> {
-        let Ok(output) = std::process::Command::new("ps")
-            .args(["-axo", "pid=,args="])
-            .output()
-        else {
+        let Ok(output) = scan_ps_command().output() else {
             return Vec::new();
         };
         parse_ps_scan(&String::from_utf8_lossy(&output.stdout))
     }
+}
+
+/// The process scan's own `ps` call, with `-ww` for the same reason
+/// as [`crate::registry::liveness_ps_command`]: whole command lines,
+/// whatever `$COLUMNS` says.
+pub fn scan_ps_command() -> std::process::Command {
+    let mut command = std::process::Command::new("ps");
+    command.args(["-ww", "-axo", "pid=,args="]);
+    command
 }
 
 /// Parses `ps -axo pid=,args=`'s own output into `(pid, args)` pairs
@@ -457,6 +463,16 @@ mod tests {
     use super::*;
     use crate::registry::RegistryEntry;
     use std::time::Duration;
+
+    #[test]
+    fn the_scan_ps_call_asks_for_whole_command_lines() {
+        let command = scan_ps_command();
+        let args: Vec<_> = command
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(args, ["-ww", "-axo", "pid=,args="]);
+    }
 
     struct AllAlive;
     impl Liveness for AllAlive {

@@ -858,12 +858,26 @@ pub fn terminate_launcher(mut child: Child) {
 /// known, not instantly at spawn.
 pub fn wait_for_registry_entries(runs_dir: &Path, want: usize, timeout: Duration) {
     let deadline = Instant::now() + timeout;
+    let entries = || -> Vec<String> {
+        std::fs::read_dir(runs_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
     loop {
-        let n = std::fs::read_dir(runs_dir)
-            .map(|rd| rd.flatten().count())
-            .unwrap_or(0);
-        if n >= want || Instant::now() >= deadline {
+        let json = entries().iter().filter(|n| n.ends_with(".json")).count();
+        if json >= want {
             return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "expected {want} registry entries in {} within {timeout:?}, found {:?}",
+                runs_dir.display(),
+                entries()
+            );
         }
         std::thread::sleep(Duration::from_millis(50));
     }
