@@ -127,7 +127,10 @@ def _no_such_option_core(stderr: str) -> str:
     one line after the blank line in its own plain frame
     (`print_run_usage_error`). DESIGN.md's own row covers why the rest
     of either frame isn't compared."""
-    joined = " ".join(stderr.split())
+    # Rich colours the panel where it decides the output supports it
+    # (CI runners do), so drop ANSI styling before searching.
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", stderr)
+    joined = " ".join(plain.split())
     match = re.search(r"No such option: \S+", joined)
     assert match, f"no 'No such option: ...' text in stderr: {stderr!r}"
     return match.group(0)
