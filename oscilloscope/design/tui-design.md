@@ -657,16 +657,17 @@ Above · Received Below · Fixed Scale`). Counts in chrome are `6 Done · 2 Runn
 
 **Navigation.** `osi doc.yml` opens the run on Tape. `osi` alone opens Select (or attaches when one run is
 live, or shows the empty Select). Select → a run → `esc` → Select. Select → All → `enter` on a tile → that run →
-`esc` → All → `esc` → Select. `?` opens the help over the current screen. `q` asks for confirmation while a run is live
+`esc` → All → `esc` → Select. `?` opens the help over the current screen. `?` shows the keys and a Key of the symbols, lines and colours
+on the current screen. `q` asks for confirmation while a run is live
 and quits at once otherwise. Below 80 columns only the Tape is offered, so its key bar drops `0-3`.
 
-**Keys the shipped TUI binds that the frames do not show** (`crates/oscilloscope/src/keys.rs`): `j`/`k`,
-`PageUp`/`PageDown`, `Home`/`End`, `g`/`G` keep working as movement aliases (also binding the Tape's own
-detail pane, once `tab` has given it focus) and belong in Help. `/` filter and `e` errors-only act on the
-Tape's rows and belong in Help. `t` cycles the theme today; the design uses `t` for the token column, so
-theme cycling moves to `T`. `s` (state tree) and `l` (log) swapped panes on the shipped Flow; this design has
-no such panes, so they go, as does `z` (folding is the Flow's `+/-`) and `v`. `Tab` is otherwise unnecessary:
-every other screen has one list with a cursor, nothing of its own to focus.
+**Keys the Tape's own key bar does not show, but its own Help's Keys page lists** (`crates/oscilloscope/src/keys.rs`):
+`j`/`k`, `PageUp`/`PageDown`, `Home`/`End`, `g`/`G` keep working as movement aliases (also binding the Tape's own
+detail pane, once `tab` has given it focus). `/` filter and `e` errors-only act on the Tape's rows. `t` cycles the
+theme today; the design uses `t` for the token column, so theme cycling moves to `T`. `s` (state tree) and `l` (log)
+swapped panes on the shipped Flow; this design has no such panes, so they go, as does `z` (folding is the Flow's
+`+/-`) and `v`. `Tab` is otherwise unnecessary: every other screen has one list with a cursor, nothing of its own to
+focus.
 
 ---
 
