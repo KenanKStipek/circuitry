@@ -178,6 +178,7 @@ mod tests {
             token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         }
     }
 

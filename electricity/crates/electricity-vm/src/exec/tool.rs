@@ -162,6 +162,7 @@ pub async fn run_tool(
     token: &CancellationToken,
     armed: bool,
     secret_headers: &[String],
+    scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
     let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
@@ -171,6 +172,7 @@ pub async fn run_tool(
         token,
         armed,
         secret_headers,
+        scrub,
     };
     plugin.as_dyn().execute(params, &call).await
 }
@@ -1214,6 +1216,14 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 let is_cel = electricity_value::pycompat::py_strip(&tool.provider)
                                     .to_lowercase()
                                     == "cel";
+                                // Issue #725: an http dispatch's own error
+                                // excerpt is scrubbed before it is cut, so
+                                // no part of a secret survives the cut
+                                // (`plugins/http.py::HttpPlugin.execute`'s
+                                // own `scrub_secrets`).
+                                let scrub_closure = |s: &str| dispatch_secrets.scrub_str(s);
+                                let scrub: Option<&dyn Fn(&str) -> String> =
+                                    if is_http { Some(&scrub_closure) } else { None };
                                 let dispatch = tokio::select! {
                                     biased;
                                     result = async {
@@ -1229,6 +1239,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 token,
                                                 run_ctx.armed,
                                                 &secret_header_names,
+                                                scrub,
                                             ).await
                                         }
                                     } => Some(result),
@@ -1754,6 +1765,7 @@ mod tests {
             &token,
             false,
             &[],
+            None,
         )
         .await
         .unwrap_err();
@@ -1777,6 +1789,7 @@ mod tests {
             &token,
             false,
             &[],
+            None,
         )
         .await
         .unwrap_err();

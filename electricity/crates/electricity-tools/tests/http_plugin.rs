@@ -30,6 +30,7 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         token,
         armed: false,
         secret_headers: &[],
+        scrub: None,
     }
 }
 
@@ -352,6 +353,7 @@ async fn a_secret_header_defaults_redirects_to_strip_auth_not_follow() {
             token: &token,
             armed: false,
             secret_headers: &secret_headers,
+            scrub: None,
         },
     )
     .await
@@ -483,6 +485,47 @@ async fn a_non_utf8_body_decodes_with_replacement_characters() {
     .unwrap();
     let text = dict_get(&result.raw, "body").unwrap();
     assert_eq!(text, &Value::Str("\u{fffd}\u{fffd}".to_string()));
+}
+
+#[tokio::test]
+async fn a_secret_straddling_the_error_excerpts_own_cut_leaves_no_fragment_on_either_side() {
+    // Issue #725: the scrub callback runs *before* `http_error_excerpt`
+    // cuts the body to its own 500-character cap, so no part of a
+    // secret -- not even a fragment that would otherwise land on
+    // either side of the cut -- survives into `stderr`.
+    const SECRET: &str = "circuitry-test-fragment-secret-725";
+    let body = format!("{}{SECRET}{}", "a".repeat(490), "b".repeat(200));
+    assert!(body.find(SECRET).unwrap() < 500);
+    assert!(body.find(SECRET).unwrap() + SECRET.len() > 500);
+    let response = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let addr = respond_once(Box::leak(response.into_bytes().into_boxed_slice()));
+    let token = CancellationToken::new();
+    let scrub = |s: &str| s.replace(SECRET, "[secret:api]");
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/")))]),
+        &ToolCall {
+            timeout_seconds: 5,
+            config: &NONE,
+            token: &token,
+            armed: false,
+            secret_headers: &[],
+            scrub: Some(&scrub),
+        },
+    )
+    .await
+    .unwrap();
+    let stderr = result.stderr.unwrap();
+    assert!(!stderr.contains(SECRET), "{stderr}");
+    // No four-character fragment from either side of the secret
+    // survives either -- a weaker scrub that only matched the whole
+    // value, applied after the cut split it, could still leak one.
+    assert!(!stderr.contains(&SECRET[..4]), "{stderr}");
+    assert!(!stderr.contains(&SECRET[SECRET.len() - 4..]), "{stderr}");
+    assert!(stderr.contains("[secret:"), "{stderr}");
 }
 
 #[tokio::test]

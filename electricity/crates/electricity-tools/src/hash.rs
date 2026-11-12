@@ -233,6 +233,7 @@ mod tests {
             token: &token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         };
         HashPlugin.execute(params, &call).await
     }

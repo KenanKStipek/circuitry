@@ -146,6 +146,7 @@ mod tests {
             token: &token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         };
         EnvVarsPlugin.execute(params, &call).await
     }

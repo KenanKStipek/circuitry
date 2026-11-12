@@ -352,6 +352,7 @@ mod tests {
             token: &token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         };
         RegexPlugin.execute(params, &call).await
     }

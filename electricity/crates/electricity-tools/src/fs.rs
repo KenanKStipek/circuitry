@@ -898,6 +898,7 @@ mod tests {
             token: &token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         };
         FsPlugin.execute(params, &call).await
     }

@@ -285,6 +285,7 @@ mod tests {
             token: &token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         };
         tool.execute(params, &call).await
     }

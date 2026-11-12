@@ -1494,6 +1494,7 @@ fn finalize_response_save(
     final_reason: Option<String>,
     refused: bool,
     save: &SaveTarget,
+    scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<ToolResult, ToolError> {
     let status = response.status;
     let ok = !(parsed.fail_on_error
@@ -1508,7 +1509,10 @@ fn finalize_response_save(
         let text = String::from_utf8_lossy(&response.body).into_owned();
         stderr = final_reason.map(|reason| {
             let base = format!("HTTP {status}: {reason}");
-            let excerpt = http_error_excerpt(&text, ERROR_EXCERPT_MAX_CHARS);
+            // Issue #725: scrubbed *before* the cut, so no part of a
+            // secret survives it (`plugins/http.py::HttpPlugin.execute`).
+            let scrubbed = scrub.map(|f| f(&text)).unwrap_or(text);
+            let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
             if excerpt.is_empty() {
                 base
             } else {
@@ -1578,12 +1582,19 @@ fn build_result(
     response: http_client::RawResponse,
     final_reason: Option<String>,
     refused: bool,
+    scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<ToolResult, ToolError> {
     match &parsed.save {
-        Some(save) => {
-            finalize_response_save(parsed, original_url, response, final_reason, refused, save)
-        }
-        None => finalize_response(parsed, original_url, response, final_reason, refused),
+        Some(save) => finalize_response_save(
+            parsed,
+            original_url,
+            response,
+            final_reason,
+            refused,
+            save,
+            scrub,
+        ),
+        None => finalize_response(parsed, original_url, response, final_reason, refused, scrub),
     }
 }
 
@@ -1602,13 +1613,17 @@ fn finalize_response(
     response: http_client::RawResponse,
     final_reason: Option<String>,
     refused: bool,
+    scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<ToolResult, ToolError> {
     let status = response.status;
     let text = String::from_utf8_lossy(&response.body).into_owned();
     let value = parse_body(&parsed.parse_mode, &response.headers, &text)?;
     let stderr = final_reason.map(|reason| {
         let base = format!("HTTP {status}: {reason}");
-        let excerpt = http_error_excerpt(&text, ERROR_EXCERPT_MAX_CHARS);
+        // Issue #725: scrubbed *before* the cut, so no part of a secret
+        // survives it (`plugins/http.py::HttpPlugin.execute`).
+        let scrubbed = scrub.map(|f| f(&text)).unwrap_or_else(|| text.clone());
+        let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
         if excerpt.is_empty() {
             base
         } else {
@@ -1970,7 +1985,7 @@ impl ToolPlugin for HttpPlugin {
                 if let Some(body_error) = response.body_error.clone() {
                     return Err(send_error_to_tool_error(body_error, &original_url));
                 }
-                return build_result(&parsed, &original_url, response, None, false);
+                return build_result(&parsed, &original_url, response, None, false, call.scrub);
             }
 
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -1983,7 +1998,14 @@ impl ToolPlugin for HttpPlugin {
                     let target_scheme = http_url::urlsplit(&quoted, "").scheme;
                     if !matches!(target_scheme.as_str(), "" | "http" | "https" | "ftp") {
                         let reason = disallowed_redirect_scheme_reason(&response.reason, &quoted);
-                        return build_result(&parsed, &original_url, response, Some(reason), false);
+                        return build_result(
+                            &parsed,
+                            &original_url,
+                            response,
+                            Some(reason),
+                            false,
+                            call.scrub,
+                        );
                     }
                     // `plugins/http.py::_RedirectPolicy.redirect_request`:
                     // reached after urllib's own scheme check, before its
@@ -1994,7 +2016,14 @@ impl ToolPlugin for HttpPlugin {
                     {
                         let reason =
                             format!("{}: {}", response.reason, parsed.redirects.refused_note());
-                        return build_result(&parsed, &original_url, response, Some(reason), true);
+                        return build_result(
+                            &parsed,
+                            &original_url,
+                            response,
+                            Some(reason),
+                            true,
+                            call.scrub,
+                        );
                     }
                     if let Some(redirect) = http_client::redirect_policy(&current_method, status) {
                         let repeat_count = visited.get(&quoted).copied().unwrap_or(0);
@@ -2006,6 +2035,7 @@ impl ToolPlugin for HttpPlugin {
                                 response,
                                 Some(reason),
                                 false,
+                                call.scrub,
                             );
                         }
                         *visited.entry(quoted.clone()).or_insert(0) += 1;
@@ -2036,14 +2066,35 @@ impl ToolPlugin for HttpPlugin {
                         continue;
                     }
                     let reason = response.reason.clone();
-                    return build_result(&parsed, &original_url, response, Some(reason), false);
+                    return build_result(
+                        &parsed,
+                        &original_url,
+                        response,
+                        Some(reason),
+                        false,
+                        call.scrub,
+                    );
                 }
                 let reason = response.reason.clone();
-                return build_result(&parsed, &original_url, response, Some(reason), false);
+                return build_result(
+                    &parsed,
+                    &original_url,
+                    response,
+                    Some(reason),
+                    false,
+                    call.scrub,
+                );
             }
 
             let reason = response.reason.clone();
-            return build_result(&parsed, &original_url, response, Some(reason), false);
+            return build_result(
+                &parsed,
+                &original_url,
+                response,
+                Some(reason),
+                false,
+                call.scrub,
+            );
         }
     }
 

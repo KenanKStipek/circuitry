@@ -90,6 +90,7 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         token,
         armed: false,
         secret_headers: &[],
+        scrub: None,
     }
 }
 

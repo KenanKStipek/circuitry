@@ -252,6 +252,14 @@ pub struct ToolCall<'a> {
     /// when non-empty), and which headers a followed cross-origin
     /// redirect strips alongside `Authorization`.
     pub secret_headers: &'a [String],
+    /// Issue #725: scrubs every secret this dispatch resolved out of a
+    /// string, `electricity_tools::secrets::SecretValues::scrub_str`'s own
+    /// callback -- `None` for every provider but `http`. `HttpPlugin::
+    /// execute` applies it to an error body *before* cutting it to
+    /// `ERROR_EXCERPT_MAX_CHARS`, so no part of a secret survives the cut
+    /// (`plugins/http.py::HttpPlugin.execute`'s own `scrub_secrets`
+    /// parameter).
+    pub scrub: Option<&'a dyn Fn(&str) -> String>,
 }
 
 /// DESIGN.md §8.1's shared tool-plugin trait, mirroring `plugins/
@@ -334,6 +342,7 @@ mod tests {
             token,
             armed: false,
             secret_headers: &[],
+            scrub: None,
         }
     }
 
