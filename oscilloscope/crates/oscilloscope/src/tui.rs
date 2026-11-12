@@ -4985,13 +4985,13 @@ pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("↑↓ j k", "Select"),
         row("Home End g G", "Jump to the ends"),
         row("enter", "Open the selected run"),
-        row("T", "Colour theme"),
-        row("?", "This help"),
+        row("T ?", "Colour theme · this help"),
         row("q", "Quit"),
         row("c", "Inert here (no run attached to cancel)"),
         Line::from(""),
         Line::from(Span::styled("Key", muted)),
         key_row("●", running, "a running orchestration"),
+        key_row("◌", muted, "nothing running"),
         key_row("✓", done, "a finished run, in Recent Runs"),
         key_row("✗", failed, "a failed run, in Recent Runs"),
         key_row("—", muted, "no config, or no run directory"),
@@ -7795,40 +7795,72 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
         ])
     };
     let muted = Style::default().fg(ctx.theme.fg_muted);
+    let dim = Style::default().fg(ctx.theme.dim);
     let default = Style::default().fg(ctx.theme.text);
     let legend_color = ctx.theme.run_colors()[0];
     let legend_style = Style::default().fg(legend_color);
     let now_style = Style::default()
         .fg(ctx.theme.accent_primary)
         .add_modifier(Modifier::BOLD);
+    let done_style = Style::default().fg(ctx.theme.status_done);
     let key_row = |sym: &str, style: Style, d: &str| {
         Line::from(vec![
             Span::styled(format!("{sym:<16}"), style),
             Span::styled(d.to_string(), default),
         ])
     };
-    // Issue #738: `\u{2503}` Now, the stacked token bars and the
-    // `\u{25a0}` legend swatch all read one colour per run
-    // (`run_colors`'s own first entry stands in for whichever
-    // colour a given run actually keeps), and `\u{25cf}` names the
-    // run's own currently running step, drawn in the accent colour.
+    let mixed_row = |sym1: &str, style1: Style, sym2: &str, style2: Style, d: &str| {
+        let used = sym1.chars().count() + 1 + sym2.chars().count();
+        let pad = 16usize.saturating_sub(used).max(1);
+        Line::from(vec![
+            Span::styled(sym1.to_string(), style1),
+            Span::raw(" "),
+            Span::styled(sym2.to_string(), style2),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(d.to_string(), default),
+        ])
+    };
+    // Issue #738, each in the real style the chart draws it in:
+    // `\u{2503}` Now with the axis dashed `\u{254c}` ahead of it, the
+    // stacked token bars and their own round top, the `\u{25a0}`
+    // legend swatch (`run_colors`'s own first entry stands in for
+    // whichever colour a given run actually keeps) and `\u{25cf}`
+    // the run's own current step, a finished prompt's `\u{2713}` and
+    // the Per Run table's own `\u{276f}` cursor.
     let lines = vec![
-        row("\u{2190}\u{2192}", "Scrub the chart"),
-        row("n", "Back to Now"),
+        row("\u{2190}\u{2192} n", "Scrub the chart \u{b7} back to Now"),
         row("\u{2191}\u{2193}", "Select a run"),
         row("enter", "Open the selected run on its Signal"),
-        row("T", "Colour theme"),
-        row("c", "Inert here (no run attached to cancel)"),
-        row("esc", "Back to the tiles"),
-        row("?", "This help"),
+        row("T c", "Colour theme \u{b7} inert here"),
+        row("esc ?", "Back to the tiles \u{b7} this help"),
         row("q", "Quit"),
         Line::from(""),
         Line::from(Span::styled("Key", muted)),
-        key_row("\u{2503} \u{2588}", now_style, "Now \u{b7} tokens, stacked per run"),
+        mixed_row("\u{2503}", now_style, "\u{254c}", dim, "Now \u{b7} dashed ahead"),
         key_row(
-            "\u{25a0} \u{25cf}",
+            "\u{2581}\u{2582}\u{2583}\u{2584}\u{2585}\u{2586}\u{2587}\u{2588}",
             legend_style,
-            "legend swatch \u{b7} the run's own current step",
+            "tokens, stacked per run",
+        ),
+        key_row("\u{2580} \u{2594}", legend_style, "the stack's own round top"),
+        Line::from(vec![
+            Span::styled("\u{25a0}", legend_style),
+            Span::raw(" "),
+            Span::styled("\u{25cf}", now_style),
+            Span::raw(" "),
+            Span::styled("\u{203a}", muted),
+            Span::raw("        "),
+            Span::styled(
+                "legend swatch \u{b7} the current step \u{b7} its own loop pass",
+                default,
+            ),
+        ]),
+        mixed_row(
+            "\u{2713}",
+            done_style,
+            "\u{276f}",
+            now_style,
+            "a finished prompt \u{b7} the table's own cursor",
         ),
         key_row("colour", default, "one colour per run, shared with the legend"),
         key_row("scale", default, "one round top shared by every run's bars"),
@@ -10527,8 +10559,15 @@ fn tape_help_key_rows(
     lines.extend(help_row(
         help_cell("↑ ↓", default),
         help_cell("Totals: sent · received", default),
-        help_cell("┼", muted),
-        help_cell("the `t` view's tick", default),
+        vec![("┼".into(), muted), (" ".into(), default), ("▓".into(), above_usual)],
+        help_cell("the `t` view's own tick", default),
+        width,
+    ));
+    lines.extend(help_row(
+        help_cell("▁▂▃▄▅▆▇█", bar_filled),
+        help_cell("a loop's own pass sparkline", default),
+        help_cell("", default),
+        help_cell("", default),
         width,
     ));
     lines
@@ -10601,11 +10640,11 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
     ];
     const QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
         ("esc", "close · back", "q", "quit · confirms if running"),
-        ("c", "cancel · confirms", "", ""),
+        ("c", "cancel · confirms", "T", "colour theme"),
     ];
     const WATCH_QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
         ("esc", "close · back", "q", "quit at once"),
-        ("c", "inert · launched only", "", ""),
+        ("c", "inert · launched only", "T", "colour theme"),
     ];
     let quit_rows: &[(&str, &str, &str, &str)] = if is_watch { WATCH_QUIT_ROWS } else { QUIT_ROWS };
     let mut lines: Vec<Line<'static>> = ROWS
@@ -10613,8 +10652,6 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
         .chain(quit_rows.iter())
         .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
         .collect();
-    // Issue #714: `T` cycles the theme here too.
-    lines.extend(tape_help_row("T", "colour theme", "", "", ctx, width));
     lines.push(Line::from(""));
     lines.push(Line::from(Span::styled(
         "Key",
@@ -10649,7 +10686,7 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
     let below_usual = tape_deviation_style(-25.0, theme);
     lines.extend(help_row(
         help_cell("┃", now_style),
-        help_cell("Now · axis dashed ahead", default),
+        help_cell("Now · axis ╌ ahead", default),
         vec![
             ("✓".into(), done),
             (" ".into(), default),
@@ -10699,6 +10736,24 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
     lines.extend(help_row(
         help_cell("scale", muted),
         help_cell("fixed for the whole run", default),
+        vec![
+            ("▁▂▃▄▅▆▇█".into(), sent_style),
+            (" ".into(), default),
+            ("▀▔".into(), received_style),
+        ],
+        help_cell("a column's own partial row", default),
+        width,
+    ));
+    lines.extend(help_row(
+        help_cell("↑ ↓", default),
+        help_cell("Totals: tokens sent · received", default),
+        help_cell("■", muted),
+        help_cell("Run End, on the axis", default),
+        width,
+    ));
+    lines.extend(help_row(
+        help_cell("›", dim),
+        help_cell("path separator, in a step's own name", default),
         help_cell("", default),
         help_cell("", default),
         width,
@@ -10805,8 +10860,22 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool, unit: u64, width: u16) -> Vec<
     lines.extend(help_row(
         help_cell("·", dim),
         help_cell("not taken, once decided", default),
-        help_cell("Following", default),
-        help_cell("f toggles · stays on Now", default),
+        help_cell("▾", running),
+        help_cell("f toggles Following", default),
+        width,
+    ));
+    lines.extend(help_row(
+        help_cell("◂ ▸", dim),
+        help_cell("stations scrolled past the edge", default),
+        help_cell("", default),
+        help_cell("", default),
+        width,
+    ));
+    lines.extend(help_row(
+        help_cell("━", Style::default().fg(theme.accent_primary)),
+        help_cell("the rail's own visible window", default),
+        help_cell("›", dim),
+        help_cell("path separator, in the status line", default),
         width,
     ));
     for _ in lines.len()..14 {
@@ -10841,7 +10910,7 @@ fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool, width: u16) -> Vec
         .collect();
     lines.push(Line::from(""));
     lines.extend(tape_help_row(
-        "▰",
+        "▰ ▱",
         &format!("= {unit} t · fixed scale"),
         "",
         "",
@@ -10860,12 +10929,15 @@ fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool, width: u16) -> Vec
     // the smaller stores together, a running container reads its
     // own accent `●` and a live leaf reads dim (italic in the
     // `terminal` theme, which paints no background of its own).
+    use oscilloscope_core::render::RowKind;
     let theme = ctx.theme;
     let default = Style::default().fg(theme.text);
     let dim = Style::default().fg(theme.dim);
     let running = Style::default()
         .fg(theme.accent_primary)
         .add_modifier(Modifier::BOLD);
+    let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
+    let failed = tape_glyph_style(RowKind::Prompt, StatusKind::Failed, theme);
     lines.extend(help_row(
         help_cell("tile", default),
         help_cell("area is its share of tokens", default),
@@ -10883,8 +10955,19 @@ fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool, width: u16) -> Vec
     lines.extend(help_row(
         help_cell("dim", dim),
         help_cell("a live leaf, italic in `terminal`", default),
-        help_cell("", default),
-        help_cell("", default),
+        help_cell("❯", running),
+        help_cell("the Largest table's own cursor", default),
+        width,
+    ));
+    lines.extend(help_row(
+        vec![
+            ("✓".into(), done),
+            (" ".into(), default),
+            ("✗".into(), failed),
+        ],
+        help_cell("a finished/failed step, in the status line", default),
+        help_cell("›", dim),
+        help_cell("path separator, in that step's name", default),
         width,
     ));
     for _ in lines.len()..14 {
@@ -23813,6 +23896,328 @@ mod tape_frame_goldens {
         );
     }
 
+    fn lines_text(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .map(|l| l.spans.iter().map(|s| s.content.as_ref()).collect::<String>())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// Every glyph [`tape_glyph`] can draw, across every `RowKind`
+    /// and `StatusKind` it actually switches on -- issue #738's own
+    /// derived test: a new symbol `tape_glyph` starts drawing with
+    /// no Key line of its own fails this, rather than needing a
+    /// human to notice.
+    fn derived_tape_glyphs() -> std::collections::HashSet<char> {
+        use oscilloscope_core::render::RowKind;
+        const ROW_KINDS: &[RowKind] = &[
+            RowKind::Tool,
+            RowKind::Prompt,
+            RowKind::Use,
+            RowKind::Yield,
+            RowKind::Reflector,
+            RowKind::If,
+            RowKind::Loop,
+            RowKind::Dynamic,
+            RowKind::TryFinally,
+            RowKind::Pass,
+            RowKind::Root,
+            RowKind::Unknown,
+            RowKind::QuickSteps,
+            RowKind::Report,
+        ];
+        const STATUS_KINDS: &[StatusKind] = &[
+            StatusKind::Pending,
+            StatusKind::Running,
+            StatusKind::LikelyRunning,
+            StatusKind::RunningOrQueued,
+            StatusKind::Done,
+            StatusKind::Failed,
+            StatusKind::FailedHandled,
+            StatusKind::Skipped,
+            StatusKind::Cancelled,
+            StatusKind::Aborted,
+        ];
+        let mut set = std::collections::HashSet::new();
+        for &kind in ROW_KINDS {
+            for &status in STATUS_KINDS {
+                set.insert(tape_glyph(kind, status));
+            }
+        }
+        set
+    }
+
+    #[test]
+    fn every_glyph_tape_glyph_can_draw_has_a_tape_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let key_text = lines_text(&tape_help_key_rows(&ctx, 50, Some(3), 72));
+        for ch in derived_tape_glyphs() {
+            assert!(
+                key_text.contains(ch),
+                "tape_glyph can draw {ch:?} but the Tape's own Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_glyph_tape_glyph_can_draw_has_a_signal_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let key_text = lines_text(&signal_help_lines(&ctx, false, 72));
+        for ch in derived_tape_glyphs() {
+            assert!(
+                key_text.contains(ch),
+                "tape_glyph can draw {ch:?} but the Signal's own Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_glyph_tape_glyph_can_draw_has_a_flow_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let key_text = lines_text(&flow_help_lines(&ctx, false, 50, 72));
+        for ch in derived_tape_glyphs() {
+            assert!(
+                key_text.contains(ch),
+                "tape_glyph can draw {ch:?} but the Flow's own Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    /// Box-drawing chrome -- a screen's own border/rule drawing,
+    /// never a symbol issue #738's Key owes a line of its own.
+    const CHROME_GLYPHS: &[char] = &[
+        '─', '│', '╭', '╮', '╰', '╯', '┬', '┴', '├', '┤', '═', '║', '⋯', '…',
+        '└', '┘',
+    ];
+
+    /// Prose punctuation every screen's own text uses constantly --
+    /// never, on its own, a symbol issue #738's Key owes a line to.
+    const PROSE_PUNCTUATION: &[char] = &[
+        '.', ',', ':', ';', '\'', '"', '`', '-', '+', '=', '(', ')', '[', ']', '{', '}', '/', '\\',
+        '*', '#', '&', '$', '@', '!', '?', '<', '>', '|', '~', '_', '%', '—', '×', '→',
+    ];
+
+    /// Every non-alphanumeric glyph an already-committed `.mock`
+    /// frame draws, minus pure chrome and prose punctuation -- issue
+    /// #738's own second derived check: a real frame's own symbol
+    /// with no Key line of its own fails whichever screen's test
+    /// below includes that frame, rather than needing a human to
+    /// notice.
+    fn symbols_in_mock(name: &str, theme: &Theme) -> std::collections::HashSet<char> {
+        let mock = parse_mock(name, theme);
+        let mut set = std::collections::HashSet::new();
+        for row in &mock.cells {
+            for &(ch, _) in row {
+                if ch.is_ascii_alphanumeric() || ch == ' ' {
+                    continue;
+                }
+                if CHROME_GLYPHS.contains(&ch) || PROSE_PUNCTUATION.contains(&ch) {
+                    continue;
+                }
+                set.insert(ch);
+            }
+        }
+        set
+    }
+
+    #[test]
+    fn every_symbol_in_the_tapes_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in [
+            "tape--normal--120x30",
+            "tape--usual--120x30",
+            "tape--failed--120x30",
+            "tape--starting--120x30",
+            "tape--ended--120x30",
+        ] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let key_text = lines_text(&tape_help_key_rows(&ctx, 50, Some(3), 72));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Tape's own frames but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_signals_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let symbols = symbols_in_mock("signal--normal--120x30", &theme);
+        let key_text = lines_text(&signal_help_lines(&ctx, false, 72));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Signal's own frame but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_flows_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in ["flow--normal--120x30", "flow--folded--120x30"] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let key_text = lines_text(&flow_help_lines(&ctx, false, 50, 72));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Flow's own frames but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_stores_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let symbols = symbols_in_mock("store--normal--120x30", &theme);
+        let key_text = lines_text(&store_help_lines(&ctx, 50, false, 72));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Store's own frame but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_selects_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in ["select--normal--120x30", "select--empty--80x24"] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| draw_select_help(f, &ctx)).unwrap();
+        let key_text = terminal.backend().to_string();
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in Select's own frames but its Help never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_alls_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in ["all--tape--180x48", "all--signal--180x48"] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| draw_all_help(f, &ctx)).unwrap();
+        // Every tile on this screen is that same screen's own
+        // single-run rendering (issue #698), so a symbol inside one
+        // -- the Tape's own `━`, say -- is already explained by
+        // that screen's own Key, reachable with `?` there; All's own
+        // Key only owes a line for what it adds itself (the grid's
+        // own `●`/`—`/`gone` and the run's own name).
+        let mut key_text = terminal.backend().to_string();
+        key_text.push_str(&lines_text(&tape_help_key_rows(&ctx, 50, Some(3), 72)));
+        key_text.push_str(&lines_text(&signal_help_lines(&ctx, false, 72)));
+        key_text.push_str(&lines_text(&flow_help_lines(&ctx, false, 50, 72)));
+        key_text.push_str(&lines_text(&store_help_lines(&ctx, 50, false, 72)));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in All's own frames but no screen's own Key mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_combined_signals_own_frame_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let symbols = symbols_in_mock("all--combined-signal--180x48", &theme);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| draw_combined_signal_help(f, &ctx))
+            .unwrap();
+        let key_text = terminal.backend().to_string();
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Combined Signal's own frame but its Help never mentions it:\n{key_text}"
+            );
+        }
+    }
+
     /// Issue #738: at 120x30 the Tape's own Help has the room to
     /// show every key and the Key together, on one page -- `←→`
     /// (`crate::keys::HelpPage`) draws the same merged content
@@ -24079,7 +24484,7 @@ mod tape_frame_goldens {
         // the axis's fixed scale.
         assert!(text.contains("Key"), "expected a Key section:\n{text}");
         assert!(
-            text.contains("axis dashed ahead") && text.contains("finished prompt"),
+            text.contains("axis ╌ ahead") && text.contains("finished prompt"),
             "expected the Now sweep's own Key line:\n{text}"
         );
         assert!(
@@ -24209,7 +24614,7 @@ mod tape_frame_goldens {
             "expected the station/folded-lane Key lines:\n{text}"
         );
         assert!(
-            text.contains("token bar, fixed") && text.contains("stays on Now"),
+            text.contains("token bar, fixed") && text.contains("f toggles Following"),
             "expected the token bar/Following Key lines:\n{text}"
         );
     }

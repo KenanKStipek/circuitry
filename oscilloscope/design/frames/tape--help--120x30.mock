@@ -12,7 +12,7 @@
 #! region r2 list 0,1,76,27 Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t
 #! region r3 detail 76,1,44,27 gate › reply · Selected
 #! region r4 keybar 0,29,120,1
-#! region r5 modal 2,5,72,21 Help · Tape
+#! region r5 modal 2,5,72,22 Help · Tape
 #! focus r5
 {fg.faint} osi  demo.yml · ochre-desert · ● Running 3.6s                                                         TAPE    12:50:50 {/}
 {fg.faint}╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t ─────────────────────────╮╭─ gate › reply · Selected ────────────────╮{/}
@@ -37,10 +37,10 @@
 {fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{accent.primary bold on:bg.surface}━━ Now {/}{fg.default on:bg.surface}now band: clock · elapsed   {/}{accent.primary on:bg.surface}▰{/}{fg.faint on:bg.surface}▱      {/}{fg.default on:bg.surface}= 50 t token bar, fixed   {/}{border.focus on:bg.surface}│{/}{fg.faint} ││                                          │{/}
 {fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{fg.muted on:bg.surface}slots  {/}{fg.default on:bg.surface}N of N Slots Busy at once   {/}{fg.muted on:bg.surface}queued  {/}{fg.default on:bg.surface}passes waiting to run     {/}{border.focus on:bg.surface}│{/}{fg.faint} ││                                          │{/}
 {fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{fg.muted on:bg.surface}usual  {/}{fg.default on:bg.surface}median of 3 past runs       {/}{status.warning bold on:bg.surface}+25%{/}{fg.default on:bg.surface} {/}{status.error bold on:bg.surface}+50% {/}{fg.default on:bg.surface}above usual: amber · red{/}{border.focus on:bg.surface}│{/}{fg.faint} ││                                          │{/}
-{fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{fg.default on:bg.surface}↑ ↓    Totals: sent · received     {/}{fg.muted on:bg.surface}┼       {/}{fg.default on:bg.surface}the `t` view's tick       {/}{border.focus on:bg.surface}│{/}{fg.faint} ││                                          │{/}
-{fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{accent.primary bold on:bg.surface}esc {/}{fg.default on:bg.surface}Close  {/}{accent.primary bold on:bg.surface}? {/}{fg.default on:bg.surface}Close     {/}{border.focus on:bg.surface}                                              │{/}{fg.faint} ││                                          │{/}
-{fg.faint}│─{/}{border.focus on:bg.surface}╰──────────────────────────────────────────────────────────────────────╯{/}{fg.faint}─││                                          │{/}
-{fg.faint}│ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —  ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{fg.default on:bg.surface}↑ ↓    Totals: sent · received     {/}{fg.muted on:bg.surface}┼{/}{fg.default on:bg.surface} {/}{status.warning bold on:bg.surface}▓     {/}{fg.default on:bg.surface}the `t` view's own tick   {/}{border.focus on:bg.surface}│{/}{fg.faint} ││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.surface}│ {/}{accent.primary on:bg.surface}▁▂▃▄▅▆▇█ {/}{fg.default on:bg.surface}a loop's own pass sparkline {/}{border.focus on:bg.surface}                                │{/}{fg.faint} ││                                          │{/}
+{fg.faint}│─{/}{border.focus on:bg.surface}│ {/}{accent.primary bold on:bg.surface}esc {/}{fg.default on:bg.surface}Close  {/}{accent.primary bold on:bg.surface}? {/}{fg.default on:bg.surface}Close     {/}{border.focus on:bg.surface}                                              │{/}{fg.faint}─││                                          │{/}
+{fg.faint}│ {/}{border.focus on:bg.surface}╰──────────────────────────────────────────────────────────────────────╯{/}{fg.faint} ││                                          │{/}
 {fg.faint}╰──────────────────────────────────────────────────────────────────────────╯╰──────────────────────────────────────────╯{/}
 {fg.faint} ✓ iter_1 › draft finished · ↑118 ↓13 · 0.6s ago{/}{fg.default}                                                                        {/}
 {fg.faint} ↑↓ Select  enter Open  tab Focus  p Previews  t Tokens  0-3 Screens                                     ? Help  q Quit {/}
