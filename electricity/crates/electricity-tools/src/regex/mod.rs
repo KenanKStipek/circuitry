@@ -351,6 +351,7 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            on_live: None,
         };
         RegexPlugin.execute(params, &call).await
     }

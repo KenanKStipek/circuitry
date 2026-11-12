@@ -201,6 +201,7 @@ mod tests {
             config,
             token,
             armed: false,
+            on_live: None,
         }
     }
 

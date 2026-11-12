@@ -237,11 +237,20 @@ pub struct CheckResult {
 ///   (`core/cancellation.py::run_tracked`'s own doc comment: a child
 ///   only ever gets its own process group while the run is armed)
 ///   reads this, not *token* itself.
+/// - *on_live*: `Some` only for a process-backed tool the caller wants
+///   `meta.live` published for while it runs (#741 part B) --
+///   [`process::run_tracked`]'s own readers call it, already throttled
+///   to at most once a second plus one trailing call after a second of
+///   quiet, with the current tail/byte-count snapshot; the caller
+///   assembles and publishes the actual `meta.live` value. `None` for
+///   every other provider, including the agent CLIs and `http`, which
+///   never call it even when it is `Some`.
 pub struct ToolCall<'a> {
     pub timeout_seconds: u32,
     pub config: &'a Value,
     pub token: &'a CancellationToken,
     pub armed: bool,
+    pub on_live: Option<&'a dyn Fn(process::LiveTail)>,
 }
 
 /// DESIGN.md §8.1's shared tool-plugin trait, mirroring `plugins/
@@ -323,6 +332,7 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            on_live: None,
         }
     }
 

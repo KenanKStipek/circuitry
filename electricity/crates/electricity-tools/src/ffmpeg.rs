@@ -245,7 +245,7 @@ impl ToolPlugin for FfmpegPlugin {
             env_set: Vec::new(),
         };
 
-        let completed = match process::run_tracked(&cmd, &opts, call.token).await {
+        let completed = match process::run_tracked(&cmd, &opts, call.token, call.on_live).await {
             Ok(completed) => completed,
             Err(ProcError::NotFound(_)) => {
                 return Err(ToolError {
@@ -352,6 +352,7 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            on_live: None,
         }
     }
 

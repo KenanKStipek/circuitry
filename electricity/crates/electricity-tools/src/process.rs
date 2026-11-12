@@ -177,13 +177,105 @@ impl Drop for KillGroupOnDrop {
     }
 }
 
+/// A process-backed tool's running output, for a running [`crate::
+/// ToolCall::on_live`] callback (#741 part B) -- the tail/byte-count
+/// figures `meta.live` needs; `v`/`started_at`/`updated_at` are the
+/// caller's own, assembled once it has these.
+pub struct LiveTail {
+    pub stdout_tail: String,
+    pub stderr_tail: String,
+    pub stdout_bytes: u64,
+    pub stderr_bytes: u64,
+}
+
+/// `meta.live`'s own tail cap (#741 part B) -- the same shape the agent
+/// tool (#636) and streamed prompts (#674) already publish: the last
+/// [`LIVE_TAIL_MAX_LINES`] lines (a trailing, newline-less line counts
+/// as one), never more than [`LIVE_TAIL_MAX_BYTES`] bytes.
+const LIVE_TAIL_MAX_LINES: usize = 20;
+const LIVE_TAIL_MAX_BYTES: usize = 4096;
+
+/// *buf*'s own last [`LIVE_TAIL_MAX_BYTES`] bytes, trimmed further to
+/// its last [`LIVE_TAIL_MAX_LINES`] lines -- the byte cap is applied
+/// first (so this never scans further back than that many bytes to
+/// find line boundaries), the line cap second, so the result is always
+/// within both at once. A trailing `\n` never counts as its own empty
+/// line; everything else between newlines does, including a final
+/// run with no trailing `\n` at all (`tail -n`'s own convention for a
+/// file missing its final newline).
+fn tail_slice(buf: &[u8], max_lines: usize, max_bytes: usize) -> &[u8] {
+    let window = &buf[buf.len().saturating_sub(max_bytes)..];
+    if max_lines == 0 || window.is_empty() {
+        return window;
+    }
+    let ends_with_newline = window[window.len() - 1] == b'\n';
+    let scanned = if ends_with_newline {
+        &window[..window.len() - 1]
+    } else {
+        window
+    };
+    let newline_positions: Vec<usize> = scanned
+        .iter()
+        .enumerate()
+        .filter(|&(_, &b)| b == b'\n')
+        .map(|(i, _)| i)
+        .collect();
+    let total_lines = newline_positions.len() + 1;
+    if total_lines <= max_lines {
+        return window;
+    }
+    let lines_to_drop = total_lines - max_lines;
+    let start = newline_positions[lines_to_drop - 1] + 1;
+    &window[start..]
+}
+
+/// [`tail_slice`], decoded the way `meta.live`'s own tails are --
+/// UTF-8 with invalid bytes replaced (never the final output's own
+/// strict [`decode_text`]: a tail is a display value, cut at an
+/// arbitrary byte boundary that can split a multi-byte character, and
+/// must never fail a running tool over that).
+fn tail_text(buf: &[u8]) -> String {
+    String::from_utf8_lossy(tail_slice(buf, LIVE_TAIL_MAX_LINES, LIVE_TAIL_MAX_BYTES)).into_owned()
+}
+
+fn live_tail(stdout_buf: &[u8], stderr_buf: &[u8]) -> LiveTail {
+    LiveTail {
+        stdout_tail: tail_text(stdout_buf),
+        stderr_tail: tail_text(stderr_buf),
+        stdout_bytes: stdout_buf.len() as u64,
+        stderr_bytes: stderr_buf.len() as u64,
+    }
+}
+
+/// `on_live`'s own cadence (#741 part B, `exec/prompt.rs`'s own
+/// `meta.live` throttle for #674/#676, ported): `true` at most once a
+/// second. A call that isn't due only records that a publish is
+/// *pending*, for [`run_tracked`]'s own periodic tick to flush once a
+/// second has actually passed even if no further output ever arrives.
+fn live_due(published_at: &mut Option<std::time::Instant>, pending: &mut bool) -> bool {
+    let now = std::time::Instant::now();
+    let due = published_at.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1));
+    if due {
+        *published_at = Some(now);
+        *pending = false;
+    } else {
+        *pending = true;
+    }
+    due
+}
+
 /// `core/cancellation.py::run_tracked` -- process-group spawn, the
 /// stdin-writer task, universal-newline/locale decoding, and the
-/// token-tracked wait/kill loop.
+/// token-tracked wait/kill loop. *on_live*, when given, is called with
+/// this run's current output tails/byte counts while it runs, already
+/// throttled to [`live_due`]'s own cadence (#741 part B) -- `None` for
+/// every caller that never publishes `meta.live` (the agent CLIs,
+/// `http`).
 pub async fn run_tracked(
     cmd: &[String],
     opts: &RunOpts,
     token: &CancellationToken,
+    on_live: Option<&dyn Fn(LiveTail)>,
 ) -> Result<Completed, ProcError> {
     // `get_token().check()` before `Popen` -- refuse to even start a new
     // child once cancellation has already been requested.
@@ -319,16 +411,6 @@ pub async fn run_tracked(
             message: "child has no stderr pipe".to_string(),
         });
     };
-    let mut stdout_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stdout_pipe.read_to_end(&mut buf).await;
-        buf
-    });
-    let mut stderr_task = tokio::spawn(async move {
-        let mut buf = Vec::new();
-        let _ = stderr_pipe.read_to_end(&mut buf).await;
-        buf
-    });
 
     let deadline = opts
         .timeout
@@ -339,18 +421,36 @@ pub async fn run_tracked(
     // a grandchild that keeps a pipe open after the
     // tracked child itself has exited (`awk 'BEGIN{system("sleep 600
     // &")}'`) must not make this call hang with no limit once
-    // `child.wait()` alone has returned. `child_status`/`stdout_bytes`/
-    // `stderr_bytes` each go from `None` to `Some` independently and
-    // never revert, so a `select!` branch already resolved is excluded
-    // from every later iteration's own `if` guard -- `child.wait()` and
-    // a `JoinHandle` are both safe to poll again on a fresh `select!`
-    // each loop iteration up until their own branch first fires.
+    // `child.wait()` alone has returned. `child_status`/`stdout_done`/
+    // `stderr_done` each go from unset to set independently and never
+    // revert, so a `select!` branch already resolved is excluded from
+    // every later iteration's own `if` guard -- `child.wait()` and a
+    // pipe's own `read()` are both safe to poll again on a fresh
+    // `select!` each loop iteration up until their own branch first
+    // reports EOF or an error.
     let mut child_status: Option<std::process::ExitStatus> = None;
-    let mut stdout_bytes: Option<Vec<u8>> = None;
-    let mut stderr_bytes: Option<Vec<u8>> = None;
+    // Read straight into these in the loop below, not through a
+    // separate `tokio::spawn`'d reader task the way a `read_to_end`
+    // only handed back at EOF would need (#741 part B: `on_live` needs
+    // the bytes as they arrive, not just the final total) -- this loop
+    // already multiplexes `child.wait()`/the poll timer through the
+    // same `tokio::select!`, so reading each pipe inline here, re-
+    // polled every iteration exactly like those two already are,
+    // needs no second task or channel at all.
+    let mut stdout_buf: Vec<u8> = Vec::new();
+    let mut stderr_buf: Vec<u8> = Vec::new();
+    let mut stdout_done = false;
+    let mut stderr_done = false;
+    let mut stdout_chunk = [0u8; 8192];
+    let mut stderr_chunk = [0u8; 8192];
+    // `on_live`'s own publish-pending state across loop iterations
+    // (#741 part B) -- unused, and left at its initial `None`/`false`,
+    // for every call `on_live` is `None` for.
+    let mut live_published_at: Option<std::time::Instant> = None;
+    let mut live_pending = false;
 
     let timed_out = loop {
-        if child_status.is_some() && stdout_bytes.is_some() && stderr_bytes.is_some() {
+        if child_status.is_some() && stdout_done && stderr_done {
             break false;
         }
         let remaining =
@@ -376,11 +476,31 @@ pub async fn run_tracked(
                     }
                 }
             }
-            out = &mut stdout_task, if stdout_bytes.is_none() => {
-                stdout_bytes = Some(out.unwrap_or_default());
+            result = stdout_pipe.read(&mut stdout_chunk), if !stdout_done => {
+                match result {
+                    Ok(0) | Err(_) => stdout_done = true,
+                    Ok(n) => {
+                        stdout_buf.extend_from_slice(&stdout_chunk[..n]);
+                        if let Some(on_live) = on_live {
+                            if live_due(&mut live_published_at, &mut live_pending) {
+                                on_live(live_tail(&stdout_buf, &stderr_buf));
+                            }
+                        }
+                    }
+                }
             }
-            err = &mut stderr_task, if stderr_bytes.is_none() => {
-                stderr_bytes = Some(err.unwrap_or_default());
+            result = stderr_pipe.read(&mut stderr_chunk), if !stderr_done => {
+                match result {
+                    Ok(0) | Err(_) => stderr_done = true,
+                    Ok(n) => {
+                        stderr_buf.extend_from_slice(&stderr_chunk[..n]);
+                        if let Some(on_live) = on_live {
+                            if live_due(&mut live_published_at, &mut live_pending) {
+                                on_live(live_tail(&stdout_buf, &stderr_buf));
+                            }
+                        }
+                    }
+                }
             }
             () = tokio::time::sleep(sleep_for) => {
                 // While cancellation is set, keep repeating the group
@@ -395,6 +515,17 @@ pub async fn run_tracked(
                 if token.is_set() {
                     if let Some(pgid) = pgid {
                         repeat_group_kill(pgid);
+                    }
+                }
+                // This loop's own trailing publish (#741 part B): a
+                // pending update from inside the 1 s throttle window
+                // above still goes out within about a second of it even
+                // if no further output ever arrives, the same way
+                // `exec/prompt.rs`'s own wake-timer arm flushes a
+                // pending `meta.live` update for a streamed prompt.
+                if let Some(on_live) = on_live {
+                    if live_pending && live_due(&mut live_published_at, &mut live_pending) {
+                        on_live(live_tail(&stdout_buf, &stderr_buf));
                     }
                 }
             }
@@ -420,8 +551,6 @@ pub async fn run_tracked(
         if let Some(pgid) = pgid {
             repeat_group_kill(pgid);
         }
-        stdout_task.abort();
-        stderr_task.abort();
         let timeout_seconds = opts.timeout.map(|t| t.as_secs()).unwrap_or(0);
         return Err(ProcError::Timeout {
             binary: program.clone(),
@@ -430,15 +559,13 @@ pub async fn run_tracked(
     }
 
     let status = child_status.expect("loop only breaks `false` once child_status is Some");
-    let stdout_bytes = stdout_bytes.unwrap_or_default();
-    let stderr_bytes = stderr_bytes.unwrap_or_default();
     // A decode failure here still leaves the guard armed (the `?`
     // below returns before `disarm()` runs) -- it mirrors Python's own
     // decode, which happens inside `proc.communicate()`, so a
     // `UnicodeDecodeError` there unwinds through `run_tracked`'s own
     // `except BaseException:` and still kills the group, `:888-895`.
-    let stdout = decode_text(&stdout_bytes)?;
-    let stderr = decode_text(&stderr_bytes)?;
+    let stdout = decode_text(&stdout_buf)?;
+    let stderr = decode_text(&stderr_buf)?;
 
     // The one path with no kill at all in `core/cancellation.py::
     // run_tracked` (#519): a normal exit disarms the guard instead of
@@ -744,6 +871,7 @@ fn is_executable_file(path: &std::path::Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
 
     #[test]
     fn timeout_display_quotes_the_binary_like_pythons_own_repr() {
@@ -820,11 +948,109 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn tail_slice_keeps_the_last_twenty_lines() {
+        let mut buf = String::new();
+        for i in 0..25 {
+            buf.push_str(&format!("line{i}\n"));
+        }
+        let tail = tail_slice(buf.as_bytes(), 20, 1_000_000);
+        let text = std::str::from_utf8(tail).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 20);
+        assert_eq!(lines[0], "line5");
+        assert_eq!(lines[19], "line24");
+    }
+
+    #[test]
+    fn tail_slice_keeps_at_most_four_kib_even_well_under_the_line_cap() {
+        // One 10,000-byte line, no newline at all -- a single partial
+        // line, well under the 20-line cap, so the 4 KiB byte cap is
+        // the only thing trimming it.
+        let buf = vec![b'a'; 10_000];
+        let tail = tail_slice(&buf, 20, 4096);
+        assert_eq!(tail.len(), 4096);
+        assert!(tail.iter().all(|&b| b == b'a'));
+    }
+
+    #[test]
+    fn tail_slice_counts_an_unterminated_final_line_as_its_own_line() {
+        let buf = b"a\nb\nc";
+        assert_eq!(tail_slice(buf, 2, 4096), b"b\nc");
+        assert_eq!(tail_slice(buf, 1, 4096), b"c");
+        // A trailing `\n` never counts as its own empty line.
+        assert_eq!(tail_slice(b"a\nb\nc\n", 2, 4096), b"b\nc\n");
+    }
+
+    #[test]
+    fn tail_text_replaces_invalid_utf8_with_the_replacement_character() {
+        let buf = [b'a', 0xff, b'b'];
+        assert_eq!(tail_text(&buf), "a\u{fffd}b");
+    }
+
+    #[tokio::test]
+    async fn run_tracked_calls_on_live_with_growing_separate_tails_and_a_trailing_flush() {
+        // `printf` of each stream's own line is unbuffered (unlike a
+        // libc-buffered `echo` inside a script that might coalesce
+        // both writes into one pipe read), so the main loop's own
+        // first `read()` reliably sees stdout alone, publishing it at
+        // once (#741 part B: no prior publish this call, so the first
+        // update is never throttled) -- the child then sleeps past the
+        // 1 s throttle window with nothing further written, so the
+        // *second* line (stderr) is only ever picked up by this loop's
+        // own trailing-publish tick, never a third, immediate publish
+        // of its own.
+        let token = CancellationToken::new();
+        let cmd = vec![
+            "sh".to_string(),
+            "-c".to_string(),
+            "printf out1; printf out2 1>&2; sleep 1.5".to_string(),
+        ];
+        let calls: Rc<RefCell<Vec<LiveTail>>> = Rc::new(RefCell::new(Vec::new()));
+        let calls_for_callback = Rc::clone(&calls);
+        let on_live = move |tail: LiveTail| {
+            calls_for_callback.borrow_mut().push(tail);
+        };
+        let completed = run_tracked(&cmd, &RunOpts::default(), &token, Some(&on_live))
+            .await
+            .unwrap();
+        assert_eq!(completed.stdout, "out1");
+        assert_eq!(completed.stderr, "out2");
+        let calls = calls.borrow();
+        assert!(
+            calls.len() >= 2,
+            "expected an immediate publish plus a later, trailing one; got {}",
+            calls.len()
+        );
+        assert_eq!(calls[0].stdout_tail, "out1");
+        assert_eq!(calls[0].stderr_tail, "");
+        assert_eq!(calls[0].stdout_bytes, 4);
+        assert_eq!(calls[0].stderr_bytes, 0);
+        let last = calls.last().unwrap();
+        assert_eq!(last.stdout_tail, "out1");
+        assert_eq!(last.stderr_tail, "out2");
+        assert_eq!(last.stderr_bytes, 4);
+    }
+
+    #[tokio::test]
+    async fn run_tracked_never_calls_on_live_when_it_is_none() {
+        // Every caller `on_live` is `None` for (the agent CLIs, `http`)
+        // must cost this loop nothing beyond the `if let Some` checks
+        // already there -- this just pins that passing `None` through
+        // a real run never panics on an absent callback.
+        let token = CancellationToken::new();
+        let cmd = vec!["echo".to_string(), "hi".to_string()];
+        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None)
+            .await
+            .unwrap();
+        assert_eq!(completed.stdout, "hi\n");
+    }
+
     #[tokio::test]
     async fn run_tracked_refuses_to_start_once_cancellation_is_set() {
         let token = CancellationToken::new();
         token.request(2);
-        let err = run_tracked(&["true".to_string()], &RunOpts::default(), &token)
+        let err = run_tracked(&["true".to_string()], &RunOpts::default(), &token, None)
             .await
             .unwrap_err();
         assert_eq!(err, ProcError::Cancelled);
@@ -838,7 +1064,7 @@ mod tests {
             "-c".to_string(),
             "printf out; printf err 1>&2; exit 3".to_string(),
         ];
-        let completed = run_tracked(&cmd, &RunOpts::default(), &token)
+        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None)
             .await
             .unwrap();
         assert_eq!(completed.stdout, "out");
@@ -850,7 +1076,7 @@ mod tests {
     async fn run_tracked_reports_not_found_for_a_missing_binary() {
         let token = CancellationToken::new();
         let cmd = vec!["electricity-tools-definitely-missing-binary".to_string()];
-        let err = run_tracked(&cmd, &RunOpts::default(), &token)
+        let err = run_tracked(&cmd, &RunOpts::default(), &token, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ProcError::NotFound(_)));
@@ -865,7 +1091,7 @@ mod tests {
             ..RunOpts::default()
         };
         let cmd = vec!["sleep".to_string(), "30".to_string()];
-        let err = run_tracked(&cmd, &opts, &token).await.unwrap_err();
+        let err = run_tracked(&cmd, &opts, &token, None).await.unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
     }
 
@@ -877,7 +1103,7 @@ mod tests {
             ..RunOpts::default()
         };
         let cmd = vec!["cat".to_string()];
-        let completed = run_tracked(&cmd, &opts, &token).await.unwrap();
+        let completed = run_tracked(&cmd, &opts, &token, None).await.unwrap();
         assert_eq!(completed.stdout, "hello\n");
     }
 
@@ -918,7 +1144,7 @@ mod tests {
             ..RunOpts::default()
         };
         let cmd = vec!["sleep".to_string(), "30".to_string()];
-        let err = run_tracked(&cmd, &opts, &token).await.unwrap_err();
+        let err = run_tracked(&cmd, &opts, &token, None).await.unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
     }
 
@@ -944,7 +1170,7 @@ mod tests {
         // future; this test needs the real owned future actually
         // dropped at a precise point, which only a `Pin<Box<_>>`'s own
         // `drop` gives.
-        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token));
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None));
         // One poll is enough to spawn the child and construct the
         // guard; the future is then dropped without ever completing.
         tokio::select! {
@@ -998,7 +1224,7 @@ mod tests {
             "-c".to_string(),
             "sleep 8473 >/dev/null 2>&1 & echo $!".to_string(),
         ];
-        let completed = run_tracked(&cmd, &opts, &token).await.unwrap();
+        let completed = run_tracked(&cmd, &opts, &token, None).await.unwrap();
         assert_eq!(completed.exit_code, 0);
         let bg_pid: u32 = completed.stdout.trim().parse().expect("sh printed $!");
         assert!(
@@ -1089,7 +1315,7 @@ mod tests {
                 pidfile.display()
             ),
         ];
-        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token));
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None));
         // One poll (via `select!`, not a bare `.await` sitting on an
         // un-started future) is enough to actually spawn the shell and
         // its background child before cancellation is requested.
@@ -1135,7 +1361,7 @@ mod tests {
         };
         let cmd = vec!["true".to_string()];
         let started = tokio::time::Instant::now();
-        let completed = run_tracked(&cmd, &opts, &token).await.unwrap();
+        let completed = run_tracked(&cmd, &opts, &token, None).await.unwrap();
         assert_eq!(completed.exit_code, 0);
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -1171,7 +1397,7 @@ mod tests {
             "sleep 8470 & echo hi".to_string(),
         ];
         let started = tokio::time::Instant::now();
-        let err = run_tracked(&cmd, &opts, &token).await.unwrap_err();
+        let err = run_tracked(&cmd, &opts, &token, None).await.unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
         assert!(
             started.elapsed() < Duration::from_secs(2),
@@ -1206,7 +1432,7 @@ mod tests {
             "sleep 8471 & echo hi".to_string(),
         ];
         let started = tokio::time::Instant::now();
-        let err = run_tracked(&cmd, &opts, &token).await.unwrap_err();
+        let err = run_tracked(&cmd, &opts, &token, None).await.unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
         assert!(started.elapsed() < Duration::from_secs(2));
         // This test cleans up the leftover itself -- an unarmed run has
@@ -1234,7 +1460,7 @@ mod tests {
             "-c".to_string(),
             "sleep 8472 & echo hi".to_string(),
         ];
-        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token));
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None));
         // `sh` itself (printing "hi" and exiting) finishes almost at
         // once; this gives it ample time to exit and be reaped by this
         // future's own wait loop before the drop below, while the

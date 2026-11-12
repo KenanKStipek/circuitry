@@ -199,6 +199,7 @@ async fn golden_corpus_validate_yaml() {
         config: &none_config,
         token: &token,
         armed: false,
+        on_live: None,
     };
 
     let mut failures = Vec::new();

@@ -171,6 +171,7 @@ impl ToolPlugin for ShellPlugin {
             "override the plugin's binary path",
             call.armed,
             call.token,
+            call.on_live,
         )
         .await?;
         if parse_json {
@@ -268,6 +269,7 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            on_live: None,
         }
     }
 

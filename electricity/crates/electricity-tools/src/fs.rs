@@ -897,6 +897,7 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            on_live: None,
         };
         FsPlugin.execute(params, &call).await
     }

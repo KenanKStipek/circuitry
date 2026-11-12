@@ -371,7 +371,10 @@ pub async fn run_agent_cli(
         env_set: env.to_vec(),
         new_session: true,
     };
-    match process::run_tracked(cmd, &opts, token).await {
+    // The agent CLIs never publish `meta.live`'s process-tool shape
+    // (#741 part B's own scope, issue #636's agent-tool live summary
+    // being the one `meta.live` an agent effect gets instead).
+    match process::run_tracked(cmd, &opts, token, None).await {
         Ok(completed) => Ok(completed),
         Err(ProcError::Timeout { .. }) => Err(AgentCliRunError::Timeout(timeout_message(
             &cmd[0],
