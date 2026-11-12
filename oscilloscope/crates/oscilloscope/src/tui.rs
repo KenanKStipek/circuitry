@@ -24956,6 +24956,25 @@ mod tape_frame_goldens {
         }
     }
 
+    /// `help_page` (a free-running counter, keys.rs) always wraps
+    /// into `0..page_count`, however far `←`/`→` have moved it --
+    /// negative, past the last page, or (since nothing bounds it)
+    /// several multiples around either way.
+    #[test]
+    fn help_page_index_wraps_a_free_running_counter_into_range() {
+        assert_eq!(help_page_index(0, 3), 0);
+        assert_eq!(help_page_index(1, 3), 1);
+        assert_eq!(help_page_index(2, 3), 2);
+        assert_eq!(help_page_index(3, 3), 0);
+        assert_eq!(help_page_index(-1, 3), 2);
+        assert_eq!(help_page_index(-3, 3), 0);
+        assert_eq!(help_page_index(-4, 3), 2);
+        assert_eq!(help_page_index(7, 3), 1);
+        assert_eq!(help_page_index(0, 1), 0);
+        assert_eq!(help_page_index(5, 1), 0);
+        assert_eq!(help_page_index(5, 0), 0);
+    }
+
     /// Issue #738's layout rule (the findings behind #748's own
     /// `the_tapes_help_overlay_pages_between_key_and_keys_at_80x24`
     /// but for every screen's own rows, not just whether the pages

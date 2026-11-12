@@ -2632,6 +2632,25 @@ mod tests {
         assert_eq!(app.help_page, 0);
     }
 
+    /// `help_page` is a free-running counter (issue #738): `←` from
+    /// the default page moves it negative, not back to whatever the
+    /// last page happens to be -- the draw side (`help_page_index`)
+    /// is the one that wraps it into range, once it knows how many
+    /// pages the current screen, at its current size, actually has.
+    #[test]
+    fn left_from_the_default_page_moves_the_counter_negative() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, 0);
+        app.handle_key(key(KeyCode::Left), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        assert_eq!(app.help_page, -1);
+        app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, 0);
+    }
+
     #[test]
     fn question_mark_reopens_help_on_its_default_page() {
         let rows = [row("prime.a", 1, StatusKind::Done)];
