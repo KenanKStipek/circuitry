@@ -3718,6 +3718,61 @@ the pane was already scrolled there (`App::tape_detail_bottom`,
 compared against the current scroll at the start of every draw,
 before its own clamp runs).
 
+**On a run longer than the window (issue #734).** The text is
+silent: every frame is a short run, so none of this changes a single
+one. While the run is live and nothing is being scrubbed
+(`App::signal_cursor_col`, never `screens::SignalScreen::cursor_col`,
+which the previous paragraph's own `selection_col` can leave parked
+on a step that finished long ago), the single-run Signal's own
+window follows Now at the same share of the trace's own width the
+Combined Signal and the Signal tiles already use (`tui::
+trace_window_start`, shared by all three rather than copied). An
+ended run's window ends at Run End instead, at the pane's own right
+edge, rather than leaving a quarter of it empty past a run that will
+never fill it. A scrub still moves the window exactly as
+`trace_window_start` already did, seeded from wherever the trace
+last actually drew its own cursor only when that column is still
+inside the window the latest redraw drew (`App::signal_window_start`)
+-- never teleporting back to a stale, long-scrolled-past selection;
+`n` returns it to following. A tool bar already running when the
+window scrolls past its own start still draws its own label, readable
+from the window's own left edge, its own fill sized from that same
+edge rather than from the row's original, now off-screen start, and
+clipped by the same per-span budget any other row's own over-long
+text already is (`draw_signal_step_rows`). Second marks on the
+single-run Signal, its tiles and the Combined Signal read in one
+elapsed-time format shared by all three (`format::
+format_signal_elapsed`): whole seconds under a minute (a decimal only
+where one already showed, `0.5s`), `MmSSs` from a minute, `HhMMmSSs`
+from an hour -- never a raw second count. The Combined Totals' own
+`Peak … at` reads the same scale but keeps its own decimal under a
+minute even on a whole second (`format::
+format_signal_elapsed_with_decimal`, `at 3.0s`), the reading it has
+always shown; `Quiet` keeps its own separate one-decimal reading,
+unaffected. Their marks' own spacing (`format::signal_mark_step_s`)
+widens past one mark a second only once a run's own longest label
+would otherwise overlap its neighbour. A tick never overlaps a Now
+or Ahead label on either side, with at least one blank column always
+clear (`tui::mark_clears_label`, shared by the single-run Signal, its
+tiles and the Combined Signal). The Now label itself, and the Ahead
+label after it, are cut to the room left before the pane's own right
+edge rather than overflowing it (`tui::cut_now_and_ahead_label`,
+shared the same way): Ahead is dropped first, then the elapsed part
+of the Now label, and the bare clock itself is never broken -- too
+narrow even for that drops the whole label rather than ever cutting
+it. The Combined Signal's own Per Run table cuts the RUN, CONFIG and
+ENGINE columns with an ellipsis before the next one starts, rather
+than letting a long label run over it, the same rule the Largest
+Stores table's own `store_cut_label` already follows. Readings, on
+both the single-run Signal and the Combined Signal, never wraps any
+of its own lines: a long Largest label is cut with an ellipsis
+instead, and the token figure after it, and the share after that on
+the Combined Signal, always stay whole; every other line (`Runs`,
+`Steps`, `Scale`, `Sent`, `Received`, `Ratio`, `Quiet`) is cut the
+same way once the pane itself is too narrow for it, rather than
+reading bare or losing a trailing word with no mark at all
+(`tui::readings_cut_line`).
+
 ### 6.4 Tests
 
 - **Golden tests, with `insta`.** Each fixture is a recorded run: plan, snapshot sequence with times, events, stdout/stderr and exit code. The fixtures are the §1 probes, with paths scrubbed. Two outputs are checked against goldens:

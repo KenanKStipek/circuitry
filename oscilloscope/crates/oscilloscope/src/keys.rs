@@ -214,6 +214,13 @@ pub struct App {
     /// would jump the cursor to Now instead of moving it one column
     /// from wherever it is already drawn.
     pub signal_drawn_col: Option<usize>,
+    /// The latest redraw's own trace window start (#734): `signal_drawn_col` can be a column the window no
+    /// longer shows at all (a stale selection from long before the
+    /// window last scrolled) -- `signal_scrub`'s own first press
+    /// seeds from `signal_drawn_col` only when it is still at or
+    /// past this, falling back to Now otherwise, never jumping the
+    /// cursor back to a column that is off screen.
+    pub signal_window_start: Option<usize>,
     /// Whether the latest redraw's own Signal screen has a step
     /// under its cursor at all, cached the same way `signal_now_col`
     /// is -- `enter` on Signal only opens one when this is true, so
@@ -328,6 +335,7 @@ impl App {
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_drawn_col: None,
+            signal_window_start: None,
             signal_column_ms: 100,
             signal_now_col: None,
             signal_has_step: false,
@@ -404,13 +412,19 @@ impl App {
     /// last, the shared selection's own column included, issue #704
     /// rule 2), never from Now directly, or the first press would
     /// jump the cursor there instead of moving it one column from
-    /// wherever it already is.
+    /// wherever it already is. #734: that column
+    /// is only honoured when the latest draw's own window still
+    /// shows it (`signal_window_start`) -- a stale selection the
+    /// window has long since scrolled past seeds from Now instead,
+    /// never teleporting the window back to it.
     pub fn signal_scrub(&mut self, delta: i64) {
         let now = self.signal_now_col.unwrap_or(0);
-        let current = self
-            .signal_cursor_col
-            .or(self.signal_drawn_col)
-            .unwrap_or(now) as i64;
+        let drawn_in_window = self.signal_drawn_col.filter(|&c| {
+            self.signal_window_start
+                .map(|start| c >= start)
+                .unwrap_or(true)
+        });
+        let current = self.signal_cursor_col.or(drawn_in_window).unwrap_or(now) as i64;
         self.signal_cursor_col = Some(current.saturating_add(delta).clamp(0, now as i64) as usize);
     }
 
@@ -3388,6 +3402,40 @@ mod tests {
         app.signal_scrub(1);
         app.signal_scrub(1);
         assert_eq!(app.signal_cursor_col, Some(3), "never past Now");
+    }
+
+    /// #734: `signal_drawn_col` can hold a column
+    /// the window has long since scrolled past (the shared tree
+    /// selection's own, parked on a step that finished minutes ago)
+    /// while following Now -- the first `←` must not teleport the
+    /// window back to it, it must seed from Now instead.
+    #[test]
+    fn signal_scrub_ignores_a_drawn_col_outside_the_window() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(21_000);
+        app.signal_window_start = Some(15_750); // the window's own left edge
+        app.signal_drawn_col = Some(10); // a stale selection, off screen
+        app.signal_scrub(-1);
+        assert_eq!(
+            app.signal_cursor_col,
+            Some(20_999),
+            "the first press must seed from Now, not the off-screen column"
+        );
+    }
+
+    /// The same first press, but the drawn column is still inside
+    /// the window: it is honoured, as issue #704 rule 2 already
+    /// relied on.
+    #[test]
+    fn signal_scrub_honours_a_drawn_col_inside_the_window() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(21_000);
+        app.signal_window_start = Some(15_750);
+        app.signal_drawn_col = Some(16_000); // inside the window
+        app.signal_scrub(-1);
+        assert_eq!(app.signal_cursor_col, Some(15_999));
     }
 
     #[test]
