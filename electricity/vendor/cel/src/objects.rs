@@ -8,6 +8,7 @@ use crate::context::Context;
 use crate::{ExecutionError, Expression, FunctionContext};
 #[cfg(feature = "chrono")]
 use chrono::TimeZone;
+use indexmap::IndexMap;
 use std::any::Any;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
@@ -50,7 +51,7 @@ static MIN_TIMESTAMP: LazyLock<chrono::DateTime<chrono::FixedOffset>> = LazyLock
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Map {
-    pub map: Arc<HashMap<Key, Value>>,
+    pub map: Arc<IndexMap<Key, Value>>,
 }
 
 impl PartialOrd for Map {
@@ -281,10 +282,13 @@ impl<'a> TryFrom<&'a Value> for KeyRef<'a> {
     }
 }
 
-// Implement conversion from HashMap<K, V> into CelMap
+// Implement conversion from HashMap<K, V> into CelMap -- the input has no
+// order of its own (a plain `std::collections::HashMap`), so the result's
+// order here is whatever the input's iteration happens to be, same as
+// before this type's own storage became order-preserving.
 impl<K: Into<Key>, V: Into<Value>> From<HashMap<K, V>> for Map {
     fn from(map: HashMap<K, V>) -> Self {
-        let mut new_map = HashMap::with_capacity(map.len());
+        let mut new_map = IndexMap::with_capacity(map.len());
         for (k, v) in map {
             new_map.insert(k.into(), v.into());
         }
@@ -921,7 +925,7 @@ impl<'b, 'v> TryFrom<&'b (dyn Val + 'v)> for Value {
                 let entries = map
                     .iter()
                     .map(|(k, v)| Ok((Key::from(k.clone()), Value::try_from(v.as_ref())?)))
-                    .collect::<Result<HashMap<_, _>, ExecutionError>>()?;
+                    .collect::<Result<IndexMap<_, _>, ExecutionError>>()?;
                 Ok(Value::Map(Map {
                     map: Arc::new(entries),
                 }))
@@ -973,7 +977,7 @@ impl TryFrom<Value> for Box<dyn Val> {
                 Ok(Box::new(CelList::from(result?)))
             }
             Value::Map(map) => {
-                let result: Result<HashMap<CelMapKey, Box<dyn Val>>, ExecutionError> = (*map.map)
+                let result: Result<IndexMap<CelMapKey, Box<dyn Val>>, ExecutionError> = (*map.map)
                     .clone()
                     .into_iter()
                     .map(|(k, v)| v.clone().try_into().map(|v| (k.clone().into(), v)))
@@ -1417,8 +1421,8 @@ impl Value {
                 Ok(CowVal::owned(CelList::from(list)))
             }
             Expr::Map(map_expr) => {
-                let mut map: HashMap<CelMapKey<'v>, Box<dyn Val + 'v>> =
-                    HashMap::with_capacity(map_expr.entries.len());
+                let mut map: IndexMap<CelMapKey<'v>, Box<dyn Val + 'v>> =
+                    IndexMap::with_capacity(map_expr.entries.len());
                 for entry in map_expr.entries.iter() {
                     let (k, v, is_optional) = match &entry.expr {
                         EntryExpr::StructField(_) => panic!("WAT?"),

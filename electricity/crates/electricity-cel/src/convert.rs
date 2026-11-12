@@ -20,13 +20,13 @@
 //! within it too (`nesting.rs`'s own module docs explain why bracket
 //! nesting alone was not enough).
 
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 
 use cel::objects::{Key, Map as CelMap};
 use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use electricity_value::{Dict, IntValue, Value};
+use indexmap::IndexMap;
 
 /// Why [`to_cel`] could not convert a `Value`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,7 +141,7 @@ fn int_to_cel(i: &IntValue) -> Result<cel::Value, ConvertError> {
 /// position. A key too large for `i64` raises [`ConvertError::Overflow`]
 /// instead of being dropped, matching every other big-int read.
 fn dict_to_cel(entries: &electricity_value::Dict, depth: usize) -> Result<CelMap, ConvertError> {
-    let mut map = HashMap::with_capacity(entries.len());
+    let mut map = IndexMap::with_capacity(entries.len());
     for (key, value) in entries {
         if let Some(key) = to_cel_key(key)? {
             map.insert(key, to_cel_at_depth(value, depth + 1)?);
@@ -211,17 +211,14 @@ fn to_cel_key(key: &Value) -> Result<Option<Key>, ConvertError> {
 /// can actually produce) have no JSON form and are `Err`, matching
 /// `cel_to_json` exactly.
 ///
-/// A map's own keys are sorted by their own JSON text rather than kept in
-/// authoring/insertion order: unlike `celtypes.MapType` (a Python `dict`,
-/// insertion-ordered), `cel::objects::Map` is backed by a plain
-/// `std::collections::HashMap`, whose iteration order is not just
-/// different from Python's but unspecified *within* a single process --
-/// carrying it through unsorted would make a multi-key map result
-/// non-reproducible from one electricity run to the next, not just
-/// disagree with `cof` in a fixed, documented way. A known, deliberate
-/// divergence from `cof` (`DESIGN.md` §13), not a parity bug: every
-/// *value* a map's own keys/values carry still round-trips exactly, only
-/// the authored order does not.
+/// A map's own keys keep the order the expression gave them in -- a map
+/// literal keeps its source order, and a map read straight from `state`
+/// keeps `state`'s own order, the same way `celtypes.MapType` (a Python
+/// `dict`, insertion-ordered) does on `cof run`: the vendored `cel` crate
+/// (`vendor/cel`, `vendor/cel/VENDORING.md`) backs `cel::objects::Map` with
+/// `indexmap::IndexMap` rather than the upstream crate's plain
+/// `std::collections::HashMap`, so iterating `map.map` here is already in
+/// that order, needing no sort of its own.
 pub fn to_json(value: cel::Value) -> Result<Value, String> {
     Ok(match value {
         cel::Value::Null => Value::None,
@@ -247,15 +244,9 @@ pub fn to_json(value: cel::Value) -> Result<Value, String> {
             Value::List(out)
         }
         cel::Value::Map(map) => {
-            let mut entries: Vec<(String, &cel::Value)> = map
-                .map
-                .iter()
-                .map(|(key, item)| (json_key_text(key), item))
-                .collect();
-            entries.sort_by(|a, b| a.0.cmp(&b.0));
             let mut dict = Dict::new();
-            for (key_text, item) in entries {
-                dict.insert(Value::Str(key_text), to_json(item.clone())?);
+            for (key, item) in map.map.iter() {
+                dict.insert(Value::Str(json_key_text(key)), to_json(item.clone())?);
             }
             Value::Dict(dict)
         }

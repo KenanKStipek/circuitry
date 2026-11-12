@@ -94,6 +94,9 @@ version = "0.10"
 optional = true
 default-features = false
 
+[dependencies.indexmap]
+version = "2"
+
 [dependencies.lazy_static]
 version = "1.5.0"
 

@@ -70,7 +70,7 @@
 //! date/time type `_to_cel` special-cases) — collapses the same way in
 //! this crate: `convert::to_cel` routes every such key to one reserved
 //! sentinel [`cel::objects::Key::String`] (`convert::NULL_KEY_SENTINEL`),
-//! so a plain `HashMap::insert` collapses them exactly like Python's own
+//! so a plain `IndexMap::insert` collapses them exactly like Python's own
 //! dict assignment does (last value wins), `size()` counts the slot
 //! once, and `null in state.m` finds it (`equality`'s own `in` arm
 //! special-cases the sentinel back into a `null` match). This is
@@ -140,8 +140,7 @@
 //! CEL's error-absorbing `&&`, where a `false` anywhere wins over an
 //! error anywhere else, and a `Map` comparison checks both sides hold
 //! the same key set before comparing any value, so neither result can
-//! depend on a `HashMap`'s own unspecified iteration order
-//! (`equality` module docs).
+//! depend on the map's own iteration order (`equality` module docs).
 //!
 //! The `map` macro only accepts the two-argument form
 //! (`target.map(x, transform)`): the `cel` crate's own copied expander
@@ -1777,7 +1776,7 @@ mod evaluate_value_tests {
     }
 
     #[test]
-    fn a_map_result_sorts_its_keys() {
+    fn a_map_literal_result_keeps_its_source_order() {
         let state = Value::Dict(Dict::new());
         let Value::Dict(ref result) = evaluate_value("{'b': 2, 'a': 1}", &state, false).unwrap()
         else {
@@ -1785,7 +1784,75 @@ mod evaluate_value_tests {
         };
         assert_eq!(
             result.keys().cloned().collect::<Vec<_>>(),
-            vec![Value::from("a"), Value::from("b")]
+            vec![Value::from("b"), Value::from("a")]
+        );
+    }
+
+    #[test]
+    fn a_map_read_from_state_keeps_states_own_order() {
+        let mut inner = Dict::new();
+        inner.insert(Value::from("z"), Value::from(1_i64));
+        inner.insert(Value::from("m"), Value::from(2_i64));
+        inner.insert(Value::from("a"), Value::from(3_i64));
+        let mut prime = Dict::new();
+        prime.insert(Value::Str("gate".to_string()), Value::Dict(inner));
+        let mut state_dict = Dict::new();
+        state_dict.insert(Value::Str("prime".to_string()), Value::Dict(prime));
+        let state = Value::Dict(state_dict);
+        let Value::Dict(ref result) = evaluate_value("state.prime.gate", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            result.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("z"), Value::from("m"), Value::from("a")]
+        );
+    }
+
+    #[test]
+    fn a_map_nested_inside_a_list_keeps_its_own_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::List(ref items) = evaluate_value("[{'y': 1, 'x': 2}]", &state, false).unwrap()
+        else {
+            panic!("expected a list");
+        };
+        let Value::Dict(ref inner) = items[0] else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            inner.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("y"), Value::from("x")]
+        );
+    }
+
+    #[test]
+    fn a_map_nested_inside_a_map_keeps_its_own_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::Dict(ref outer) =
+            evaluate_value("{'outer': {'y': 1, 'x': 2}}", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        let Value::Dict(ref inner) = outer[&Value::from("outer")] else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            inner.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("y"), Value::from("x")]
+        );
+    }
+
+    #[test]
+    fn a_map_chosen_by_a_ternary_keeps_its_own_order() {
+        let state = Value::Dict(Dict::new());
+        let Value::Dict(ref result) =
+            evaluate_value("true ? {'b': 1, 'a': 2} : {'x': 3}", &state, false).unwrap()
+        else {
+            panic!("expected a dict");
+        };
+        assert_eq!(
+            result.keys().cloned().collect::<Vec<_>>(),
+            vec![Value::from("b"), Value::from("a")]
         );
     }
 

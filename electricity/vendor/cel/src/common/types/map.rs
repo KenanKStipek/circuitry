@@ -3,10 +3,10 @@ use crate::common::types::{CelBool, CelDouble, CelInt, CelString, CelUInt, Type}
 use crate::common::value::{Builtin, BuiltinRef, CowVal, Val};
 use crate::common::{traits, types};
 use crate::ExecutionError;
+use indexmap::map::Keys;
+use indexmap::IndexMap;
 use std::borrow::Borrow;
 use std::cmp::Ordering;
-use std::collections::hash_map::Keys;
-use std::collections::HashMap;
 use std::hash::Hash;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -23,22 +23,22 @@ use std::sync::Arc;
 /// Numeric keys are looked up by numeric value, as the spec requires:
 /// `{1u: 'one'}[1]` and `{1: 'one'}[1.0]` both find `'one'`.
 #[derive(Debug, Default)]
-pub struct DefaultMap<'v>(HashMap<Key<'v>, Box<dyn Val + 'v>>);
+pub struct DefaultMap<'v>(IndexMap<Key<'v>, Box<dyn Val + 'v>>);
 
 impl<'v> DefaultMap<'v> {
     /// The entries.
-    pub fn into_inner(self) -> HashMap<Key<'v>, Box<dyn Val + 'v>> {
+    pub fn into_inner(self) -> IndexMap<Key<'v>, Box<dyn Val + 'v>> {
         self.0
     }
 
     /// The entries, borrowed from `self`.
-    pub fn inner(&self) -> &HashMap<Key<'v>, Box<dyn Val + 'v>> {
+    pub fn inner(&self) -> &IndexMap<Key<'v>, Box<dyn Val + 'v>> {
         &self.0
     }
 }
 
 impl<'v> Deref for DefaultMap<'v> {
-    type Target = HashMap<Key<'v>, Box<dyn Val + 'v>>;
+    type Target = IndexMap<Key<'v>, Box<dyn Val + 'v>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -158,7 +158,7 @@ fn lookup<T>(key: &dyn Val, mut probe: impl FnMut(&dyn AsKeyRef) -> Option<T>) -
 
 /// Whether `map` has `key`, or the same number as the other numeric key type: the spec has map
 /// keys compare with numeric equality, so `{0: 1, 0u: 2}` repeats a key.
-pub(crate) fn has_key<V>(map: &HashMap<Key<'_>, V>, key: &Key<'_>) -> bool {
+pub(crate) fn has_key<V>(map: &IndexMap<Key<'_>, V>, key: &Key<'_>) -> bool {
     lookup(key.inner(), |k| map.get(k)).is_some()
 }
 
@@ -261,7 +261,7 @@ impl<'v> Indexer for DefaultMap<'v> {
         Self: 'w,
     {
         let mut map = self;
-        match lookup(key, |k| map.0.remove(k)) {
+        match lookup(key, |k| map.0.shift_remove(k)) {
             Some(v) => Ok(v as Box<dyn Val + 'w>),
             None if is_lookup_key(key) => Err(no_such_key(key)),
             None => Err(unsupported_key(key)),
@@ -290,8 +290,8 @@ impl Zeroer for DefaultMap<'_> {
     }
 }
 
-impl<'v> From<HashMap<Key<'v>, Box<dyn Val + 'v>>> for DefaultMap<'v> {
-    fn from(value: HashMap<Key<'v>, Box<dyn Val + 'v>>) -> Self {
+impl<'v> From<IndexMap<Key<'v>, Box<dyn Val + 'v>>> for DefaultMap<'v> {
+    fn from(value: IndexMap<Key<'v>, Box<dyn Val + 'v>>) -> Self {
         Self(value)
     }
 }

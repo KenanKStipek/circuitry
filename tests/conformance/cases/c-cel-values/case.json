@@ -1,7 +1,6 @@
 {
   "spec_case": "issue #597 (the `cel` tool)",
-  "description": "The `cel` tool's value is its expression's result as JSON: a filter and map over input, a map literal, a map lookup with a default, timestamps and durations as ISO 8601 strings, the later of two timestamps, and a loop body reading its `each.as` and `iter` bindings. An unset `state.` path without `strict` gives null and a warning, as in `if`. electricity's own CEL maps keep no authored key order (DESIGN.md §13): `ordered.value` is a known, pinned divergence.",
+  "description": "The `cel` tool's value is its expression's result as JSON: a filter and map over input, a map literal (keeping its own source order), a map lookup with a default, timestamps and durations as ISO 8601 strings, the later of two timestamps, and a loop body reading its `each.as` and `iter` bindings. An unset `state.` path without `strict` gives null and a warning, as in `if`.",
   "engines": ["python", "electricity"],
-  "expect": "success",
-  "known_divergence": {"location": "prime.ordered.value", "electricity_value": {"alpha": [true, null, 2.5], "mid": {"a": "c", "y": "b"}, "zeta": 1}}
+  "expect": "success"
 }
