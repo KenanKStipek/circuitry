@@ -8,7 +8,7 @@ log:
   ✓ prime.greet  0.0s  ↑5 ↓3
   ▶ prime.thank  prompt scripted/scripted-model "Say thank you!"
   ✓ prime.thank  0.0s  ↑4 ↓3
-  ■ run ok  0.0s
+  ■ run rainy-basil  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.greet: Done skip=None retrying=false

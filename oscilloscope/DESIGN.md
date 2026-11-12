@@ -219,7 +219,7 @@ line, from `--events`' own `report` line (§3), not from a snapshot diff:
 compact one-line JSON preview of `data` after it (`(data truncated)`
 when the engine itself replaced an oversized one) — truncated to fit
 the TUI's own log pane width, or to 200 characters in `--log`. The run's
-own `run_start` gets a line of its own too, `■ run started  <run_id>`.
+own `run_start` gets a line of its own too, `■ run started  <name>  <run_id>`.
 
 Values are never logged in full: one line, with a character cap. The details pane shows the full value on request.
 
@@ -3036,7 +3036,7 @@ Both the process scan and the live-state scan are pure, injectable
 (`ProcessScanner`/`ProcessCwd`), so no test ever depends on the real
 machine's own processes. Bare `osi` with no orchestration argument,
 without a TTY (or with `--log`), now runs this discovery and prints
-one plain line per result -- document, config, engine, pid, run
+one plain line per result -- document, name, config, engine, pid, run
 directory, `"—"` for anything not known -- then exits 0; on a TTY
 with no `--log` it opens the Select screen (below).
 

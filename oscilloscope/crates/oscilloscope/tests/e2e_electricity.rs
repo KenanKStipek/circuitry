@@ -67,7 +67,7 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         "osi should exit 0, got {status:?}; stdout:\n{stdout}"
     );
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
     // Proves `ElectricityEngine::detect` actually found, and passed,
     // both flags (the no-events fallback would still produce the
@@ -133,7 +133,7 @@ fn a_documents_reports_show_up_in_the_log_and_the_run_still_ends_ok() {
     // must never also grow its own step line.
     assert!(!stdout.contains("▶ prime.summary"), "stdout:\n{stdout}");
     assert!(!stdout.contains("✓ prime.summary"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
@@ -231,7 +231,13 @@ fn an_invalid_document_fails_and_still_writes_state() {
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
+    // The summary names the run (#717): `■ run <name>  failed: …`.
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("■ run ") && l.contains("failed")),
+        "stdout:\n{stdout}"
+    );
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(run_dir.join("state.json").is_file());
     assert!(!stderr.contains("look swapped"), "stderr:\n{stderr}");
@@ -279,7 +285,13 @@ fn unsupported_content_is_refused_as_a_pre_execution_failure() {
         wait_with_timeout_capturing_stdout_and_stderr(child, Duration::from_secs(30));
 
     assert_eq!(status.code(), Some(1), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run failed"), "stdout:\n{stdout}");
+    // The summary names the run (#717): `■ run <name>  failed: …`.
+    assert!(
+        stdout
+            .lines()
+            .any(|l| l.contains("■ run ") && l.contains("failed")),
+        "stdout:\n{stdout}"
+    );
     assert!(stdout.contains(PREVIEW_MARKER), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 1"), "stdout:\n{stdout}");
     assert!(!run_dir.join("state.json").is_file());
@@ -547,7 +559,7 @@ fn watch_mirrors_a_run_osi_did_not_start() {
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
 /// Issue #538's B1, item 1 ("a scripted prompt"): `adapter: scripted`,
@@ -620,7 +632,7 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
     assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 
     // The same scripted prompt, launched by `osi` itself rather than
     // attached to after the fact (#545's own live race).
@@ -640,7 +652,10 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
     assert!(log_status.success(), "stdout:\n{log_stdout}");
     assert!(log_stdout.contains("prime.ask"), "stdout:\n{log_stdout}");
     assert!(log_stdout.contains("↑3 ↓5"), "stdout:\n{log_stdout}");
-    assert!(log_stdout.contains("■ run ok"), "stdout:\n{log_stdout}");
+    assert!(
+        support::log_shows_run_ok(&log_stdout),
+        "stdout:\n{log_stdout}"
+    );
 }
 
 /// Issue #545's own trigger case, now fixed by #465: a named `flow:
@@ -697,7 +712,7 @@ fn a_tree_loops_fast_pass_prints_tokens_before_the_loop_merges() {
     for line in ["↑1 ↓1", "↑2 ↓2", "↑3 ↓3"] {
         assert!(stdout.contains(line), "stdout:\n{stdout}");
     }
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
 /// Issue #538's B1, item 2 ("a tree loop"): a named `flow: tree` `each`
@@ -741,7 +756,7 @@ fn a_tree_loop_merges_every_pass() {
             "stdout:\n{stdout}"
         );
     }
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
 /// Issue #538's B1, item 3 ("a `use`"): a `use: {path: child.yml}`
@@ -795,7 +810,7 @@ fn a_use_path_child_grafts_into_the_plan() {
         "the plan's own `tool` label must appear on the child's start line, \
          or it was never actually grafted into osi's compiled plan: stdout:\n{stdout}"
     );
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
 /// Issue #538's B1, item 4 ("decomposition"): the `decompose-success`
@@ -908,7 +923,7 @@ effects:
     ] {
         assert!(stdout.contains(path), "missing {path} in stdout:\n{stdout}");
     }
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
 }
 
 /// Issue #616: a container (the root, a `dynamic`) gets the scope's

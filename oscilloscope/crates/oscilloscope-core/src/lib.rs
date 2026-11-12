@@ -22,6 +22,7 @@ pub mod icon;
 pub mod layout;
 pub mod model;
 pub mod multi;
+pub mod names;
 pub mod observe;
 pub mod plan;
 pub mod rail;

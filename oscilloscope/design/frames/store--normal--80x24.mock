@@ -14,7 +14,7 @@
 #! region r4 keybar 0,23,80,1
 #! focus r2
 #! selected r3 1
-{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                             {/}{fg.on-accent on:accent.secondary}  STORE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}ochre-desert {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s              {/}{fg.on-accent on:accent.secondary}  STORE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
 {border.focus}╭─ {/}{fg.title bold}Store · Area = Tokens Used So Far {/}{border.focus}──────────────────────────────────────────╮{/}
 {border.focus}│ {/}{fg.default bold on:bg.surface} kind {/}{fg.default on:bg.surface}· 215 t     {/} {fg.title bold on:bg.inset} gate {/}{fg.muted on:bg.inset}· 389 t                    {/} {accent.primary bold on:bg.inset} ● drafts {/}{fg.muted on:bg.inset}· 261 t     {/}{border.focus}  │{/}
 {border.focus}│ {/}{fg.default bold on:bg.surface} +6% {/}{fg.muted on:bg.surface}vs usual     {/} {on:bg.inset} {/}{fg.default bold on:bg.surface} reply {/}{fg.default on:bg.surface}· 389 t                 {/}{on:bg.inset} {/} {on:bg.inset} {/}{fg.default bold on:bg.surface} iter_0 › draft     {/}{on:bg.inset} {/}{border.focus}  │{/}

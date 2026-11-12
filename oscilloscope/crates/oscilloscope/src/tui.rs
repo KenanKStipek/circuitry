@@ -173,7 +173,7 @@ fn draw_tape_header_band(
     } else {
         crate::icon::trace_color(header.status, ctx.theme)
     };
-    let mut left = vec![
+    let left_before_name = vec![
         Span::styled(
             osi_text,
             Style::default()
@@ -186,6 +186,8 @@ fn draw_tape_header_band(
             Style::default().fg(ctx.theme.text).bg(bg),
         ),
         Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+    ];
+    let left_after_name = vec![
         Span::styled(
             format!("{glyph} {status_word} "),
             Style::default()
@@ -206,7 +208,6 @@ fn draw_tape_header_band(
         .theme_banner
         .map(|name| format!("theme: {name}  "))
         .unwrap_or_default();
-    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let clock_text =
         oscilloscope_core::format::format_clock_time(now, ctx.zone).unwrap_or_default();
     let chip_text = format!("  {chip}  ");
@@ -215,6 +216,48 @@ fn draw_tape_header_band(
         + 2
         + clock_text.chars().count()
         + 1;
+    let fixed_width: usize = left_before_name
+        .iter()
+        .chain(left_after_name.iter())
+        .map(|s| s.content.chars().count())
+        .sum();
+    // Issue #717: a run's own short name, once its `run_id` is known
+    // -- never a suffix here, since this header is always exactly
+    // one run and has nothing on screen to collide with. The clock
+    // is never clipped for it: the name gives way first, cut with
+    // `⋯` once there isn't room for it whole, and dropped outright
+    // (with its own `· ` separator) once fewer than 4 cells remain.
+    let available_for_name = (area.width as usize).saturating_sub(fixed_width + right_width);
+    let name_block: Vec<Span<'static>> = match header
+        .run_id
+        .as_deref()
+        .map(oscilloscope_core::names::run_name)
+    {
+        Some(name) if available_for_name >= name.chars().count() + 3 => vec![
+            Span::styled(
+                format!("{name} "),
+                Style::default().fg(ctx.theme.text).bg(bg),
+            ),
+            Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+        ],
+        Some(name) if available_for_name >= 4 => {
+            let cut = truncate_text(&name, available_for_name.saturating_sub(3));
+            vec![
+                Span::styled(
+                    format!("{cut} "),
+                    Style::default().fg(ctx.theme.text).bg(bg),
+                ),
+                Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+            ]
+        }
+        _ => Vec::new(),
+    };
+    let mut left: Vec<Span<'static>> = left_before_name
+        .into_iter()
+        .chain(name_block)
+        .chain(left_after_name)
+        .collect();
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let pad = (area.width as usize).saturating_sub(left_width + right_width);
     left.push(Span::styled(
         " ".repeat(pad),
@@ -5020,10 +5063,22 @@ fn draw_select_list(
     ctx: &DrawCtx,
 ) {
     let run_count = rows.len().saturating_sub(1);
+    // Issue #717's own name column is as wide as the longest name
+    // actually on screen, never a fixed width -- a screen full of
+    // short names (or none yet) never reserves more room than it
+    // needs, leaving the rest for `config_width` below.
+    let names: Vec<Option<&str>> = rows
+        .iter()
+        .map(|row| match row {
+            oscilloscope_core::select::Row::All { .. } => None,
+            oscilloscope_core::select::Row::Run { name, .. } => name.as_deref(),
+        })
+        .collect();
+    let name_col = oscilloscope_core::names::name_column_width(&names) as u16;
     let box_width: u16 = if area.width >= 100 {
-        60
+        60 + name_col
     } else {
-        56.min(area.width.saturating_sub(4))
+        (56 + name_col).min(area.width.saturating_sub(4))
     };
     let box_height = rows.len() as u16 + 2;
     let box_x = area.x + area.width.saturating_sub(box_width) / 2;
@@ -5059,7 +5114,28 @@ fn draw_select_list(
         .saturating_sub(max_visible.saturating_sub(1))
         .min(max_start);
 
-    let config_width = (inner.width as usize).saturating_sub(32);
+    // Issue #717's own narrow-width rule: config gives way first
+    // (cut with `⋯`), then the document, once the box is too narrow
+    // at this screen's own `name_col` for both at their full width.
+    // 17 = the row's own prefix (5: `   `/` ❯ ` plus the glyph `● `)
+    // and the right-aligned engine field plus its own trailing space
+    // (11 + 1), the same fixed cost `config_width`'s own pre-#717
+    // formula already charged.
+    let doc_width = 15usize;
+    let fixed_without_config = doc_width + name_col as usize + 17;
+    let (doc_width, config_width) = if (inner.width as usize) >= fixed_without_config {
+        (
+            doc_width,
+            (inner.width as usize).saturating_sub(fixed_without_config),
+        )
+    } else {
+        (
+            (inner.width as usize)
+                .saturating_sub(name_col as usize + 17)
+                .max(1),
+            0,
+        )
+    };
     for (i, row) in rows.iter().enumerate().skip(start).take(max_visible) {
         let line_rect = Rect {
             x: inner.x,
@@ -5067,25 +5143,44 @@ fn draw_select_list(
             width: inner.width,
             height: 1,
         };
-        let spans = select_row_spans(row, i == cursor, config_width, ctx);
+        let spans = select_row_spans(
+            row,
+            i == cursor,
+            doc_width,
+            name_col as usize,
+            config_width,
+            ctx,
+        );
         frame.render_widget(Paragraph::new(Line::from(spans)), line_rect);
     }
 }
 
 /// One [`draw_select_list`] row's own spans -- shared between `All`
 /// and a run row, and between a selected and a plain one, so the
-/// field widths (doc 15, config `config_width`, engine 11) can never
-/// drift apart between the two stylings.
+/// field widths (`doc_width`, `name_col`, `config_width`, engine 11)
+/// can never drift apart between the two stylings. `doc_width` and
+/// `config_width` are already narrowed for the terminal's own width
+/// (issue #717: config gives way before the document); `name_col` by
+/// construction always fits every name on screen, so it is never cut.
 fn select_row_spans(
     row: &oscilloscope_core::select::Row,
     selected: bool,
+    doc_width: usize,
+    name_col: usize,
     config_width: usize,
     ctx: &DrawCtx,
 ) -> Vec<Span<'static>> {
     use oscilloscope_core::select::Row as SelectRow;
-    let doc_text = match row {
-        SelectRow::All { .. } => "All".to_string(),
-        SelectRow::Run { document_label, .. } => document_label.clone(),
+    let doc_text = truncate_text(
+        match row {
+            SelectRow::All { .. } => "All",
+            SelectRow::Run { document_label, .. } => document_label,
+        },
+        doc_width,
+    );
+    let name_text = match row {
+        SelectRow::All { .. } => String::new(),
+        SelectRow::Run { name, .. } => name.clone().unwrap_or_default(),
     };
     let tail = match row {
         SelectRow::All { running } => {
@@ -5104,12 +5199,12 @@ fn select_row_spans(
             config_label, run, ..
         } => format!(
             "{:<cw$}{:>11} ",
-            config_label.clone().unwrap_or_else(|| "—".to_string()),
+            truncate_text(config_label.as_deref().unwrap_or("—"), config_width),
             run.engine.as_deref().unwrap_or("—"),
             cw = config_width
         ),
     };
-    let rest = format!("{doc_text:<15}{tail}");
+    let rest = format!("{doc_text:<doc_width$}{name_text:<name_col$}{tail}");
     if selected {
         let sel_bg = ctx.theme.selection_bg;
         vec![
@@ -5144,7 +5239,11 @@ fn select_row_spans(
                     .fg(ctx.theme.accent_primary)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(format!("{doc_text:<15}"), doc_style),
+            Span::styled(format!("{doc_text:<doc_width$}"), doc_style),
+            Span::styled(
+                format!("{name_text:<name_col$}"),
+                Style::default().fg(ctx.theme.text),
+            ),
             Span::styled(tail, Style::default().fg(ctx.theme.fg_muted)),
         ]
     }
@@ -5264,6 +5363,12 @@ fn draw_select_empty_panel(
         vec![Span::styled(" Recent Runs · open read-only", title_style)],
     );
     y += 1;
+    let name_col = oscilloscope_core::names::name_column_width(
+        &rows
+            .iter()
+            .map(|r| Some(r.name.as_str()))
+            .collect::<Vec<_>>(),
+    );
     render_line(
         frame,
         Rect {
@@ -5273,7 +5378,10 @@ fn draw_select_empty_panel(
             height: 1,
         },
         vec![Span::styled(
-            "      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME",
+            format!(
+                "      DOC      {:<name_col$}CONFIG         STARTED   TOOK  TOKENS OUTCOME",
+                "NAME"
+            ),
             header_style,
         )],
     );
@@ -5297,7 +5405,7 @@ fn draw_select_empty_panel(
         if y >= inner.y + inner.height {
             break;
         }
-        let spans = recent_row_spans(row, i == cursor, ctx.zone, ctx);
+        let spans = recent_row_spans(row, i == cursor, name_col, ctx.zone, ctx);
         render_line(
             frame,
             Rect {
@@ -5350,13 +5458,19 @@ fn render_line(frame: &mut Frame, rect: Rect, spans: Vec<Span<'static>>) {
     frame.render_widget(Paragraph::new(Line::from(spans)), rect);
 }
 
-/// One Recent Runs row's own spans (issue #698): DOC(9) CONFIG(15)
-/// STARTED(10) then TOOK+TOKENS combined (13, `{:<5}{:>7} `) and
-/// OUTCOME -- field widths measured from `design/frames/select--
-/// empty--80x24`.
+/// One Recent Runs row's own spans (issue #698): DOC(9) NAME
+/// (`name_col`, issue #717's own narrow-width rule: as wide as the
+/// longest name on this table, never a fixed width, so OUTCOME is
+/// never clipped while NAME has slack to give) CONFIG(15) STARTED(10)
+/// then TOOK+TOKENS combined (13, `{:<5}{:>7} `) and OUTCOME -- the
+/// other field widths measured from `design/frames/select--empty--
+/// 80x24`. A terminal narrower than the row's own full content still
+/// simply clips OUTCOME, the same as every other field here already
+/// would.
 fn recent_row_spans(
     row: &oscilloscope_core::select::RecentRow,
     selected: bool,
+    name_col: usize,
     zone: &dyn oscilloscope_core::format::ClockZone,
     ctx: &DrawCtx,
 ) -> Vec<Span<'static>> {
@@ -5371,6 +5485,7 @@ fn recent_row_spans(
     let started =
         oscilloscope_core::format::format_clock_time(&row.started_at, zone).unwrap_or_default();
     let doc_field = format!("{:<9}", row.document_label);
+    let name_field = format!("{:<name_col$}", row.name);
     let config_field = format!("{config_text:<15}");
     let started_field = format!("{started:<10}");
     let tokens_text = oscilloscope_core::format::format_tokens(row.tokens);
@@ -5408,7 +5523,7 @@ fn recent_row_spans(
             ),
             Span::styled(
                 format!(
-                    "{doc_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"
+                    "{doc_field}{name_field}{config_field}{started_field}{took_tokens_field}{outcome_field}"
                 ),
                 Style::default().fg(ctx.theme.selection_fg).bg(sel_bg),
             ),
@@ -5429,6 +5544,7 @@ fn recent_row_spans(
             Span::styled("    ".to_string(), Style::default().fg(ctx.theme.text)),
             Span::styled(format!("{glyph} "), glyph_style),
             Span::styled(doc_field, Style::default().fg(ctx.theme.text)),
+            Span::styled(name_field, Style::default().fg(ctx.theme.text)),
             Span::styled(
                 format!("{config_field}{started_field}"),
                 Style::default().fg(ctx.theme.fg_muted),
@@ -5451,6 +5567,11 @@ fn recent_row_spans(
 pub struct AllTile {
     pub document_label: String,
     pub config_label: Option<String>,
+    /// This run's own short name (issue #717), already
+    /// disambiguated against every other running tile, not only
+    /// those on this same page -- `None` for a run whose `run_start`
+    /// hasn't arrived yet.
+    pub name: Option<String>,
     pub render: oscilloscope_core::multi::TileRender,
     /// This run's own position in launch order, across every page
     /// (never a page-relative slot index) -- a Signal tile's own
@@ -5742,9 +5863,11 @@ fn draw_all_status_line(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-/// One tile's own mini document band (§2.6): `triage.yml
-/// config-triage.json · ● 2.2s   cof`, on the statusbar colours, the
-/// same band style the main header uses but scoped to one run.
+/// One tile's own mini document band (§2.6): `triage.yml amber-falcon
+/// config-triage.json · ● 2.2s   cof` (the name, issue #717, right
+/// after the document, same as a run's own header), on the statusbar
+/// colours, the same band style the main header uses but scoped to
+/// one run.
 fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawCtx) {
     let bg = ctx.theme.statusbar_bg;
     let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
@@ -5754,41 +5877,66 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         oscilloscope_core::model::RunStatus::Ok => ('✓', ctx.theme.status_done),
         _ => ('✗', ctx.theme.status_failed),
     };
-    let config_text = tile
-        .config_label
+    let name_text = tile
+        .name
         .as_deref()
-        .map(|c| format!("{c} "))
+        .map(|n| format!("{n} "))
         .unwrap_or_default();
-    let mut left = vec![
-        Span::styled(
-            format!(" {} ", tile.document_label),
-            Style::default()
-                .fg(ctx.theme.text)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
-        Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
-        Span::styled(
-            format!("{glyph} "),
-            Style::default()
-                .fg(glyph_color)
-                .bg(bg)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(
-            oscilloscope_core::format::format_duration(header.elapsed_s),
-            Style::default().fg(ctx.theme.text).bg(bg),
-        ),
-    ];
     let engine_word = header
         .engine
         .split_whitespace()
         .next()
         .unwrap_or(&header.engine)
         .to_string();
-    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let right_text = format!("{engine_word} ");
+    // Issue #717: the name follows the document directly, and is
+    // never dropped; when the band is too narrow for everything, the
+    // config -- already optional -- gives way first.
+    let build = |show_config: bool| -> Vec<Span<'static>> {
+        let config_text = if show_config {
+            tile.config_label
+                .as_deref()
+                .map(|c| format!("{c} "))
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        vec![
+            Span::styled(
+                format!(" {} ", tile.document_label),
+                Style::default()
+                    .fg(ctx.theme.text)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                name_text.clone(),
+                Style::default().fg(ctx.theme.text).bg(bg),
+            ),
+            Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
+            Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+            Span::styled(
+                format!("{glyph} "),
+                Style::default()
+                    .fg(glyph_color)
+                    .bg(bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                oscilloscope_core::format::format_duration(header.elapsed_s),
+                Style::default().fg(ctx.theme.text).bg(bg),
+            ),
+        ]
+    };
+    let fits = |spans: &[Span<'static>]| -> bool {
+        let width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        width + right_text.chars().count() <= area.width as usize
+    };
+    let mut left = build(true);
+    if !fits(&left) {
+        left = build(false);
+    }
+    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
     let pad = (area.width as usize).saturating_sub(left_width + right_text.chars().count());
     left.push(Span::styled(" ".repeat(pad), base));
     left.push(Span::styled(right_text, base));
@@ -6673,7 +6821,7 @@ fn draw_combined_chart(
     let max_doc_len = screen
         .runs
         .iter()
-        .map(|r| r.document_label.chars().count())
+        .map(|r| combined_legend_label(r).chars().count())
         .max()
         .unwrap_or(0);
     let label_field_width = (max_doc_len + 1).max(5) as u16;
@@ -7026,6 +7174,39 @@ fn draw_combined_seconds_row(
     }
 }
 
+/// The legend's own left label (issue #717): the document, then
+/// the run's own short name once it's known -- shared between
+/// [`draw_combined_chart`]'s own width sizing and
+/// [`draw_combined_legend`]'s own drawing so the two can never
+/// drift apart.
+fn combined_legend_label(run: &oscilloscope_core::combined::CombinedRun) -> String {
+    match &run.name {
+        Some(name) => format!("{} {name}", run.document_label),
+        None => run.document_label.clone(),
+    }
+}
+
+/// The Per Run table's own RUN cell: the document and the run's own
+/// name (#717), cut with `⋯` to fit before the CONFIG column (#734).
+/// The document gives way first: the name is what tells two runs of
+/// one document apart, so it stays whole whenever it fits at all.
+fn per_run_label(document: &str, name: Option<&str>, width: usize) -> String {
+    let full = match name {
+        Some(name) => format!("{document} {name}"),
+        None => document.to_string(),
+    };
+    if full.chars().count() < width {
+        return full;
+    }
+    match name {
+        Some(name) if name.chars().count() + 3 < width => {
+            let doc_width = width - name.chars().count() - 1;
+            format!("{} {name}", store_cut_label(document, doc_width))
+        }
+        _ => store_cut_label(&full, width),
+    }
+}
+
 /// One legend row per run: `\u{25a0} <doc>`, the finished-prompt
 /// label at its own column (the token figure the first thing cut
 /// when it would run into the running label), and the running
@@ -7057,7 +7238,7 @@ fn draw_combined_legend(
         let color = run_colors[oscilloscope_core::multi::run_role_index(run.role)];
         let buf = frame.buffer_mut();
         buf.set_string(area.x, y, "\u{25a0} ", Style::default().fg(color));
-        buf.set_string(area.x + 2, y, &run.document_label, muted);
+        buf.set_string(area.x + 2, y, combined_legend_label(run), muted);
         if let (Some(label), Some(col)) = (&run.finished_label, run.finished_col) {
             if let Some(rel) = col.checked_sub(start_col) {
                 let x = data_x as usize + rel;
@@ -7168,9 +7349,14 @@ fn draw_combined_totals_row(
 /// from the panel's own `inner.x` -- derived from the frame itself,
 /// not from a guessed field width.
 const PER_RUN_NAME_COL: u16 = 5;
-const PER_RUN_CONFIG_COL: u16 = 20;
-const PER_RUN_ENGINE_COL: u16 = 43;
-const PER_RUN_NOW_COL: u16 = 55;
+/// Issue #717: the RUN column now also carries the run's own short
+/// name after the document (`triage.yml amber-falcon`), so CONFIG/
+/// ENGINE/NOW each shift right by the same amount from their own
+/// pre-#717 offsets, leaving the RUN column enough room for both.
+const PER_RUN_NAME_EXTRA: u16 = 16;
+const PER_RUN_CONFIG_COL: u16 = 20 + PER_RUN_NAME_EXTRA;
+const PER_RUN_ENGINE_COL: u16 = 43 + PER_RUN_NAME_EXTRA;
+const PER_RUN_NOW_COL: u16 = 55 + PER_RUN_NAME_EXTRA;
 /// `TOKENS`/`SHARE`/`DONE` are right-aligned instead, each this
 /// many columns in from the panel's own right edge -- derived from
 /// the 136-wide frame (`inner.width` 134 there) so they scale with
@@ -7348,8 +7534,9 @@ fn draw_combined_per_run_table(
         buf.set_string(
             inner.x + PER_RUN_NAME_COL,
             y,
-            store_cut_label(
+            per_run_label(
                 &run.document_label,
+                run.name.as_deref(),
                 (PER_RUN_CONFIG_COL - PER_RUN_NAME_COL) as usize,
             ),
             row_style(ctx.theme.text),
@@ -12080,15 +12267,17 @@ fn draw_flow_story_pane(
 /// (`fg.faint`), the glyph (the rail's own role colour for `■`/`◆`/
 /// `⟳`/`✗`, plain otherwise), and the rest of the line in
 /// `fg.default`.
-/// The Story pane's own `run started · <run id>` (DESIGN.md §2.3):
-/// a short run id, its own first hyphen-delimited segment, never
-/// the full UUID `--log` itself writes.
+/// The Story pane's own `run started · <name>` (DESIGN.md §2.3,
+/// issue #717): the run's own short name, never the full run id
+/// `--log` itself writes after it (`"run started  amber-falcon
+/// <run-id>"`, [`oscilloscope_core::diff::Differ::diff_event`]'s own
+/// `RunStart` line).
 fn shorten_run_id(text: &str) -> String {
     let Some(after) = text.strip_prefix("run started  ") else {
         return text.to_string();
     };
-    let short = after.split('-').next().unwrap_or(after);
-    format!("run started · {short}")
+    let name = after.split_whitespace().next().unwrap_or(after);
+    format!("run started · {name}")
 }
 
 fn story_entry_line(entry: &oscilloscope_core::flow::StoryEntry, ctx: &DrawCtx) -> Line<'static> {
@@ -18746,6 +18935,29 @@ mod tape_frame_goldens {
         );
     }
 
+    /// The real `run_id` `design/fixtures/multi/snap6/<key>/events.jsonl`'s
+    /// own first line (`run_start`) carries -- issue #717's own name is
+    /// derived from this id everywhere else osi shows one, so the design
+    /// fixtures' own helpers read the same id rather than standing in
+    /// the manifest's own `key` for it.
+    fn snap6_run_id(key: &str) -> String {
+        let events_path = fixtures_dir()
+            .join("multi/snap6")
+            .join(key)
+            .join("events.jsonl");
+        let first_line = std::fs::read_to_string(&events_path)
+            .unwrap_or_else(|e| panic!("couldn't read {events_path:?}: {e}"))
+            .lines()
+            .next()
+            .unwrap_or_else(|| panic!("{events_path:?} is empty"))
+            .to_string();
+        let event: serde_json::Value = serde_json::from_str(&first_line).expect("valid JSON line");
+        event["run_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{events_path:?}'s first line has no run_id"))
+            .to_string()
+    }
+
     /// `design/fixtures/multi/snap6/manifest.json` turned into
     /// [`oscilloscope_core::discovery::DiscoveredRun`]s, in the
     /// manifest's own order -- already launch order (the manifest
@@ -18762,7 +18974,7 @@ mod tape_frame_goldens {
             .iter()
             .enumerate()
             .map(|(i, entry)| oscilloscope_core::discovery::DiscoveredRun {
-                run_id: Some(entry["key"].as_str().unwrap().to_string()),
+                run_id: Some(snap6_run_id(entry["key"].as_str().unwrap())),
                 orchestration: Some(entry["orchestration"].as_str().unwrap().to_string()),
                 config: Some(entry["config"].as_str().unwrap().to_string()),
                 engine: Some(entry["engine"].as_str().unwrap().to_string()),
@@ -18797,6 +19009,12 @@ mod tape_frame_goldens {
         .unwrap();
         let zone = frame_zone();
         let multi_dir = fixtures_dir().join("multi");
+        let run_ids: Vec<String> = manifest
+            .iter()
+            .map(|entry| snap6_run_id(entry["key"].as_str().unwrap()))
+            .collect();
+        let run_id_refs: Vec<Option<&str>> = run_ids.iter().map(|id| Some(id.as_str())).collect();
+        let names = oscilloscope_core::names::disambiguated_names(&run_id_refs);
         manifest
             .iter()
             .enumerate()
@@ -18833,6 +19051,7 @@ mod tape_frame_goldens {
                     run_index,
                     document_label: multi_basename(orchestration),
                     config_label: Some(multi_basename(config)),
+                    name: names[run_index].clone(),
                     render,
                 }
             })
@@ -18971,7 +19190,6 @@ mod tape_frame_goldens {
     /// frame, so this is reported, not bent to match it.
     const ALL_TAPE_STATUS_LINE_PRECISION: &[(u16, u16)] =
         &[(23, 46), (27, 46), (28, 46), (29, 46), (30, 46), (31, 46)];
-
     #[test]
     fn all_tape_180x48_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -19226,8 +19444,11 @@ mod tape_frame_goldens {
     /// (15%), drawn `\u{2580}` rather than `\u{2594}`. Reported here
     /// rather than bent to whichever of blank/`\u{2594}`/`\u{2580}`/
     /// solid each one would need.
+    // Issue #717 widened the legend column by the longest name on
+    // screen, shifting the chart's own data columns +12; these four
+    // coordinates moved with it.
     const COMBINED_SIGNAL_RECEIVED_PARTIAL_ROUNDING: &[(u16, u16)] =
-        &[(27, 17), (32, 17), (37, 17), (22, 19)];
+        &[(39, 17), (44, 17), (49, 17), (34, 19)];
 
     /// Same reason as `ALL_TAPE_EFFECTS_DONE_COUNTER`: the frame's
     /// DONE column counts one more finished effect than the fixture's
@@ -19288,7 +19509,6 @@ mod tape_frame_goldens {
         assert_eq!(screen.totals.rate_tokens_per_s.round() as u64, 5_215);
         assert!((screen.totals.quiet_s.unwrap() - 0.8).abs() < 0.05);
     }
-
     #[test]
     fn all_combined_signal_180x48_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -19645,9 +19865,15 @@ mod tape_frame_goldens {
             !seconds_row.contains("  0s"),
             "expected the long-scrolled window not to still label 0s: {seconds_row:?}"
         );
+        // Issue #717's own name column widens the chart's own left
+        // label field whenever a run's `run_id` is known (every
+        // snap6 fixture run here has one, from its own real
+        // events.jsonl), narrowing the data area by the same amount
+        // and so starting the visible window one second mark later
+        // than before #717.
         assert!(
-            seconds_row.contains("28s"),
-            "expected the window's own first second mark at 28s: {seconds_row:?}"
+            seconds_row.contains("29s"),
+            "expected the window's own first second mark at 29s: {seconds_row:?}"
         );
         assert!(
             seconds_row.contains("43s"),
@@ -19664,6 +19890,7 @@ mod tape_frame_goldens {
             role: i,
             document_label: format!("run{i}.yml"),
             config_label: None,
+            name: None,
             engine_label: "cof".to_string(),
             tokens_sent: 0,
             tokens_received: 0,
@@ -20720,7 +20947,6 @@ mod tape_frame_goldens {
             &[],
         );
     }
-
     #[test]
     fn select_empty_80x24_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -20791,10 +21017,9 @@ mod tape_frame_goldens {
             terminal.backend().buffer(),
             &mock,
             "select--empty--80x24",
-            &[(43, 9)],
+            &[(57, 9)],
         );
     }
-
     /// `OSI_PROCESS_SCAN=0` turns off both the process scan and the
     /// current-directory source together -- the empty Select's own
     /// "Looked" line names only what it actually still looked at.
@@ -21139,7 +21364,6 @@ mod tape_frame_goldens {
             .unwrap();
         assert_matches_mock(terminal.backend().buffer(), &mock, name, allowed_cells);
     }
-
     #[test]
     fn tape_starting_120x30_matches_the_frame() {
         let plan = demo_plan();
@@ -23906,6 +24130,36 @@ mod tape_frame_goldens {
             drawn_len,
             1_000 + 1 - visible_col,
             "the bar must end at end_col, not run past it"
+        );
+    }
+}
+
+#[cfg(test)]
+mod per_run_label_tests {
+    use super::per_run_label;
+
+    #[test]
+    fn a_short_document_and_name_stay_whole() {
+        assert_eq!(
+            per_run_label("a.yml", Some("amber-falcon"), 31),
+            "a.yml amber-falcon"
+        );
+    }
+
+    #[test]
+    fn a_long_document_gives_way_and_the_name_stays_whole() {
+        let label = per_run_label("orchestrations/ticket.v3.yml", Some("amber-falcon"), 31);
+        assert!(label.ends_with(" amber-falcon"), "{label}");
+        assert!(label.contains('\u{22ef}'), "{label}");
+        assert!(label.chars().count() < 31, "{label}");
+    }
+
+    #[test]
+    fn an_unnamed_run_cuts_its_document() {
+        let label = per_run_label("orchestrations/ticket-pipeline.v3.yml", None, 31);
+        assert!(
+            label.ends_with('\u{22ef}') && label.chars().count() < 31,
+            "{label}"
         );
     }
 }

@@ -42,7 +42,7 @@ model and the metadata around each step. Four screens look at one run; two more 
 ### 2.1 Tape (`0`)
 
 ```text
- osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                         TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t · Previews On ───────────╮╭─ gate › reply · Selected ────────────────╮
 │                                                                          ││      Status  ✓ Done · 0.0s · 12:50:50    │
 │12:50:50 ✓ tests              3.0s · sleep 3                              ││        Type  prompt · scripted-model     │
@@ -98,7 +98,7 @@ each step's deviation from its usual: `────┼▓▓▓▓  +47%`, a bas
 12.5 % each, coloured by the deviation (§3.6):
 
 ```text
- osi  demo.yml · ● Running 3.6s                                                                        TAPE    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                         TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · vs Usual · 3 Runs · Previews On ──╮╭─ gate › reply · Selected ────────────────╮
 │                                                                          ││      Status  ✓ Done · 0.0s · 12:50:50    │
 │12:50:50 ✓ tests              3.0s · sleep 3                              ││        Type  prompt · scripted-model     │
@@ -169,7 +169,7 @@ default. At 60×24 (a split pane) the time and info columns go too, leaving glyp
 Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 
 ```text
- osi  demo.yml · ● Running 3.6s                                TAPE    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                 TAPE    12:50:50
 ╭─ Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t ─────────────────────────────╮
 │12:50:47 ✓ kind               ↑212 ↓3 · Bug.                  ▰▰▰▰▱▱▱▱   215 t│
 │12:50:50 ✓ tests              3.0s · sleep 3                                  │
@@ -197,7 +197,7 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 *`frames/tape--normal--80x24.mock` · [png](frames/tape--normal--80x24.png)*
 
 ```text
- osi  demo.yml · ● Running 3.6s            TAPE    12:50:50
+ osi  demo.yml · ochre-⋯ · ● Running 3.6s  TAPE    12:50:50 
 ╭─ Tape · 6/14 · ▰ = 50 t ─────────────────────────────────╮
 │■ Run Started                                             │
 │✓ kind                                    ▰▰▰▰▱▱▱▱   215 t│
@@ -226,7 +226,7 @@ Below 60×24 the too-small screen names the minimum and points at `osi --log`:
 ### 2.2 Signal (`1`)
 
 ```text
- osi  demo.yml · ● Running 3.6s                                                                      SIGNAL    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                       SIGNAL    12:50:50
 ╭─ Signal · Tokens to scripted-model · Sent Above · Received Below · 100 ms per Column · Fixed Scale ──────────────────╮
 │600 t                               ▇     ┃                                                                           │
 │                                    █     ┃                                                                           │
@@ -285,7 +285,7 @@ the cursor.
 ### 2.3 Flow (`2`)
 
 ```text
- osi  demo.yml · ● Running 3.6s                                                                        FLOW    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                         FLOW    12:50:50
 ╭─ Flow · 6/14 · ▰ = 50 t · Following ─────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                               ▾ Now 12:50:50 · 3.6s  │
 │■ Start   ── ✓ kind    ── ✓ tests   ── ◆ gate    ─┬─ ✓ reply   ─┴── ⟳ drafts  ─┬─ ✓ draft   ── ● pause   ─┴── · flaky │
@@ -306,7 +306,7 @@ the cursor.
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Pass 1 · cats · Selected ─────────────────────────────────╮╭─ Story · Decisions and Failures ───────────────────────╮
-│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · d2c8267e                      │
+│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · ochre-desert                  │
 │ Draft    ✓ Done  ↑118 ↓12 · 130 t  -16% vs usual 154 t     ││ 12:50:50 ◆ gate → then                                 │
 │ Produced Cats nap in sunbeams and judge you quietly.       ││ 12:50:50 ⟳ drafts · 3 passes · 2 wide                  │
 │                                                            ││                                                        │
@@ -332,7 +332,7 @@ leave the view, the rail scrolls to a station boundary that puts Now at about 60
 `+` opens them again. Below 100 columns the lanes start folded:
 
 ```text
- osi  demo.yml · ● Running 3.6s                                                                        FLOW    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                         FLOW    12:50:50
 ╭─ Flow · 6/14 · ▰ = 50 t · Following ─────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                 ▾ Now 12:50:50 · 3.6s                │
 │■ Start   ── ✓ kind    ── ✓ tests   ── ◆ gate    ─┬─ ✓ reply   ─┴── ⟳ drafts  ══ 3 lanes + ══ · flaky   ── · summary ─│
@@ -353,7 +353,7 @@ leave the view, the rail scrolls to a station boundary that puts Now at about 60
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Pass 1 · cats · Selected ─────────────────────────────────╮╭─ Story · Decisions and Failures ───────────────────────╮
-│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · d2c8267e                      │
+│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · ochre-desert                  │
 │ Draft    ✓ Done  ↑118 ↓12 · 130 t  -16% vs usual 154 t     ││ 12:50:50 ◆ gate → then                                 │
 │ Produced Cats nap in sunbeams and judge you quietly.       ││ 12:50:50 ⟳ drafts · 3 passes · 2 wide                  │
 │                                                            ││                                                        │
@@ -367,7 +367,7 @@ leave the view, the rail scrolls to a station boundary that puts Now at about 60
 
 **Below the rail.** The selected pass, `Pass 1 · cats · Selected`: Status, the pass's draft with its tokens and
 deviation, what it produced. The **Story** pane: the run's decisions and failures as a short log (`■ run
-started · d2c8267e`, `◆ gate → then`, `⟳ drafts · 3 passes · 2 wide`).
+started · ochre-desert`, `◆ gate → then`, `⟳ drafts · 3 passes · 2 wide`).
 
 **Keys.** `←→` scroll the rail (and turn follow off until `f`), `↑↓` select a lane, `+/-` lanes, `f` follow,
 `enter` opens the selected station or pass.
@@ -377,7 +377,7 @@ started · d2c8267e`, `◆ gate → then`, `⟳ drafts · 3 passes · 2 wide`).
 ### 2.4 Store (`3`)
 
 ```text
- osi  demo.yml · ● Running 3.6s                                                                       STORE    12:50:50
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                        STORE    12:50:50
 ╭─ Store · Tokens by Store · Area = Tokens Used So Far ────────────────────────────────────────────────────────────────╮
 │  kind · 215 t                 gate · 389 t                                        ● drafts · 261 t                   │
 │  +6% vs usual                  reply · 389 t                                       iter_0 › draft · 130 t            │
@@ -437,15 +437,15 @@ Ratio sent to received, the loop's progress.
 
 
 
-                              ╭─ Running Orchestrations · 6 ─────────────────────────────╮
-                              │   ● All            6 runs · tiled                        │
-                              │ ❯ ● triage.yml     config-triage.json                cof │
-                              │   ● triage.yml     config-triage-b.json              cof │
-                              │   ● digest.yml     config-digest.json                cof │
-                              │   ● review.yml     config-review.json                cof │
-                              │   ● summarize.yml  config-summarize.json     electricity │
-                              │   ● classify.yml   config-classify.json      electricity │
-                              ╰──────────────────────────────────────────────────────────╯
+                       ╭─ Running Orchestrations · 6 ───────────────────────────────────────────╮
+                       │   ● All                          6 runs · tiled                        │
+                       │ ❯ ● triage.yml     icy-geyser    config-triage.json                cof │
+                       │   ● triage.yml     oaken-poplar  config-triage-b.json              cof │
+                       │   ● digest.yml     shallow-wren  config-digest.json                cof │
+                       │   ● review.yml     ochre-condor  config-review.json                cof │
+                       │   ● summarize.yml  new-lagoon    config-summarize.json     electricity │
+                       │   ● classify.yml   crimson-fern  config-classify.json      electricity │
+                       ╰────────────────────────────────────────────────────────────────────────╯
 
 
 
@@ -462,7 +462,8 @@ Ratio sent to received, the loop's progress.
 
 `osi` with no document looks for running orchestrations (§7.2). With exactly one it attaches straight away.
 With more it shows this list: `All` first (`6 runs · tiled`), then one row per run with the document, its
-config file in muted text and the engine. `enter` opens osi on that run; `esc` from the run comes back here.
+own name (§3.1), its config file in muted text and the engine. `enter` opens osi on that run; `esc` from
+the run comes back here.
 The status line says what the screen is doing: `4 on cof · 2 on electricity · refreshing every 2s`.
 
 With nothing running, the screen says where it looked and lists recent finished runs to open read-only, with
@@ -475,12 +476,12 @@ the three ways to start one:
 │ Found  0 running                                                             │
 │                                                                              │
 │ Recent Runs · open read-only                                                 │
-│      DOC      CONFIG         STARTED   TOOK  TOKENS OUTCOME                  │
-│  ❯ ✓ demo.yml config-h3.json 14:14:09  5.0s  1.3 kt ok · 1 handled failure   │
-│    ✓ demo.yml config-h2.json 14:14:03  5.1s  1.4 kt ok · 1 handled failure   │
-│    ✓ demo.yml config-h1.json 14:13:57  5.0s  1.3 kt ok · 1 handled failure   │
-│    ✓ demo.yml config.json    12:50:47  5.1s  1.4 kt ok · 1 handled failure   │
-│    ✗ demo.yml config.json    12:48:49  0.0s   215 t failed · tests           │
+│      DOC      NAME          CONFIG         STARTED   TOOK  TOKENS OUTCOME    │
+│  ❯ ✓ demo.yml placid-wren   config-h3.json 14:14:09  5.0s  1.3 kt ok · 1 hand│
+│    ✓ demo.yml opal-harrier  config-h2.json 14:14:03  5.1s  1.4 kt ok · 1 hand│
+│    ✓ demo.yml marshy-elk    config-h1.json 14:13:57  5.0s  1.3 kt ok · 1 hand│
+│    ✓ demo.yml ochre-desert  config.json    12:50:47  5.1s  1.4 kt ok · 1 hand│
+│    ✗ demo.yml square-jay    config.json    12:48:49  0.0s   215 t failed · te│
 │                                                                              │
 │ Start One                                                                    │
 │ osi demo.yml config.json      run a document and attach                      │
@@ -496,6 +497,10 @@ the three ways to start one:
 ```
 *`frames/select--empty--80x24.mock` · [png](frames/select--empty--80x24.png)*
 
+Recent Runs keeps each row's own name (§3.1), derived from the same run id the record carries, next to its
+document, in a column only as wide as the longest name on the table; at 80 columns OUTCOME still has no room
+for the whole of a handled failure's own text, so that is what clips at the border.
+
 ### 2.6 All
 
 ![All · Tape](frames/all--tape--180x48.png)
@@ -503,7 +508,8 @@ the three ways to start one:
 **The grid.** One full osi per running orchestration. Columns are as many 56-cell tiles as fit the width, rows as
 many as the runs need, then fewer columns when that leaves fewer empty cells (six runs at 180×48 make 3 × 2; four
 make 2 × 2; three make one row). A tile is at least 56×20. Each tile has its own header band, `triage.yml
-config-triage.json · ● 2.2s   cof`, its own panel and its own Totals row.
+icy-geyser config-triage.json · ● 2.2s   cof` (the name, §3.1, right after the document); the config gives
+way first when the band is too narrow for all three. Each tile also has its own panel and its own Totals row.
 
 **One screen for every tile.** `0`–`3` switch the screen of every tile at once, so `1` turns the wall into
 Signal tiles on one shared scale. Arrows move the focus (the focused tile has the accent border and the
@@ -519,9 +525,10 @@ title carries the slots.
 ![All · Signal](frames/all--signal--180x48.png)
 
 **Combined Signal (`u`).** Every run on one trace, stacked by run in the run's colour, with one legend row per
-run under the axis carrying its finished prompts and its running step at Now. Totals across runs with Peak,
-Rate and Quiet; a Per Run table with document, config, engine, what is running now, tokens, share and
-progress, with a cursor so `enter` opens that run; Readings. `esc` returns to the tiles.
+run under the axis carrying the document and name (§3.1), its finished prompts and its running step at Now.
+Totals across runs with Peak, Rate and Quiet; a Per Run table with the same document and name in its own RUN
+column, then config, engine, what is running now, tokens, share and progress, with a cursor so `enter` opens
+that run; Readings. `esc` returns to the tiles.
 
 ![All · Combined Signal](frames/all--combined-signal--180x48.png)
 
@@ -531,11 +538,28 @@ progress, with a cursor so `enter` opens that run; Readings. `esc` returns to th
 
 ### 3.1 Header band
 
-`osi  <where> · <status>` on the left; the screen chip and the clock on the right. *Where* is the document
-(`demo.yml`), `Select` or `All`. *Status* is `● Running 3.6s`, `✓ Ended 5.1s`, `✗ Failed 0.0s`, `◌ Starting
+`osi  <where> · <name> · <status>` on the left; the screen chip and the clock on the right. *Where* is the
+document (`demo.yml`), `Select` or `All`. *Status* is `● Running 3.6s`, `✓ Ended 5.1s`, `✗ Failed 0.0s`, `◌ Starting
 0.0s`, `● 6 Running`, `◌ Nothing Running`. The chip is the screen's name in capitals on the secondary accent:
 `TAPE`, `SIGNAL`, `FLOW`, `STORE`, `SELECT`, `ALL · TAPE`, `ALL · COMBINED SIGNAL`. The band sits on the inset
 background.
+
+**The name.** Every run gets a short, memorable name (`amber-falcon`), two words from fixed adjective and
+noun lists, hashed from its own run id (FNV-1a 64) so the same run reads the same name on every screen,
+including its own entry in Recent Runs once it has ended. It shows right after the document: in the header
+band above, in Select's running list and Recent Runs, in the plain listing of bare `osi` without a terminal,
+in the All screen's tile bands, and in the Combined Signal's legend and Per Run table. A run with no name
+yet (`run_start` hasn't arrived) shows none; two runs that land on the same name on one screen both add the
+first four hex digits of their own id (`amber-falcon·0299`). Where the name tells two runs of the same
+document apart, it replaces the parent-directory tie-break of §7.2; the parent directory stays only for a run
+with no name yet.
+
+Wherever the name sits in a column of its own (Select's running list and Recent Runs), that column is as
+wide as the longest name actually on screen, never a fixed width. At 60-99 columns, once that and every
+other field no longer all fit, the config gives way first (cut with `⋯`), then the document; a run's own
+header band instead cuts the name itself (`⋯`, or drops it outright under four cells) so the clock on the
+right is never clipped. In the All screen's own tile band the config is still what gives way first, since
+the name there is never cut.
 
 ### 3.2 Status line and key bar
 
