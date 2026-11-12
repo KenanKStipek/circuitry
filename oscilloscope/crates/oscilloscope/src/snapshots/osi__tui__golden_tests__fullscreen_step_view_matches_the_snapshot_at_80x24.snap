@@ -2,7 +2,7 @@
 source: crates/oscilloscope/src/tui.rs
 expression: "fullscreen_step_snapshot(80, 24)"
 ---
-" osi  do.yml · severe-dewdrop · ✓ Ended 10.1s                  TAPE    02:09:00 "
+" osi  do.yml · faint-reef · ✓ Ended 10.1s                      TAPE    02:09:00 "
 "╭─ top_agent · Selected ───────────────────────────────────────────────────────╮"
 "│ Status  ✓ Done  5.0s · 02:08:55                                              │"
 "│ Type    agent · agent                                                        │"

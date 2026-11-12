@@ -5344,7 +5344,8 @@ enum AllAction {
 /// the same document from different directories would otherwise
 /// draw identical tile bands, with nothing on screen to tell them
 /// apart at all. Also sets each slot's own short name (issue #717),
-/// disambiguated the same way across this same page of slots.
+/// disambiguated the same way across every running slot, not just
+/// `slots`'s own current page.
 fn disambiguate_tile_labels(slots: &mut [AllRunSlot]) {
     let runs: Vec<oscilloscope_core::discovery::DiscoveredRun> =
         slots.iter().map(|s| s.run.clone()).collect();
