@@ -1812,7 +1812,9 @@ only after each turn, and `meta.raw` gains `context_tokens`,
 sets none, the model the CLI reports. See
 [`docs/plugins/agent.md`](./plugins/agent.md#live-progress-while-the-session-runs).
 
-**A running subprocess tool's live output.** While `shell`, or any other
+#### A running subprocess tool's live output
+
+While `shell`, or any other
 tool plugin that runs a program (every `GenericSubprocessTool`-based
 plugin — `awk`, `gh`, `imagemagick`, and the rest — plus `ffmpeg`; not
 the `agent` tool, which has its own `meta.live` above, nor `http`, which
