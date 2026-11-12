@@ -1,0 +1,17 @@
+name: c-gh-api-graphql-multiline-query
+effects:
+  - type: tool
+    name: viewer
+    provider: gh
+    params:
+      args:
+        - "api"
+        - "graphql"
+        - "-f"
+        - |-
+          query=query {
+            viewer {
+              login
+            }
+          }
+      parse: json

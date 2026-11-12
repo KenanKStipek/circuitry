@@ -214,6 +214,13 @@ pub struct App {
     /// would jump the cursor to Now instead of moving it one column
     /// from wherever it is already drawn.
     pub signal_drawn_col: Option<usize>,
+    /// The latest redraw's own trace window start (#734): `signal_drawn_col` can be a column the window no
+    /// longer shows at all (a stale selection from long before the
+    /// window last scrolled) -- `signal_scrub`'s own first press
+    /// seeds from `signal_drawn_col` only when it is still at or
+    /// past this, falling back to Now otherwise, never jumping the
+    /// cursor back to a column that is off screen.
+    pub signal_window_start: Option<usize>,
     /// Whether the latest redraw's own Signal screen has a step
     /// under its cursor at all, cached the same way `signal_now_col`
     /// is -- `enter` on Signal only opens one when this is true, so
@@ -274,6 +281,23 @@ pub struct App {
     /// right after computing it, the same lifecycle `flow_scroll`
     /// already has.
     pub tape_list_start: Option<isize>,
+    /// Issue #716: the detail pane's own bottom scroll offset as of
+    /// the last draw -- compared against `details_scroll` at the
+    /// start of every `tui::draw_tape_detail` call, before its own
+    /// clamp runs, to tell a live step's growing content whether to
+    /// follow the bottom (the comparison still reads `>=` once a
+    /// manual `↑`/`k` has since moved `details_scroll` strictly
+    /// below it) or leave the scroll where the user left it.
+    /// `usize::MAX` right after a fresh selection (`Self::
+    /// select_tree_path`'s own reset, alongside `details_scroll`'s
+    /// own `0`) so that reset never itself reads as "already at the
+    /// bottom" and springs the fresh pane open scrolled down.
+    pub tape_detail_bottom: usize,
+    /// Issue #716: whether `tui::draw_tape`'s last draw actually drew
+    /// the detail pane (the split view, >=100 columns) -- `Tab` is a
+    /// no-op while this is false, since a pane the screen never
+    /// draws has nothing to focus or scroll.
+    pub tape_detail_visible: bool,
 }
 
 impl App {
@@ -311,6 +335,7 @@ impl App {
             flow_lanes_open: std::collections::BTreeMap::new(),
             signal_cursor_col: None,
             signal_drawn_col: None,
+            signal_window_start: None,
             signal_column_ms: 100,
             signal_now_col: None,
             signal_has_step: false,
@@ -323,6 +348,8 @@ impl App {
             loop_pass_line_paths: Vec::new(),
             step_meta_unfolded: false,
             tape_list_start: None,
+            tape_detail_bottom: usize::MAX,
+            tape_detail_visible: true,
         }
     }
 
@@ -385,13 +412,19 @@ impl App {
     /// last, the shared selection's own column included, issue #704
     /// rule 2), never from Now directly, or the first press would
     /// jump the cursor there instead of moving it one column from
-    /// wherever it already is.
+    /// wherever it already is. #734: that column
+    /// is only honoured when the latest draw's own window still
+    /// shows it (`signal_window_start`) -- a stale selection the
+    /// window has long since scrolled past seeds from Now instead,
+    /// never teleporting the window back to it.
     pub fn signal_scrub(&mut self, delta: i64) {
         let now = self.signal_now_col.unwrap_or(0);
-        let current = self
-            .signal_cursor_col
-            .or(self.signal_drawn_col)
-            .unwrap_or(now) as i64;
+        let drawn_in_window = self.signal_drawn_col.filter(|&c| {
+            self.signal_window_start
+                .map(|start| c >= start)
+                .unwrap_or(true)
+        });
+        let current = self.signal_cursor_col.or(drawn_in_window).unwrap_or(now) as i64;
         self.signal_cursor_col = Some(current.saturating_add(delta).clamp(0, now as i64) as usize);
     }
 
@@ -646,6 +679,7 @@ impl App {
         if self.selected_path != path {
             self.selected_path = path;
             self.details_scroll = 0;
+            self.tape_detail_bottom = usize::MAX;
             self.details_source = Pane::Tree;
             // Issue #704 rule 2: the selection moved by some route
             // other than the Signal's own scrub (which writes the
@@ -665,6 +699,7 @@ impl App {
         if self.selected_path != path {
             self.selected_path = path;
             self.details_scroll = 0;
+            self.tape_detail_bottom = usize::MAX;
             self.details_source = Pane::Tree;
         }
     }
@@ -680,6 +715,7 @@ impl App {
             self.selected_path = path;
             if self.details_source == Pane::Tree {
                 self.details_scroll = 0;
+                self.tape_detail_bottom = usize::MAX;
             }
             // Same reasoning as `select_tree_path`'s own: follow's
             // own target update (`main.rs`) and `tape_select_run_
@@ -885,6 +921,15 @@ impl App {
         if self.screen == Screen::Store && self.handle_store_key(key, store_rows) {
             return Action::None;
         }
+        // Issue #716: `esc` with the Tape's own detail pane focused
+        // returns focus to the list -- it never leaves the screen,
+        // checked here (before the Select-return guard just below)
+        // so a run also opened from Select doesn't jump there
+        // instead while the pane still has focus.
+        if key.code == KeyCode::Esc && self.screen == Screen::Tape && self.pane == Pane::Details {
+            self.pane = Pane::Tree;
+            return Action::None;
+        }
         // Issue #698 (§2.5): `esc` on a run opened from the Select
         // screen returns there, before any of this screen's own
         // bindings below -- checked here rather than added as a
@@ -896,6 +941,25 @@ impl App {
             return Action::BackToSelect;
         }
         match key.code {
+            // Issue #716: `Tab` moves focus between the Tape's own
+            // list and its detail pane; `esc` above, or `Tab` again
+            // here, gives it back -- guarded against the full-screen
+            // step (its own key block above already returned for
+            // every key it binds, but an unbound one like `Tab`
+            // falls through to this match unless stopped here too)
+            // and against every other screen, which has no such
+            // toggle of its own. A no-op below 100 columns, where
+            // `draw_tape` never draws the detail pane at all.
+            KeyCode::Tab
+                if self.screen == Screen::Tape
+                    && !self.tape_fullscreen_step
+                    && self.tape_detail_visible =>
+            {
+                self.pane = match self.pane {
+                    Pane::Details => Pane::Tree,
+                    _ => Pane::Details,
+                };
+            }
             // DESIGN.md §6.3/issue #527: every one of these moves (or
             // scrolls) whichever pane currently has focus — the
             // orchestration pane's own selection when `Pane::Tree`,
@@ -1038,6 +1102,12 @@ impl App {
                         // scroll, in whichever unrelated pane the
                         // next screen draws.
                         self.details_scroll = 0;
+                        // Issue #716: the Tape's own
+                        // detail-pane focus is per-screen, unlike
+                        // the scroll above -- it never follows the
+                        // selection to a screen with no such toggle
+                        // of its own.
+                        self.pane = Pane::Tree;
                     }
                     self.screen = screen;
                 }
@@ -3334,6 +3404,40 @@ mod tests {
         assert_eq!(app.signal_cursor_col, Some(3), "never past Now");
     }
 
+    /// #734: `signal_drawn_col` can hold a column
+    /// the window has long since scrolled past (the shared tree
+    /// selection's own, parked on a step that finished minutes ago)
+    /// while following Now -- the first `←` must not teleport the
+    /// window back to it, it must seed from Now instead.
+    #[test]
+    fn signal_scrub_ignores_a_drawn_col_outside_the_window() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(21_000);
+        app.signal_window_start = Some(15_750); // the window's own left edge
+        app.signal_drawn_col = Some(10); // a stale selection, off screen
+        app.signal_scrub(-1);
+        assert_eq!(
+            app.signal_cursor_col,
+            Some(20_999),
+            "the first press must seed from Now, not the off-screen column"
+        );
+    }
+
+    /// The same first press, but the drawn column is still inside
+    /// the window: it is honoured, as issue #704 rule 2 already
+    /// relied on.
+    #[test]
+    fn signal_scrub_honours_a_drawn_col_inside_the_window() {
+        let mut app = App::new(false);
+        app.screen = Screen::Signal;
+        app.signal_now_col = Some(21_000);
+        app.signal_window_start = Some(15_750);
+        app.signal_drawn_col = Some(16_000); // inside the window
+        app.signal_scrub(-1);
+        assert_eq!(app.signal_cursor_col, Some(15_999));
+    }
+
     #[test]
     fn n_returns_the_signal_cursor_to_now() {
         let mut app = App::new(false);
@@ -3824,5 +3928,85 @@ mod tests {
             state.help_open,
             "T must leave Help open, unlike every other key"
         );
+    }
+
+    // -------------------------------------------------------------
+    // Issue #716: Tab focuses the Tape's own detail pane
+    // -------------------------------------------------------------
+
+    #[test]
+    fn tab_focuses_the_tape_detail_pane_and_down_scrolls_it_while_the_list_selection_stays() {
+        let rows = [
+            row("prime.a", 1, StatusKind::Done),
+            row("prime.b", 1, StatusKind::Done),
+        ];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.tape_detail_visible = true;
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Details);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        // The list's own selection never moves while the pane has focus.
+        assert_eq!(app.selected_path.as_deref(), Some("prime.a"));
+        assert_eq!(app.details_scroll, 1);
+        app.handle_key(key(KeyCode::Tab), &visible, &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+        app.handle_key(key(KeyCode::Down), &visible, &[], true, false, &[]);
+        // `↓` now moves the list again, not the pane's own scroll,
+        // and the new selection resets the scroll it gave back.
+        assert_eq!(app.selected_path.as_deref(), Some("prime.b"));
+        assert_eq!(app.details_scroll, 0);
+    }
+
+    #[test]
+    fn tab_does_nothing_below_100_columns_where_the_detail_pane_never_draws() {
+        let mut app = App::new(false);
+        app.tape_detail_visible = false;
+        app.handle_key(key(KeyCode::Tab), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn esc_with_the_tape_detail_pane_focused_returns_to_the_list_without_leaving_the_screen() {
+        let mut app = App::new(false);
+        app.pane = Pane::Details;
+        let action = app.handle_key(key(KeyCode::Esc), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+        assert_eq!(action, Action::None);
+    }
+
+    #[test]
+    fn tab_does_nothing_on_a_screen_with_no_detail_pane_focus_of_its_own() {
+        let mut app = App::new(false);
+        app.screen = Screen::Store;
+        app.handle_key(key(KeyCode::Tab), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn tab_does_nothing_while_the_full_screen_step_is_open() {
+        let mut app = App::new(false);
+        app.tape_fullscreen_step = true;
+        app.handle_key(key(KeyCode::Tab), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn switching_screens_drops_the_tape_detail_pane_focus() {
+        let mut app = App::new(false);
+        app.pane = Pane::Details;
+        app.handle_key(key(KeyCode::Char('1')), &[], &[], true, false, &[]);
+        assert_eq!(app.pane, Pane::Tree);
+    }
+
+    #[test]
+    fn selecting_a_new_row_resets_the_tape_detail_pane_bottom_tracking() {
+        let mut app = App::new(false);
+        app.tape_detail_bottom = 3;
+        app.select_tree_path(Some("prime.a".to_string()));
+        assert_eq!(app.tape_detail_bottom, usize::MAX);
     }
 }

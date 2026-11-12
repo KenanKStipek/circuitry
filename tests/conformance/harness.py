@@ -631,19 +631,33 @@ def materialize_cli_args(
     return [a.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port)) for a in args]
 
 
+def config_needs_materializing(case_dir: Path, config_name: str) -> bool:
+    """Whether *config_name*'s own committed content names
+    `CASE_DIR_PLACEHOLDER` at all -- a `runtime.plugins.<name>.binary`
+    override naming the case's own `fakes/` directory by absolute path
+    (issue #722) can't be committed with one, the same reason `cli_args`
+    has its own case-dir substitution."""
+    text = (case_dir / config_name).read_text(encoding="utf-8")
+    return CASE_DIR_PLACEHOLDER in text
+
+
 def materialize_config(
-    case_dir: Path, config_name: str, *, mock_http_port: int, tmp_dir: Path
+    case_dir: Path, config_name: str, *, mock_http_port: int | None = None, tmp_dir: Path
 ) -> Path:
     """Write *config_name*'s own content, with `MOCK_HTTP_PORT_PLACEHOLDER`
-    substituted for the mock server's real port, to *tmp_dir*, and return
-    the new absolute path -- an adapter's `base_url` can only name the
-    port this way, materialized fresh for each run since the port is
+    substituted for the mock server's real port (when *mock_http_port* is
+    given) and `CASE_DIR_PLACEHOLDER` for *case_dir*, to *tmp_dir*, and
+    return the new absolute path -- an adapter's `base_url` can only name
+    the port this way, materialized fresh for each run since the port is
     different every time (electricity/DESIGN.md §12). Both runners and the
     generator call this (and `materialize_cli_args`) so generation and
-    verification can never diverge on how the port reaches either engine.
+    verification can never diverge on how the port, or the case
+    directory, reaches either engine.
     """
     text = (case_dir / config_name).read_text(encoding="utf-8")
-    materialized = text.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port))
+    materialized = text.replace(CASE_DIR_PLACEHOLDER, str(case_dir))
+    if mock_http_port is not None:
+        materialized = materialized.replace(MOCK_HTTP_PORT_PLACEHOLDER, str(mock_http_port))
     target = tmp_dir / f"materialized-{config_name}"
     target.write_text(materialized, encoding="utf-8")
     return target
@@ -714,7 +728,7 @@ def run_case(
         cmd += ["--live-state", str(live_state_path)]
     config_name = metadata.get("config")
     if config_name:
-        if mock_http_port is not None:
+        if mock_http_port is not None or config_needs_materializing(case_dir, config_name):
             config_path = materialize_config(
                 case_dir, config_name, mock_http_port=mock_http_port, tmp_dir=out_path.parent
             )

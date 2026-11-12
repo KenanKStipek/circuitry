@@ -304,6 +304,12 @@ pub struct PlanEntry {
     /// any run at all -- `None` for every other kind, or a tool
     /// whose own `params` needs a run's state to resolve.
     pub tool_command: Option<String>,
+    /// The effect's own `description:` (issue #716) -- only a tool,
+    /// prompt, `use` or yield leaf carries one in the compiled
+    /// bytecode; `None` for a report (no plan row) and for every
+    /// container (`if`/loop/`dynamic`/try-finally), which the schema
+    /// gives no `description:` of their own.
+    pub description: Option<String>,
 }
 
 /// One pass index resolved while matching a concrete path against a
@@ -637,6 +643,14 @@ impl PlanTree {
         entry.prompt_template.clone()
     }
 
+    /// The effect's own `description:` (issue #716), for any leaf
+    /// kind that carries one -- `None` for a container, a report, or
+    /// a path the plan has nothing to say about.
+    pub fn description(&self, path: &str) -> Option<String> {
+        let entry = self.match_path(path)?.entries.first()?;
+        entry.description.clone()
+    }
+
     /// Whether `path` is a report's own (#605/#610): resolved the
     /// same way `match_path` resolves a `Pass` placeholder against a
     /// concrete `iter_N` segment, so a report inside a named loop's
@@ -947,12 +961,17 @@ fn record_op_entry(
     let mut model = None;
     let mut prompt_template = None;
     let mut tool_command = None;
+    let mut description = None;
     let kind = match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
-            LeafKind::Use(_) => PlanEntryKind::Leaf(LeafEffectKind::Use),
+            LeafKind::Use(use_op) => {
+                description = use_op.description.clone();
+                PlanEntryKind::Leaf(LeafEffectKind::Use)
+            }
             LeafKind::Tool(tool) => {
                 provider = Some(tool.provider.clone());
                 tool_command = static_tool_command(&tool.params);
+                description = tool.description.clone();
                 PlanEntryKind::Leaf(LeafEffectKind::Tool)
             }
             LeafKind::Prompt(prompt) => {
@@ -965,9 +984,13 @@ fn record_op_entry(
                 } else {
                     None
                 };
+                description = prompt.description.clone();
                 PlanEntryKind::Leaf(LeafEffectKind::Prompt)
             }
-            LeafKind::Yield(_) => PlanEntryKind::Leaf(LeafEffectKind::Yield),
+            LeafKind::Yield(yield_op) => {
+                description = yield_op.description.clone();
+                PlanEntryKind::Leaf(LeafEffectKind::Yield)
+            }
             LeafKind::Reflector(_) => PlanEntryKind::Leaf(LeafEffectKind::Reflector),
             LeafKind::Report(_) => unreachable!("reports return above, via is_report"),
         },
@@ -1047,6 +1070,7 @@ fn record_op_entry(
             model,
             prompt_template,
             tool_command,
+            description,
         },
     );
     path

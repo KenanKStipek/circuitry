@@ -1,0 +1,16 @@
+name: c-gh-api-timeline-paginate-slurp-continue
+effects:
+  - type: tool
+    name: timeline
+    provider: gh
+    on_error: continue
+    params:
+      args:
+        [
+          "api",
+          "repos/acme/widgets/issues/42/timeline",
+          "--paginate",
+          "-H",
+          "Accept: application/vnd.github+json",
+          "--slurp",
+        ]
