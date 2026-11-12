@@ -1985,7 +1985,12 @@ fn draw_tape_list(
             })
             .max()
             .unwrap_or(0);
-        let cap = ((inner.width as usize) / 3).max(1);
+        // The 19-cell floor always wins over the cap itself: at an
+        // overall width narrow enough that a third of it is less
+        // than 19 (every tile; a single-run attach below ~57), the
+        // floor is the one real bound, not a cap the `.min` below
+        // would otherwise collapse under it.
+        let cap = ((inner.width as usize) / 3).max(19);
         (longest + 2).max(19).min(cap)
     };
     let what_width = if narrow {
@@ -5097,12 +5102,48 @@ fn draw_all_tape_tile(
         width: inner.width.saturating_sub(2),
         height: inner.height,
     };
-    let name_width = 19usize;
-    let token_width = 16usize;
-    let what_width = (content.width as usize).saturating_sub(2 + name_width + token_width);
-
     let viewport = (inner.height as usize).saturating_sub(2);
     let folded = oscilloscope_core::multi::fold_tape_tile(&screen.items, viewport);
+    // Issue #737: a tile's own name column widens to fit the
+    // longest breadcrumb actually on screen, up to a third of its
+    // own width, and never narrower than the design's own 19-cell
+    // floor -- the same rule a single-run Tape's own list already
+    // follows, scoped to this tile's own folded rows (never the
+    // full, unfolded list a fuller attach would show).
+    let token_width = 16usize;
+    let longest = folded
+        .iter()
+        .filter_map(|l| match l {
+            oscilloscope_core::multi::TapeTileLine::Item(
+                oscilloscope_core::screens::TapeItem::Row(r),
+            ) => Some(r.indent * 2 + r.label.chars().count()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    // The 19-cell floor always wins over the cap (a tile's own
+    // 56-60 cell width makes a third of it narrower than 19).
+    let cap = ((content.width as usize) / 3).max(19);
+    let name_width = (longest + 2).max(19).min(cap);
+    let what_width = (content.width as usize).saturating_sub(2 + name_width + token_width);
+    // Issue #737: "two different steps never read the same, so keep
+    // more segments when the short form would collide" -- the same
+    // once-over-every-row computation `draw_tape_list` makes, scoped
+    // to this tile's own folded rows.
+    let lead_rows: Vec<(&str, &str, usize)> = folded
+        .iter()
+        .filter_map(|l| match l {
+            oscilloscope_core::multi::TapeTileLine::Item(
+                oscilloscope_core::screens::TapeItem::Row(r),
+            ) => Some((
+                r.path.as_str(),
+                r.label.as_str(),
+                name_width.saturating_sub(r.indent * 2),
+            )),
+            _ => None,
+        })
+        .collect();
+    let lead_segments = tape_breadcrumb_lead_segments(&lead_rows);
     // The focused tile's own first running row reads as if it were
     // selected (the frames' own convention for a tile with no real
     // cursor of its own) -- every other tile's running rows, and
@@ -5236,7 +5277,7 @@ fn draw_all_tape_tile(
                         name_width,
                         what_width,
                         token_width,
-                        1,
+                        lead_segments.get(row.path.as_str()).copied().unwrap_or(1),
                         border_color,
                         ctx,
                     )),
@@ -15958,6 +15999,172 @@ mod highlight_tests {
             .unwrap();
         let buffer = terminal.backend().buffer();
         assert_eq!(buffer[(0, 0)].bg, Color::Reset);
+    }
+}
+
+/// Issue #737: the breadcrumb layout helpers the Now area's own tree
+/// and every finished/ahead row's own label share -- the uniqueness,
+/// widening, middle-cut and gap rules, tested directly rather than
+/// only through a full frame golden.
+#[cfg(test)]
+mod tape_breadcrumb_tests {
+    use super::*;
+
+    fn plain(spans: Vec<Span<'static>>) -> String {
+        spans.into_iter().map(|s| s.content.into_owned()).collect()
+    }
+
+    #[test]
+    fn a_short_label_pads_to_width_with_one_space_before_the_next_column() {
+        let text = plain(tape_breadcrumb_spans(
+            "drafts",
+            12,
+            1,
+            Style::default(),
+            Style::default(),
+        ));
+        assert_eq!(text, "drafts      ");
+        assert_eq!(text.chars().count(), 12);
+        assert_eq!(text.chars().last(), Some(' '));
+    }
+
+    #[test]
+    fn a_label_too_long_for_its_width_loses_its_middle_segments() {
+        let text = plain(tape_breadcrumb_spans(
+            "iter_0 › files › iter_2 › build › compile",
+            24,
+            1,
+            Style::default(),
+            Style::default(),
+        ));
+        assert!(text.contains('⋯'), "{text:?}");
+        assert!(text.trim_end().ends_with("compile"), "{text:?}");
+        assert!(text.starts_with("iter_0"), "{text:?}");
+        assert_eq!(text.chars().count(), 24);
+    }
+
+    #[test]
+    fn the_cut_always_leaves_at_least_one_trailing_space() {
+        let text = plain(tape_breadcrumb_spans(
+            "a › b › a_step_name_much_longer_than_the_column",
+            20,
+            1,
+            Style::default(),
+            Style::default(),
+        ));
+        assert_eq!(text.chars().count(), 20);
+        assert_eq!(text.chars().last(), Some(' '), "{text:?}");
+    }
+
+    #[test]
+    fn kept_parents_always_keeps_the_first_segment_then_every_pass_before_a_plain_container() {
+        let parents = ["iter_0", "files", "iter_2", "build"];
+        assert_eq!(tape_breadcrumb_kept_parents(&parents, 1), vec!["iter_0"]);
+        assert_eq!(
+            tape_breadcrumb_kept_parents(&parents, 2),
+            vec!["iter_0", "iter_2"],
+            "a pass segment is kept over a plain container's own name"
+        );
+        assert_eq!(
+            tape_breadcrumb_kept_parents(&parents, 3),
+            vec!["iter_0", "files", "iter_2"],
+            "once every pass is kept, a plain container fills what's left, in the label's own original order"
+        );
+    }
+
+    #[test]
+    fn lead_segments_grow_only_for_rows_that_actually_collide() {
+        let rows = vec![
+            (
+                "prime.groups.iter_0.files.iter_2.build.compile",
+                "iter_0 › build › compile",
+                30,
+            ),
+            (
+                "prime.groups.iter_1.files.iter_2.build.compile",
+                "iter_1 › build › compile",
+                30,
+            ),
+            ("prime.watcher", "watcher", 30),
+        ];
+        let lead = tape_breadcrumb_lead_segments(&rows);
+        assert_eq!(
+            lead["prime.watcher"], 1,
+            "never grows with nothing to collide against"
+        );
+        assert_eq!(lead["prime.groups.iter_0.files.iter_2.build.compile"], 1);
+        assert_eq!(lead["prime.groups.iter_1.files.iter_2.build.compile"], 1);
+    }
+
+    #[test]
+    fn lead_segments_grow_until_two_colliding_rows_cuts_read_apart() {
+        // Both rows' own one-segment cut at this narrow a width reads
+        // identically ("iter_2 › ⋯ › compile"), since `build` is the
+        // only thing left to tell them apart -- neither parent is a
+        // pass, so growing from 1 to 2 segments is what actually
+        // changes the text (the kept parent becomes `build` too,
+        // which still collides) until there is nothing left to grow.
+        let rows = vec![
+            (
+                "prime.a.iter_2.build.compile",
+                "iter_2 › build › compile",
+                18,
+            ),
+            (
+                "prime.b.iter_2.build.compile",
+                "iter_2 › build › compile",
+                18,
+            ),
+        ];
+        let lead = tape_breadcrumb_lead_segments(&rows);
+        // Identical labels at the identical width can never actually
+        // read apart no matter how many segments are kept -- this
+        // only asserts growth is attempted (capped at the label's
+        // own parent count), never that it was free to resolve the
+        // collision here (`screens.rs`'s own full-breadcrumb fallback
+        // is what actually resolves a true collision like this one).
+        assert!(lead["prime.a.iter_2.build.compile"] >= 1);
+        assert!(lead["prime.b.iter_2.build.compile"] >= 1);
+    }
+
+    #[test]
+    fn loop_slots_text_shortens_to_the_short_form_once_the_full_text_doesnt_fit() {
+        assert_eq!(
+            tape_loop_slots_text("2 of 2 Slots Busy · 1 Pass Queued", 40),
+            "2 of 2 Slots Busy · 1 Pass Queued"
+        );
+        assert_eq!(
+            tape_loop_slots_text("2 of 2 Slots Busy · 3 Passes Queued", 25),
+            "2/2 busy · 3 queued"
+        );
+        assert_eq!(
+            tape_loop_slots_text("2 of 2 Slots Busy", 25),
+            "2 of 2 Slots Busy",
+            "no queued suffix at all still fits whole"
+        );
+    }
+
+    #[test]
+    fn loop_slots_text_falls_back_to_a_plain_cut_once_even_the_short_form_doesnt_fit() {
+        // One cell short of the short form's own 19 characters: the
+        // ordinary character cut every other row's own `what` text
+        // gets, same as before this fell back to a short form at
+        // all -- it only ever cuts the words around a count
+        // (`Busy`/`queued`), never a digit itself, since every count
+        // here is always a single one.
+        let text = tape_loop_slots_text("2 of 2 Slots Busy · 3 Passes Queued", 19);
+        assert_eq!(text, "2 of 2 Slots Busy⋯");
+    }
+
+    #[test]
+    fn loop_counts_reads_zero_queued_as_none_and_ignores_non_counts_text() {
+        assert_eq!(tape_loop_counts("2 of 2 Slots Busy"), Some((2, 2, 0)));
+        assert_eq!(
+            tape_loop_counts("2 of 2 Slots Busy · 1 Pass Queued"),
+            Some((2, 2, 1))
+        );
+        assert_eq!(tape_loop_counts("loop · each g · 2 passes"), None);
+        assert_eq!(tape_loop_counts("3 passes · 2 wide · 1 done"), None);
     }
 }
 
