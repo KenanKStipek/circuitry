@@ -550,8 +550,11 @@ fn fullscreen_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
     lines
 }
 
-fn tape_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
+fn tape_key_bar_items(wide: bool, detail_pane: bool) -> Vec<(&'static str, &'static str)> {
     let mut items = vec![("↑↓", "Select"), ("enter", "Open")];
+    if detail_pane {
+        items.push(("tab", "Focus"));
+    }
     if wide {
         items.push(("p", "Previews"));
     }
@@ -943,6 +946,27 @@ fn tape_block_title(text: &str, border: Color, ctx: &DrawCtx) -> Line<'static> {
                 .fg(ctx.theme.text)
                 .add_modifier(Modifier::BOLD),
         ),
+    ])
+}
+
+/// Issue #716: the detail pane's own bottom-left `↓ n
+/// more` corner label, in the pane's default text colour (never
+/// bold -- unlike [`tape_block_title`]'s own title, this is a
+/// scroll hint, not the pane's name).
+fn tape_block_corner_label_left(text: &str, border: Color, ctx: &DrawCtx) -> Line<'static> {
+    Line::from(vec![
+        Span::styled("─ ", Style::default().fg(border)),
+        Span::styled(format!("{text} "), Style::default().fg(ctx.theme.text)),
+    ])
+}
+
+/// [`tape_block_corner_label_left`]'s own top-right counterpart (`↑ n
+/// above`), read right to left: text first, the connecting dash
+/// last, so a right-aligned title lands flush against the corner.
+fn tape_block_corner_label_right(text: &str, border: Color, ctx: &DrawCtx) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!(" {text} "), Style::default().fg(ctx.theme.text)),
+        Span::styled("─", Style::default().fg(border)),
     ])
 }
 
@@ -2409,7 +2433,7 @@ fn focused_attempts_lines(
     };
     let mut lines = vec![
         Line::from(""),
-        tape_detail_line(vec![Span::styled(title, title_bold)], width),
+        detail_section_rule(&title, width, title_bold),
     ];
     for (i, attempt) in step.attempts.iter().enumerate() {
         let mut text = format!("{}. ", i + 1);
@@ -2457,83 +2481,122 @@ fn focused_attempts_lines(
 /// selected_step_lines`'s own `asked` match), but the Tape's own
 /// detail pane never had an Asked section for anything but a
 /// prompt's own "Prompt Sent" at all.
-fn focused_tool_asked_lines(
+fn tool_detail_fields(
     step: &oscilloscope_core::screens::FocusedStep,
-    width: usize,
     ctx: &DrawCtx,
-) -> Vec<Line<'static>> {
+) -> DetailFields {
     use oscilloscope_core::screens::FocusDetail;
     let FocusDetail::Tool {
-        command: Some(command),
-        ..
+        command, exit_code, ..
     } = &step.detail
     else {
         return Vec::new();
     };
     let default = Style::default().fg(ctx.theme.text);
-    let title_bold = Style::default()
-        .fg(ctx.theme.text)
-        .add_modifier(Modifier::BOLD);
-    let mut lines = vec![
-        Line::from(""),
-        tape_detail_line(vec![Span::styled("Asked", title_bold)], width),
-    ];
-    for line in tape_word_wrap(command, width.saturating_sub(1)) {
-        lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+    let mut fields = Vec::new();
+    if let Some(command) = command {
+        fields.push(("Command", vec![Span::styled(command.clone(), default)]));
     }
-    lines
+    if let Some(code) = exit_code {
+        let style = if *code == 0 {
+            Style::default().fg(ctx.theme.status_done)
+        } else {
+            Style::default().fg(ctx.theme.status_failed)
+        };
+        fields.push(("Exit", vec![Span::styled(code.to_string(), style)]));
+    }
+    fields
 }
 
-/// Issue #704 rule 4's own Tool section, shared by every screen: the
-/// exit code and full stdout/stderr -- the command line itself is
-/// each screen's own Asked section already, never repeated here.
-fn focused_tool_lines(
+/// Issue #716: a running tool's own elapsed time against its usual
+/// busy time from history ("1m54s · usual 30.2s") -- appended to the
+/// Status field's own value, `None` once the step has finished (its
+/// own real duration already said everything worth saying) or
+/// without the 3-run threshold history needs.
+fn tool_usual_busy_suffix(step: &oscilloscope_core::screens::FocusedStep) -> Option<String> {
+    use oscilloscope_core::model::StatusKind;
+    if !matches!(
+        step.detail,
+        oscilloscope_core::screens::FocusDetail::Tool { .. }
+    ) {
+        return None;
+    }
+    let running = matches!(
+        step.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
+    if !running {
+        return None;
+    }
+    step.usual_busy_p50_s
+        .map(|s| format!("usual {}", oscilloscope_core::format::format_duration(s)))
+}
+
+/// The last 20 lines of `text`, and the count of whatever came
+/// before them -- `None` when `text` already fits in 20 lines, so
+/// nothing was dropped.
+fn tail_20_lines(text: &str) -> (&str, Option<usize>) {
+    let total = text.lines().count();
+    if total <= 20 {
+        return (text, None);
+    }
+    let earlier = total - 20;
+    let start = text
+        .match_indices('\n')
+        .nth(earlier - 1)
+        .map(|(i, _)| i + 1)
+        .unwrap_or(0);
+    (&text[start..], Some(earlier))
+}
+
+/// Issue #704 rule 4's own Tool section, shared by every screen,
+/// renamed and reshaped by issue #716: the command and exit code are
+/// now fields in the pane's own aligned column
+/// ([`tool_detail_fields`]). `full`: the full-screen step keeps the
+/// whole stdout and stderr, nothing cut (issue #704's own rule); any
+/// other pane reads only the last 20 lines of each, with a `… n
+/// earlier lines` row above them once there were more -- a running
+/// tool has neither yet, since neither engine publishes one before
+/// the tool finishes.
+fn tool_output_sections(
     step: &oscilloscope_core::screens::FocusedStep,
     width: usize,
     ctx: &DrawCtx,
+    full: bool,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
-    let FocusDetail::Tool {
-        exit_code,
-        stdout,
-        stderr,
-        ..
-    } = &step.detail
-    else {
+    let FocusDetail::Tool { stdout, stderr, .. } = &step.detail else {
         return Vec::new();
     };
-    if exit_code.is_none() && stdout.is_none() && stderr.is_none() {
-        return Vec::new();
-    }
     let muted = Style::default().fg(ctx.theme.fg_muted);
     let default = Style::default().fg(ctx.theme.text);
     let title_bold = Style::default()
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
-    let mut lines = vec![
-        Line::from(""),
-        tape_detail_line(vec![Span::styled("Tool", title_bold)], width),
-    ];
-    if let Some(code) = exit_code {
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("exit ", muted),
-                Span::styled(code.to_string(), default),
-            ],
-            width,
-        ));
-    }
-    if let Some(stdout) = stdout {
-        lines.push(tape_detail_line(vec![Span::styled("stdout", muted)], width));
-        for line in tape_word_wrap(stdout, width.saturating_sub(1)) {
+    let mut lines = Vec::new();
+    let section = |lines: &mut Vec<Line<'static>>, title: &str, text: &str| {
+        lines.push(Line::from(""));
+        lines.push(detail_section_rule(title, width, title_bold));
+        let (text, earlier) = if full {
+            (text, None)
+        } else {
+            tail_20_lines(text)
+        };
+        if let Some(n) = earlier {
+            lines.push(tape_detail_line(
+                vec![Span::styled(format!("… {n} earlier lines"), muted)],
+                width,
+            ));
+        }
+        for line in tape_word_wrap(text, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
+    };
+    if let Some(stdout) = stdout {
+        section(&mut lines, "Output", stdout);
     }
     if let Some(stderr) = stderr {
-        lines.push(tape_detail_line(vec![Span::styled("stderr", muted)], width));
-        for line in tape_word_wrap(stderr, width.saturating_sub(1)) {
-            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
-        }
+        section(&mut lines, "Errors", stderr);
     }
     lines
 }
@@ -2558,7 +2621,7 @@ fn focused_decision_lines(
         .add_modifier(Modifier::BOLD);
     let mut lines = vec![
         Line::from(""),
-        tape_detail_line(vec![Span::styled("Decision", title_bold)], width),
+        detail_section_rule("Decision", width, title_bold),
     ];
     if let Some(condition) = &decision.condition {
         for line in tape_word_wrap(&condition.text, width.saturating_sub("condition ".len())) {
@@ -2622,7 +2685,7 @@ fn focused_loop_lines(
         .add_modifier(Modifier::BOLD);
     let mut lines = vec![
         Line::from(""),
-        tape_detail_line(vec![Span::styled("Loop", title_bold)], width),
+        detail_section_rule("Loop", width, title_bold),
     ];
     for pass in passes {
         let (glyph, word, glyph_style) = tape_status_glyph_word_style(pass.status.kind, ctx.theme);
@@ -2695,7 +2758,7 @@ fn focused_meta_lines(
     };
     let mut lines = vec![
         Line::from(""),
-        tape_detail_line(vec![Span::styled(title, title_bold)], width),
+        detail_section_rule(&title, width, title_bold),
     ];
     if unfolded {
         for (key, value) in &step.meta_extra {
@@ -2718,9 +2781,571 @@ fn focused_meta_lines(
     lines
 }
 
+/// A detail pane's own field pairs: a key, right-aligned to
+/// whichever other keys share its column, and the value spans
+/// `wrap_detail_value` wraps under it.
+type DetailFields = Vec<(&'static str, Vec<Span<'static>>)>;
+
+/// Issue #716: the detail pane's own key style, kept apart
+/// from the broader `fg_muted`-styled text elsewhere in the same
+/// pane (timestamps, captions) -- it must differ from the value
+/// style in every theme, including `terminal`, where `fg_muted`
+/// (ANSI gray) renders the same as most terminals' own default
+/// foreground; the dim modifier, not a colour, is what actually
+/// tells them apart there, so every theme gets it, not only
+/// `terminal`.
+fn detail_key_style(ctx: &DrawCtx) -> Style {
+    Style::default()
+        .fg(ctx.theme.fg_muted)
+        .add_modifier(Modifier::DIM)
+}
+
+/// Issue #716: one section's own titled rule (`── Reply ·
+/// 41 t ───`), in the panel-title style end to end -- dashes filled
+/// to `width`, never truncated even when `title` alone would already
+/// overflow it (the rule still starts correctly; only the fill runs
+/// out).
+fn detail_section_rule(title: &str, width: usize, title_style: Style) -> Line<'static> {
+    let prefix = format!("\u{2500}\u{2500} {title} ");
+    let used = prefix.chars().count();
+    let mut text = prefix;
+    if used < width {
+        text.push_str(&"\u{2500}".repeat(width - used));
+    }
+    tape_detail_line(vec![Span::styled(text, title_style)], width)
+}
+
+/// Issue #716: a field's own value wraps under its own
+/// column, never under the key -- each wrapped word keeps whichever
+/// span it came from, so a value built from more than one style
+/// (a glyph, a bold total) still carries each piece's own look onto
+/// whichever wrapped line it lands on. A single word wider than
+/// `width` is hard-cut, the same rule `tape_word_wrap` already uses
+/// for one plain string.
+fn wrap_detail_value(spans: Vec<Span<'static>>, width: usize) -> Vec<Vec<Span<'static>>> {
+    let mut words: Vec<(String, Style)> = Vec::new();
+    for span in spans {
+        for word in span.content.split_whitespace() {
+            words.push((word.to_string(), span.style));
+        }
+    }
+    if words.is_empty() {
+        return vec![Vec::new()];
+    }
+    if width == 0 {
+        return vec![
+            words
+                .into_iter()
+                .map(|(text, style)| Span::styled(text, style))
+                .collect(),
+        ];
+    }
+    let mut lines: Vec<Vec<Span<'static>>> = Vec::new();
+    let mut current: Vec<Span<'static>> = Vec::new();
+    let mut current_len = 0usize;
+    for (mut word, style) in words {
+        let mut word_len = word.chars().count();
+        let extra = if current_len == 0 { 0 } else { 1 };
+        if current_len + extra + word_len > width && current_len > 0 {
+            lines.push(std::mem::take(&mut current));
+            current_len = 0;
+        }
+        if current_len == 0 && word_len > width {
+            while word_len > width {
+                let (head, rest) = {
+                    let mut chars = word.chars();
+                    let head: String = chars.by_ref().take(width).collect();
+                    (head, chars.as_str().to_string())
+                };
+                lines.push(vec![Span::styled(head, style)]);
+                word = rest;
+                word_len = word.chars().count();
+            }
+        }
+        if current_len > 0 {
+            current.push(Span::raw(" "));
+            current_len += 1;
+        }
+        current.push(Span::styled(word, style));
+        current_len += word_len;
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+/// Issue #716: the shared field renderer every detail pane
+/// uses for its own key/value fields -- the Tape's own normal detail
+/// pane, the Agent block (shared by the Tape, the Signal's and the
+/// Store's full-screen step, and the Flow's Selected pane), and every
+/// `focused_*_lines` section below. Keys are right-aligned to the
+/// widest key actually present in `fields`, followed by exactly two
+/// spaces; a value wraps under its own column with a hanging
+/// indent of the same width.
+fn detail_field_key_width(fields: &[(&'static str, Vec<Span<'static>>)]) -> usize {
+    fields
+        .iter()
+        .map(|(k, _)| k.chars().count())
+        .max()
+        .unwrap_or(0)
+}
+
+/// Issue #716: a step's own key column keeps one width for its whole
+/// lifetime, computed from every key that step's own kind could ever
+/// show, not only the ones a particular draw happens to have -- a
+/// running prompt's `First token`/`Received`/`Sent`/`Attempt` fields,
+/// present only while it streams, must never widen the column while
+/// they're there and narrow it again once they're gone. `Status`/
+/// `Type`/`Tokens`/`Usual`/`Share` never exceed any of these.
+fn detail_key_width_for_step(step: &oscilloscope_core::screens::FocusedStep) -> usize {
+    use oscilloscope_core::screens::FocusDetail;
+    match &step.detail {
+        FocusDetail::Prompt { .. } => "First token".len(),
+        FocusDetail::Agent { .. } => "Context".len(),
+        FocusDetail::Tool { .. } => "Command".len(),
+        FocusDetail::Decision(_) | FocusDetail::Loop(_) | FocusDetail::Plain => "Status".len(),
+    }
+}
+
+fn detail_field_lines(
+    fields: &[(&'static str, Vec<Span<'static>>)],
+    key_width: usize,
+    width: usize,
+    ctx: &DrawCtx,
+) -> Vec<Line<'static>> {
+    if fields.is_empty() {
+        return Vec::new();
+    }
+    let key_style = detail_key_style(ctx);
+    let value_col = key_width + 2;
+    let value_width = width.saturating_sub(value_col).max(1);
+    let mut out = Vec::new();
+    for (key, value) in fields {
+        let wrapped = wrap_detail_value(value.clone(), value_width);
+        for (i, line_spans) in wrapped.into_iter().enumerate() {
+            let mut spans = Vec::new();
+            if i == 0 {
+                spans.push(Span::styled(format!("{key:>key_width$}  "), key_style));
+            } else {
+                spans.push(Span::raw(" ".repeat(value_col)));
+            }
+            spans.extend(line_spans);
+            out.push(tape_detail_line(spans, width));
+        }
+    }
+    out
+}
+
+/// Issue #716: whether the Tape's own detail pane should
+/// follow a live step's growing content to the bottom -- `current`
+/// is `App::details_scroll` as of this draw (already moved by
+/// whatever key handling ran since the last one, including a manual
+/// scroll away from the bottom); `prev_bottom` is the bottom that
+/// same draw computed (`App::tape_detail_bottom`). `current >=
+/// prev_bottom` is true both right after a `usize::MAX` jump-to-end
+/// and on every redraw where nothing has since scrolled away from a
+/// bottom reached earlier -- in either case the pane follows the
+/// newly computed `bottom`; otherwise the scroll stays exactly where
+/// it was, clamped only if the content has somehow shrunk under it.
+/// Returns the resolved scroll offset and the bottom to remember for
+/// the next call.
+fn tape_detail_scroll_follow(
+    current: usize,
+    prev_bottom: usize,
+    total: usize,
+    viewport: usize,
+) -> (usize, usize) {
+    let bottom = total.saturating_sub(viewport.max(1));
+    // `prev_bottom == 0` means the content fit the pane on the last
+    // draw, not that the pane was scrolled to a real bottom -- without
+    // the `prev_bottom > 0` guard, a step whose content later outgrows
+    // the pane reads `current (0) >= prev_bottom (0)` as already there
+    // and jumps to the new bottom on its own.
+    let follow = current == usize::MAX || (prev_bottom > 0 && current >= prev_bottom);
+    let scroll = if follow { bottom } else { current.min(bottom) };
+    (scroll, bottom)
+}
+
+#[cfg(test)]
+mod detail_renderer_tests {
+    use super::*;
+    use crate::theme::ThemeName;
+
+    fn ctx<'a>(theme: &'a Theme, zone: &'a chrono::FixedOffset) -> DrawCtx<'a> {
+        DrawCtx {
+            theme,
+            theme_banner: None,
+            zone,
+            no_animation: true,
+        }
+    }
+
+    /// Issue #716: keys right-aligned to the widest one
+    /// present, followed by exactly two spaces, a value wrapping
+    /// under its own column with a hanging indent.
+    #[test]
+    fn detail_field_lines_right_aligns_keys_and_wraps_values_with_a_hanging_indent() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let c = ctx(&theme, &zone);
+        let default = Style::default().fg(theme.text);
+        let fields: DetailFields = vec![
+            ("Status", vec![Span::styled("Done", default)]),
+            (
+                "Type",
+                vec![Span::styled(
+                    "a value long enough to wrap under its own column",
+                    default,
+                )],
+            ),
+        ];
+        let key_width = detail_field_key_width(&fields);
+        assert_eq!(key_width, "Status".len());
+        let lines = detail_field_lines(&fields, key_width, 30, &c);
+        let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
+        assert_eq!(text[0].trim_end(), "Status  Done");
+        assert!(text[1].starts_with("  Type  "), "{:?}", text[1]);
+        // The wrapped continuation line hangs under the value
+        // column, not under the key.
+        assert!(text[2].starts_with("        "), "{:?}", text[2]);
+        assert!(!text[2].trim_start().is_empty());
+    }
+
+    /// A value wider than the pane still wraps (hard-cut), rather
+    /// than running off it.
+    #[test]
+    fn wrap_detail_value_hard_cuts_a_word_wider_than_the_pane() {
+        let default = Style::default();
+        let spans = vec![Span::styled("supercalifragilisticexpialidocious", default)];
+        let wrapped = wrap_detail_value(spans, 10);
+        assert!(wrapped.len() > 1, "{wrapped:?}");
+        for line in &wrapped {
+            let len: usize = line.iter().map(|s| s.content.chars().count()).sum();
+            assert!(len <= 10, "{line:?}");
+        }
+    }
+
+    /// A long word that follows a short one is still hard-cut, not
+    /// run off the pane's edge -- the short word flushes its own
+    /// line first, then the long one is cut the same way a lone
+    /// long word already is.
+    #[test]
+    fn wrap_detail_value_hard_cuts_a_long_word_that_follows_a_short_one() {
+        let default = Style::default();
+        let spans = vec![Span::styled(
+            "cd supercalifragilisticexpialidocious",
+            default,
+        )];
+        let wrapped = wrap_detail_value(spans, 10);
+        assert!(wrapped.len() > 2, "{wrapped:?}");
+        for line in &wrapped {
+            let len: usize = line.iter().map(|s| s.content.chars().count()).sum();
+            assert!(len <= 10, "{line:?}");
+        }
+        let first: String = wrapped[0].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(first, "cd");
+    }
+
+    /// A newline or a tab inside a value is whitespace too, same as
+    /// `tape_word_wrap` already treats it -- ratatui drops `\n` when
+    /// it draws, so splitting on `' '` alone glues the words either
+    /// side of it together.
+    #[test]
+    fn wrap_detail_value_treats_a_newline_and_a_tab_as_whitespace() {
+        let default = Style::default();
+        let spans = vec![Span::styled("bash -c\n\tchange.Then rebuild", default)];
+        let wrapped = wrap_detail_value(spans, 80);
+        assert_eq!(wrapped.len(), 1, "{wrapped:?}");
+        let text: String = wrapped[0].iter().map(|s| s.content.as_ref()).collect();
+        assert_eq!(text, "bash -c change.Then rebuild");
+    }
+
+    /// Issue #716: a section's own titled rule fills the
+    /// width with dashes, in the panel-title style end to end.
+    #[test]
+    fn detail_section_rule_fills_the_width_with_dashes_in_the_title_style() {
+        let title_style = Style::default().add_modifier(Modifier::BOLD);
+        let line = detail_section_rule("Reply · 41 t", 30, title_style);
+        let text = line.to_string();
+        assert_eq!(text.chars().count(), 30);
+        assert!(text.starts_with("── Reply · 41 t ─"), "{text}");
+        assert!(line.spans.iter().all(|s| s.style == title_style));
+    }
+
+    /// Issue #716: the key style differs from the value
+    /// style in every theme, including `terminal`, where `fg_muted`
+    /// alone would read the same as the default foreground.
+    #[test]
+    fn detail_key_style_differs_from_the_value_style_in_every_theme() {
+        use clap::ValueEnum;
+        let value_style = Style::default().fg(Color::Reset);
+        let zone = test_zone();
+        for name in ThemeName::value_variants() {
+            let theme = Theme::for_name(*name);
+            let key_style = detail_key_style(&ctx(&theme, &zone));
+            assert!(
+                key_style.add_modifier.contains(Modifier::DIM),
+                "{name:?}: the key must carry the dim modifier"
+            );
+            assert_ne!(
+                key_style.fg,
+                Some(theme.text),
+                "{name:?}: the key's colour must never be the theme's own text colour"
+            );
+            assert_ne!(
+                key_style,
+                Style::default().fg(theme.text),
+                "{name:?}: the key style must differ from the default text style"
+            );
+            assert_ne!(key_style, value_style, "{name:?}");
+        }
+    }
+
+    /// Issue #716: scroll clamping, resetting on a fresh
+    /// selection (`usize::MAX`, never already at the bottom) and
+    /// following a live step's growing content only while the pane
+    /// was already scrolled to the bottom.
+    #[test]
+    fn tape_detail_scroll_follow_clamps_resets_and_follows_only_from_the_bottom() {
+        // A fresh selection's own `details_scroll = 0` never reads as
+        // already at the bottom against `tape_detail_bottom`'s own
+        // `usize::MAX` reset -- it stays at the top even though the
+        // content overflows the viewport.
+        let (scroll, bottom) = tape_detail_scroll_follow(0, usize::MAX, 50, 10);
+        assert_eq!((scroll, bottom), (0, 40));
+        // Jumping to the end (`usize::MAX`, the same sentinel `End`/
+        // `G` already use) lands on the real bottom.
+        let (scroll, bottom) = tape_detail_scroll_follow(usize::MAX, bottom, 50, 10);
+        assert_eq!((scroll, bottom), (40, 40));
+        // Already at the bottom, and the content grows: the pane
+        // follows it to the new bottom.
+        let (scroll, bottom) = tape_detail_scroll_follow(scroll, bottom, 60, 10);
+        assert_eq!((scroll, bottom), (50, 50));
+        // A manual scroll up and away from the bottom...
+        let scroll = scroll - 1;
+        // ... stops the pane from following further growth.
+        let (scroll, bottom) = tape_detail_scroll_follow(scroll, bottom, 70, 10);
+        assert_eq!((scroll, bottom), (49, 60));
+    }
+
+    /// A fresh selection whose content fits the pane (`bottom == 0`)
+    /// must never read as already at the bottom once that content
+    /// grows past it -- a running agent's transcript outgrowing the
+    /// pane must stay at the top, not jump down, when the scroll was
+    /// never moved away from it in the first place.
+    #[test]
+    fn tape_detail_scroll_follow_does_not_jump_once_content_that_fit_grows_past_the_pane() {
+        let (scroll, bottom) = tape_detail_scroll_follow(0, usize::MAX, 5, 10);
+        assert_eq!((scroll, bottom), (0, 0));
+        let (scroll, bottom) = tape_detail_scroll_follow(scroll, bottom, 5, 10);
+        assert_eq!((scroll, bottom), (0, 0));
+        let (scroll, bottom) = tape_detail_scroll_follow(scroll, bottom, 15, 10);
+        assert_eq!((scroll, bottom), (0, 5), "must stay at the top: {scroll}");
+    }
+
+    /// A step's own key column keeps the widest key its own kind
+    /// could ever show, whether or not this particular draw has one
+    /// -- a running prompt's column never narrows once `First token`
+    /// is gone, and a plain tool's never grows for it at all.
+    #[test]
+    fn detail_key_width_for_step_is_fixed_by_kind_not_by_the_fields_present_now() {
+        use oscilloscope_core::screens::FocusDetail;
+        let mut screen = long_reply_tape_screen();
+        let step = screen.selected.as_mut().unwrap();
+        step.detail = FocusDetail::Prompt {
+            tokens: None,
+            estimated: false,
+            snippet: None,
+        };
+        assert_eq!(detail_key_width_for_step(step), "First token".len());
+        step.detail = FocusDetail::Tool {
+            command: None,
+            exit_code: None,
+            stdout: None,
+            stderr: None,
+        };
+        assert_eq!(detail_key_width_for_step(step), "Command".len());
+        step.detail = FocusDetail::Plain;
+        assert_eq!(detail_key_width_for_step(step), "Status".len());
+    }
+
+    /// `Transcript · N calls` for a read that reaches the session's
+    /// own start; once the read window is truncated, the title
+    /// instead gives the session's own whole total, from whichever
+    /// of `live`/`raw_tool_calls` is known.
+    #[test]
+    fn transcript_section_title_gives_the_whole_total_once_the_read_window_is_truncated() {
+        use oscilloscope_core::transcript::{TranscriptView, build_transcript_view};
+        let calls = vec![serde_json::json!({
+            "type": "tool_start",
+            "id": 1,
+            "tool": "bash",
+            "target": "ls",
+            "t": "2026-01-01T00:00:00Z",
+        })];
+        let not_truncated = build_transcript_view(&calls, false);
+        assert_eq!(
+            transcript_section_title(Some(&not_truncated), &None, Some(99)),
+            "Transcript · 1 calls"
+        );
+        let truncated = TranscriptView {
+            truncated: true,
+            ..build_transcript_view(&calls, true)
+        };
+        assert_eq!(
+            transcript_section_title(Some(&truncated), &None, Some(42)),
+            "Transcript · last 1 of 42 calls"
+        );
+        assert_eq!(
+            transcript_section_title(Some(&truncated), &None, None),
+            "Transcript · 1 calls"
+        );
+    }
+
+    /// The last 20 lines of a longer text, and how many came before
+    /// them; unchanged, with nothing dropped, at 20 lines or fewer.
+    #[test]
+    fn tail_20_lines_keeps_the_last_20_and_counts_what_came_before() {
+        let short = "a\nb\nc";
+        assert_eq!(tail_20_lines(short), (short, None));
+        let long: String = (1..=25)
+            .map(|n| n.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let (tail, earlier) = tail_20_lines(&long);
+        assert_eq!(earlier, Some(5));
+        assert_eq!(tail.lines().count(), 20);
+        assert_eq!(tail.lines().next(), Some("6"));
+        assert_eq!(tail.lines().last(), Some("25"));
+    }
+
+    fn long_reply_tape_screen() -> oscilloscope_core::screens::TapeScreen {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{
+            FocusDetail, FocusedStep, TapeHead, TapeScreen, TapeSelectedDetail,
+        };
+        let step = FocusedStep {
+            path: "prime.ask".to_string(),
+            breadcrumb: "ask".to_string(),
+            kind_label: "prompt",
+            provider_or_model: None,
+            since_ts: None,
+            finished_ts: Some("2026-01-01T00:00:05Z".to_string()),
+            elapsed_s: Some(5.0),
+            detail: FocusDetail::Plain,
+            status: RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: Vec::new(),
+            usual_busy_p50_s: None,
+            usual_busy_p90_s: None,
+            description: None,
+        };
+        TapeScreen {
+            unit: 50,
+            items: Vec::new(),
+            done: 0,
+            running: 0,
+            ahead: 0,
+            head: TapeHead::Normal,
+            selected_breadcrumb: Some(step.breadcrumb.clone()),
+            selected: Some(step),
+            selected_usual: None,
+            selected_share_pct: None,
+            selected_detail: Some(TapeSelectedDetail {
+                reply: Some(
+                    (1..=40)
+                        .map(|n| format!("Line {n} of the reply."))
+                        .collect::<Vec<_>>()
+                        .join(" "),
+                ),
+                reply_tokens: Some(200),
+                ..Default::default()
+            }),
+            starting_detail: None,
+            ended_detail: None,
+            failed_detail: None,
+            usual_so_far_tokens: None,
+        }
+    }
+
+    /// Issue #716: the pane's own bottom border reads `↓ n
+    /// more` once its content overflows it, `Tab` gives it the
+    /// accent border, and scrolling it down (the list selection
+    /// untouched) makes the top border read `↑ n above`.
+    #[test]
+    fn draw_tape_detail_shows_the_overflow_borders_once_focused_and_scrolled() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let screen = long_reply_tape_screen();
+        let mut app = crate::keys::App::new(false);
+        app.selected_path = Some("prime.ask".to_string());
+        let backend = ratatui::backend::TestBackend::new(60, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_tape_detail(
+                    f,
+                    f.area(),
+                    &screen,
+                    &mut app,
+                    None,
+                    "2026-01-01T00:00:05Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let unfocused = terminal.backend().to_string();
+        assert!(unfocused.contains("↓"), "{unfocused}");
+        assert!(unfocused.contains("more"), "{unfocused}");
+        assert!(!unfocused.contains("above"), "{unfocused}");
+
+        app.pane = Pane::Details;
+        app.details_scroll = 3;
+        terminal
+            .draw(|f| {
+                draw_tape_detail(
+                    f,
+                    f.area(),
+                    &screen,
+                    &mut app,
+                    None,
+                    "2026-01-01T00:00:05Z",
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let focused = terminal.backend().to_string();
+        assert!(focused.contains("above"), "{focused}");
+        assert_eq!(app.selected_path.as_deref(), Some("prime.ask"));
+    }
+}
+
 /// The Normal/Usual states' own detail pane (§2.1): the selected
-/// row's Status, Type, Tokens, Usual, Share, then the prompt sent and
-/// the reply in full, each headed with its own token count.
+/// row's own description in full, then its Status, Type, Tokens,
+/// Usual, Share, then the prompt sent and the reply in full, each
+/// headed with its own token count.
 fn tape_normal_detail_lines(
     screen: &oscilloscope_core::screens::TapeScreen,
     width: usize,
@@ -2736,6 +3361,7 @@ fn tape_normal_detail_lines(
 ) -> Vec<Line<'static>> {
     let muted = Style::default().fg(ctx.theme.fg_muted);
     let default = Style::default().fg(ctx.theme.text);
+    let dim = Style::default().fg(ctx.theme.dim);
     let title_bold = Style::default()
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
@@ -2747,6 +3373,18 @@ fn tape_normal_detail_lines(
     };
     let detail = screen.selected_detail.clone().unwrap_or_default();
     let mut lines = Vec::new();
+
+    // Issue #716: the selected effect's own `description:`, wrapped
+    // in full, ahead of every field below -- a step with none set
+    // starts with the fields, as before this issue.
+    if let Some(description) = &detail.description {
+        for line in tape_word_wrap(description, width.saturating_sub(1)) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+        lines.push(Line::from(""));
+    }
+
+    let mut fields: DetailFields = Vec::new();
 
     let (glyph, word, glyph_style) = tape_status_glyph_word_style(step.status.kind, ctx.theme);
     let finished_clock = detail
@@ -2763,26 +3401,34 @@ fn tape_normal_detail_lines(
         }
         status_value.push_str(&clock);
     }
-    lines.push(tape_detail_line(
-        vec![
-            Span::styled("Status  ", muted),
-            Span::styled(format!("{glyph} {word}  "), glyph_style),
-            Span::styled(status_value, default),
-        ],
-        width,
+    if let Some(usual_busy) = tool_usual_busy_suffix(step) {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(&usual_busy);
+    }
+    fields.push((
+        "Status",
+        if status_value.is_empty() {
+            vec![Span::styled(format!("{glyph} {word}"), glyph_style)]
+        } else {
+            vec![
+                Span::styled(format!("{glyph} {word} "), glyph_style),
+                Span::styled("· ", muted),
+                Span::styled(status_value, default),
+            ]
+        },
     ));
 
-    let type_text = match &step.provider_or_model {
-        Some(m) => format!("{} · {m}", step.kind_label),
-        None => step.kind_label.to_string(),
+    let type_text = match step.provider_or_model.as_deref() {
+        Some(m) if m != step.kind_label => format!("{} · {m}", step.kind_label),
+        _ => step.kind_label.to_string(),
     };
-    lines.push(tape_detail_line(
-        vec![
-            Span::styled("Type    ", muted),
-            Span::styled(type_text, default),
-        ],
-        width,
-    ));
+    fields.push(("Type", vec![Span::styled(type_text, default)]));
+    // Issue #716: a tool step's own Command and (once finished) Exit
+    // fields, right after Type -- a shell step shows what it does,
+    // not only that it ran.
+    fields.extend(tool_detail_fields(step, ctx));
 
     // Issue #675's Live block: a running prompt shows its own live
     // figures here, in place of the Tokens line below (never both --
@@ -2791,12 +3437,9 @@ fn tape_normal_detail_lines(
     // tokens don't exist yet).
     if let Some(live) = &detail.live {
         if !live.streaming {
-            lines.push(tape_detail_line(
-                vec![
-                    Span::styled("Live    ", muted),
-                    Span::styled("no live figures from this adapter", muted),
-                ],
-                width,
+            fields.push((
+                "Live",
+                vec![Span::styled("no live figures from this adapter", muted)],
             ));
         } else {
             let first_token_value = if live.waiting_for_first_token {
@@ -2814,12 +3457,9 @@ fn tape_normal_detail_lines(
                         .unwrap_or_default()
                 )
             };
-            lines.push(tape_detail_line(
-                vec![
-                    Span::styled("First token  ", muted),
-                    Span::styled(first_token_value, default),
-                ],
-                width,
+            fields.push((
+                "First token",
+                vec![Span::styled(first_token_value, default)],
             ));
             if let Some((n, is_estimate)) = live.tokens_received_or_estimate() {
                 let marker = if is_estimate { "≈" } else { "" };
@@ -2831,13 +3471,7 @@ fn tape_normal_detail_lines(
                         oscilloscope_core::format::format_tokens(rate.round() as u64)
                     ));
                 }
-                lines.push(tape_detail_line(
-                    vec![
-                        Span::styled("Received  ", muted),
-                        Span::styled(received_text, default),
-                    ],
-                    width,
-                ));
+                fields.push(("Received", vec![Span::styled(received_text, default)]));
             }
             if let Some((n, is_estimate)) = live.tokens_sent_or_estimate() {
                 let sent_text = if is_estimate {
@@ -2845,22 +3479,16 @@ fn tape_normal_detail_lines(
                 } else {
                     format!("↑{}", oscilloscope_core::format::format_tokens(n))
                 };
-                lines.push(tape_detail_line(
-                    vec![
-                        Span::styled("Sent  ", muted),
-                        Span::styled(sent_text, default),
-                    ],
-                    width,
-                ));
+                fields.push(("Sent", vec![Span::styled(sent_text, default)]));
             }
         }
         if live.attempt.is_some_and(|a| a > 0) {
-            lines.push(tape_detail_line(
-                vec![
-                    Span::styled("Attempt  ", muted),
-                    Span::styled(format!("{}", live.attempt.unwrap() + 1), default),
-                ],
-                width,
+            fields.push((
+                "Attempt",
+                vec![Span::styled(
+                    format!("{}", live.attempt.unwrap() + 1),
+                    default,
+                )],
             ));
         }
     }
@@ -2878,9 +3506,9 @@ fn tape_normal_detail_lines(
             .map(oscilloscope_core::format::format_tokens_arrow)
             .unwrap_or_else(|| "—".to_string());
         let total = detail.tokens_sent.unwrap_or(0) + detail.tokens_received.unwrap_or(0);
-        lines.push(tape_detail_line(
+        fields.push((
+            "Tokens",
             vec![
-                Span::styled("Tokens  ", muted),
                 Span::styled(format!("↑{sent_text} ↓{received_text} "), default),
                 Span::styled("· ", muted),
                 Span::styled(
@@ -2888,7 +3516,6 @@ fn tape_normal_detail_lines(
                     default.add_modifier(Modifier::BOLD),
                 ),
             ],
-            width,
         ));
     }
 
@@ -2897,13 +3524,10 @@ fn tape_normal_detail_lines(
             .tokens
             .filter(|_| usual > 0)
             .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
-        let mut spans = vec![
-            Span::styled("Usual   ", muted),
-            Span::styled(
-                format!("{}  ", oscilloscope_core::format::format_tokens(usual)),
-                default,
-            ),
-        ];
+        let mut spans = vec![Span::styled(
+            format!("{} ", oscilloscope_core::format::format_tokens(usual)),
+            default,
+        )];
         if let Some(d) = dev {
             spans.push(Span::styled(
                 format!("{d:+.0}% "),
@@ -2911,26 +3535,62 @@ fn tape_normal_detail_lines(
             ));
         }
         spans.push(Span::styled(format!("· median of {count} runs"), muted));
-        lines.push(tape_detail_line(spans, width));
+        fields.push(("Usual", spans));
     }
 
     if let Some(pct) = screen.selected_share_pct {
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("Share   ", muted),
-                Span::styled(format!("{pct}% of this run so far"), default),
-            ],
-            width,
+        fields.push((
+            "Share",
+            vec![Span::styled(format!("{pct}% of this run so far"), default)],
         ));
     }
 
     // Issue #703's rule 3: an agent step's own detail pane adds the
-    // one shared Agent block after Tokens/Usual/Share, which still
-    // read from the step's own totals the same as any other tool --
-    // Live, Prompt Sent and Reply above and below are already `None`
-    // for a non-prompt row, so they never draw here.
+    // one shared Agent block's own fields right after Status/Type/
+    // Tokens/Usual/Share, in the very same right-aligned column
+    // (issue #716) -- Live, Prompt Sent and Reply above and below
+    // are already `None` for a non-prompt row, so they never draw
+    // here.
+    let mut context_bar = None;
+    if matches!(
+        step.detail,
+        oscilloscope_core::screens::FocusDetail::Agent { .. }
+    ) {
+        let (agent_fields, bar) = agent_detail_fields(step, transcript_view, ctx);
+        fields.extend(agent_fields);
+        context_bar = bar;
+    }
+
+    let key_width = detail_key_width_for_step(step);
+    match (
+        context_bar,
+        fields.iter().position(|(k, _)| *k == "Context"),
+    ) {
+        (Some((tokens, window)), Some(idx)) => {
+            lines.extend(detail_field_lines(&fields[..=idx], key_width, width, ctx));
+            lines.push(tape_detail_line(
+                vec![
+                    Span::raw(" ".repeat(key_width + 2)),
+                    Span::styled(bar(tokens, window, 20), dim),
+                ],
+                width,
+            ));
+            lines.extend(detail_field_lines(
+                &fields[idx + 1..],
+                key_width,
+                width,
+                ctx,
+            ));
+        }
+        _ => lines.extend(detail_field_lines(&fields, key_width, width, ctx)),
+    }
+
     if let oscilloscope_core::screens::FocusDetail::Agent {
-        stale, live, note, ..
+        stale,
+        live,
+        note,
+        raw_tool_calls,
+        ..
     } = &step.detail
     {
         if *stale {
@@ -2945,15 +3605,23 @@ fn tape_normal_detail_lines(
                 | oscilloscope_core::model::StatusKind::LikelyRunning
                 | oscilloscope_core::model::StatusKind::RunningOrQueued
         );
+        if live.is_none() && running {
+            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        }
         // Issue #704 rule 4: the detail pane (the small one and the
         // full-screen step alike, both scrollable) reads the whole
         // transcript, never cut to this pane's own current height --
         // nothing the run recorded is cut.
-        for line in agent_block_lines(step, transcript_view, ctx, now, None) {
-            lines.push(tape_detail_line(line.spans, width));
-        }
-        if live.is_none() && running {
-            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        let tail =
+            agent_transcript_tail_lines(step, transcript_view, ctx, now, usize::MAX, Some(width));
+        if !tail.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(detail_section_rule(
+                &transcript_section_title(transcript_view, live, *raw_tool_calls),
+                width,
+                title_bold,
+            ));
+            lines.extend(tail.into_iter().skip(1));
         }
     }
 
@@ -2964,14 +3632,16 @@ fn tape_normal_detail_lines(
         // Live block below already carries the sent figure for one
         // of those, so this heading drops its own count rather than
         // print a bogus `0 t`.
-        let mut heading = vec![Span::styled("Prompt Sent ", title_bold)];
-        if let Some(tokens) = detail.prompt_sent_tokens {
-            heading.push(Span::styled(
-                format!("· {}", oscilloscope_core::format::format_tokens(tokens)),
-                muted,
-            ));
-        }
-        lines.push(tape_detail_line(heading, width));
+        let title = match detail.prompt_sent_tokens {
+            Some(tokens) => {
+                format!(
+                    "Prompt Sent · {}",
+                    oscilloscope_core::format::format_tokens(tokens)
+                )
+            }
+            None => "Prompt Sent".to_string(),
+        };
+        lines.push(detail_section_rule(&title, width, title_bold));
         for line in tape_word_wrap(prompt_sent, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
@@ -2979,19 +3649,11 @@ fn tape_normal_detail_lines(
 
     if let Some(reply) = &detail.reply {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("Reply ", title_bold),
-                Span::styled(
-                    format!(
-                        "· {}",
-                        oscilloscope_core::format::format_tokens(detail.reply_tokens.unwrap_or(0))
-                    ),
-                    muted,
-                ),
-            ],
-            width,
-        ));
+        let title = format!(
+            "Reply · {}",
+            oscilloscope_core::format::format_tokens(detail.reply_tokens.unwrap_or(0))
+        );
+        lines.push(detail_section_rule(&title, width, title_bold));
         for line in tape_word_wrap(reply, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
@@ -3007,10 +3669,7 @@ fn tape_normal_detail_lines(
     ) {
         if let Some(value) = &step.value_full {
             lines.push(Line::from(""));
-            lines.push(tape_detail_line(
-                vec![Span::styled("Produced", title_bold)],
-                width,
-            ));
+            lines.push(detail_section_rule("Produced", width, title_bold));
             for line in tape_word_wrap(value, width.saturating_sub(1)) {
                 lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
             }
@@ -3018,10 +3677,7 @@ fn tape_normal_detail_lines(
     }
     if let Some(error) = &step.error {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![Span::styled("Error", title_bold)],
-            width,
-        ));
+        lines.push(detail_section_rule("Error", width, title_bold));
         for line in tape_word_wrap(error, width.saturating_sub(1)) {
             lines.push(tape_detail_line(
                 vec![Span::styled(line, Style::default().fg(ctx.theme.error))],
@@ -3029,9 +3685,8 @@ fn tape_normal_detail_lines(
             ));
         }
     }
-    lines.extend(focused_tool_asked_lines(step, width, ctx));
     lines.extend(focused_attempts_lines(step, width, ctx));
-    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(tool_output_sections(step, width, ctx, false));
     lines.extend(focused_decision_lines(step, width, ctx));
     lines.extend(focused_loop_lines(step, width, ctx));
     lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
@@ -3051,30 +3706,24 @@ fn tape_starting_detail_lines(
     let title_bold = Style::default()
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
-    let mut lines = vec![
-        tape_detail_line(
-            vec![
-                Span::styled("Engine ", muted),
-                Span::styled(format!("{} · launching", detail.engine), default),
-            ],
-            width,
+    let mut fields: DetailFields = vec![
+        (
+            "Engine",
+            vec![Span::styled(
+                format!("{} · launching", detail.engine),
+                default,
+            )],
         ),
-        tape_detail_line(
-            vec![
-                Span::styled("Plan   ", muted),
-                Span::styled(detail.plan_text.clone(), default),
-            ],
-            width,
+        (
+            "Plan",
+            vec![Span::styled(detail.plan_text.clone(), default)],
         ),
-        tape_detail_line(
-            vec![
-                Span::styled("Shape  ", muted),
-                Span::styled(detail.shape_text.clone(), default),
-            ],
-            width,
+        (
+            "Shape",
+            vec![Span::styled(detail.shape_text.clone(), default)],
         ),
     ];
-    let mut usual_spans = vec![Span::styled("Usual  ", muted)];
+    let mut usual_spans = Vec::new();
     match (
         detail.usual_total_tokens,
         detail.usual_total_s,
@@ -3095,8 +3744,8 @@ fn tape_starting_detail_lines(
         }
         _ => usual_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
     }
-    lines.push(tape_detail_line(usual_spans, width));
-    let mut eta_spans = vec![Span::styled("ETA    ", muted)];
+    fields.push(("Usual", usual_spans));
+    let mut eta_spans = Vec::new();
     match detail
         .eta_ts
         .as_deref()
@@ -3111,12 +3760,11 @@ fn tape_starting_detail_lines(
         }
         None => eta_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
     }
-    lines.push(tape_detail_line(eta_spans, width));
+    fields.push(("ETA", eta_spans));
+    let key_width = detail_field_key_width(&fields);
+    let mut lines = detail_field_lines(&fields, key_width, width, ctx);
     lines.push(Line::from(""));
-    lines.push(tape_detail_line(
-        vec![Span::styled("First Step", title_bold)],
-        width,
-    ));
+    lines.push(detail_section_rule("First Step", width, title_bold));
     let first_step_text = match detail.first_step_type.is_empty() {
         true => detail.first_step_label.clone(),
         false => format!("{} · {}", detail.first_step_label, detail.first_step_type),
@@ -3192,10 +3840,10 @@ fn tape_ended_detail_lines(
         (Some(s), Some(e)) => format!("{s} → {e}"),
         _ => String::new(),
     };
-    let mut lines = vec![
-        tape_detail_line(
+    let mut fields: DetailFields = vec![
+        (
+            "Outcome",
             vec![
-                Span::styled("Outcome  ", muted),
                 Span::styled(format!("{outcome_glyph} {outcome_word}  "), outcome_style),
                 Span::styled(
                     format!(
@@ -3205,11 +3853,10 @@ fn tape_ended_detail_lines(
                     default,
                 ),
             ],
-            width,
         ),
-        tape_detail_line(
+        (
+            "Tokens",
             vec![
-                Span::styled("Tokens   ", muted),
                 Span::styled(
                     format!(
                         "↑{} ↓{} · ",
@@ -3225,10 +3872,9 @@ fn tape_ended_detail_lines(
                     default.add_modifier(Modifier::BOLD),
                 ),
             ],
-            width,
         ),
     ];
-    let mut usual_spans = vec![Span::styled("Usual    ", muted)];
+    let mut usual_spans = Vec::new();
     match (detail.usual_total_tokens, detail.usual_dev_pct) {
         (Some(tokens), Some(dev)) => {
             usual_spans.push(Span::styled(
@@ -3247,8 +3893,7 @@ fn tape_ended_detail_lines(
         }
         _ => usual_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
     }
-    lines.push(tape_detail_line(usual_spans, width));
-    let mut effects_spans = vec![Span::styled("Effects  ", muted)];
+    fields.push(("Usual", usual_spans));
     let planned_text = detail
         .effects_planned
         .map(|p| format!("{} of {p}", detail.effects_done))
@@ -3262,41 +3907,36 @@ fn tape_ended_detail_lines(
     } else {
         String::new()
     };
-    effects_spans.push(Span::styled(
-        format!("{planned_text}{handled_text}"),
-        default,
+    fields.push((
+        "Effects",
+        vec![Span::styled(
+            format!("{planned_text}{handled_text}"),
+            default,
+        )],
     ));
-    lines.push(tape_detail_line(effects_spans, width));
     if let Some(decision) = &detail.decision_text {
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("Decision ", muted),
-                Span::styled(decision.clone(), default),
-            ],
-            width,
-        ));
+        fields.push(("Decision", vec![Span::styled(decision.clone(), default)]));
     }
     if let (Some(label), Some(tokens)) = (&detail.largest_label, detail.largest_tokens) {
-        lines.push(tape_detail_line(
+        fields.push((
+            "Largest",
             vec![
-                Span::styled("Largest  ", muted),
                 Span::styled(format!("{label} "), default),
                 Span::styled(
                     oscilloscope_core::format::format_tokens(tokens),
                     default.add_modifier(Modifier::BOLD),
                 ),
             ],
-            width,
         ));
     }
+    let key_width = detail_field_key_width(&fields);
+    let mut lines = detail_field_lines(&fields, key_width, width, ctx);
     if let Some(handled) = &detail.handled_failure {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![
-                Span::styled("Handled Failure ", title_bold),
-                Span::styled(format!("· {}", handled.label), muted),
-            ],
+        lines.push(detail_section_rule(
+            &format!("Handled Failure · {}", handled.label),
             width,
+            title_bold,
         ));
         lines.push(tape_detail_line(
             vec![Span::styled(handled.what.clone(), default)],
@@ -3315,10 +3955,7 @@ fn tape_ended_detail_lines(
     }
     if let Some(summary) = &detail.summary {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![Span::styled("Summary", title_bold)],
-            width,
-        ));
+        lines.push(detail_section_rule("Summary", width, title_bold));
         for line in tape_word_wrap(summary, width.saturating_sub(1)) {
             lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
         }
@@ -3333,7 +3970,6 @@ fn tape_failed_detail_lines(
     width: usize,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
-    let muted = Style::default().fg(ctx.theme.fg_muted);
     let default = Style::default().fg(ctx.theme.text);
     let title_bold = Style::default()
         .fg(ctx.theme.text)
@@ -3342,10 +3978,10 @@ fn tape_failed_detail_lines(
         .start_ts
         .as_deref()
         .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
-    let mut lines = vec![
-        tape_detail_line(
+    let mut fields: DetailFields = vec![
+        (
+            "Outcome",
             vec![
-                Span::styled("Outcome ", muted),
                 Span::styled(
                     "✗ Failed  ",
                     Style::default()
@@ -3361,21 +3997,17 @@ fn tape_failed_detail_lines(
                     default,
                 ),
             ],
-            width,
         ),
-        tape_detail_line(
-            vec![
-                Span::styled("Step    ", muted),
-                Span::styled(
-                    format!("{} · {}", detail.failing_label, detail.failing_type),
-                    default,
-                ),
-            ],
-            width,
+        (
+            "Step",
+            vec![Span::styled(
+                format!("{} · {}", detail.failing_label, detail.failing_type),
+                default,
+            )],
         ),
-        tape_detail_line(
+        (
+            "Tokens",
             vec![
-                Span::styled("Tokens  ", muted),
                 Span::styled(
                     format!(
                         "↑{} ↓{} · ",
@@ -3391,10 +4023,9 @@ fn tape_failed_detail_lines(
                     default.add_modifier(Modifier::BOLD),
                 ),
             ],
-            width,
         ),
     ];
-    let mut usual_spans = vec![Span::styled("Usual   ", muted)];
+    let mut usual_spans = Vec::new();
     match (detail.usual_tokens, detail.usual_dev_pct) {
         (Some(tokens), Some(dev)) => {
             usual_spans.push(Span::styled(
@@ -3408,20 +4039,16 @@ fn tape_failed_detail_lines(
         }
         _ => usual_spans.push(Span::styled("—", Style::default().fg(ctx.theme.dim))),
     }
-    lines.push(tape_detail_line(usual_spans, width));
+    fields.push(("Usual", usual_spans));
+    let key_width = detail_field_key_width(&fields);
+    let mut lines = detail_field_lines(&fields, key_width, width, ctx);
     lines.push(Line::from(""));
-    lines.push(tape_detail_line(
-        vec![Span::styled("Error", title_bold)],
-        width,
-    ));
+    lines.push(detail_section_rule("Error", width, title_bold));
     for line in tape_word_wrap(&detail.error, width.saturating_sub(1)) {
         lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
     }
     lines.push(Line::from(""));
-    lines.push(tape_detail_line(
-        vec![Span::styled("Not Reached", title_bold)],
-        width,
-    ));
+    lines.push(detail_section_rule("Not Reached", width, title_bold));
     for item in &detail.not_reached {
         lines.push(tape_detail_line(
             vec![Span::styled(
@@ -3473,29 +4100,22 @@ fn draw_tape_detail(
     } else {
         ctx.theme.border
     };
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_set(ratatui::symbols::border::ROUNDED)
-        .title(tape_block_title(&title, border_color, ctx))
-        .border_style(Style::default().fg(border_color));
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
+    let inner = Block::default().borders(Borders::ALL).inner(area);
     if inner.width == 0 || inner.height == 0 {
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_set(ratatui::symbols::border::ROUNDED)
+            .title(tape_block_title(&title, border_color, ctx))
+            .border_style(Style::default().fg(border_color));
+        frame.render_widget(block, area);
         return;
     }
-    fill_border_rows(frame, inner, border_color);
     let content_area = Rect {
         x: inner.x + 1,
         y: inner.y,
         width: inner.width.saturating_sub(1),
         height: inner.height,
     };
-    // A modal dialog open (issue #678's own Help) leaves the detail
-    // pane's own border and title, never its content -- the modal
-    // itself is the only thing actually readable right now.
-    if app.dialog != Dialog::None {
-        return;
-    }
     let width = content_area.width as usize;
     let lines = match &screen.head {
         TapeHead::Starting => screen
@@ -3538,10 +4158,41 @@ fn draw_tape_detail(
     // Issue #704 rule 4: `End` lands on the last full page, not the
     // last single line with the rest of the viewport left blank --
     // the clamp is against a whole page's worth, never `total - 1`.
-    app.details_scroll = app
-        .details_scroll
-        .min(total.saturating_sub(viewport.max(1)));
+    let (scroll, bottom) =
+        tape_detail_scroll_follow(app.details_scroll, app.tape_detail_bottom, total, viewport);
+    app.details_scroll = scroll;
+    app.tape_detail_bottom = bottom;
     let start = app.details_scroll.min(total);
+    let above = start;
+    let more_below = total.saturating_sub(start + viewport);
+
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border_color, ctx))
+        .border_style(Style::default().fg(border_color));
+    // Issue #716: the overflow borders -- shown whenever
+    // the pane's own content is taller than it, regardless of focus.
+    if above > 0 {
+        block = block.title_top(
+            tape_block_corner_label_right(&format!("↑ {above} above"), border_color, ctx)
+                .right_aligned(),
+        );
+    }
+    if more_below > 0 {
+        block = block.title_bottom(
+            tape_block_corner_label_left(&format!("↓ {more_below} more"), border_color, ctx)
+                .left_aligned(),
+        );
+    }
+    frame.render_widget(block, area);
+    fill_border_rows(frame, inner, border_color);
+    // A modal dialog open (issue #678's own Help) leaves the detail
+    // pane's own border and title, never its content -- the modal
+    // itself is the only thing actually readable right now.
+    if app.dialog != Dialog::None {
+        return;
+    }
     let visible: Vec<Line> = lines.into_iter().skip(start).collect();
     frame.render_widget(Paragraph::new(visible), content_area);
 }
@@ -6478,7 +7129,7 @@ fn draw_tape(
     let key_bar_items = if app.tape_fullscreen_step {
         fullscreen_step_key_bar_items(full_area.width >= 80)
     } else {
-        tape_key_bar_items(full_area.width >= 80)
+        tape_key_bar_items(full_area.width >= 80, full_area.width >= 100)
     };
     draw_key_bar(frame, sections[3], &key_bar_items, ctx);
 
@@ -6488,7 +7139,14 @@ fn draw_tape(
         return;
     }
     // §5: the detail pane stays down to 100 columns, not just
-    // 120 -- only below that does it drop to one pane.
+    // 120 -- only below that does it drop to one pane. A resize
+    // that drops below 100 while the pane was focused gives focus
+    // back to the list, since there is no longer a pane to show it
+    // on.
+    app.tape_detail_visible = full_area.width >= 100;
+    if !app.tape_detail_visible && app.pane == Pane::Details {
+        app.pane = Pane::Tree;
+    }
     if full_area.width >= 100 {
         let cols = Layout::default()
             .direction(Direction::Horizontal)
@@ -8127,26 +8785,49 @@ fn focused_step_full_lines(
             status_value.push_str(end);
         }
     }
-    let mut lines = vec![tape_detail_line(
-        vec![
-            Span::styled("Status  ", muted),
-            Span::styled(format!("{glyph} {word}  "), glyph_style),
-            Span::styled(status_value, default),
-        ],
-        width,
+    if let Some(usual_busy) = tool_usual_busy_suffix(step) {
+        if !status_value.is_empty() {
+            status_value.push_str(" · ");
+        }
+        status_value.push_str(&usual_busy);
+    }
+    let mut lines = Vec::new();
+    // Issue #716: the step's own `description:` in full, ahead of
+    // the Status field below -- `None` for a step with none set.
+    if let Some(description) = &step.description {
+        for line in tape_word_wrap(description, width) {
+            lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
+        }
+        lines.push(Line::from(""));
+    }
+    let mut top_fields = vec![(
+        "Status",
+        if status_value.is_empty() {
+            vec![Span::styled(format!("{glyph} {word}"), glyph_style)]
+        } else {
+            vec![
+                Span::styled(format!("{glyph} {word} "), glyph_style),
+                Span::styled("· ", muted),
+                Span::styled(status_value, default),
+            ]
+        },
     )];
+    // Issue #716: a tool step's own Command and (once finished) Exit
+    // fields, right after Status.
+    top_fields.extend(tool_detail_fields(step, ctx));
+    // One key column for the whole step (issue #716): Status/Command/
+    // Exit above and Tokens/Usual/the Agent block below share it,
+    // rather than each lining up on its own.
+    let key_width = detail_key_width_for_step(step);
+    lines.extend(detail_field_lines(&top_fields, key_width, width, ctx));
 
     let asked = match &step.detail {
         FocusDetail::Prompt { .. } => step.prompt_sent_full.clone(),
-        FocusDetail::Tool { command, .. } => command.clone(),
         _ => None,
     };
     if asked.is_some() || step.params_rendered_full.is_some() {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![Span::styled("Asked", title_bold)],
-            width,
-        ));
+        lines.push(detail_section_rule("Asked", width, title_bold));
         if let Some(asked) = &asked {
             for line in tape_word_wrap(asked, width.saturating_sub(1)) {
                 lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
@@ -8175,10 +8856,7 @@ fn focused_step_full_lines(
     if !matches!(step.detail, FocusDetail::Prompt { .. }) {
         if let Some(value) = &step.value_full {
             lines.push(Line::from(""));
-            lines.push(tape_detail_line(
-                vec![Span::styled("Produced", title_bold)],
-                width,
-            ));
+            lines.push(detail_section_rule("Produced", width, title_bold));
             for line in tape_word_wrap(value, width.saturating_sub(1)) {
                 lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
             }
@@ -8186,19 +8864,16 @@ fn focused_step_full_lines(
     } else if let Some(received) = &step.received {
         if let Some(value) = &step.value_full {
             lines.push(Line::from(""));
-            lines.push(tape_detail_line(
-                vec![
-                    Span::styled("Produced ", title_bold),
-                    Span::styled(
-                        received
-                            .tokens
-                            .map(|t| format!("· {}", oscilloscope_core::format::format_tokens(t)))
-                            .unwrap_or_default(),
-                        muted,
-                    ),
-                ],
-                width,
-            ));
+            let title = match received.tokens {
+                Some(tokens) => {
+                    format!(
+                        "Produced · {}",
+                        oscilloscope_core::format::format_tokens(tokens)
+                    )
+                }
+                None => "Produced".to_string(),
+            };
+            lines.push(detail_section_rule(&title, width, title_bold));
             for line in tape_word_wrap(value, width.saturating_sub(1)) {
                 lines.push(tape_detail_line(vec![Span::styled(line, default)], width));
             }
@@ -8207,10 +8882,7 @@ fn focused_step_full_lines(
 
     if let Some(error) = &step.error {
         lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![Span::styled("Error", title_bold)],
-            width,
-        ));
+        lines.push(detail_section_rule("Error", width, title_bold));
         for line in tape_word_wrap(error, width.saturating_sub(1)) {
             lines.push(tape_detail_line(
                 vec![Span::styled(line, Style::default().fg(ctx.theme.error))],
@@ -8219,9 +8891,13 @@ fn focused_step_full_lines(
         }
     }
 
+    // Issue #716: the Tokens/Usual fields and, for an agent step,
+    // the whole Agent block's own fields (Asked/Turn/.../Said/Cost)
+    // share one right-aligned column -- the same merge `tape_normal_
+    // detail_lines` does, since both panes use the same renderer.
+    let mut fields: DetailFields = Vec::new();
     if step.tokens.is_some() || step.usual_tokens.is_some() {
-        lines.push(Line::from(""));
-        let mut spans = vec![Span::styled("Tokens  ", muted)];
+        let mut spans = Vec::new();
         if let Some(total) = step.tokens {
             spans.push(Span::styled(
                 oscilloscope_core::format::format_tokens(total),
@@ -8229,9 +8905,58 @@ fn focused_step_full_lines(
             ));
         }
         if let Some(pct) = step.share_pct {
-            spans.push(Span::styled(format!("  {pct}% of this run so far"), muted));
+            spans.push(Span::styled(format!(" {pct}% of this run so far"), muted));
         }
-        lines.push(tape_detail_line(spans, width));
+        fields.push(("Tokens", spans));
+        if let Some((usual, count)) = step.usual_tokens {
+            let dev = step
+                .tokens
+                .filter(|_| usual > 0)
+                .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
+            let mut spans = vec![Span::styled(
+                format!("{} ", oscilloscope_core::format::format_tokens(usual)),
+                default,
+            )];
+            if let Some(d) = dev {
+                spans.push(Span::styled(
+                    format!("{d:+.0}% "),
+                    tape_deviation_style(d, ctx.theme).add_modifier(Modifier::BOLD),
+                ));
+            }
+            spans.push(Span::styled(format!("· median of {count} runs"), muted));
+            fields.push(("Usual", spans));
+        }
+    }
+    let mut context_bar = None;
+    if matches!(step.detail, FocusDetail::Agent { .. }) {
+        let (agent_fields, bar) = agent_detail_fields(step, transcript_view, ctx);
+        fields.extend(agent_fields);
+        context_bar = bar;
+    }
+    if !fields.is_empty() {
+        lines.push(Line::from(""));
+        match (
+            context_bar,
+            fields.iter().position(|(k, _)| *k == "Context"),
+        ) {
+            (Some((tokens, window)), Some(idx)) => {
+                lines.extend(detail_field_lines(&fields[..=idx], key_width, width, ctx));
+                lines.push(tape_detail_line(
+                    vec![
+                        Span::raw(" ".repeat(key_width + 2)),
+                        Span::styled(bar(tokens, window, 20), Style::default().fg(ctx.theme.dim)),
+                    ],
+                    width,
+                ));
+                lines.extend(detail_field_lines(
+                    &fields[idx + 1..],
+                    key_width,
+                    width,
+                    ctx,
+                ));
+            }
+            _ => lines.extend(detail_field_lines(&fields, key_width, width, ctx)),
+        }
         // Issue #704 rule 4's own Tokens section, "totals across
         // attempts": only shown once there actually were more than
         // one -- the figure above is already the winning attempt's
@@ -8245,7 +8970,7 @@ fn focused_step_full_lines(
                 .sum();
             lines.push(tape_detail_line(
                 vec![
-                    Span::styled("        ", muted),
+                    Span::raw(" ".repeat(key_width + 2)),
                     Span::styled(
                         oscilloscope_core::format::format_tokens(attempts_total),
                         default,
@@ -8258,38 +8983,16 @@ fn focused_step_full_lines(
                 width,
             ));
         }
-        if let Some((usual, count)) = step.usual_tokens {
-            let dev = step
-                .tokens
-                .filter(|_| usual > 0)
-                .map(|t| ((t as f64 - usual as f64) / usual as f64) * 100.0);
-            let mut spans = vec![
-                Span::styled("Usual   ", muted),
-                Span::styled(
-                    format!("{}  ", oscilloscope_core::format::format_tokens(usual)),
-                    default,
-                ),
-            ];
-            if let Some(d) = dev {
-                spans.push(Span::styled(
-                    format!("{d:+.0}% "),
-                    tape_deviation_style(d, ctx.theme).add_modifier(Modifier::BOLD),
-                ));
-            }
-            spans.push(Span::styled(format!("· median of {count} runs"), muted));
-            lines.push(tape_detail_line(spans, width));
-        }
     }
 
     if let FocusDetail::Agent {
-        stale, live, note, ..
+        stale,
+        live,
+        note,
+        raw_tool_calls,
+        ..
     } = &step.detail
     {
-        lines.push(Line::from(""));
-        lines.push(tape_detail_line(
-            vec![Span::styled("Agent", title_bold)],
-            width,
-        ));
         if *stale {
             lines.push(tape_detail_line(
                 vec![Span::styled("stopped", muted)],
@@ -8300,21 +9003,29 @@ fn focused_step_full_lines(
             step.status.kind,
             StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
         );
+        if live.is_none() && running {
+            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        }
         // Issue #704 rule 4: the full-screen view is scrollable (`App::
         // details_scroll`/`scroll_details`), so the transcript reads
         // in full here, never cut to fit a fixed line budget the way
         // the Tape's own narrower, un-scrolled-by-section detail pane
         // still is -- nothing the run recorded is cut.
-        for line in agent_block_lines(step, transcript_view, ctx, now, None) {
-            lines.push(tape_detail_line(line.spans, width));
-        }
-        if live.is_none() && running {
-            lines.push(tape_detail_line(vec![Span::styled(*note, muted)], width));
+        let tail =
+            agent_transcript_tail_lines(step, transcript_view, ctx, now, usize::MAX, Some(width));
+        if !tail.is_empty() {
+            lines.push(Line::from(""));
+            lines.push(detail_section_rule(
+                &transcript_section_title(transcript_view, live, *raw_tool_calls),
+                width,
+                title_bold,
+            ));
+            lines.extend(tail.into_iter().skip(1));
         }
     }
 
     lines.extend(focused_attempts_lines(step, width, ctx));
-    lines.extend(focused_tool_lines(step, width, ctx));
+    lines.extend(tool_output_sections(step, width, ctx, true));
     lines.extend(focused_decision_lines(step, width, ctx));
     lines.extend(focused_loop_lines(step, width, ctx));
     lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
@@ -8355,6 +9066,62 @@ fn agent_block_lines(
     now: &str,
     max_lines: Option<usize>,
 ) -> Vec<Line<'static>> {
+    use oscilloscope_core::screens::FocusDetail;
+    if !matches!(step.detail, FocusDetail::Agent { .. }) {
+        return Vec::new();
+    }
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let dim = Style::default().fg(ctx.theme.dim);
+    let (fields, context_bar) = agent_detail_fields(step, transcript_view, ctx);
+    let mut lines = Vec::new();
+    for (key, value) in &fields {
+        let text = value.iter().map(|s| s.content.as_ref()).collect::<String>();
+        lines.push(agent_field_line(key, text, muted, default));
+        if *key == "Context" {
+            if let Some((tokens, window)) = context_bar {
+                lines.push(Line::styled(
+                    format!("        {}", bar(tokens, window, 20)),
+                    dim,
+                ));
+            }
+        }
+    }
+    // The tail's own row budget (issue #703's rule 3): whatever is
+    // left of the caller's own pane height once the fields above
+    // have taken their share -- newest calls kept, oldest dropped
+    // first, with a leading `…` whenever either the read window or
+    // this budget cut the list short. `None` (every unit test but
+    // the PTY one, which has no real pane to fit into) keeps today's
+    // unbounded reading of the whole tail.
+    let tail_budget = max_lines.unwrap_or(usize::MAX).saturating_sub(lines.len());
+    lines.extend(agent_transcript_tail_lines(
+        step,
+        transcript_view,
+        ctx,
+        now,
+        tail_budget,
+        None,
+    ));
+    lines
+}
+
+/// [`agent_block_lines`]'s own field pairs (issue #703's rule 3:
+/// Asked, Turn, Tool, Tools, Context, Files, Tests, Said, Cost, each
+/// left out whenever the engine didn't report it), extracted so
+/// issue #716's merged detail-pane renderer
+/// (`tape_normal_detail_lines`/`focused_step_full_lines`) can lay
+/// them out in the very same right-aligned column as Status/Type/
+/// Tokens/Share, rather than `agent_field_line`'s own fixed eight-
+/// cell column -- the one further value a Context field carries,
+/// its own usage bar, is returned alongside rather than folded into
+/// the pairs themselves, since it is a second line under the field,
+/// not a second field of its own.
+fn agent_detail_fields(
+    step: &oscilloscope_core::screens::FocusedStep,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+) -> (DetailFields, Option<(u64, u64)>) {
     use oscilloscope_core::format::{format_duration, format_tokens_k};
     use oscilloscope_core::screens::FocusDetail;
     let FocusDetail::Agent {
@@ -8372,15 +9139,13 @@ fn agent_block_lines(
         ..
     } = &step.detail
     else {
-        return Vec::new();
+        return (Vec::new(), None);
     };
-    let muted = Style::default().fg(ctx.theme.fg_muted);
     let default = Style::default().fg(ctx.theme.text);
-    let dim = Style::default().fg(ctx.theme.dim);
-    let mut lines = Vec::new();
+    let mut fields: DetailFields = Vec::new();
 
     if let Some(asked) = asked {
-        lines.push(agent_field_line("Asked", asked.clone(), muted, default));
+        fields.push(("Asked", vec![Span::styled(asked.clone(), default)]));
     }
 
     let turn_text = match live.as_deref() {
@@ -8401,7 +9166,7 @@ fn agent_block_lines(
         None => raw_turns.map(|t| t.to_string()),
     };
     if let Some(turn_text) = turn_text {
-        lines.push(agent_field_line("Turn", turn_text, muted, default));
+        fields.push(("Turn", vec![Span::styled(turn_text, default)]));
     }
 
     if let Some(current) = live.as_deref().and_then(|l| l.current_tool.as_ref()) {
@@ -8409,7 +9174,7 @@ fn agent_block_lines(
             Some(elapsed) => format!("{} · {}", current.name, format_duration(*elapsed)),
             None => current.name.clone(),
         };
-        lines.push(agent_field_line("Tool", text, muted, default));
+        fields.push(("Tool", vec![Span::styled(text, default)]));
     }
 
     let tool_counts_text = match live.as_deref() {
@@ -8433,24 +9198,22 @@ fn agent_block_lines(
             .flatten()
     });
     if let Some(tools) = tool_counts_text {
-        lines.push(agent_field_line("Tools", tools, muted, default));
+        fields.push(("Tools", vec![Span::styled(tools, default)]));
     }
 
     let (context_tokens, context_window) = match live.as_deref() {
         Some(live) => (live.context_tokens, live.context_window),
         None => (*raw_context_tokens, *raw_context_window),
     };
+    let mut context_bar = None;
     if let Some(tokens) = context_tokens {
         let value = match context_window {
             Some(window) => format!("{}/{}", format_tokens_k(tokens), format_tokens_k(window)),
             None => format_tokens_k(tokens),
         };
-        lines.push(agent_field_line("Context", value, muted, default));
+        fields.push(("Context", vec![Span::styled(value, default)]));
         if let Some(window) = context_window {
-            lines.push(Line::styled(
-                format!("        {}", bar(tokens, window, 20)),
-                dim,
-            ));
+            context_bar = Some((tokens, window));
         }
     }
 
@@ -8477,7 +9240,7 @@ fn agent_block_lines(
             }
             text.push_str(&sides.join(" "));
         }
-        lines.push(agent_field_line("Files", text, muted, default));
+        fields.push(("Files", vec![Span::styled(text, default)]));
     }
 
     if let Some(tests) = transcript_view.and_then(|v| v.tests) {
@@ -8487,11 +9250,11 @@ fn agent_block_lines(
             TestOutcome::Ok => "✓".to_string(),
             TestOutcome::Failed => "✗".to_string(),
         };
-        lines.push(agent_field_line("Tests", text, muted, default));
+        fields.push(("Tests", vec![Span::styled(text, default)]));
     }
 
     if let Some(said) = transcript_view.and_then(|v| v.last_reply.as_deref()) {
-        lines.push(agent_field_line("Said", said.to_string(), muted, default));
+        fields.push(("Said", vec![Span::styled(said.to_string(), default)]));
     }
 
     let cost = match live.as_deref() {
@@ -8499,100 +9262,143 @@ fn agent_block_lines(
         None => step.cost_usd,
     };
     if let Some(cost) = cost {
-        lines.push(agent_field_line(
-            "Cost",
-            format!("${cost:.2}"),
-            muted,
-            default,
-        ));
+        fields.push(("Cost", vec![Span::styled(format!("${cost:.2}"), default)]));
     }
 
-    // The tail's own row budget (issue #703's rule 3): whatever is
-    // left of the caller's own pane height once the fields above
-    // have taken their share -- newest calls kept, oldest dropped
-    // first, with a leading `…` whenever either the read window or
-    // this budget cut the list short. `None` (every unit test but
-    // the PTY one, which has no real pane to fit into) keeps today's
-    // unbounded reading of the whole tail.
-    let tail_budget = max_lines.unwrap_or(usize::MAX).saturating_sub(lines.len());
-    if let Some(view) = transcript_view.filter(|v| !v.calls.is_empty()) {
-        if tail_budget == 0 {
-            return lines;
+    (fields, context_bar)
+}
+
+/// The Transcript section's own title: `Transcript · N calls` for a
+/// read that reaches the session's own start, else `Transcript ·
+/// last N of M calls` once the live or finished total (`M`) is
+/// known -- `live.tool_calls` while running, `raw_tool_calls` once
+/// finished, both counting the whole session, unlike `view.calls`'s
+/// own read window.
+fn transcript_section_title(
+    view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    live: &Option<Box<oscilloscope_core::model::AgentLive>>,
+    raw_tool_calls: Option<u64>,
+) -> String {
+    let calls = view.map(|v| v.calls.len()).unwrap_or(0);
+    if view.is_some_and(|v| v.truncated) {
+        if let Some(total) = live
+            .as_deref()
+            .and_then(|l| l.tool_calls)
+            .or(raw_tool_calls)
+        {
+            return format!("Transcript · last {calls} of {total} calls");
         }
-        lines.push(Line::from(""));
-        let budget_for_calls = tail_budget - 1;
-        let ellipsis = view.truncated || view.calls.len() > budget_for_calls;
-        let take = if ellipsis {
-            budget_for_calls.saturating_sub(1)
-        } else {
-            budget_for_calls
-        };
-        if ellipsis && budget_for_calls > 0 {
-            lines.push(Line::styled("…", dim));
+    }
+    format!("Transcript · {calls} calls")
+}
+
+/// [`agent_block_lines`]'s own transcript tail (issue #703's rule 3),
+/// extracted so issue #716's merged detail-pane renderer can append
+/// it after its own aligned fields, unchanged -- newest calls kept,
+/// oldest dropped first within `tail_budget`, with a leading `…`
+/// whenever either the read window or the budget cut the list short.
+fn agent_transcript_tail_lines(
+    step: &oscilloscope_core::screens::FocusedStep,
+    transcript_view: Option<&oscilloscope_core::transcript::TranscriptView>,
+    ctx: &DrawCtx,
+    now: &str,
+    tail_budget: usize,
+    // Issue #716: the detail pane's own width, for wrapping a long
+    // call's own command rather than cutting it at the pane's edge
+    // and for the padded fill every other line there gets --
+    // `None` for the Flow's own narrower Selected pane, which never
+    // wraps or pads any of its own lines either.
+    detail_width: Option<usize>,
+) -> Vec<Line<'static>> {
+    use oscilloscope_core::format::format_duration;
+    let dim = Style::default().fg(ctx.theme.dim);
+    let default = Style::default().fg(ctx.theme.text);
+    let push_line = |lines: &mut Vec<Line<'static>>, text: String, style: Style| match detail_width
+    {
+        Some(width) => {
+            for line in tape_word_wrap(&text, width.saturating_sub(1)) {
+                lines.push(tape_detail_line(vec![Span::styled(line, style)], width));
+            }
         }
-        let calls = &view.calls[view.calls.len().saturating_sub(take)..];
-        for call in calls {
-            let clock = call
+        None => lines.push(Line::styled(text, style)),
+    };
+    let mut lines = Vec::new();
+    let Some(view) = transcript_view.filter(|v| !v.calls.is_empty()) else {
+        return lines;
+    };
+    if tail_budget == 0 {
+        return lines;
+    }
+    lines.push(Line::from(""));
+    let budget_for_calls = tail_budget - 1;
+    let ellipsis = view.truncated || view.calls.len() > budget_for_calls;
+    let take = if ellipsis {
+        budget_for_calls.saturating_sub(1)
+    } else {
+        budget_for_calls
+    };
+    if ellipsis && budget_for_calls > 0 {
+        push_line(&mut lines, "…".to_string(), dim);
+    }
+    let calls = &view.calls[view.calls.len().saturating_sub(take)..];
+    for call in calls {
+        let clock = call
+            .start_t
+            .as_deref()
+            .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
+            .map(|c| format!("{c} "))
+            .unwrap_or_default();
+        let mut text = format!("{clock}› {}", call.tool);
+        if let Some(target) = &call.target {
+            text.push(' ');
+            text.push_str(target);
+        }
+        match call.ok {
+            Some(true) => {
+                text.push_str(" ✓");
+                if let Some(ms) = call.ms {
+                    text.push_str(&format!(" {}", format_duration(ms as f64 / 1000.0)));
+                }
+            }
+            Some(false) => {
+                text.push_str(" ✗");
+                if let Some(ms) = call.ms {
+                    text.push_str(&format!(" {}", format_duration(ms as f64 / 1000.0)));
+                }
+            }
+            // Issue #647: a stopped session's own transcript can end
+            // mid-call, with no later `tool_start` to ever mark it
+            // `call.stopped` -- the step's own status (not running
+            // any more) is enough on its own to call this
+            // unfinished, not still running.
+            None if call.stopped
+                || !matches!(
+                    step.status.kind,
+                    oscilloscope_core::model::StatusKind::Running
+                        | oscilloscope_core::model::StatusKind::LikelyRunning
+                        | oscilloscope_core::model::StatusKind::RunningOrQueued
+                ) =>
+            {
+                text.push_str(" stopped")
+            }
+            None => match call
                 .start_t
                 .as_deref()
-                .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone))
-                .map(|c| format!("{c} "))
-                .unwrap_or_default();
-            let mut text = format!("{clock}› {}", call.tool);
-            if let Some(target) = &call.target {
-                text.push(' ');
-                text.push_str(target);
-            }
-            match call.ok {
-                Some(true) => {
-                    text.push_str(" ✓");
-                    if let Some(ms) = call.ms {
-                        text.push_str(&format!(" {}", format_duration(ms as f64 / 1000.0)));
-                    }
-                }
-                Some(false) => {
-                    text.push_str(" ✗");
-                    if let Some(ms) = call.ms {
-                        text.push_str(&format!(" {}", format_duration(ms as f64 / 1000.0)));
-                    }
-                }
-                // Issue #647: a stopped session's own transcript can
-                // end mid-call, with no later `tool_start` to ever
-                // mark it `call.stopped` -- the step's own status
-                // (not running any more) is enough on its own to
-                // call this unfinished, not still running.
-                None if call.stopped
-                    || !matches!(
-                        step.status.kind,
-                        oscilloscope_core::model::StatusKind::Running
-                            | oscilloscope_core::model::StatusKind::LikelyRunning
-                            | oscilloscope_core::model::StatusKind::RunningOrQueued
-                    ) =>
-                {
-                    text.push_str(" stopped")
-                }
-                None => match call
-                    .start_t
-                    .as_deref()
-                    .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
-                {
-                    Some(elapsed) => {
-                        text.push_str(&format!(" running {}", format_duration(elapsed)))
-                    }
-                    None => text.push_str(" running"),
-                },
-            }
-            if call.lines_added.is_some() || call.lines_removed.is_some() {
-                text.push_str(&format!(
-                    " +{} −{}",
-                    call.lines_added.unwrap_or(0),
-                    call.lines_removed.unwrap_or(0)
-                ));
-            }
-            lines.push(Line::from(text));
+                .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
+            {
+                Some(elapsed) => text.push_str(&format!(" running {}", format_duration(elapsed))),
+                None => text.push_str(" running"),
+            },
         }
+        if call.lines_added.is_some() || call.lines_removed.is_some() {
+            text.push_str(&format!(
+                " +{} −{}",
+                call.lines_added.unwrap_or(0),
+                call.lines_removed.unwrap_or(0)
+            ));
+        }
+        push_line(&mut lines, text, default);
     }
-
     lines
 }
 
@@ -8768,7 +9574,8 @@ fn tape_help_lines(ctx: &DrawCtx, unit: u64, history_runs: Option<usize>) -> Vec
     // Issue #714: `T` (colour theme) in the first of what the
     // frame's own blank rows above otherwise still leave open.
     lines.push(tape_help_row("T", "colour theme", "", "", ctx));
-    for _ in 0..5 {
+    lines.push(tape_help_row("tab", "focus the detail pane", "", "", ctx));
+    for _ in 0..4 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -10645,6 +11452,13 @@ fn flow_selected_step_lines(
                 }
             }
         }
+        if let FocusDetail::Tool {
+            exit_code: Some(code),
+            ..
+        } = &step.detail
+        {
+            produced.push(Line::from(format!("exit {code}")));
+        }
         if let Some(tokens) = step.tokens {
             produced.push(Line::from(format!(
                 "tokens {}",
@@ -10673,7 +11487,7 @@ fn flow_selected_step_lines(
     // tool's own command and value, so only the data they don't
     // reach is new here.
     lines.extend(focused_attempts_lines(step, content_width, ctx));
-    lines.extend(focused_tool_lines(step, content_width, ctx));
+    lines.extend(tool_output_sections(step, content_width, ctx, false));
     lines.extend(focused_decision_lines(step, content_width, ctx));
     lines.extend(focused_loop_lines(step, content_width, ctx));
     lines.extend(focused_meta_lines(step, content_width, ctx, meta_unfolded));
@@ -13477,7 +14291,209 @@ mod golden_tests {
             meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
+            description: None,
         }
+    }
+
+    /// Issue #716: a shell tool step's own `FocusedStep`, running or
+    /// finished -- every field this module's own tests don't read
+    /// stays at a value that would otherwise never show (`None`/
+    /// empty), the same convention `agent_focused_step` already
+    /// uses.
+    fn tool_focused_step(running: bool) -> oscilloscope_core::screens::FocusedStep {
+        use oscilloscope_core::model::RowStatus;
+        use oscilloscope_core::screens::{FocusDetail, FocusedStep};
+        FocusedStep {
+            path: "prime.build".to_string(),
+            breadcrumb: "build".to_string(),
+            kind_label: "tool",
+            provider_or_model: Some("shell".to_string()),
+            since_ts: None,
+            finished_ts: (!running).then(|| "2026-01-01T00:02:00Z".to_string()),
+            elapsed_s: Some(114.0),
+            detail: FocusDetail::Tool {
+                command: Some("make build --release".to_string()),
+                exit_code: (!running).then_some(0),
+                stdout: (!running).then(|| "compiling\nlinking\ndone".to_string()),
+                stderr: None,
+            },
+            status: RowStatus {
+                kind: if running {
+                    StatusKind::Running
+                } else {
+                    StatusKind::Done
+                },
+                skip_reason: None,
+                retrying: false,
+            },
+            error: None,
+            value: None,
+            received: None,
+            tokens: None,
+            cost_usd: None,
+            value_full: None,
+            prompt_sent_full: None,
+            params_rendered_full: None,
+            usual_tokens: None,
+            share_pct: None,
+            attempts: Vec::new(),
+            retries_used: None,
+            meta_extra: Vec::new(),
+            usual_busy_p50_s: running.then_some(30.2),
+            usual_busy_p90_s: None,
+            description: None,
+        }
+    }
+
+    /// `tool_focused_step`'s own minimal [`oscilloscope_core::
+    /// screens::TapeScreen`], with it selected -- every field `tape_
+    /// normal_detail_lines` doesn't read stays empty/`None`.
+    fn tool_tape_screen(
+        step: oscilloscope_core::screens::FocusedStep,
+    ) -> oscilloscope_core::screens::TapeScreen {
+        use oscilloscope_core::screens::{TapeHead, TapeScreen, TapeSelectedDetail};
+        TapeScreen {
+            unit: 50,
+            items: Vec::new(),
+            done: 0,
+            running: 0,
+            ahead: 0,
+            head: TapeHead::Normal,
+            selected_breadcrumb: Some(step.breadcrumb.clone()),
+            selected: Some(step),
+            selected_usual: None,
+            selected_share_pct: None,
+            selected_detail: Some(TapeSelectedDetail::default()),
+            starting_detail: None,
+            ended_detail: None,
+            failed_detail: None,
+            usual_so_far_tokens: None,
+        }
+    }
+
+    /// Issue #716: a running shell step's own detail pane shows its
+    /// full command and its elapsed time against its usual busy
+    /// time, but nothing of its output yet -- neither engine
+    /// publishes one before the tool finishes.
+    #[test]
+    fn tool_detail_pane_shows_the_command_and_usual_busy_time_while_running() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let screen = tool_tape_screen(tool_focused_step(true));
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Command"), "{text}");
+        assert!(text.contains("make build --release"), "{text}");
+        assert!(text.contains("1m54s"), "{text}");
+        assert!(text.contains("usual 30.2s"), "{text}");
+        assert!(!text.contains("Exit"), "{text}");
+        assert!(!text.contains("Output"), "{text}");
+        assert!(!text.contains("compiling"), "{text}");
+    }
+
+    /// Issue #716: a finished shell step's own detail pane adds its
+    /// exit code and an `── Output ───` section with its stdout.
+    #[test]
+    fn tool_detail_pane_shows_the_exit_code_and_output_once_finished() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let screen = tool_tape_screen(tool_focused_step(false));
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:02:30Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("Command"), "{text}");
+        assert!(text.contains("make build --release"), "{text}");
+        assert!(text.contains("Exit"), "{text}");
+        assert!(text.contains("── Output"), "{text}",);
+        assert!(text.contains("compiling"), "{text}");
+        assert!(text.contains("linking"), "{text}");
+        assert!(!text.contains("usual"), "{text}");
+    }
+
+    /// Issue #716: the selected effect's own `description:` comes
+    /// first, wrapped in full, ahead of every field.
+    #[test]
+    fn tape_normal_detail_lines_shows_the_description_first() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut screen = tool_tape_screen(tool_focused_step(true));
+        screen.selected_detail = Some(oscilloscope_core::screens::TapeSelectedDetail {
+            description: Some("Builds the release binary.".to_string()),
+            ..Default::default()
+        });
+        let lines =
+            tape_normal_detail_lines(&screen, 80, 40, None, "2026-01-01T00:01:54Z", false, &ctx);
+        let first_text = lines[0].to_string();
+        assert!(
+            first_text
+                .trim_start()
+                .starts_with("Builds the release binary."),
+            "{first_text}"
+        );
+        let text = agent_block_lines_text(&lines);
+        let description_pos = text.find("Builds the release binary.").unwrap();
+        let status_pos = text.find("Status").unwrap();
+        assert!(description_pos < status_pos, "{text}");
+    }
+
+    /// Issue #716: a repeated word drops from the Type field --
+    /// `agent` for both the kind and its own provider reads `agent`
+    /// alone, never `agent · agent`.
+    #[test]
+    fn tape_normal_detail_lines_drops_a_type_word_repeated_as_its_own_provider() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut step = agent_focused_step(None, false, None, StatusKind::Done);
+        step.provider_or_model = Some("agent".to_string());
+        let screen = tool_tape_screen(step);
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(!text.contains("agent · agent"), "{text}");
+        assert!(text.contains("Type  agent"), "{text}");
     }
 
     /// Issue #703's rules 1/2: a running or finished agent row's
@@ -13980,6 +14996,7 @@ mod golden_tests {
             meta_extra: Vec::new(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
+            description: None,
         };
         let text = agent_block_lines_text(&focused_step_full_lines(
             &step, None, "now", false, 80, &ctx,
@@ -14054,7 +15071,7 @@ mod golden_tests {
             false,
             &ctx,
         ));
-        assert!(text.contains("Asked"), "{text}");
+        assert!(text.contains("Command"), "{text}");
         let oscilloscope_core::screens::FocusDetail::Tool {
             command: Some(command),
             ..
@@ -14294,6 +15311,7 @@ mod golden_tests {
                 .collect(),
             usual_busy_p50_s: None,
             usual_busy_p90_s: None,
+            description: None,
         };
         let mut app = crate::keys::App::new(false);
         app.tape_fullscreen_step = true;

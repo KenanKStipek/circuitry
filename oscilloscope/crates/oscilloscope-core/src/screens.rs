@@ -604,12 +604,9 @@ pub struct FocusedStep {
     /// [`crate::flow::FlowRow::tokens`] uses.
     pub tokens: Option<u64>,
     pub cost_usd: Option<f64>,
-    /// A running step's own usual busy time from history (issue
-    /// #649's now-pane bar) -- `None` below the 3-run threshold, or
-    /// for a step that isn't actually running right now. Filled in
-    /// by [`build_now_pane`]'s own `NowFocus::Running` branch, never
-    /// by [`build_focused_step`] itself, which has no history of its
-    /// own to read.
+    /// A step's own usual busy time from history (issue #649's
+    /// now-pane bar, issue #716's tool detail: `1m54s · usual
+    /// 30.2s`) -- `None` below the 3-run threshold.
     pub usual_busy_p50_s: Option<f64>,
     /// [`Self::usual_busy_p50_s`]'s own p90 -- `None` below the
     /// 5-run threshold even with a p50 in hand.
@@ -630,6 +627,9 @@ pub struct FocusedStep {
     /// folded by default, `m` unfolds. Already formatted the same
     /// way [`crate::render::Details::meta_summary`] is.
     pub meta_extra: Vec<(String, String)>,
+    /// The step's own `description:` (issue #716) -- `None` for a
+    /// container or a step with none set.
+    pub description: Option<String>,
 }
 
 /// One line of [`FocusDetail::Loop`] (issue #704's own Loop section):
@@ -760,24 +760,20 @@ pub(crate) fn build_focused_step(
         }
     } else if row.kind == RowKind::Tool {
         FocusDetail::Tool {
-            command: details
-                .meta_summary
-                .iter()
-                .find(|(k, _)| k == "command")
-                .map(|(_, v)| v.clone()),
+            command: tool_rendered_command(&row.path, node, plan),
             exit_code: node
                 .and_then(|n| n.meta.get("exit_code"))
                 .and_then(Value::as_i64),
             stdout: node
                 .and_then(|n| n.meta.get("stdout"))
                 .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
+                .map(str::to_string)
+                .filter(|s| !s.is_empty()),
             stderr: node
                 .and_then(|n| n.meta.get("stderr"))
                 .and_then(Value::as_str)
-                .filter(|s| !s.is_empty())
-                .map(str::to_string),
+                .map(str::to_string)
+                .filter(|s| !s.is_empty()),
         }
     } else if row.kind == RowKind::Prompt || row.kind == RowKind::Reflector {
         FocusDetail::Prompt {
@@ -830,9 +826,17 @@ pub(crate) fn build_focused_step(
         .and_then(|n| n.meta.get("params_rendered"))
         .filter(|v| !v.is_null())
         .map(crate::render::display_value);
-    let usual_tokens = crate::history::display_key(&row.path, plan)
-        .and_then(|key| header.history_step_usual.get(&key))
-        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+    let history_key = crate::history::display_key(&row.path, plan);
+    let history_usual = history_key
+        .as_ref()
+        .and_then(|key| header.history_step_usual.get(key));
+    let usual_tokens = history_usual.and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+    // Issue #716: a running tool's own elapsed time against its
+    // usual busy time (`1m54s · usual 30.2s`) -- the same history
+    // `usual_tokens` above already reads, now for a step's own
+    // duration rather than its tokens.
+    let usual_busy_p50_s = history_usual.and_then(|s| s.busy_p50_s);
+    let usual_busy_p90_s = history_usual.and_then(|s| s.busy_p90_s);
     let share_pct = {
         let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
             let (sent, received) = node
@@ -874,8 +878,9 @@ pub(crate) fn build_focused_step(
         attempts,
         retries_used,
         meta_extra,
-        usual_busy_p50_s: None,
-        usual_busy_p90_s: None,
+        usual_busy_p50_s,
+        usual_busy_p90_s,
+        description: plan.description(&row.path),
     }
 }
 
@@ -1276,6 +1281,9 @@ pub struct TapeSelectedDetail {
     /// carry its final figures instead by then) or when it never had
     /// any live record at all (shown as today, never a crash).
     pub live: Option<crate::model::PromptLiveFigures>,
+    /// The step's own `description:` (issue #716) -- `None` for a
+    /// container or a step with none set.
+    pub description: Option<String>,
 }
 
 /// The Starting state's own detail pane content (§2.1: "the detail
@@ -1490,38 +1498,44 @@ fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> S
 /// off the already-flattened node so a row's own text costs no more
 /// than this one lookup -- `details_for` re-flattens the whole state
 /// on every call, which a per-row loop here must never pay for).
-fn tape_tool_what(row: &Row, node: Option<&NodeMeta>, plan: &PlanTree) -> String {
-    let command = node
-        .and_then(|n| {
-            let command = n.meta.pointer("/params_rendered/command")?.as_str()?;
-            let args = n
-                .meta
-                .pointer("/params_rendered/args")
-                .and_then(Value::as_array)
-                .map(|args| {
-                    args.iter()
-                        .map(crate::render::display_value)
-                        .collect::<Vec<_>>()
-                        .join(" ")
-                })
-                .filter(|a| !a.is_empty());
-            Some(match args {
-                Some(args) => format!("{command} {args}"),
-                None => command.to_string(),
+/// A tool step's own full command and args, rendered -- `None` for
+/// anything but a tool leaf, or one whose own `start` event carries
+/// no rendered params yet (a loop pass's own tool child,
+/// concurrently started with its siblings, say) *and* has no plan
+/// entry of its own either. Falls back to the plan's own static
+/// command (`PlanEntry::tool_command`, already known before any run
+/// at all for a tool whose `params` need no templating) the same
+/// literal lookup a pending row already makes.
+fn tool_rendered_command(path: &str, node: Option<&NodeMeta>, plan: &PlanTree) -> Option<String> {
+    node.and_then(|n| {
+        let command = n.meta.pointer("/params_rendered/command")?.as_str()?;
+        let args = n
+            .meta
+            .pointer("/params_rendered/args")
+            .and_then(Value::as_array)
+            .map(|args| {
+                args.iter()
+                    .map(crate::render::display_value)
+                    .collect::<Vec<_>>()
+                    .join(" ")
             })
+            .filter(|a| !a.is_empty());
+        Some(match args {
+            Some(args) => format!("{command} {args}"),
+            None => command.to_string(),
         })
-        // A tool whose own `start` event carries no rendered params
-        // yet (a loop pass's own tool child, concurrently started
-        // with its siblings, say) still has the plan's own static
-        // command to show meanwhile -- the same literal lookup a
-        // pending row already makes.
-        .or_else(|| {
-            (row.kind == RowKind::Tool)
-                .then(|| plan.match_path(&row.path))
-                .flatten()
-                .and_then(|m| m.entries.first())
-                .and_then(|e| e.tool_command.clone())
-        });
+    })
+    .or_else(|| {
+        plan.match_path(path)
+            .and_then(|m| m.entries.first())
+            .and_then(|e| e.tool_command.clone())
+    })
+}
+
+fn tape_tool_what(row: &Row, node: Option<&NodeMeta>, plan: &PlanTree) -> String {
+    let command = (row.kind == RowKind::Tool)
+        .then(|| tool_rendered_command(&row.path, node, plan))
+        .flatten();
     match (row.duration_s, command) {
         (Some(d), Some(cmd)) => format!("{} · {cmd}", crate::format::format_duration(d)),
         (Some(d), None) => crate::format::format_duration(d),
@@ -2197,9 +2211,11 @@ fn build_tape_selected_detail(
     flat: &BTreeMap<String, NodeMeta>,
     model: &RunModel,
     now: &str,
+    plan: &PlanTree,
 ) -> TapeSelectedDetail {
     let node = flat.get(&row.path);
     let finished_ts = node.and_then(|n| n.completed_at.clone());
+    let description = plan.description(&row.path);
     if !matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
         // Issue #702: a running agent session's own `meta.live`
         // tokens show here the same way a finished step's exact
@@ -2215,6 +2231,7 @@ fn build_tape_selected_detail(
             finished_ts,
             tokens_sent: has_tokens.then_some(figures.tokens_sent).flatten(),
             tokens_received: has_tokens.then_some(figures.tokens_received).flatten(),
+            description,
             ..Default::default()
         };
     }
@@ -2255,6 +2272,7 @@ fn build_tape_selected_detail(
         live,
         reply,
         reply_tokens: received,
+        description,
     }
 }
 
@@ -2993,7 +3011,8 @@ pub fn build_tape(
     });
     let selected_row = selected_path.and_then(find_selected_row);
     let selected_breadcrumb = selected_row.map(|row| tape_row_label(row, flat, plan));
-    let selected_detail = selected_row.map(|row| build_tape_selected_detail(row, flat, model, now));
+    let selected_detail =
+        selected_row.map(|row| build_tape_selected_detail(row, flat, model, now, plan));
 
     let starting_detail = matches!(head, TapeHead::Starting)
         .then(|| build_tape_starting_detail(rows, flat, plan, header, state));
