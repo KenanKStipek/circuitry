@@ -742,6 +742,50 @@ async fn save_to_refuses_an_existing_file_without_overwrite_and_replaces_it_with
 }
 
 #[tokio::test]
+async fn save_to_max_bytes_true_is_rejected_not_coerced_to_one() {
+    let within = save_to_temp_dir("max-bytes-bool");
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::Bool(true)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: params['max_bytes'] must be a positive integer, got True."
+    );
+}
+
+#[tokio::test]
+async fn save_to_max_bytes_with_a_leading_sign_is_rejected() {
+    let within = save_to_temp_dir("max-bytes-sign");
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::Str("+5".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: params['max_bytes'] must be a positive integer, got '+5'."
+    );
+}
+
+#[tokio::test]
 async fn save_to_over_max_bytes_fails_and_leaves_no_file() {
     let body = b"0123456789";
     let response = format!(
@@ -849,6 +893,112 @@ async fn save_to_refuses_escaping_within_via_dot_dot() {
     .await
     .unwrap_err();
     assert!(err.message.contains("resolves outside"));
+}
+
+#[tokio::test]
+async fn save_to_a_dot_dot_that_cancels_out_still_lands_inside_within() {
+    let body = b"hello";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("dot-dot-cancels-out");
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a/../b.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(std::fs::read(within.join("b.bin")).unwrap(), body);
+    assert!(!within.join("a").exists(), "no stray 'a' directory");
+}
+
+#[tokio::test]
+async fn save_to_a_trailing_dot_component_is_refused() {
+    let token = CancellationToken::new();
+    let within = save_to_temp_dir("trailing-dot");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("out/.".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.message.contains("does not name a file"),
+        "{}",
+        err.message
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn save_to_through_a_symlinked_directory_inside_within_saves_at_the_resolved_path() {
+    let within = save_to_temp_dir("symlink-inside");
+    let real_dir = within.join("real");
+    std::fs::create_dir(&real_dir).unwrap();
+    std::os::unix::fs::symlink(&real_dir, within.join("link")).unwrap();
+
+    let body = b"via a symlink";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("link/c.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(std::fs::read(real_dir.join("c.bin")).unwrap(), body);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn save_to_through_a_symlink_leading_outside_within_is_refused_before_any_request() {
+    let within = save_to_temp_dir("symlink-outside-within");
+    let outside = save_to_temp_dir("symlink-outside-target");
+    std::os::unix::fs::symlink(&outside, within.join("link")).unwrap();
+
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("link/c.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("resolves outside"), "{}", err.message);
 }
 
 #[tokio::test]

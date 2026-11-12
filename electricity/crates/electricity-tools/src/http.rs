@@ -1117,6 +1117,71 @@ fn path_is_inside(path: &Path, root: &Path) -> bool {
     path == root || path.starts_with(root)
 }
 
+/// `pathlib.Path.resolve(strict=False)`'s own algorithm, enough of it for
+/// [`save_target`]'s own need: *base* is already absolute and fully
+/// resolved; walks *relative*'s own components onto it, following a
+/// symlink the moment a `Normal` component's own path exists as one
+/// (bounded, the same `ELOOP`-style cap a real filesystem enforces), and
+/// popping on `ParentDir` the same way `resolve()` collapses a lexical
+/// `..` -- even past a component that was never created, so `a/../b`
+/// still lands inside *base* and never touches a literal `a` on disk.
+/// Every component this ever sees is `Normal`/`CurDir`/`ParentDir`
+/// (never `RootDir`/`Prefix`, since *relative* is already checked
+/// non-absolute by the caller).
+fn resolve_existing_prefix(base: &Path, relative: &Path) -> Result<PathBuf, ToolError> {
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(name) => {
+                current.push(name);
+                current = resolve_symlink_chain(current)?;
+            }
+            std::path::Component::ParentDir => {
+                current.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                unreachable!("save_target already checked relative is not absolute")
+            }
+        }
+    }
+    Ok(current)
+}
+
+/// Follows *path* through every symlink it already is, on disk, right
+/// now -- a component that doesn't exist yet (the common case: a
+/// directory `save_to` is about to create) is returned unchanged, a
+/// `..` or sibling file name intact.
+fn resolve_symlink_chain(path: PathBuf) -> Result<PathBuf, ToolError> {
+    let mut current = path;
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&current) {
+            Err(_) => return Ok(current),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = std::fs::read_link(&current).map_err(|e| {
+                    runtime_error(format!(
+                        "HttpPlugin: could not read {}: {e}",
+                        current.display()
+                    ))
+                })?;
+                current = if target.is_absolute() {
+                    target
+                } else {
+                    current
+                        .parent()
+                        .expect("symlink_metadata succeeded, so current has a parent")
+                        .join(target)
+                };
+            }
+            Ok(_) => return Ok(current),
+        }
+    }
+    Err(runtime_error(format!(
+        "HttpPlugin: too many levels of symlinks resolving {}.",
+        current.display()
+    )))
+}
+
 /// `plugins/http.py::_SaveTarget` -- *path*'s own directory is not
 /// necessarily created yet; [`make_save_directories`] does that.
 struct SaveTarget {
@@ -1124,31 +1189,6 @@ struct SaveTarget {
     path: PathBuf,
     overwrite: bool,
     max_bytes: u64,
-}
-
-/// Whether *relative*'s own components ever climb above the directory
-/// they are joined to -- a pure, lexical check (no filesystem access):
-/// a `..` is refused once it would leave the base behind, the same
-/// shape `params['save_to']` and `params_json`'s own `within` are
-/// barred from writing outside of. Every component this walk can ever
-/// see is `Normal`/`CurDir`/`ParentDir` (never `RootDir`/`Prefix`,
-/// since *relative* is already checked non-absolute by the caller).
-fn lexically_inside_base(relative: &Path) -> bool {
-    let mut depth: i64 = 0;
-    for component in relative.components() {
-        match component {
-            std::path::Component::Normal(_) => depth += 1,
-            std::path::Component::ParentDir => {
-                depth -= 1;
-                if depth < 0 {
-                    return false;
-                }
-            }
-            std::path::Component::CurDir => {}
-            std::path::Component::RootDir | std::path::Component::Prefix(_) => return false,
-        }
-    }
-    true
 }
 
 /// `plugins/http.py::_save_target` -- *params*`['save_to']` as a
@@ -1208,20 +1248,28 @@ fn save_target(params: &Value) -> Result<Option<SaveTarget>, ToolError> {
     let base = base
         .canonicalize()
         .map_err(|e| runtime_error(e.to_string()))?;
-    if !lexically_inside_base(relative) {
+    // `lexical.name in ("", ".", "..")` -- the *literal* final `/`-
+    // delimited segment of `raw`, before `Path`'s own parsing drops a
+    // trailing `.` component the way `Path::file_name` does (`out/.`
+    // would otherwise silently name `out`).
+    let last_segment = raw.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if matches!(last_segment, "" | "." | "..") {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] {} does not name a file.",
+            raw_value.py_repr()
+        )));
+    }
+    let file_name = relative
+        .file_name()
+        .expect("the last_segment check above already rejects every case file_name would not");
+    let directory = resolve_existing_prefix(&base, relative.parent().unwrap_or(Path::new("")))?;
+    if !path_is_inside(&directory, &base) {
         return Err(value_error(format!(
             "HttpPlugin: params['save_to'] {} resolves outside {where_text} ({}).",
             raw_value.py_repr(),
             base.display()
         )));
     }
-    let Some(file_name) = relative.file_name() else {
-        return Err(value_error(format!(
-            "HttpPlugin: params['save_to'] {} does not name a file.",
-            raw_value.py_repr()
-        )));
-    };
-    let directory = base.join(relative.parent().unwrap_or(Path::new("")));
     let path = directory.join(file_name);
 
     let overwrite = get(params, "overwrite")
@@ -1269,9 +1317,23 @@ fn within_value_repr(text: &str) -> String {
 /// `params['max_bytes']` as a positive integer, Python's own `int()`
 /// coercion (a numeric string included).
 fn positive_int_param(value: &Value, name: &str) -> Result<u64, ToolError> {
+    // `isinstance(max_bytes, bool)` is checked and rejected *before* the
+    // plain `int` check -- Python's `bool` is an `int` subclass, so
+    // `isinstance(True, int)` alone would otherwise accept it.
     let as_int = match value {
-        Value::Int(_) | Value::Bool(_) => electricity_value::pycompat::py_int(value).ok(),
-        Value::Str(s) if py_strip(s).parse::<i64>().is_ok() => py_strip(s).parse::<i64>().ok(),
+        Value::Bool(_) => None,
+        Value::Int(_) => electricity_value::pycompat::py_int(value).ok(),
+        // `max_bytes.strip().isdigit()` -- ASCII digits only, no sign;
+        // `int()`'s own looser grammar (leading `+`/`-`, surrounding
+        // whitespace it would still strip again) never applies here.
+        Value::Str(s) => {
+            let stripped = py_strip(s);
+            if !stripped.is_empty() && stripped.chars().all(|c| c.is_ascii_digit()) {
+                stripped.parse::<i64>().ok()
+            } else {
+                None
+            }
+        }
         _ => None,
     };
     match as_int {
