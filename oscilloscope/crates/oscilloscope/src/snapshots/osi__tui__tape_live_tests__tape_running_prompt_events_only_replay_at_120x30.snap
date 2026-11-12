@@ -15,7 +15,7 @@ expression: terminal.backend().to_string()
 "│                                                                          ││                                          │"
 "│11:46:43 ■ Run Started        do-thing.yml · cof                          ││                                          │"
 "│━━ Now 11:46:44 · 1.2s ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━││                                          │"
-"│         ● ask                1.2s · ↓≈41 t · 68 t/s      ▰▰▰▰▰▰▰▰   391 t││                                          │"
+"│11:46:43 ● ask                1.2s · ↓≈41 t · 68 t/s      ▰▰▰▰▰▰▰▰   391 t││                                          │"
 "│         ■ Run End            ETA — · no history yet                      ││                                          │"
 "│                                                                          ││                                          │"
 "│                                                                          ││                                          │"
