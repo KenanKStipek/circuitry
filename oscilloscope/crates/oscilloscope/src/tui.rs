@@ -10376,11 +10376,11 @@ fn help_row(
     // the other pair of that row, so the right column never shifts
     // and nothing is ever cut at the border.
     let fits_inline = width >= HELP_NARROW_WIDTH
-        && help_cell_len(&key1) <= HELP_KEY1_WIDTH
-        && help_cell_len(&desc1) <= HELP_DESC1_WIDTH
+        && help_cell_len(&key1) < HELP_KEY1_WIDTH
+        && help_cell_len(&desc1) < HELP_DESC1_WIDTH
         && (!has_second
-            || (help_cell_len(&key2) <= HELP_KEY2_WIDTH
-                && help_cell_len(&desc2) <= HELP_DESC2_WIDTH));
+            || (help_cell_len(&key2) < HELP_KEY2_WIDTH
+                && help_cell_len(&desc2) < HELP_DESC2_WIDTH));
     if fits_inline {
         let mut spans = help_cell_spans(&key1, HELP_KEY1_WIDTH);
         spans.extend(help_cell_spans(&desc1, HELP_DESC1_WIDTH));
@@ -24804,6 +24804,472 @@ mod tape_frame_goldens {
             text.contains("a live leaf"),
             "expected the live-leaf Key line:\n{text}"
         );
+    }
+
+    /// Renders `screen`'s own Help, every page `←`/`→` reaches
+    /// (`App::help_page` wraps once it cycles back to the page it
+    /// started on), at `width`x24 -- real backend, real pagination,
+    /// so a cut or a missing page shows the same way it would in a
+    /// real terminal.
+    fn render_help_pages(
+        draw_at: impl Fn(&mut App, &mut Terminal<TestBackend>),
+        width: u16,
+    ) -> Vec<String> {
+        let mut app = App::new(false);
+        app.dialog = Dialog::Help;
+        let mut pages = Vec::new();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        for page in 0..8 {
+            app.help_page = page;
+            draw_at(&mut app, &mut terminal);
+            let text = terminal.backend().to_string();
+            if pages.contains(&text) {
+                break;
+            }
+            pages.push(text);
+        }
+        pages
+    }
+
+    /// Every row of every page, at every width this fails against
+    /// `ccac5c9` (#748's fix pass): a pair that overflowed its own
+    /// column shifted the row's right pair instead of getting a
+    /// line of its own (`help_row` there only ever checked the
+    /// overlay's own width, never the pair's own fit), so e.g. the
+    /// Store's `Home End`/`first / last row` row pushed `g G` two
+    /// columns right of every other row's own second pair, and
+    /// `path separator, in that step's name` ran past the border
+    /// outright. Checks the right pair's own column (never shifted)
+    /// and that no row is wider than the overlay's own content --
+    /// `help_overlays_keep_every_phrase_at_every_width` below checks
+    /// nothing is actually cut, the same way, through the real
+    /// backend.
+    fn assert_help_rows_fit(
+        blocks: &[Vec<Line<'static>>],
+        content_width: u16,
+        screen: &str,
+        width: u16,
+    ) {
+        let content_width = content_width as usize;
+        for block in blocks {
+            for line in block {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                let len = text.chars().count();
+                assert!(
+                    len <= content_width,
+                    "{screen} at {width} cols: a row is {len} cells wide, past the overlay's own {content_width}-cell content width: {text:?}"
+                );
+            }
+            if block.len() == 1 {
+                let text: String = block[0].spans.iter().map(|s| s.content.as_ref()).collect();
+                let chars: Vec<char> = text.chars().collect();
+                if chars.len() > 35 {
+                    assert_ne!(
+                        chars.get(35),
+                        Some(&' '),
+                        "{screen} at {width} cols: the right-hand pair doesn't start at column 35, same as every other row's own: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Issue #738's layout rule (the findings behind #748's own
+    /// `the_tapes_help_overlay_pages_between_key_and_keys_at_80x24`
+    /// but for every screen's own rows, not just whether the pages
+    /// split): at 60 (the Tape only -- #738's own floor), 72, 73,
+    /// 74, 80, 120 and 187 columns, no key:meaning pair ever gets
+    /// cut or shifts the row's own right-hand column.
+    #[test]
+    fn help_rows_never_cut_or_shift_at_every_required_width() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let content_width_at = |width: u16| -> u16 {
+            HELP_OVERLAY_WIDTH
+                .min(width.saturating_sub(2))
+                .saturating_sub(3)
+        };
+        for width in [60u16, 72, 73, 74, 80, 120, 187] {
+            let content_width = content_width_at(width);
+            assert_help_rows_fit(
+                &tape_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Tape Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &tape_help_key_rows(&ctx, 50, Some(3), content_width),
+                content_width,
+                "Tape Key",
+                width,
+            );
+        }
+        for width in [72u16, 73, 74, 80, 120, 187] {
+            let content_width = content_width_at(width);
+            assert_help_rows_fit(
+                &signal_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Signal Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &signal_help_key_rows(&ctx, content_width),
+                content_width,
+                "Signal Key",
+                width,
+            );
+            assert_help_rows_fit(
+                &flow_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Flow Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &flow_help_key_rows(&ctx, 50, content_width),
+                content_width,
+                "Flow Key",
+                width,
+            );
+            assert_help_rows_fit(
+                &store_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Store Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &store_help_key_rows(&ctx, 50, content_width),
+                content_width,
+                "Store Key",
+                width,
+            );
+        }
+    }
+
+    /// The same widths, through the real backend this time: every
+    /// key and meaning in a screen's own list (every literal below,
+    /// copied from its own row-building functions) reads in full on
+    /// some page -- a cut would break one of these apart, same as a
+    /// page `←→` never reaches would drop one outright.
+    #[test]
+    fn help_overlays_keep_every_phrase_at_every_width() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+
+        let (tape_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        const TAPE_PHRASES: &[&str] = &[
+            "select a row",
+            "same as ↑ ↓",
+            "move a page",
+            "first · last row",
+            "same as Home · End",
+            "Tape Signal Flow Store",
+            "open the step",
+            "focus the detail pane",
+            "previews on or off",
+            "tokens: units or vs usual",
+            "filter rows",
+            "errors only",
+            "colour theme",
+            "follow Now · unfold meta",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "done · failed",
+            "running · ahead, queued",
+            "decision · loop",
+            "run start/end · starting",
+            "a handled failure",
+            "below usual",
+            "path separator, dim parents",
+            "shown under a finished step, toggled with p",
+            "now band: clock · elapsed",
+            "token bar, fixed",
+            "N of N Slots Busy at once",
+            "passes waiting to run",
+            "past runs",
+            "above usual: amber · red",
+            "Totals: sent · received",
+            "the t view's tick",
+            "a loop's pass sparkline",
+        ];
+        for width in [60u16, 72, 73, 74, 80, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &tape_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                Some(&tape_screen),
+                                None,
+                                None,
+                                None,
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in TAPE_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Tape at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
+
+        let (signal_rendered, signal_screen) = build_signal_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            100,
+        );
+        const SIGNAL_PHRASES: &[&str] = &[
+            "scrub the cursor along the axis",
+            "zoom: 50 ms to 1 s a column",
+            "cursor back to Now",
+            "open the step under the cursor",
+            "Tape Signal Flow Store",
+            "this help",
+            "close · back",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "colour theme",
+            "Now · axis ╌ ahead",
+            "finished prompt · decision",
+            "failed · running · ahead",
+            "a loop station",
+            "sent, above the axis",
+            "received, below the axis",
+            "a tool's duration bar",
+            "marks along the axis",
+            "below usual: accent colour",
+            "amber · red, above usual",
+            "fixed for the whole run",
+            "a column's partial row",
+            "Totals: tokens sent · received",
+            "the run's end, in the list of steps ahead",
+            "path separator, in a step's name",
+        ];
+        for width in [80u16, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    app.screen = oscilloscope_core::screens::Screen::Signal;
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &signal_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                None,
+                                None,
+                                None,
+                                Some(&signal_screen),
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in SIGNAL_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Signal at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
+
+        let (flow_rendered, flow_screen) = build_flow_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+        );
+        const FLOW_PHRASES: &[&str] = &[
+            "select a station",
+            "open / fold loop lanes",
+            "select a pass",
+            "open the selection full-screen",
+            "follow Now",
+            "Tape Signal Flow Store",
+            "this help",
+            "close · back",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "colour theme",
+            "a station: done · failed",
+            "running · ahead",
+            "decision · loop station",
+            "run start / end",
+            "folded lanes, N more",
+            "token bar, fixed",
+            "one lane per pass or branch",
+            "paths split · rejoin",
+            "not taken, once decided",
+            "Now: clock · elapsed",
+            "stations scrolled past the edge",
+            "sent · received",
+            "the rail's visible window",
+            "path separator, in the status line",
+        ];
+        for width in [80u16, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    app.screen = oscilloscope_core::screens::Screen::Flow;
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &flow_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                None,
+                                None,
+                                Some(&flow_screen),
+                                None,
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in FLOW_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Flow at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
+
+        let (store_rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        const STORE_PHRASES: &[&str] = &[
+            "select a row",
+            "open the selected store",
+            "same as ↑ ↓",
+            "move a page",
+            "first / last row",
+            "same as Home/End",
+            "Tape Signal Flow Store",
+            "this help",
+            "close · back",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "colour theme",
+            "area is its share of tokens",
+            "a container's tokens",
+            "the smaller stores, folded",
+            "a running container",
+            "a live leaf, dim (italic under terminal)",
+            "the Largest table's cursor",
+            "a finished/failed step, in the status line",
+            "path separator, in that step's name",
+            "sent · received, per store",
+            "fixed scale",
+        ];
+        for width in [80u16, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    app.screen = oscilloscope_core::screens::Screen::Store;
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &store_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                None,
+                                Some(&store_screen),
+                                None,
+                                None,
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in STORE_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Store at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
     }
 
     /// Issue #704 rule 5: the full-screen step's own key bar, shared
