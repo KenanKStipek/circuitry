@@ -1452,15 +1452,16 @@ fn tape_running_agent_what(
     what
 }
 
-/// A finished agent row's own "what" text (issue #703's rule 2):
-/// elapsed time, turns, tool calls and files changed, all from
-/// `meta.raw`, cut from the right in that order -- a failed session
-/// never reaches this at all, `tape_row_content`'s own Failed/
-/// Failed-handled branches keep today's error text for one of
-/// those. Issue #739's rule 1: once the agent tool left nothing of
-/// that shape at all (`raw` has none of turns, tool calls or files
-/// changed), the duration alone falls through to the one shared
-/// summary function on the node's own value instead.
+/// A finished agent row's own "what" text (issue #739's rule 1):
+/// elapsed time first, as every tool row's own duration already
+/// leads, then files changed (with `+N −M` alongside it) and turns,
+/// cut from the right in that order, from `meta.raw` -- a failed
+/// session never reaches this at all, `tape_row_content`'s own
+/// Failed/Failed-handled branches keep today's error text for one
+/// of those. Once the agent tool left neither of those two (`raw`
+/// has no files changed and no turns), the duration alone falls
+/// through to the one shared summary function on the node's own
+/// value instead.
 fn tape_finished_agent_what(
     duration_s: Option<f64>,
     raw: &AgentRawSummary,
@@ -1469,18 +1470,6 @@ fn tape_finished_agent_what(
     let mut what = duration_s
         .map(crate::format::format_duration)
         .unwrap_or_default();
-    if let Some(turns) = raw.turns {
-        what.push_str(&format!(
-            " · {turns} turn{}",
-            if turns == 1 { "" } else { "s" }
-        ));
-    }
-    if let Some(calls) = raw.tool_calls {
-        what.push_str(&format!(
-            " · {calls} tool{}",
-            if calls == 1 { "" } else { "s" }
-        ));
-    }
     if let Some(files) = raw.files_changed {
         what.push_str(&format!(
             " · {files} file{}",
@@ -1494,7 +1483,13 @@ fn tape_finished_agent_what(
             ));
         }
     }
-    if raw.turns.is_none() && raw.tool_calls.is_none() && raw.files_changed.is_none() {
+    if let Some(turns) = raw.turns {
+        what.push_str(&format!(
+            " · {turns} turn{}",
+            if turns == 1 { "" } else { "s" }
+        ));
+    }
+    if raw.files_changed.is_none() && raw.turns.is_none() {
         if let Some(words) = (!value.is_null())
             .then(|| crate::summary::json_value_summary(value, 24))
             .filter(|v| !v.is_empty())
@@ -4855,10 +4850,14 @@ fn build_selected_pass(
         .map(|r| {
             let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
             let usual = tape_row_usual_tokens(&r.path, plan, header);
-            let produced = flat
-                .get(&r.path)
-                .and_then(|n| n.value.as_str())
-                .map(str::to_string);
+            let produced = flat.get(&r.path).and_then(|n| {
+                if crate::summary::is_json_shaped(&n.value) {
+                    let summary = crate::summary::json_value_summary(&n.value, 24);
+                    (!summary.is_empty()).then_some(summary)
+                } else {
+                    n.value.as_str().map(str::to_string)
+                }
+            });
             SelectedPassStep {
                 label: capitalize(&r.label),
                 status: r.status.clone(),
@@ -6396,7 +6395,7 @@ mod tests {
             false,
             "2026-01-01T11:52:00Z",
         );
-        assert_eq!(what, "14.1s · 3 turns · 12 tools · 2 files +3 −1");
+        assert_eq!(what, "14.1s · 2 files +3 −1 · 3 turns");
     }
 
     /// A failed agent keeps today's error text, never the finished
@@ -6453,7 +6452,7 @@ mod tests {
             false,
             "2026-01-01T11:52:00Z",
         );
-        assert_eq!(what, "↑31.1k ↓2.3k · edits 1 items");
+        assert_eq!(what, "↑31.1k ↓2.3k · edits 1 item");
     }
 
     /// Issue #739's rule 1 fallthrough: an agent step whose `meta.raw`
@@ -7141,6 +7140,63 @@ mod tests {
                 mode: crate::plan::ConditionMode::Cel,
                 text: "true".to_string()
             })
+        );
+    }
+
+    /// Issue #739: the Flow's selected pass pane shows a prompt's
+    /// own JSON reply as a summary, rather than dropping the
+    /// `Produced` line entirely the way a plain `.as_str()` read
+    /// used to for anything that wasn't a bare string.
+    #[test]
+    fn build_flow_screens_selected_pass_summarises_a_json_reply() {
+        let plan = tree_loop_with_prompt_plan();
+        let state = json!({
+            "prime": {"value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:10Z"},
+                "fan": {"value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:10Z"},
+                    "iter_0": {"value": null, "meta": {"created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:10Z"},
+                        "ask": {"value": {"edits": [1, 2], "files": [1, 2, 3]}, "meta": {
+                            "created_at": "2026-10-08T11:00:00Z", "completed_at": "2026-10-08T11:00:05Z"
+                        }}
+                    }
+                }
+            }
+        });
+        let flat = flat_from(state.clone());
+        let mut model = RunModel::new();
+        let statuses = model.observe(&state, &plan, ProcessState::exited(true));
+        let all_paths: BTreeMap<String, ()> = statuses
+            .keys()
+            .chain(flat.keys())
+            .map(|k| (k.clone(), ()))
+            .collect();
+        let rows = crate::render::build_rows(
+            &plan,
+            &flat,
+            &statuses,
+            &all_paths,
+            "2026-10-08T11:00:10Z",
+            &model,
+            None,
+        );
+        let screen = build_flow(
+            &rows,
+            &rows,
+            &flat,
+            &plan,
+            &model,
+            &base_header(),
+            Some(&state),
+            &[],
+            Some("prime.fan.iter_0"),
+            &utc(),
+            None,
+            "2026-10-08T11:00:10Z",
+        );
+        let pass = screen.selected_pass.expect("the pass is selectable");
+        let step = pass.steps.last().expect("the ask step");
+        assert_eq!(
+            step.produced.as_deref(),
+            Some("edits 2 items \u{b7} files 3 items")
         );
     }
 

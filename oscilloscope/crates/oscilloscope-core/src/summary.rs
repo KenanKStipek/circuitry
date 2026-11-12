@@ -12,6 +12,12 @@
 //! without the `preserve_order` feature, which this workspace never
 //! enables (electricity's own `depth_safety` tests rely on every
 //! crate sharing one feature set, issues #492/#549).
+//!
+//! A string value is itself tried as JSON first (rule 2/3's own
+//! object/array shape, not rule 4's plain text): raw JSON must never
+//! appear in a row, including the common case of a tool's own stdout
+//! or an untyped prompt reply carrying a JSON *string* rather than
+//! an engine-parsed object or array.
 
 use serde_json::Value;
 
@@ -36,7 +42,42 @@ pub(crate) fn json_value_summary(value: &Value, max_chars: usize) -> String {
         Value::Object(map) => object_summary(map, max_chars),
         Value::Array(items) => array_summary(items, max_chars),
         Value::Null => String::new(),
+        Value::String(s) => match parse_as_json_container(s) {
+            Some(parsed) => json_value_summary(&parsed, max_chars),
+            None => first_words(s, max_chars),
+        },
         other => first_words(&plain_text(other), max_chars),
+    }
+}
+
+/// Whether `value` is itself JSON-shaped (rule 2/3's own scope,
+/// object or array) rather than plain text, a number, a boolean or
+/// null -- including a string that only *holds* one, parsed the
+/// same way [`json_value_summary`]'s own `Value::String` arm does.
+/// Lets a caller that wants the whole, untruncated value for plain
+/// text (a front end's own full-value preview, say) still route a
+/// JSON-shaped value through the summary instead.
+pub(crate) fn is_json_shaped(value: &Value) -> bool {
+    match value {
+        Value::Object(_) | Value::Array(_) => true,
+        Value::String(s) => parse_as_json_container(s).is_some(),
+        _ => false,
+    }
+}
+
+/// `s` parsed as a JSON object or array, or `None` for anything else
+/// -- plain text, a number or a string that merely starts with `{`/
+/// `[` without actually being valid JSON (`cheap `starts_with` check
+/// first, so a long plain-text reply is never run through a parser
+/// at all).
+fn parse_as_json_container(s: &str) -> Option<Value> {
+    let trimmed = s.trim();
+    if !(trimmed.starts_with('{') || trimmed.starts_with('[')) {
+        return None;
+    }
+    match serde_json::from_str::<Value>(trimmed) {
+        Ok(parsed @ (Value::Object(_) | Value::Array(_))) => Some(parsed),
+        _ => None,
     }
 }
 
@@ -73,15 +114,20 @@ fn object_summary(map: &serde_json::Map<String, Value>, max_chars: usize) -> Str
 /// or null as it is.
 fn key_value_summary(value: &Value, max_chars: usize) -> String {
     match value {
-        Value::Object(m) => format!("{} keys", m.len()),
-        Value::Array(a) => format!("{} items", a.len()),
+        Value::Object(m) => count_noun(m.len(), "key"),
+        Value::Array(a) => count_noun(a.len(), "item"),
         Value::String(s) => first_words(s, max_chars),
         other => plain_text(other),
     }
 }
 
+/// `count_noun(1, "item")` reads `1 item`, not `1 items`.
+fn count_noun(count: usize, noun: &str) -> String {
+    format!("{count} {noun}{}", if count == 1 { "" } else { "s" })
+}
+
 fn array_summary(items: &[Value], max_chars: usize) -> String {
-    let base = format!("{} items", items.len());
+    let base = count_noun(items.len(), "item");
     match items.first() {
         Some(Value::String(s)) if !s.trim().is_empty() => {
             format!("{base} \u{b7} {}", first_words(s, max_chars))
@@ -215,9 +261,8 @@ mod tests {
         );
     }
 
-    /// A string that only looks like JSON (never parsed as such by
-    /// this function, which only ever sees already-typed
-    /// `serde_json::Value`s) still just reads its own first words.
+    /// A string that only looks like JSON -- it starts with `{` but
+    /// never parses as one -- still just reads its own first words.
     #[test]
     fn a_json_looking_string_that_doesnt_parse_keeps_the_first_words_rule() {
         let value = json!("{not actually json, just starts like it");
@@ -225,6 +270,23 @@ mod tests {
             json_value_summary(&value, 24),
             "{not actually json, just\u{22ef}"
         );
+    }
+
+    /// A string that genuinely holds valid JSON (a tool's own stdout
+    /// captured as text, say, rather than an engine-parsed value) is
+    /// parsed and summarised the same as if it had arrived typed --
+    /// raw JSON never reaches the row either way.
+    #[test]
+    fn a_string_that_parses_as_json_is_summarised_like_the_value_it_holds() {
+        let object = json!(r#"{"summary": "Fixed the bug. More detail."}"#);
+        assert_eq!(json_value_summary(&object, 24), "Fixed the bug.");
+        let array = json!(r#"["first item text", "second"]"#);
+        assert_eq!(
+            json_value_summary(&array, 24),
+            "2 items \u{b7} first item text"
+        );
+        let array_of_objects = json!("  [{\"a\": 1}, {\"b\": 2}]");
+        assert_eq!(json_value_summary(&array_of_objects, 24), "2 items");
     }
 
     #[test]
@@ -320,5 +382,37 @@ mod tests {
         let value = json!({"aaaaaaaaaa": 1, "bbbbbbbbbb": 2, "cccccccccc": 3});
         let out = json_value_summary(&value, 5);
         assert_eq!(out, "aaaaaaaaaa 1 \u{b7} bbbbbbbbbb 2 \u{b7} cccccccccc 3");
+    }
+
+    /// A single item or key reads `1 item`/`1 key`, never `1 items`/
+    /// `1 keys`.
+    #[test]
+    fn a_single_item_or_key_reads_in_the_singular() {
+        assert_eq!(
+            json_value_summary(&json!(["only"]), 24),
+            "1 item \u{b7} only"
+        );
+        assert_eq!(json_value_summary(&json!([42]), 24), "1 item");
+        assert_eq!(
+            json_value_summary(&json!({"edits": [1]}), 24),
+            "edits 1 item"
+        );
+        assert_eq!(
+            json_value_summary(&json!({"nested": {"a": 1}}), 24),
+            "nested 1 key"
+        );
+    }
+
+    #[test]
+    fn is_json_shaped_is_true_for_objects_arrays_and_parsing_strings() {
+        assert!(is_json_shaped(&json!({"a": 1})));
+        assert!(is_json_shaped(&json!([1, 2])));
+        assert!(is_json_shaped(&json!(r#"{"a": 1}"#)));
+        assert!(!is_json_shaped(&json!("plain text")));
+        assert!(!is_json_shaped(&json!(
+            "{not actually json, just starts like it"
+        )));
+        assert!(!is_json_shaped(&json!(42)));
+        assert!(!is_json_shaped(&Value::Null));
     }
 }

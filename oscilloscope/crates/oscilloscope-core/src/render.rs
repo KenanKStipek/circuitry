@@ -1197,7 +1197,7 @@ pub fn details_for(
             .and_then(Value::as_str)
             .map(|s| preview(s, DETAILS_PREVIEW_CHARS)),
         value: Some(preview(
-            &crate::summary::json_value_summary(&node.value, DETAILS_PREVIEW_CHARS),
+            &json_summary_or_display_value(&node.value, DETAILS_PREVIEW_CHARS),
             DETAILS_PREVIEW_CHARS,
         )),
         sent,
@@ -1335,9 +1335,10 @@ fn build_sent_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
 /// reports output tokens before a prompt finishes (the same rule the
 /// token bar's own estimate follows). Once it's answered: `meta.
 /// answer` when present (the raw reply for `boolean`/`number`
-/// prompts and model-mode conditions), else the node's own value (a
-/// string as is, anything else summarised by issue #739's one
-/// shared rule rather than shown as raw JSON).
+/// prompts and model-mode conditions), else the node's own value --
+/// plain text in full, same as always, but JSON (an object, an
+/// array, or a string holding one) summarised by issue #739's one
+/// shared rule rather than shown raw.
 fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
     if node.is_running() {
         return TokenBlock {
@@ -1351,7 +1352,7 @@ fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
         .get("answer")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| crate::summary::json_value_summary(&node.value, DETAILS_PREVIEW_CHARS));
+        .unwrap_or_else(|| json_summary_or_display_value(&node.value, DETAILS_PREVIEW_CHARS));
     let snippet = Some(preview(&collapse_whitespace(&text), DETAILS_PREVIEW_CHARS));
     let (_, received) = crate::model::node_tokens(meta);
     TokenBlock {
@@ -1388,6 +1389,21 @@ pub(crate) fn display_value(v: &Value) -> String {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
         other => other.to_string(),
+    }
+}
+
+/// Issue #739's own summary for a JSON value (an object, an array,
+/// or a string holding one), [`display_value`] in full for anything
+/// else -- a plain-text reply or value keeps today's full preview,
+/// cut only by the caller's own [`preview`], not by [`json_value_
+/// summary`]'s first-words rule, which would otherwise stop a long
+/// plain reply at its first sentence the way a Tape row's shorter
+/// first-words text deliberately does (§3.4).
+fn json_summary_or_display_value(value: &Value, max_chars: usize) -> String {
+    if crate::summary::is_json_shaped(value) {
+        crate::summary::json_value_summary(value, max_chars)
+    } else {
+        display_value(value)
     }
 }
 
@@ -4422,6 +4438,24 @@ mod tests {
         );
     }
 
+    /// A tool's own plain-text value -- not JSON-shaped at all --
+    /// keeps today's full preview, not the summary's first-words cut
+    /// at its first sentence: the summary rule is for JSON only.
+    #[test]
+    fn details_for_a_tool_keeps_the_full_preview_for_plain_text() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": "The bug was in X. I fixed it by Y.", "meta": {
+                "created_at": "t0", "completed_at": "t1", "provider": "shell"
+            }}
+        }});
+        let details = details_for("prime.tool", &plan, &RunModel::new(), Some(&state_json));
+        assert_eq!(
+            details.value.as_deref(),
+            Some("The bug was in X. I fixed it by Y.")
+        );
+    }
+
     #[test]
     fn details_for_a_prompt_truncates_the_preview_but_full_value_does_not() {
         let plan = PlanTree::empty();
@@ -4573,6 +4607,26 @@ mod tests {
         assert_eq!(received.tokens, Some(3));
         let sent = details.sent.unwrap();
         assert_eq!(sent.tokens, Some(9));
+    }
+
+    /// A multi-sentence plain-text reply -- not JSON -- keeps its
+    /// own full preview rather than the summary's first-words cut at
+    /// its first sentence.
+    #[test]
+    fn sent_received_blocks_for_a_plain_text_reply_keep_the_full_preview() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "The bug was in X. I fixed it by Y.", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "what happened"
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
+        let received = details.received.unwrap();
+        assert_eq!(
+            received.snippet.as_deref(),
+            Some("The bug was in X. I fixed it by Y.")
+        );
     }
 
     #[test]

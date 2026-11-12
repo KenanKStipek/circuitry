@@ -3807,29 +3807,44 @@ reading bare or losing a trailing word with no mark at all
 json_value_summary`, replaces every place a reply's or a value's own
 `render::display_value` plus `first_words` once fed straight through
 to a row: the Tape's own `tape_prompt_what`, the Signal's own step
-rows, and `render::details_for`'s own `value`/`received` blocks (the
-Flow's own simpler Selected pane's `produced:`/received snippet
-lines, the only callers of `FocusedStep::value`/`Details::received`'s
-own snippet -- the detail pane's full, untruncated `value_full`/
-`reply` sections, issue #716's own concern, are untouched). A JSON
+rows, `render::details_for`'s own `value`/`received` blocks, and the
+Flow rail's own selected pass pane (`screens::build_selected_pass`'s
+`produced` field) -- the detail pane's full, untruncated `value_full`/
+`reply` sections, issue #716's own concern, are untouched. A JSON
 object's first present field among `summary`, `message`, `title`,
 `reason`, `status`, `result` (in that order) leads with its own first
 words; otherwise its first keys, alphabetical since `serde_json::
 Map` is a `BTreeMap` without the `preserve_order` feature (never
 added to any crate here -- issues #492/#549's own depth-safety
-warning), each read by its own kind (`N items`, `N keys`, a string's
-own first words, a number/boolean/null as it is), joined with ` · `
-and cut to the column the same way a plain reply already is. A JSON
-array reads `N items`, its first item's own first words following
-when that item is a string. Anything else -- plain text, or a string
-that only looks like JSON, which this function never attempts to
-parse -- keeps the existing first-words rule unchanged. An agent
-step's own rule (`screens::tape_finished_agent_what`, issue #703's
-rule 2: files changed, `+N −M`, turns, all from `meta.raw`) comes
-first and stays where it was -- it needs the whole node, not just its
-value -- but once it finds nothing recorded there at all, it now
-falls through to the same shared summary on the node's own value
-rather than reading only the bare duration.
+warning), each read by its own kind (`N items`/`N keys`, singular at
+exactly one, a string's own first words, a number/boolean/null as it
+is), joined with ` · ` and cut to the column the same way a plain
+reply already is. A JSON array reads `N items`, its first item's own
+first words following when that item is a string. A string is tried
+as JSON first -- trimmed, and only if it starts with `{` or `[` and
+actually parses as an object or array -- so a reply or value that
+*holds* JSON as text (a tool's own captured stdout, an untyped
+prompt reply) is summarised exactly as if it had arrived typed,
+never shown raw either; `summary::is_json_shaped` is the same check a
+caller uses to decide whether to route a value through the summary
+at all. Anything else -- plain text, a number, a boolean, or a
+string that only starts like JSON without actually parsing -- keeps
+the existing first-words rule unchanged, and the Flow's own simpler
+Selected pane (`render::details_for`'s `value`/`received` blocks,
+the only callers of `FocusedStep::value`/`Details::received`'s own
+snippet) keeps today's full, untruncated preview for exactly that
+case rather than cutting a long plain reply at its own first
+sentence: only a JSON-shaped value (object, array, or a string that
+parses as one) goes through the summary there, everything else still
+reads through `display_value`. An agent step's own rule
+(`screens::tape_finished_agent_what`) leads with its duration, the
+same as every other finished tool row's own "what" text, then issue
+#703's own files-changed/turns fields from `meta.raw` (files, with
+`+N −M` alongside it, then turns, with only the parts actually
+present) -- it needs the whole node, not just its value -- but once
+neither of those two is recorded there at all, it now falls through
+to the same shared summary on the node's own value rather than
+reading only the bare duration.
 
 **Two layout slips since #744's own breadcrumbs** (issue #745), both
 at 120x30 over a deeply nested loop. The detail pane's own title
@@ -3838,10 +3853,13 @@ middle with `⋯` once it would run into the border, keeping the
 breadcrumb's first segment and as many of its own trailing segments
 -- including the step's own name -- as still fit alongside the fixed
 ` · Selected` suffix, rather than ratatui's own hard clip with no `⋯`
-at all. `■ Run Started` and `■ Run End` (`tui::draw_tape_list`, and
-the All screen's own tile equivalent, `tui::draw_all_tape_tile`) now
-pad their own name field to the same `name_width` every other row on
-screen already widens to, rather than the old fixed 19-cell floor.
+at all; when even the first segment doesn't fit alongside the step's
+own name, the first segment drops too (`⋯ › {name}`), so the step's
+own name is never the part a hard clip eats into. `■ Run Started` and
+`■ Run End` (`tui::draw_tape_list`, and the All screen's own tile
+equivalent, `tui::draw_all_tape_tile`) now pad their own name field to
+the same `name_width` every other row on screen already widens to,
+rather than the old fixed 19-cell floor.
 
 ### 6.4 Tests
 
@@ -3868,7 +3886,7 @@ screen already widens to, rather than the old fixed 19-cell floor.
 - **The golden-section layout (issue #535).** `oscilloscope-core/src/layout.rs` pins `golden_section`/`left_column_width` at widths 80, 100, 120, 160, 200 and 300, plus `LEFT_MIN`. **The scope icon.** `oscilloscope-core/src/icon.rs` pins `trace_dots` at frame 0, that a later frame shifts the trace by one dot column, the flat line once ended (frame-independent), and that `--no-animation`'s own still frame (0) renders; `oscilloscope/src/icon.rs` pins the icon's own 3x17 shape, that it differs frame to frame while running, run-state colour (including aborted mapping to the cancelled trace colour), and `NO_COLOR`. **Update highlights.** `oscilloscope-core/src/changes.rs` covers the first-observation-silent rule, a row/state/log/token-bar/header change each, and elapsed time never counting; `oscilloscope/src/highlight.rs` covers a retrigger restarting rather than stacking, `prune`/`has_active`, and `style_for` at `t=0`/mid-fade/after the end for every colour mode including `NO_COLOR`; `tui.rs`'s own `highlight_tests` module pins a highlighted cell's real buffer background at `t=0` and that nothing overrides it once the fade has ended. **Colour themes.** `oscilloscope/src/theme.rs` covers every named theme defining every role, `terminal` painting no background, the xterm-256 mapping at the cube's corners and a mid-grey, the unknown-name error text, `t`'s own cycle order and wrap, `NO_COLOR`/`--theme`-beats-`OSI_THEME` resolution, and a per-theme WCAG contrast check (text/status/error at least 4.5:1, dim text 3:1, text on the highlight tint at `t=0` at least 4.5:1); `tui.rs`'s own `highlight_tests` module additionally pins a named theme painting an otherwise-untouched buffer cell's background. **The state tree and the details pane's sent/received blocks.** `oscilloscope-core/src/render.rs` covers nesting and key labels, a bare container with no node of its own, latest-or-current-first ordering (a running row before a longer-finished sibling), a bare container's own subtree token sum and empty dim, and that no value or error text appears in any row; and the sent/received blocks for a finished text prompt, a finished JSON prompt, a running prompt (the estimate and the waiting state), a `boolean` prompt's `meta.answer`, a prompt that failed before any reply (no `received` block), and a non-prompt node (no blocks at all).
 - **Engine parity** (`oscilloscope-core/tests/engine_parity.rs`): a handful of documents using only `tool`/`json`, `dynamic`, a CEL `if` and `finally:`, recorded against both engines under the same config (`scripts/record_fixtures.py --parity-only`), assert the same `--log` lines apart from each effect's own duration.
 - **The Signal screen (issue #688, replacing the Time screen of issue #650).** `oscilloscope-core/src/screens.rs` unit-tests `build_signal` end to end against synthetic rows and nodes: the axis rule with history (1.5x the usual largest step, the smallest doubling-series value at or above it) and without (600/80, doubled once past the run's own largest single column, never past the run's own running total, and never a second time); two prompts ending in the same 100 ms column summing into it rather than each getting their own; a decision's own `◆` mark winning over a finished prompt's `✓` sharing its column; a running prompt's own live estimate landing in the Now column, never the column its own start time would otherwise place it at; and Readings' own ratio and peak. `oscilloscope/src/keys.rs` unit-tests `←→` scrubbing one column at a time and clamping to Now and zero, `+`/`-` stepping the five zoom levels and clamping at both ends (and resetting a scrubbed cursor back to Now, since a column's own width just changed under it), `n` returning to Now, `⏎` toggling the full-screen step view only while a step is actually under the cursor, and switching screens resetting that shared toggle. `oscilloscope/src/tui.rs` unit-tests the chart directly: a live column's own bar draws faint, never in the Now sweep's bold style; a run many times longer than the pane is wide still keeps the sweep on screen (the trace's own window scrolls to follow the cursor, or Now while following it); a scrubbed cursor is tinted distinctly from the sweep; an axis top of 1,200 or more is never cut, with its own thousands separator; and the Help overlay lists exactly Signal's own keys, not Flow's or Cost's older generic list. `tui.rs`'s own golden tests cover the Signal screen at 120×30 and 80×24 against the design's own frames, replayed from the `run2` fixture frozen 3.62s after its own start with three pooled history runs. `oscilloscope/tests/e2e_tui_pty.rs` presses `1` during a live `cof` run and checks the Now sweep and the running step's own row, scrubs, zooms and returns to Now, opens and closes the full-screen step view, returns to the Tape with `0`, and separately checks that 80 columns drops the Readings pane and that below 80 columns Signal bounces back to the Tape on its own, picked up on the next redraw with no key needed.
-- **The one summary function (issue #739).** `oscilloscope-core/src/summary.rs` unit-tests `json_value_summary`/`first_words`/`first_sentence_end` directly: a top-level string, a JSON-looking string this function never parses, null, a number and a boolean, an object with and without a summary-like field (tried in order, a blank one skipped), a nested empty object and array reading `0 keys`/`0 items`, mixed value kinds in one object, an array of strings and of non-strings, an empty array, and cutting a long result to width with `⋯`. `oscilloscope-core/src/screens.rs` covers a finished prompt's own JSON reply on the Tape row and the Signal's own step row, and an agent step whose `meta.raw` has nothing recorded falling through to the same summary on its own value; `oscilloscope-core/src/render.rs` covers a non-prompt step's own JSON value the same way. Issue #745's two fixes are each a `tui.rs` golden-style test over a real mid-run snapshot of `tests/fixtures/nested_tree_loops` at 120x30: the detail pane's own title cutting a long breadcrumb from the middle with `⋯` rather than ratatui's own hard clip, and `■ Run Started`/`■ Run End` reading at the exact column every other row's own widened name field starts at.
+- **The one summary function (issue #739).** `oscilloscope-core/src/summary.rs` unit-tests `json_value_summary`/`first_words`/`first_sentence_end`/`is_json_shaped` directly: a top-level string, a JSON-looking string that never parses (kept to the first-words rule), a string that genuinely does parse as an object or an array (summarised exactly as if it had arrived typed), null, a number and a boolean, an object with and without a summary-like field (tried in order, a blank one skipped), a nested empty object and array reading `0 keys`/`0 items`, a single item or key reading the singular (`1 item`/`1 key`), mixed value kinds in one object, an array of strings and of non-strings, an empty array, and cutting a long result to width with `⋯`. `oscilloscope-core/src/screens.rs` covers a finished prompt's own JSON reply on the Tape row and the Signal's own step row, an agent step whose `meta.raw` has nothing recorded falling through to the same summary on its own value, and the Flow rail's own selected pass pane summarising a prompt's JSON reply rather than dropping it; `oscilloscope-core/src/render.rs` covers a non-prompt step's own JSON value the same way, and that a plain-text, non-JSON reply or value keeps its own full preview rather than the summary's first-words cut at its first sentence. Issue #745's two fixes: the detail pane's own title cut (`tui::tape_detail_title_cut`) is unit-tested directly for a two-segment breadcrumb (dropping the first segment entirely rather than hard-clipping the step's own name), plus a `tui.rs` golden-style test over a real mid-run snapshot of `tests/fixtures/nested_tree_loops` at 120x30 for the deeper breadcrumb case; the same fixture's golden test covers `■ Run Started`/`■ Run End` reading at the exact column (in cells, not bytes) every other row's own widened name field starts at. `oscilloscope/tests/e2e_tui_pty.rs`'s `json_replies_read_as_short_summaries_not_raw_json` scripts an object with a summary field, an object of lists, an array of strings, an array of objects, a string holding JSON and plain text as a live `cof` run's own replies, and checks the replayed screen's finished rows: each reads its own short summary, and none shows `{"`/`["` anywhere.
 
 ---
 

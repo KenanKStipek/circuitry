@@ -980,9 +980,11 @@ fn tape_rule_line(
 /// edge to a hard clip -- the breadcrumb's first segment survives,
 /// then as many of its trailing segments, including the step's own
 /// name, as still fit alongside the fixed `suffix` (` · Selected`),
-/// never cut itself. `max_chars` is the title line's own full budget
-/// (`tape_block_title`'s `"─ " + text + " "`), not the pane's raw
-/// width.
+/// never cut itself; when even the first segment doesn't fit
+/// alongside it, `⋯ › {step's own name}` drops the first segment too
+/// rather than hard-clipping the step's own name from the right.
+/// `max_chars` is the title line's own full budget (`tape_block_
+/// title`'s `"─ " + text + " "`), not the pane's raw width.
 fn tape_detail_title_cut(breadcrumb: &str, suffix: &str, max_chars: usize) -> String {
     let reserved = 2 + 1 + suffix.chars().count(); // "─ " prefix, trailing space, the fixed suffix.
     let budget = max_chars.saturating_sub(reserved);
@@ -993,7 +995,7 @@ fn tape_detail_title_cut(breadcrumb: &str, suffix: &str, max_chars: usize) -> St
     let Some((first, rest)) = segments.split_first() else {
         return format!("{}{suffix}", truncate_text(breadcrumb, budget));
     };
-    if !rest.is_empty() {
+    if let Some((&last, _)) = rest.split_last() {
         for keep in (1..rest.len()).rev() {
             let tail = rest[rest.len() - keep..].join(" › ");
             let candidate = format!("{first} › ⋯ › {tail}");
@@ -1001,10 +1003,9 @@ fn tape_detail_title_cut(breadcrumb: &str, suffix: &str, max_chars: usize) -> St
                 return format!("{candidate}{suffix}");
             }
         }
-        let last = rest[rest.len() - 1];
-        let bare = format!("{first} › ⋯ › {last}");
-        if bare.chars().count() <= budget {
-            return format!("{bare}{suffix}");
+        let fallback = format!("⋯ › {last}");
+        if fallback.chars().count() <= budget {
+            return format!("{fallback}{suffix}");
         }
     }
     format!("{}{suffix}", truncate_text(breadcrumb, budget))
@@ -15800,6 +15801,20 @@ mod golden_tests {
         );
     }
 
+    /// Issue #745 rule 1, a two-segment breadcrumb: there is only one
+    /// segment to drop before the step's own name, so the cut drops
+    /// the first segment entirely (`⋯ › name`) rather than hard-
+    /// clipping the name itself from the right.
+    #[test]
+    fn tape_detail_title_cut_keeps_the_steps_own_name_with_only_two_segments() {
+        let cut = tape_detail_title_cut(
+            "a_very_long_first_segment_indeed › build",
+            " · Selected",
+            40,
+        );
+        assert_eq!(cut, "⋯ › build · Selected");
+    }
+
     /// Issue #745 rule 2: `■ Run Started` and `■ Run End` follow the
     /// same widened name column every other row does, never the old
     /// 19-cell floor -- here widened by the deep nested loop's own
@@ -15831,10 +15846,14 @@ mod golden_tests {
             "Run End's own column must match the widened one every row uses;\nRun End: {run_end:?}\nother: {other_row:?}"
         );
         // The default 19-cell floor (glyph + 19) would have put
-        // these two columns well before the widened one.
+        // these two columns well before the widened one -- in cells,
+        // not `name_width_col`'s own byte offset, which the glyph
+        // and clock's own multi-byte characters already inflate well
+        // past the floor on their own.
+        let name_width_cells = other_row[..name_width_col].chars().count();
         assert!(
-            name_width_col > 21,
-            "expected the name column to have widened past the 19-cell floor; got {name_width_col}"
+            name_width_cells > 1 + 9 + 2 + 19,
+            "expected the name column to have widened past the 19-cell floor; got {name_width_cells} cells"
         );
     }
 
