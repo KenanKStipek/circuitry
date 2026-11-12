@@ -17,7 +17,7 @@ brook
 buffalo
 canary
 canyon
-cherry
+cedar
 chinook
 cliff
 clover
@@ -52,7 +52,7 @@ fox
 gazelle
 gecko
 geyser
-ginger
+petrel
 glacier
 glade
 gorge
@@ -124,7 +124,7 @@ peony
 pike
 pine
 plover
-plum
+walnut
 poplar
 poppy
 possum
@@ -133,7 +133,7 @@ puffin
 quail
 quill
 rabbit
-raccoon
+heather
 rapid
 raven
 reed

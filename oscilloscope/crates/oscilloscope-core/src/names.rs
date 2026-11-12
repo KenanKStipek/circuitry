@@ -172,8 +172,8 @@ mod tests {
     #[test]
     fn disambiguated_names_appends_the_suffix_only_on_a_real_collision() {
         // Two distinct ids verified ahead of time to hash to the same
-        // bare name (`wary-tulip`) with different id suffixes, standing
-        // in for the rare real collision the suffix exists for.
+        // bare name with different id suffixes, standing in for the
+        // rare real collision the suffix exists for.
         let a = "00000016-aaaa-bbbb-cccc-dddddddddddd";
         let b = "0000007f-aaaa-bbbb-cccc-dddddddddddd";
         assert_eq!(run_name(a), run_name(b), "fixture pair must collide");
