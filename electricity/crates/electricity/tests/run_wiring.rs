@@ -944,8 +944,8 @@ async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker
     assert!(error.contains("comfyui"));
 }
 
-/// Issue #580: `systemone` is a cof-only plugin, so a document naming it is
-/// refused up front with the standard preview message and writes no state.
+/// Issue #724: `systemone` is runnable now -- no document naming it is
+/// refused up front any more.
 #[tokio::test]
 async fn a_tool_naming_the_systemone_plugin_runs_for_real() {
     // Issue #724: `systemone` is runnable now. No mock HTTP server is
