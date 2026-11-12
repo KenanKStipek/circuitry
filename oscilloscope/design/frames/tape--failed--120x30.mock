@@ -14,7 +14,7 @@
 #! region r3 detail 76,1,44,27 Run · Failed
 #! region r4 keybar 0,29,120,1
 #! focus r2
-{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}misty-valley {/}{fg.faint on:statusbar.bg}· {/}{status.error bold on:statusbar.bg}✗ Failed {/}{fg.default on:statusbar.bg}0.0s                                                        {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:48:49 {/}
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}square-jay {/}{fg.faint on:statusbar.bg}· {/}{status.error bold on:statusbar.bg}✗ Failed {/}{fg.default on:statusbar.bg}0.0s                                                          {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:48:49 {/}
 {border.focus}╭─ {/}{fg.title bold}Tape · 1 Done · 0 Running · 11 Ahead · ▰ = 50 t {/}{border.focus}────────────────────────╮{/}{border.default}╭─ {/}{fg.title bold}Run · Failed {/}{border.default}───────────────────────────╮{/}
 {border.focus}│{/}{fg.faint}12:48:49 {/}{fg.muted}■ Run Started        {/}{fg.faint}demo.yml · cof 0.1.0                        {/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Outcome {/}{status.error bold}✗ Failed  {/}{fg.default}0.0s · 12:48:49        {/}{border.default}│{/}
 {border.focus}│{/}{fg.faint}12:48:49 {/}{status.success}✓ {/}{fg.default}kind               {/}{fg.muted}↑212 ↓3 · Bug.              {/}{accent.primary}▰▰▰▰{/}{fg.faint}▱▱▱▱   {/}{fg.default bold}215 t{/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Step    {/}{fg.default}tests · tool · shell             {/}{border.default}│{/}

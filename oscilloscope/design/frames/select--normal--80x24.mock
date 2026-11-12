@@ -8,7 +8,7 @@
 #! note: invented: nothing; names, configs, pids, timings and tokens are the engines' own (snap6/manifest.json is what osi knew at launch)
 #! note: craft-ok CR6 the chooser is a short centered list by design; nothing else belongs on this screen
 #! region r1 header 0,0,80,1
-#! region r2 list 2,7,76,9 Running Orchestrations · 6
+#! region r2 list 5,7,70,9 Running Orchestrations · 6
 #! region r3 keybar 0,23,80,1
 #! focus r2
 #! selected r2 1
@@ -19,20 +19,20 @@
 
 
 
-  {border.focus}╭─ {/}{fg.default bold}Running Orchestrations · 6 {/}{border.focus}─────────────────────────────────────────────╮{/}
-  {border.focus}│{/}   {accent.primary bold}● {/}{fg.default bold}All            {/}                    {fg.muted}6 runs · tiled                    {/}{border.focus}│{/}
-  {border.focus}│{/}{accent.primary bold on:selection.bg} ❯ ● {/}{fg.default on:selection.bg}triage.yml     swift-eagle         config-triage.json            cof {/}{border.focus}│{/}
-  {border.focus}│{/}   {accent.primary bold}● {/}{fg.default}triage.yml     tired-coral         {/}{fg.muted}config-triage-b.json          cof {/}{border.focus}│{/}
-  {border.focus}│{/}   {accent.primary bold}● {/}{fg.default}digest.yml     happy-crow          {/}{fg.muted}config-digest.json            cof {/}{border.focus}│{/}
-  {border.focus}│{/}   {accent.primary bold}● {/}{fg.default}review.yml     full-gazelle        {/}{fg.muted}config-review.json            cof {/}{border.focus}│{/}
-  {border.focus}│{/}   {accent.primary bold}● {/}{fg.default}summarize.yml  pale-olive          {/}{fg.muted}config-summarize.json electricity {/}{border.focus}│{/}
-  {border.focus}│{/}   {accent.primary bold}● {/}{fg.default}classify.yml   classy-eagle        {/}{fg.muted}config-classify.json  electricity {/}{border.focus}│{/}
-  {border.focus}╰──────────────────────────────────────────────────────────────────────────╯{/}
+{border.focus}     ╭─ {/}{fg.title bold}Running Orchestrations · 6 {/}{border.focus}───────────────────────────────────────╮{/}
+{border.focus}     │   {/}{accent.primary bold}● {/}{fg.default bold}All            {/}{fg.muted}              6 runs · tiled                    {/}{border.focus}│{/}
+{border.focus}     │{/}{accent.primary bold on:selection.bg} ❯ ● {/}{selection.fg on:selection.bg}triage.yml     icy-geyser    config-triage.json            cof {/}{border.focus}│{/}
+{border.focus}     │   {/}{accent.primary bold}● {/}{fg.default}triage.yml     oaken-poplar  {/}{fg.muted}config-triage-b.json          cof {/}{border.focus}│{/}
+{border.focus}     │   {/}{accent.primary bold}● {/}{fg.default}digest.yml     shallow-wren  {/}{fg.muted}config-digest.json            cof {/}{border.focus}│{/}
+{border.focus}     │   {/}{accent.primary bold}● {/}{fg.default}review.yml     ochre-condor  {/}{fg.muted}config-review.json            cof {/}{border.focus}│{/}
+{border.focus}     │   {/}{accent.primary bold}● {/}{fg.default}summarize.yml  new-lagoon    {/}{fg.muted}config-summarize.json electricity {/}{border.focus}│{/}
+{border.focus}     │   {/}{accent.primary bold}● {/}{fg.default}classify.yml   crimson-fern  {/}{fg.muted}config-classify.json  electricity {/}{border.focus}│{/}
+{border.focus}     ╰────────────────────────────────────────────────────────────────────╯{/}
 
 
 
 
 
 
- {fg.default}4 on cof · 2 on electricity · refreshing every 2s                              {/}
-{accent.primary bold on:statusbar.bg} ↑↓ {/}{fg.default on:statusbar.bg}Select  {/}{accent.primary bold on:statusbar.bg}enter {/}{fg.default on:statusbar.bg}Open                                           {/}{accent.primary bold on:statusbar.bg}? {/}{fg.default on:statusbar.bg}Help  {/}{accent.primary bold on:statusbar.bg}q {/}{fg.default on:statusbar.bg}Quit {/}
+{fg.default} 4 on cof · 2 on electricity · refreshing every 2s{/}
+{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open                                           {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}

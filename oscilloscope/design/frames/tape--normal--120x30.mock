@@ -13,7 +13,7 @@
 #! region r3 detail 76,1,44,27 gate › reply · Selected
 #! region r4 keybar 0,29,120,1
 #! focus r2
-{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}wooly-ginger {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                                                       {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}ochre-desert {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                                                       {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
 {border.focus}╭─ {/}{fg.title bold}Tape · 6 Done · 2 Running · 4 Ahead · ▰ = 50 t · Previews On {/}{border.focus}───────────╮{/}{border.default}╭─ {/}{fg.title bold}gate › reply · Selected {/}{border.default}────────────────╮{/}
 {border.focus}│{/}{fg.faint}12:50:50 {/}{status.success}✓ {/}{fg.default}tests              {/}{fg.muted}3.0s · sleep 3                              {/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Status  {/}{status.success}✓ Done  {/}{fg.default}0.0s · 12:50:50          {/}{border.default}│{/}
 {border.focus}│{/}{fg.faint}12:50:50 {/}{accent.secondary bold}◆ {/}{fg.default}gate → then        {/}{fg.muted}kind != ""                                  {/}{border.focus}│{/}{border.default}│ {/}{fg.muted}Type    {/}{fg.default}prompt · scripted-model          {/}{border.default}│{/}

@@ -14,7 +14,7 @@
 #! region r4 detail 62,19,58,9 Readings
 #! region r5 keybar 0,29,120,1
 #! focus r2
-{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}wooly-ginger {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                                                     {/}{fg.on-accent on:accent.secondary}  SIGNAL  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}ochre-desert {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                                                     {/}{fg.on-accent on:accent.secondary}  SIGNAL  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
 {border.focus}╭─ {/}{fg.title bold}Signal · Tokens to scripted-model · Sent Above · Received Below · 100 ms per Column · Fixed Scale {/}{border.focus}──────────────────╮{/}
 {border.focus}│{/}{fg.faint}600 t                               {/}{accent.primary}▇     {/}{accent.primary bold}┃                                                                           {/}{border.focus}│{/}
 {border.focus}│                                    {/}{accent.primary}█     {/}{accent.primary bold}┃                                                                           {/}{border.focus}│{/}
