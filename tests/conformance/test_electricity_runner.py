@@ -163,12 +163,15 @@ def _run_electricity(
     same `harness.materialize_config`/`materialize_cli_args` helpers, so
     generation and verification never diverge on how the port reaches
     either engine."""
-    if metadata.get("config") and mock_http_port is not None:
+    config_name = metadata.get("config")
+    if config_name and (
+        mock_http_port is not None or harness.config_needs_materializing(case_dir, config_name)
+    ):
         config_path = harness.materialize_config(
-            case_dir, metadata["config"], mock_http_port=mock_http_port, tmp_dir=out_path.parent
+            case_dir, config_name, mock_http_port=mock_http_port, tmp_dir=out_path.parent
         )
-    elif metadata.get("config"):
-        config_path = case_dir / metadata["config"]
+    elif config_name:
+        config_path = case_dir / config_name
     else:
         config_path = DEFAULT_CONFIG_PATH
     cmd = [

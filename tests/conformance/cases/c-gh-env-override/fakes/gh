@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""A fake `gh` for the conformance suite (issue #722): proves
+`runtime.plugins.gh.env` reaches the child process, by printing a
+variable only that configured override sets -- `_sandboxed_env` never
+puts one like it in the subprocess's own inherited environment."""
+
+from __future__ import annotations
+
+import os
+import sys
+
+
+def main() -> int:
+    sys.stdout.write(os.environ.get("GH_PLUGIN_ENV_PROBE", "") + "\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
