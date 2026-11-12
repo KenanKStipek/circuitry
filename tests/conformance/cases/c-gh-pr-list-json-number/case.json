@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`gh pr list --json number` with `parse: json`: `value` is the parsed array of objects.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

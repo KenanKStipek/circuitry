@@ -1,0 +1,12 @@
+name: c723-cel-tool-schema-mismatch
+effects:
+  - type: tool
+    name: gate
+    provider: cel
+    params:
+      expr: "{'a': 1, 'b': 2}"
+      schema:
+        type: object
+        properties:
+          a: {type: string}
+          b: {type: string}

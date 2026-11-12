@@ -1,0 +1,20 @@
+name: c723-cel-tool-tree-failure-class
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    max_concurrency: 1
+    on_error: continue
+    effects:
+      - type: tool
+        name: unset_strict
+        provider: cel
+        params:
+          expr: "state.prime.never_ran.value.price <= 10"
+          strict: true
+      - type: tool
+        name: schema_mismatch
+        provider: cel
+        params:
+          expr: "1"
+          schema: {type: string}

@@ -84,6 +84,16 @@ const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
 /// field to this already-final struct rather than flip one lane A
 /// already named for it.
 const TOOL_VALIDATE_YAML_PROVIDERS: &[&str] = &["validate_yaml"];
+/// Issue #723's own native provider -- a `cel` tool effect, built
+/// straight off the condition-evaluation CEL already wired for `if`/
+/// `while`, so it gets its own flag the same way `validate_yaml`'s
+/// own does (#448) rather than joining one of the four process/
+/// stdlib/regex/http sets above.
+const TOOL_CEL_PROVIDERS: &[&str] = &["cel"];
+/// The `gh` provider (#722): a pass-through to the `gh` binary, built
+/// on the same subprocess machinery as [`TOOLS_PROCESS_PROVIDERS`] but
+/// with its own flag, since it was added after that set (#719).
+const TOOL_GH_PROVIDERS: &[&str] = &["gh"];
 
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +234,10 @@ pub struct Supported<'a> {
     pub tool_http: bool,
     /// Lane L2 (#448): `validate_yaml` ([`TOOL_VALIDATE_YAML_PROVIDERS`]).
     pub tool_validate_yaml: bool,
+    /// Issue #723: `cel` ([`TOOL_CEL_PROVIDERS`]).
+    pub tool_cel: bool,
+    /// Issue #722: `gh` ([`TOOL_GH_PROVIDERS`]).
+    pub tool_gh: bool,
     /// Lane K2 (#448, #516): scoring and routing are wired into
     /// `prompt` from this lane on -- read nowhere by the walker itself
     /// (nothing in a compiled [`Program`] says "this effect is
@@ -274,6 +288,8 @@ impl<'a> Supported<'a> {
             tool_regex: false,
             tool_http: false,
             tool_validate_yaml: false,
+            tool_cel: false,
+            tool_gh: false,
             complexity: false,
             decomposition: false,
             providers,
@@ -331,6 +347,10 @@ impl<'a> Supported<'a> {
             tool_http: true,
             // lane L2a (#448, #521)
             tool_validate_yaml: true,
+            // issue #723
+            tool_cel: true,
+            // issue #722
+            tool_gh: true,
             // lane K2 (#448, #516)
             complexity: true,
             // lane L2b (#448, #522)
@@ -353,6 +373,8 @@ impl<'a> Supported<'a> {
             || (self.tool_regex && TOOL_REGEX_PROVIDERS.contains(&name))
             || (self.tool_http && TOOL_HTTP_PROVIDERS.contains(&name))
             || (self.tool_validate_yaml && TOOL_VALIDATE_YAML_PROVIDERS.contains(&name))
+            || (self.tool_cel && TOOL_CEL_PROVIDERS.contains(&name))
+            || (self.tool_gh && TOOL_GH_PROVIDERS.contains(&name))
     }
 }
 
@@ -708,6 +730,11 @@ mod tests {
         // `false`, so this asserts directly rather than against it, the
         // same convention as `tool_http` above.
         assert!(current.tool_validate_yaml);
+        // issue #722: `tool_gh` is `true` now -- asserted directly
+        // rather than against `m0.tool_gh` (always `false`), the one
+        // field this change flips.
+        assert!(current.tool_gh);
+        assert!(!m0.tool_gh);
         // lane K2 (#448, #516): `complexity` is `true` now -- asserted
         // directly rather than against `m0.complexity` (always
         // `false`), the one field this lane's own PR flips.
@@ -908,6 +935,36 @@ mod tests {
                 RefusalReason::UnsupportedToolProvider(provider.to_string())
             );
         }
+    }
+
+    #[test]
+    fn a_gh_provider_is_refused_while_tool_gh_is_off() {
+        let tool_path = EffectPath::root().push_name("run");
+        let tool = leaf_op(
+            tool_path.clone(),
+            LeafKind::Tool(tool_op_with_provider("gh", ParamNode::Map(IndexMap::new()))),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("gh".to_string())
+        );
+        assert_eq!(refusal.path, tool_path);
+    }
+
+    #[test]
+    fn a_gh_provider_is_accepted_once_tool_gh_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider("gh", ParamNode::Map(IndexMap::new()))),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_gh: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1148,10 +1205,24 @@ mod tests {
     }
 
     #[test]
-    fn cel_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
-        // `cel` (issue #597) is a cof-only plugin until it is ported: a CEL
-        // map here has no key order, and the tool's result keeps it.
-        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"cel"));
+    fn cel_is_accepted_once_tool_cel_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("value"),
+            LeafKind::Tool(tool_op_with_provider(
+                "cel",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_cel: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
+    }
+
+    #[test]
+    fn cel_is_refused_until_its_own_flag_is_set() {
         let tool = leaf_op(
             EffectPath::root().push_name("value"),
             LeafKind::Tool(tool_op_with_provider(
@@ -1165,9 +1236,6 @@ mod tests {
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("cel".to_string())
         );
-        let text = crate::refusal_text::format_refusal(&refusal);
-        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
-        assert!(text.contains("cel"));
     }
 
     #[test]

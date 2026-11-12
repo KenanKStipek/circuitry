@@ -1,0 +1,45 @@
+#!/usr/bin/env python3
+"""A fake `gh` for the conformance suite (issue #722): matches a handful
+of real `gh` invocation shapes by argv and answers each with fixed
+output, standing in for a real `gh` binary/account. Each case keeps its
+own copy of this exact file (the suite's `fakes/` contract is per-case,
+not a shared library -- `harness._sandboxed_env` only ever puts one
+case's own directory on `PATH`)."""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    argv = sys.argv[1:]
+    if argv[:2] == ["issue", "view"]:
+        sys.stdout.write('{"number": 42, "title": "a sample issue", "body": "issue body text"}\n')
+        return 0
+    if argv[:2] == ["pr", "list"]:
+        sys.stdout.write("[{\"number\": 1}, {\"number\": 2}, {\"number\": 3}]\n")
+        return 0
+    if argv[:2] == ["api", "user"]:
+        sys.stdout.write("octocat\n")
+        return 0
+    if argv[:2] == ["api", "graphql"]:
+        if len(argv) != 4 or "\n" not in argv[3]:
+            sys.stderr.write(
+                f"fake gh: expected argv length 4 with a newline in argv[3] "
+                f"(the multi-line query must travel as one argv element), got: {argv}\n"
+            )
+            return 1
+        sys.stdout.write('{"data": {"viewer": {"login": "octocat"}}}\n')
+        return 0
+    if len(argv) >= 2 and argv[0] == "api" and argv[1].endswith("/timeline"):
+        sys.stderr.write("gh: Not Found (HTTP 404)\n")
+        return 1
+    if argv[:2] == ["issue", "close"]:
+        sys.stderr.write("gh: issue not found\n")
+        return 1
+    sys.stderr.write(f"fake gh: unrecognized args: {argv}\n")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

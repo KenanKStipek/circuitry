@@ -970,11 +970,11 @@ async fn a_tool_naming_the_cof_only_systemone_plugin_is_refused_with_the_marker(
     assert!(error.contains("use `cof run` instead"));
 }
 
-/// Issue #597: `cel` is a cof-only plugin, so a document naming it is
-/// refused up front with the standard preview message and writes no state.
+/// Issue #723: `cel` is runnable now, so this case now exercises the
+/// real interpreter end to end instead of the preview refusal.
 #[tokio::test]
-async fn a_tool_naming_the_cof_only_cel_plugin_is_refused_with_the_marker() {
-    let dir = temp_dir("cel-cof-only");
+async fn a_tool_naming_the_cel_plugin_runs_for_real() {
+    let dir = temp_dir("cel-runs");
     let config = write(&dir, "config.json", "{}");
     let doc = write(
         &dir,
@@ -985,15 +985,26 @@ async fn a_tool_naming_the_cof_only_cel_plugin_is_refused_with_the_marker() {
 
     let result = run(&req).await;
 
-    assert!(!result.ok);
-    assert!(
-        result.state.is_none(),
-        "a refusal must write no state at all"
+    assert!(result.ok, "{:?}", result.error);
+    let state = result.state.unwrap();
+    let computed = state
+        .as_dict()
+        .unwrap()
+        .get(&electricity_value::Value::Str("prime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(&electricity_value::Value::Str("computed".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        computed.get(&electricity_value::Value::Str("value".to_string())),
+        Some(&electricity_value::Value::List(vec![
+            electricity_value::Value::from(2_i64),
+            electricity_value::Value::from(3_i64),
+        ]))
     );
-    let error = result.error.unwrap();
-    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(error.contains("provider \"cel\""));
-    assert!(error.contains("use `cof run` instead"));
 }
 
 /// Issue #598: electricity resolves no secret, so an `http` header naming

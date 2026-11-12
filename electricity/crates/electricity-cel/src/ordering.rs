@@ -361,7 +361,7 @@ mod tests {
         let mut ctx = Context::with_env(Arc::clone(&env));
         register(&mut ctx);
         ctx.add_variable_from_value("state", {
-            let mut map = std::collections::HashMap::new();
+            let mut map = indexmap::IndexMap::new();
             map.insert(
                 cel::objects::Key::String(std::sync::Arc::new("n".to_string())),
                 Value::Float(nan),

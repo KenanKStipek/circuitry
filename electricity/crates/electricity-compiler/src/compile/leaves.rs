@@ -8,7 +8,7 @@ use crate::compile::Ctx;
 use crate::compile::coerce::{get_bool_default, get_truthy, py_int};
 use crate::compile::containers::{check_resume_mode, compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
-use crate::compile::params::{build_tool_params, build_use_inputs};
+use crate::compile::params::{build_cel_params, build_tool_params, build_use_inputs};
 use crate::compile::templates::{check_templates, template_text};
 use crate::prompt_files::compile_dispatch_file as compile_dispatch_file_dict;
 use crate::state_ns::validate_reference_path;
@@ -524,7 +524,17 @@ pub(crate) fn compile_tool(
         }
     }
 
-    let params_node = build_tool_params(params, name, effect_path, loop_names)?;
+    let params_node = if electricity_value::pycompat::py_strip(provider).to_lowercase() == "cel" {
+        build_cel_params(
+            params,
+            params_json.as_deref(),
+            name,
+            effect_path,
+            loop_names,
+        )?
+    } else {
+        build_tool_params(params, name, effect_path, loop_names)?
+    };
 
     let params_json_text = match &params_json {
         Some(raw) => {

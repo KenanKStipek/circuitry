@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #723",
+  "description": "A `flow: tree` dynamic with two failing `cel` branches: a strict unset `state.` path (CelEvaluationError) and a `schema:` mismatch (ValueError) -- `fan.meta.error` names each branch's own displayed class, matched by `electricity_vm::VmError::displayed_class`, the same way `tree-failure-class-names` does for other providers.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

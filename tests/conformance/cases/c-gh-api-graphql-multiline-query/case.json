@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`gh api graphql -f query=<a multi-line GraphQL document>` -- the whole query, newlines included, travels as one argv element, never split into several arguments or a shell word.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

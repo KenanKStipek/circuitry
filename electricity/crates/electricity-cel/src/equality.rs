@@ -62,7 +62,7 @@
 //! decides it) rather than raising on the first pair's numeric
 //! mismatch. [`strict_eq`]'s `List`/`Map` arms used to return the
 //! first `Err` the `?` operator reached, including through a
-//! `HashMap`'s own unspecified iteration order for `Map` — a `false`
+//! map's own iteration order for `Map` — a `false`
 //! result could flip to an error from one run to the next depending on
 //! which key happened to be visited first.
 //! They now scan every element, deciding `false` immediately if any
@@ -561,7 +561,7 @@ mod tests {
     fn nested_map_equality_checks_key_sets_before_any_value() {
         // A mismatched key set decides `false`
         // without comparing any value, so this can never raise
-        // regardless of a `HashMap`'s own iteration order.
+        // regardless of the map's own iteration order.
         for _ in 0..20 {
             assert_eq!(
                 eval("{'a': 1, 'b': 2} in [{'a': 1.0, 'c': 2}]"),

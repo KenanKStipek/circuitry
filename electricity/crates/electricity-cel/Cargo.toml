@@ -15,6 +15,7 @@ electricity-value = { path = "../electricity-value" }
 # (base64.encode/decode) is default but unused here, so it's dropped.
 cel = { version = "0.15", default-features = false, features = ["regex", "chrono"] }
 chrono = { version = "0.4", default-features = false, features = ["std"] }
+indexmap = "2"
 # `logger.warning` parity for the absent-path convention (DESIGN.md §7.2):
 # a no-op unless a binary later installs a logger, same as Python's
 # `logging` when nothing configures a handler.

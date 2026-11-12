@@ -1,14 +1,15 @@
 //! electricity-tools: the `ToolPlugin` trait, the per-attempt plugin
-//! builder, the process API, and electricity's 13 native tool
+//! builder, the process API, and electricity's 15 native tool
 //! providers (DESIGN.md §8.1) -- [`ToolPlugin`] v2, [`ToolCall`],
 //! [`ToolError`], [`PyExc`], [`ErrorCause`], [`ToolResult::validate`],
 //! [`registry::build_plugin`], and one module per provider: [`shell`],
 //! [`awk`], [`imagemagick`], [`ffmpeg`] (lane C, #459/#467); [`fs`],
 //! [`env_vars`], [`hash`], [`uuid`], [`clock`] (lane D1, #460/#464);
 //! [`regex`] (lane D2, #479/#480); [`http`]/[`http_client`] (lane E,
-//! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); plus [`json`]
-//! (issue #449's gate lane) and [`agent_cli`], the shared half
-//! `electricity-adapters`' `claude_code`/`pi` build on (issue #520).
+//! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); [`gh`] (issue
+//! #722); [`cel`] (issue #723); plus [`json`] (issue #449's gate lane) and [`agent_cli`],
+//! the shared half `electricity-adapters`' `claude_code`/`pi` build on
+//! (issue #520).
 //!
 //! `#[async_trait]` (not a native `async fn` in a public trait) makes
 //! [`ToolPlugin`] object-safe: a provider is looked up by name at run
@@ -22,11 +23,13 @@ use std::fmt;
 
 pub mod agent_cli;
 pub mod awk;
+pub mod cel;
 pub mod clock;
 pub mod env_vars;
 pub mod ffmpeg;
 pub mod fs;
 mod generated;
+pub mod gh;
 pub mod hash;
 pub mod http;
 pub mod http_client;

@@ -2,6 +2,16 @@
 resolver = "3"
 members = ["crates/*"]
 
+# `cel` 0.15.0, vendored (`vendor/cel`, `vendor/cel/VENDORING.md`): its own
+# `Map` is backed by `indexmap::IndexMap` instead of `std::collections::
+# HashMap`, so a `cel` tool's own map result keeps its authored/
+# insertion order on electricity the same way `celtypes.MapType` (a
+# Python `dict`) does on `cof run` (issue #723) -- `electricity-cel`
+# depends on plain `cel = "0.15"` unchanged; this patch is what actually
+# resolves it to the vendored copy.
+[patch.crates-io]
+cel = { path = "vendor/cel" }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
