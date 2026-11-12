@@ -2876,9 +2876,14 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 electricity's security posture mirrors Circuitry's (Decisions, §1: "same security rules as
 `cof`"):
 
-- **Explicit trust, no discovery.** Both the config file and the orchestration file are
-  operator-chosen and therefore fully trusted — electricity performs no document-trust
-  classification, no `cof trust`-equivalent prompt, no implicit config search path.
+- **Explicit trust, no discovery.** Both the config file and the top-level orchestration file
+  are operator-chosen and therefore fully trusted — no `cof trust`-equivalent prompt, no
+  implicit config search path. electricity does classify a *nested* document's own trust
+  (`DocumentOrigin`), the same distinction `cof check`/`cof run` make: a `use` child named by
+  `path:` inherits its parent's trust, where one named inline or generated at run time (a
+  reflector/decomposition plan) is never trusted, whatever its parent is — the boundary
+  `runtime.secrets`/`{secret: ...}` and `http`'s `save_to` (§13, issues #725/#726) are checked
+  against.
 - **Shell allowlists + host pin, intersection semantics.** A `shell` effect's commands are
   bounded by the intersection of the document's own `allowed_commands` and the host's
   `runtime.plugins.shell.allowed_commands` pin — never their union (§8.4).

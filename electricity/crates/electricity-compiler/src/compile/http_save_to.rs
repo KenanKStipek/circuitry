@@ -83,11 +83,11 @@ fn within_param_errors(within: &Value) -> Vec<String> {
     }
 }
 
-/// `plugins/http.py::static_param_errors`, minus its `trusted` branch
-/// (electricity's documents are always trusted). *params* is the tool
+/// `plugins/http.py::static_param_errors`. *params* is the tool
 /// effect's own literal `params:`; *params_json* its raw (unrendered)
 /// template text, sniffed as JSON the same lenient way the reference
-/// does.
+/// does; *trusted* is `false` for a document not run by path (a
+/// `use: inline` child, or one resolved through a limited parent).
 pub(crate) fn http_save_to_errors(
     params: &electricity_value::Dict,
     params_json: Option<&str>,

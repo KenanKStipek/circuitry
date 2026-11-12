@@ -547,14 +547,40 @@ async fn a_connection_refused_raises_the_wrapped_runtime_error() {
     assert_eq!(err.cause, electricity_tools::ErrorCause::NoReply);
 }
 
-fn save_to_temp_dir(name: &str) -> std::path::PathBuf {
+/// A `save_to_temp_dir`'s own directory, removed on `Drop` -- unlike a
+/// bare `PathBuf`, nothing this file's own tests do with the returned
+/// value leaves it behind afterward (issue #661's own fixed-cap
+/// reasoning, applied to a test's own scratch directory rather than a
+/// fake process).
+struct TempDirGuard(std::path::PathBuf);
+
+impl std::ops::Deref for TempDirGuard {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for TempDirGuard {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn save_to_temp_dir(name: &str) -> TempDirGuard {
     let dir = std::env::temp_dir().join(format!(
         "electricity-http-save-to-test-{name}-{}",
         std::process::id()
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    dir.canonicalize().unwrap()
+    TempDirGuard(dir.canonicalize().unwrap())
 }
 
 #[tokio::test]

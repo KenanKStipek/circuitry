@@ -455,12 +455,6 @@ fn reject_limited_save_to(params: &Dict) -> Result<(), String> {
     Ok(())
 }
 
-/// `core/tool.py::_capped_raw` -- redacts *raw*, JSON-round-trips it
-/// (`core/tool.py`'s own docstring: callers serialize state with plain
-/// `json.dumps`, so a raw value only `default=str` can encode must
-/// already be normalized here), then replaces it with the truncation
-/// marker once that encoding is over [`electricity_redaction::
-/// RAW_META_MAX_BYTES`].
 /// `core/tool.py::_scrub_result` (issue #725): *result* with every
 /// secret this dispatch resolved replaced by its placeholder, wherever
 /// the plugin's own output echoes it.
@@ -477,6 +471,12 @@ fn scrub_result(
     }
 }
 
+/// `core/tool.py::_capped_raw` -- redacts *raw*, JSON-round-trips it
+/// (`core/tool.py`'s own docstring: callers serialize state with plain
+/// `json.dumps`, so a raw value only `default=str` can encode must
+/// already be normalized here), then replaces it with the truncation
+/// marker once that encoding is over [`electricity_redaction::
+/// RAW_META_MAX_BYTES`].
 fn capped_raw(raw: Value) -> Value {
     let redacted = electricity_redaction::redact(raw);
     let encoded = match electricity_json::dumps_default_str(
