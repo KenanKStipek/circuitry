@@ -2617,6 +2617,44 @@ mod tests {
     }
 
     #[test]
+    fn left_and_right_page_the_help_without_closing_it() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, HelpPage::Key);
+        app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
+        assert_eq!(
+            app.dialog,
+            Dialog::Help,
+            "→ must leave Help open, unlike every other key"
+        );
+        assert_eq!(app.help_page, HelpPage::Keys);
+        app.handle_key(key(KeyCode::Left), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        assert_eq!(app.help_page, HelpPage::Key);
+    }
+
+    #[test]
+    fn question_mark_reopens_help_on_its_default_page() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, HelpPage::Keys);
+        app.handle_key(key(KeyCode::Char('x')), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::None);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        assert_eq!(
+            app.help_page,
+            HelpPage::default(),
+            "? must reopen Help on its own default page, not wherever it was left"
+        );
+    }
+
+    #[test]
     fn capital_t_cycles_the_theme_with_help_open_without_closing_it() {
         let rows = [row("prime.a", 1, StatusKind::Done)];
         let visible: Vec<&Row> = rows.iter().collect();
