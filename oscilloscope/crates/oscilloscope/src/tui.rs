@@ -24506,6 +24506,88 @@ mod tape_frame_goldens {
         );
     }
 
+    /// The review's own regression on #748's first fix pass: below
+    /// 74 columns the Tape's Help fell back to a fixed 18-row
+    /// overlay, so at 60x24 the close row -- the only hint a second
+    /// page exists -- was cut from the Keys page, and the Key
+    /// page's own last line (the sparkline) was cut too. Every page
+    /// this now splits onto keeps its own close row, and both the
+    /// Keys page's own last row and the Key page's own last row
+    /// read in full on some page.
+    #[test]
+    fn the_tapes_help_overlay_keeps_its_close_row_at_60x24() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let pages = render_help_pages(
+            |app, terminal| {
+                app.selected_path = Some("prime.gate.reply".to_string());
+                terminal
+                    .draw(|f| {
+                        draw(
+                            f,
+                            &rendered,
+                            None,
+                            &[],
+                            app,
+                            None,
+                            &ctx,
+                            0,
+                            now,
+                            Some(&tape_screen),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    })
+                    .unwrap();
+            },
+            60,
+        );
+        assert!(
+            pages.len() > 1,
+            "expected more than one page at 60x24: {} page(s)",
+            pages.len()
+        );
+        for (i, page) in pages.iter().enumerate() {
+            assert!(
+                page.contains("Close"),
+                "page {i} of {} has no close row:\n{page}",
+                pages.len()
+            );
+        }
+        let all_pages = pages.join("\n");
+        assert!(
+            all_pages.contains("a loop's pass sparkline"),
+            "the Key page's own last line is missing from every page:\n{all_pages}"
+        );
+        assert!(
+            all_pages.contains("cancel · confirms"),
+            "the Keys page's own last line is missing from every page:\n{all_pages}"
+        );
+    }
+
     /// The Help overlay on Signal lists its own keys (§4), not an
     /// older generic list that has none of them.
     #[test]
