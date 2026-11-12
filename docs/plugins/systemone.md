@@ -244,15 +244,13 @@ the key is only ever sent to `base_url`.
 
 ## electricity
 
-`electricity` runs `systemone` too: the same request body, host rules and answer
-checks, over its own HTTP client. Two differences, both narrow:
-
-- The `cof check`/compile-time validation of a literal `model`/`questions`/
-  `within` (failing a malformed document before the run starts) is not ported;
-  every one of those checks still runs again at the effect's own dispatch
-  (ported in full), so a malformed effect still fails the same way, only later
-  in the run.
-- A **limited** document's `within` is not additionally held to its own
-  project (the "Trust and `use`" section above) — every document runs as if
-  trusted. The unconditional check (a `state_file` must resolve inside its own
-  `within`) still applies regardless.
+`electricity` runs `systemone` too: the same request body, host rules, `within`
+confinement and answer checks, over its own HTTP client. One difference,
+narrow: the `cof check`/compile-time validation of a malformed `model`/
+`questions` (failing a document before the run starts) is not ported; both
+still run again at the effect's own dispatch, so a malformed effect still
+fails the same way, only later in the run. The `state_file`/`within` half of
+that same compile-time check — a document with no file of its own, a
+non-literal `within`, and a **limited** document's `within` escaping its own
+project (the "Trust and `use`" section above) — is checked at compile time
+and at dispatch, same as `cof check`/`cof run`.
