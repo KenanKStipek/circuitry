@@ -2984,20 +2984,39 @@ pane's own drop there.
 **From the frames, not from the design text: the Key's own contents
 (issue #738).** §3.7 and §4 name the glyphs and keys; which of them
 each screen's own Key page actually lists is read off the frames and
-the renderers, not stated in prose anywhere else. Every screen's Key
-starts from §3.7's shared glyphs it actually draws (never `❯`, the
-Select/All screens' own row cursor -- every other screen highlights a
-row's own background instead) and adds: the Tape's own Now band,
-a loop line's `slots`/`queued` (§3.4's `2 of 2 Slots Busy · 1 Pass
-Queued`), breadcrumbs and preview lines (both `›`), the token bar and
-the vs-usual column's `+25%`/`below` deviation colours; the Signal's
-own `┃` Now sweep over the axis's dashes ahead of it, `sent`/`received`
-above/below the axis, a tool's own bar, the second marks and the
-fixed scale; the Flow's own station glyphs, folded lanes' own `+N`,
-the token bar and Following; the Store's own tile area, the `check`
-tile, `… N more` and the running tile's own pulse; and Select's, All's
-and the Combined Signal's own `●` running mark, `—`/`gone`, run
-colours, the shared scale and a run's own name (#717).
+the renderers, not stated in prose anywhere else, and every symbol is
+drawn in the real style the screen draws it in, never a generic muted
+placeholder. At 120x30 the Tape's own Help has the room to merge every
+key and its Key onto one page; narrower terminals keep paging between
+them with `←→`, and `?` always reopens on the default page regardless
+of where a previous Help left off.
+
+Every screen's Key starts from §3.7's shared glyphs it actually draws
+(never `❯`, the Select/All/Store screens' own row cursor -- every
+other screen highlights a row's own background instead) and adds: the
+Tape's own Now band, a loop line's `slots`/`queued` (§3.4's `2 of 2
+Slots Busy · 1 Pass Queued`), breadcrumbs and preview lines (both
+`›`), the token bar, the Totals row's own `↑↓` sent/received arrows,
+the vs-usual column's `+25%`/`below` deviation colours and the `t`
+view's own filled `▓` tick, and a loop's own pass sparkline (`▁`–`█`);
+the Signal's own `┃` Now sweep over the axis's `╌` dashes ahead of
+it, a step's own done/failed/running/ahead marks and a loop station,
+`sent`/`received` above/below the axis, a tool's own bar, the stacked
+columns' own partial cells (`▁`–`█`, `▀`/`▔`), the released tokens'
+own deviation colours, the fixed scale, `■` Run End and `›` in a
+step's own name; the Flow's own station glyphs, ghost lanes' own `·`
+and off-screen `◂`/`▸` markers, folded lanes' own `+N`, the token bar
+at its real unit, `▾` Following and the rail's own `━` position; the
+Store's own tile area, the `check` tile, `… N more`, a running
+container's own accent `●`, a live leaf's own dim (italic in
+`terminal`) style, the Largest table's own `❯` cursor and the status
+line's own `✓`/`✗`/`›`; and Select's, All's and the Combined
+Signal's own `●` running mark (per-run colour on All and the
+Combined Signal, the accent colour alone on Select, which keeps no
+run colour of its own), `—`/`gone`, the shared scale and a run's own
+name -- plus, on Select, Recent Runs' own `✓`/`✗` and `❯` cursor, and
+on the Combined Signal, its own stacked bars, legend swatch and Run
+End mark.
 
 **Not yet shipped.** §2.2's own "the step rows and the Now pane
 follow the cursor's column" (the scrubbed-cursor half of §6.3e's
