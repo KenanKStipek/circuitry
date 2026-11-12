@@ -531,6 +531,16 @@ pub(crate) fn compile_tool(
         &normalized_provider,
         effect_path,
     )?;
+    if normalized_provider == "http" {
+        let problems =
+            crate::compile::http_save_to::http_save_to_errors(params, params_json.as_deref());
+        if !problems.is_empty() {
+            return Err(CompileError(format!(
+                "Tool effect '{name}' (http) at '{effect_path}': {}",
+                problems.join("; ")
+            )));
+        }
+    }
 
     let params_node = if normalized_provider == "cel" {
         build_cel_params(

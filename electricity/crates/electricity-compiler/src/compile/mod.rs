@@ -7,6 +7,7 @@
 pub mod coerce;
 pub mod containers;
 pub mod expect;
+pub mod http_save_to;
 pub mod leaves;
 pub mod names;
 pub mod params;
