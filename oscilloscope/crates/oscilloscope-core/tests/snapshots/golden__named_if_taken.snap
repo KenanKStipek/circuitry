@@ -7,7 +7,7 @@ log:
   ◆ prime.gate → then
   ▶ prime.gate.chosen  shell echo then-branch
   ✓ prime.gate.chosen  0.0s  then-branch
-  ■ run dense-ginger  ok  0.0s
+  ■ run pastel-petrel  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.gate: Done skip=None retrying=false
