@@ -9,8 +9,14 @@
 //! ParamNode`] tree at dispatch time.
 //!
 //! `core/compiler.py`'s own "only a document run by path may name a
-//! secret" refusal has no counterpart here: every document electricity
-//! runs is trusted (DESIGN.md §11), so that branch never fires.
+//! secret" refusal (`_untrusted_secret_error`) *does* have a
+//! counterpart here: the top-level document electricity runs is always
+//! trusted (DESIGN.md §11), but a `use` child compiled as
+//! [`crate::DocumentOrigin::LimitedFile`] or [`crate::DocumentOrigin::
+//! Generated`] (an inline child, or one resolved through a limited
+//! parent) is not -- the same distinction [`crate::compile::leaves::
+//! compile_agent_prompt_file`] and `UseOp::parent_trusted` already
+//! make.
 
 use crate::CompileError;
 use electricity_bytecode::secrets::{
@@ -32,11 +38,20 @@ fn key_label(key: &Value) -> String {
 /// *allowed* is the exact set of field paths a secret reference may
 /// occupy -- `params.headers.<name>` for each of `http`'s own header
 /// names, empty for every other provider.
+fn untrusted_secret_error(where_: &str, name: &str) -> CompileError {
+    CompileError(format!(
+        "{where_} names secret {}: only a document run by path may name a secret (a \
+         limited document, a library entry or a generated plan cannot).",
+        Value::Str(name.to_string()).py_repr()
+    ))
+}
+
 fn walk(
     value: &Value,
     field: String,
     allowed: &IndexMap<String, ()>,
     label: &str,
+    trusted: bool,
     found: &mut IndexMap<String, SecretRef>,
 ) -> Result<(), CompileError> {
     if allowed.contains_key(&field) && has_secret_key(value) {
@@ -45,15 +60,16 @@ fn walk(
                 "{label}: {field}: a secret reference {problem}."
             )));
         }
+        let reference = secret_ref(value).expect("secret_ref_error returned None above");
+        if !trusted {
+            return Err(untrusted_secret_error(label, &reference.name));
+        }
         let header_name = field
             .rsplit('.')
             .next()
             .expect("field always has at least one segment")
             .to_string();
-        found.insert(
-            header_name,
-            secret_ref(value).expect("secret_ref_error returned None above"),
-        );
+        found.insert(header_name, reference);
         return Ok(());
     }
     if is_secret_ref(value) {
@@ -71,13 +87,21 @@ fn walk(
                     format!("{field}.{}", key_label(key)),
                     allowed,
                     label,
+                    trusted,
                     found,
                 )?;
             }
         }
         Value::List(items) => {
             for (index, item) in items.iter().enumerate() {
-                walk(item, format!("{field}[{index}]"), allowed, label, found)?;
+                walk(
+                    item,
+                    format!("{field}[{index}]"),
+                    allowed,
+                    label,
+                    trusted,
+                    found,
+                )?;
             }
         }
         _ => {}
@@ -94,6 +118,7 @@ pub(crate) fn check_param_secrets(
     name: &str,
     provider: &str,
     effect_path: &str,
+    trusted: bool,
 ) -> Result<IndexMap<String, SecretRef>, CompileError> {
     let mut allowed: IndexMap<String, ()> = IndexMap::new();
     if provider == "http" {
@@ -110,6 +135,7 @@ pub(crate) fn check_param_secrets(
         "params".to_string(),
         &allowed,
         &label,
+        trusted,
         &mut found,
     )?;
     Ok(found)
@@ -135,7 +161,7 @@ mod tests {
         );
         let mut params = VDict::new();
         params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
-        let found = check_param_secrets(&params, "call", "http", "prime.call").unwrap();
+        let found = check_param_secrets(&params, "call", "http", "prime.call", true).unwrap();
         assert_eq!(found.len(), 1);
         assert_eq!(found.get("Authorization").unwrap().name, "github");
     }
@@ -144,7 +170,7 @@ mod tests {
     fn a_secret_outside_headers_is_a_compile_error() {
         let mut params = VDict::new();
         params.insert(Value::Str("body".to_string()), secret_value("github"));
-        let err = check_param_secrets(&params, "call", "http", "prime.call").unwrap_err();
+        let err = check_param_secrets(&params, "call", "http", "prime.call", true).unwrap_err();
         assert!(
             err.0
                 .contains("is allowed only as a value in an http effect's params.headers")
@@ -160,7 +186,7 @@ mod tests {
         );
         let mut params = VDict::new();
         params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
-        let err = check_param_secrets(&params, "call", "shell", "prime.call").unwrap_err();
+        let err = check_param_secrets(&params, "call", "shell", "prime.call", true).unwrap_err();
         assert!(
             err.0
                 .contains("is allowed only as a value in an http effect's params.headers")
@@ -176,8 +202,26 @@ mod tests {
         headers.insert(Value::Str("Authorization".to_string()), Value::Dict(secret));
         let mut params = VDict::new();
         params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
-        let err = check_param_secrets(&params, "call", "http", "prime.call").unwrap_err();
+        let err = check_param_secrets(&params, "call", "http", "prime.call", true).unwrap_err();
         assert!(err.0.contains("unknown key"));
+    }
+
+    #[test]
+    fn an_untrusted_document_naming_a_well_placed_secret_is_a_compile_error() {
+        let mut headers = VDict::new();
+        headers.insert(
+            Value::Str("Authorization".to_string()),
+            secret_value("github"),
+        );
+        let mut params = VDict::new();
+        params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
+        let err = check_param_secrets(&params, "call", "http", "prime.call", false).unwrap_err();
+        assert_eq!(
+            err.0,
+            "Tool effect 'call' at 'prime.call' names secret 'github': only a document run \
+             by path may name a secret (a limited document, a library entry or a generated \
+             plan cannot)."
+        );
     }
 
     #[test]
@@ -189,6 +233,6 @@ mod tests {
         odd.insert(Value::Str("response".to_string()), Value::from("r"));
         let mut params = VDict::new();
         params.insert(Value::Str("json".to_string()), Value::Dict(odd));
-        assert!(check_param_secrets(&params, "call", "http", "prime.call").is_ok());
+        assert!(check_param_secrets(&params, "call", "http", "prime.call", true).is_ok());
     }
 }

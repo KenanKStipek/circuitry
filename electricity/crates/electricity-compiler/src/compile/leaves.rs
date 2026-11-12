@@ -525,15 +525,20 @@ pub(crate) fn compile_tool(
     }
 
     let normalized_provider = electricity_value::pycompat::py_strip(provider).to_lowercase();
+    let trusted = matches!(origin, DocumentOrigin::File { .. });
     let secret_headers = crate::compile::secrets::check_param_secrets(
         params,
         name,
         &normalized_provider,
         effect_path,
+        trusted,
     )?;
     if normalized_provider == "http" {
-        let problems =
-            crate::compile::http_save_to::http_save_to_errors(params, params_json.as_deref());
+        let problems = crate::compile::http_save_to::http_save_to_errors(
+            params,
+            params_json.as_deref(),
+            trusted,
+        );
         if !problems.is_empty() {
             return Err(CompileError(format!(
                 "Tool effect '{name}' (http) at '{effect_path}': {}",

@@ -7,10 +7,25 @@
 //! rendered value yet).
 //!
 //! `cof check`'s own "only a document run by path may name `save_to`"
-//! refusal has no counterpart here: every document electricity runs is
-//! trusted (DESIGN.md §11), so that branch never fires.
+//! refusal (`_LIMITED_SAVE_TO`) *does* have a counterpart here: the
+//! top-level document electricity runs is always trusted (DESIGN.md
+//! §11), but a `use` child compiled as [`crate::DocumentOrigin::
+//! LimitedFile`] or [`crate::DocumentOrigin::Generated`] is not -- the
+//! same `trusted` [`crate::compile::secrets::check_param_secrets`]
+//! takes.
 
 use electricity_value::Value;
+
+/// `plugins/http.py::_LIMITED_SAVE_TO`.
+const LIMITED_SAVE_TO: &str = "only a document run by path may save a response to a file (a \
+     limited document, a library entry or a generated plan cannot)";
+
+fn key_name(key: &Value) -> String {
+    match key {
+        Value::Str(s) => s.clone(),
+        other => other.py_str(),
+    }
+}
 
 /// `core/tool.py::param_reference`'s own shape check: a mapping whose
 /// keys are `from` (a string) plus any of `default`/`as`.
@@ -76,6 +91,7 @@ fn within_param_errors(within: &Value) -> Vec<String> {
 pub(crate) fn http_save_to_errors(
     params: &electricity_value::Dict,
     params_json: Option<&str>,
+    trusted: bool,
 ) -> Vec<String> {
     let overlay: Option<Value> = params_json.and_then(|text| electricity_json::loads(text).ok());
     let overlay_keys: Vec<Value> = match &overlay {
@@ -89,6 +105,17 @@ pub(crate) fn http_save_to_errors(
     }
     let save_to_key = Value::Str("save_to".to_string());
     let has_save_to = params.contains_key(&save_to_key);
+    if !trusted {
+        for key in [&save_to_key, &within_key] {
+            if params.contains_key(key) {
+                errors.push(format!("params.{}: {LIMITED_SAVE_TO}", key_name(key)));
+            }
+        }
+        if overlay_keys.contains(&save_to_key) {
+            errors.push(format!("params_json sets save_to: {LIMITED_SAVE_TO}"));
+        }
+        return errors;
+    }
     let has_within_via_params_json = params_json.is_some() && params.contains_key(&within_key);
     if !has_save_to && !has_within_via_params_json {
         return errors;
@@ -157,19 +184,25 @@ mod tests {
     #[test]
     fn no_save_to_or_within_is_fine() {
         let params = params_with(&[("url", Value::from("http://x"))]);
-        assert_eq!(http_save_to_errors(&params, None), Vec::<String>::new());
+        assert_eq!(
+            http_save_to_errors(&params, None, true),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn a_relative_save_to_is_fine() {
         let params = params_with(&[("save_to", Value::from("a/b.png"))]);
-        assert_eq!(http_save_to_errors(&params, None), Vec::<String>::new());
+        assert_eq!(
+            http_save_to_errors(&params, None, true),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
     fn an_absolute_save_to_is_an_error() {
         let params = params_with(&[("save_to", Value::from("/etc/passwd"))]);
-        let errors = http_save_to_errors(&params, None);
+        let errors = http_save_to_errors(&params, None, true);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("must be a relative path"));
     }
@@ -180,7 +213,10 @@ mod tests {
             ("save_to", Value::from("a.png")),
             ("within", Value::from("/tmp/run")),
         ]);
-        assert_eq!(http_save_to_errors(&params, None), Vec::<String>::new());
+        assert_eq!(
+            http_save_to_errors(&params, None, true),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -189,7 +225,7 @@ mod tests {
             ("save_to", Value::from("a.png")),
             ("within", Value::from("relative/dir")),
         ]);
-        let errors = http_save_to_errors(&params, None);
+        let errors = http_save_to_errors(&params, None, true);
         assert_eq!(errors.len(), 1);
         assert!(errors[0].contains("must be an absolute path"));
     }
@@ -197,7 +233,7 @@ mod tests {
     #[test]
     fn params_json_setting_within_is_an_error() {
         let params = params_with(&[("save_to", Value::from("a.png"))]);
-        let errors = http_save_to_errors(&params, Some(r#"{"within": "/tmp"}"#));
+        let errors = http_save_to_errors(&params, Some(r#"{"within": "/tmp"}"#), true);
         assert!(
             errors
                 .iter()
@@ -211,7 +247,7 @@ mod tests {
             ("save_to", Value::from("a.png")),
             ("max_bytes", Value::from(0_i64)),
         ]);
-        let errors = http_save_to_errors(&params, None);
+        let errors = http_save_to_errors(&params, None, true);
         assert!(
             errors
                 .iter()
@@ -225,7 +261,10 @@ mod tests {
             ("save_to", Value::from("a.png")),
             ("max_bytes", Value::from(1024_i64)),
         ]);
-        assert_eq!(http_save_to_errors(&params, None), Vec::<String>::new());
+        assert_eq!(
+            http_save_to_errors(&params, None, true),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -234,11 +273,38 @@ mod tests {
             ("save_to", Value::from("a.png")),
             ("parse", Value::from("json")),
         ]);
-        let errors = http_save_to_errors(&params, None);
+        let errors = http_save_to_errors(&params, None, true);
         assert!(
             errors
                 .iter()
                 .any(|e| e.contains("params.parse must be auto"))
+        );
+    }
+
+    #[test]
+    fn an_untrusted_document_naming_save_to_is_an_error() {
+        let params = params_with(&[("save_to", Value::from("a.png"))]);
+        let errors = http_save_to_errors(&params, None, false);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("only a document run by path may save a response to a file"));
+    }
+
+    #[test]
+    fn an_untrusted_document_naming_within_is_also_an_error() {
+        let params = params_with(&[
+            ("save_to", Value::from("a.png")),
+            ("within", Value::from("/tmp/run")),
+        ]);
+        let errors = http_save_to_errors(&params, None, false);
+        assert_eq!(errors.len(), 2);
+    }
+
+    #[test]
+    fn an_untrusted_document_with_neither_save_to_nor_within_is_fine() {
+        let params = params_with(&[("url", Value::from("http://x"))]);
+        assert_eq!(
+            http_save_to_errors(&params, None, false),
+            Vec::<String>::new()
         );
     }
 
@@ -250,6 +316,9 @@ mod tests {
             ("save_to", Value::from("a.png")),
             ("within", Value::Dict(reference)),
         ]);
-        assert_eq!(http_save_to_errors(&params, None), Vec::<String>::new());
+        assert_eq!(
+            http_save_to_errors(&params, None, true),
+            Vec::<String>::new()
+        );
     }
 }
