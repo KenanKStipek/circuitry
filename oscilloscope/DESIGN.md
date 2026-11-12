@@ -3839,10 +3839,11 @@ parses as one) goes through the summary there, everything else still
 reads through `display_value`. An agent step's own rule
 (`screens::tape_finished_agent_what`) leads with its duration, the
 same as every other finished tool row's own "what" text, then issue
-#703's own files-changed/turns fields from `meta.raw` (files, with
-`+N −M` alongside it, then turns, with only the parts actually
-present) -- it needs the whole node, not just its value -- but once
-neither of those two is recorded there at all, it now falls through
+#703's own files-changed/turns/tool-calls fields from `meta.raw`
+(files, with `+N −M` alongside it, then turns, then tool calls, with
+only the parts actually present) -- it needs the whole node, not just
+its value -- but once none of those three is recorded there at all,
+it now falls through
 to the same shared summary on the node's own value rather than
 reading only the bare duration.
 

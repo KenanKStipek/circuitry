@@ -1454,14 +1454,14 @@ fn tape_running_agent_what(
 
 /// A finished agent row's own "what" text (issue #739's rule 1):
 /// elapsed time first, as every tool row's own duration already
-/// leads, then files changed (with `+N −M` alongside it) and turns,
-/// cut from the right in that order, from `meta.raw` -- a failed
-/// session never reaches this at all, `tape_row_content`'s own
-/// Failed/Failed-handled branches keep today's error text for one
-/// of those. Once the agent tool left neither of those two (`raw`
-/// has no files changed and no turns), the duration alone falls
-/// through to the one shared summary function on the node's own
-/// value instead.
+/// leads, then files changed (with `+N −M` alongside it), turns and
+/// tool calls, cut from the right in that order, from `meta.raw` --
+/// a failed session never reaches this at all, `tape_row_content`'s
+/// own Failed/Failed-handled branches keep today's error text for one
+/// of those. Once the agent tool left none of those three (`raw` has
+/// no files changed, no turns and no tool calls), the duration alone
+/// falls through to the one shared summary function on the node's
+/// own value instead.
 fn tape_finished_agent_what(
     duration_s: Option<f64>,
     raw: &AgentRawSummary,
@@ -1489,7 +1489,13 @@ fn tape_finished_agent_what(
             if turns == 1 { "" } else { "s" }
         ));
     }
-    if raw.files_changed.is_none() && raw.turns.is_none() {
+    if let Some(calls) = raw.tool_calls {
+        what.push_str(&format!(
+            " · {calls} tool{}",
+            if calls == 1 { "" } else { "s" }
+        ));
+    }
+    if raw.files_changed.is_none() && raw.turns.is_none() && raw.tool_calls.is_none() {
         if let Some(words) = (!value.is_null())
             .then(|| crate::summary::json_value_summary(value, 24))
             .filter(|v| !v.is_empty())
@@ -6395,7 +6401,7 @@ mod tests {
             false,
             "2026-01-01T11:52:00Z",
         );
-        assert_eq!(what, "14.1s · 2 files +3 −1 · 3 turns");
+        assert_eq!(what, "14.1s · 2 files +3 −1 · 3 turns · 12 tools");
     }
 
     /// A failed agent keeps today's error text, never the finished
