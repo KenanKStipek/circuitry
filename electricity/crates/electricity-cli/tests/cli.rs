@@ -1178,6 +1178,38 @@ fn run_subcommand_with_no_orchestration_fails_with_cofs_own_text_and_exit_one() 
     );
 }
 
+/// `cli/app.py::run_cmd`'s own `_print_run_warnings(cfg.resolution_
+/// warnings())` runs between "Orchestration not found" and its own
+/// `Tip: ...` line -- a discovered-but-skipped project config's
+/// warning must still reach stderr when the run ends this early, not
+/// only on one that gets far enough to reach the ordinary
+/// `print_stderr_contract` copy of the same text.
+#[test]
+fn run_subcommand_still_prints_a_config_warning_when_the_orchestration_is_not_found() {
+    let (mut cmd, home) = command("run-sub-missing-doc-config-warning");
+    let cwd = home.path.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("circuitry.config.json"),
+        r#"{"default_model": "from-project"}"#,
+    )
+    .unwrap();
+    let output = cmd
+        .current_dir(&cwd)
+        .args(["run", "no-such-doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "Error: Orchestration not found: no-such-doc.yml\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Warning: Skipped project config"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("not trusted"), "{stderr}");
+}
+
 /// Config discovery (issue #728): with no `--config`, `CIRCUITRY_CONFIG`
 /// is honored, same order as `cli/config.py::resolve_config`.
 #[test]

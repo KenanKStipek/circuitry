@@ -959,6 +959,15 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     let orchestration_path = PathBuf::from(&run_args.orchestration);
     if !orchestration_path.is_file() {
         signal_guard.disarm();
+        // `cli/app.py::run_cmd`'s own `_print_run_warnings(cfg.
+        // resolution_warnings())`, right before its own `Tip: ...` line
+        // (electricity's own note just above on why that line itself
+        // isn't printed): a skipped project config's warning must still
+        // reach stderr here, not only on a run that gets far enough to
+        // reach `print_stderr_contract`'s own copy of the same text.
+        for warning in &config_warnings {
+            write_stderr(&format!("Warning: {warning}\n"));
+        }
         write_stdout(&format!(
             "Error: Orchestration not found: {}\n",
             run_args.orchestration
