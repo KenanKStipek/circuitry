@@ -38,7 +38,7 @@ fn key_label(key: &Value) -> String {
 /// *allowed* is the exact set of field paths a secret reference may
 /// occupy -- `params.headers.<name>` for each of `http`'s own header
 /// names, empty for every other provider.
-fn untrusted_secret_error(where_: &str, name: &str) -> CompileError {
+pub(crate) fn untrusted_secret_error(where_: &str, name: &str) -> CompileError {
     CompileError(format!(
         "{where_} names secret {}: only a document run by path may name a secret (a \
          limited document, a library entry or a generated plan cannot).",
@@ -141,6 +141,55 @@ pub(crate) fn check_param_secrets(
     Ok(found)
 }
 
+/// `core/compiler.py::_check_runtime_env_secrets` (issue #598/#725): a
+/// `{secret: ...}` in *this document's own* `runtime.plugins.<name>.env`
+/// -- well-formed, and only in a trusted document. Checked for every
+/// document `compile_document` ever compiles, a `use` child's own
+/// (never-read) `runtime:` block included: a limited child may not
+/// name one even though nothing ever resolves it, the same standing
+/// cof has.
+pub(crate) fn check_runtime_env_secrets(
+    document: &Value,
+    trusted: bool,
+) -> Result<(), CompileError> {
+    let Some(Value::Dict(plugins)) = document
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("runtime".to_string())))
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&Value::Str("plugins".to_string())))
+    else {
+        return Ok(());
+    };
+    for (plugin_name, cfg) in plugins {
+        let Some(Value::Dict(env)) = cfg
+            .as_dict()
+            .and_then(|d| d.get(&Value::Str("env".to_string())))
+        else {
+            continue;
+        };
+        for (var, value) in env {
+            if !has_secret_key(value) {
+                continue;
+            }
+            let path = format!(
+                "runtime.plugins.{}.env.{}",
+                key_label(plugin_name),
+                key_label(var)
+            );
+            if let Some(problem) = secret_ref_error(value) {
+                return Err(CompileError(format!(
+                    "{path}: a secret reference {problem}."
+                )));
+            }
+            if !trusted {
+                let reference = secret_ref(value).expect("secret_ref_error returned None above");
+                return Err(untrusted_secret_error(&path, &reference.name));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +283,58 @@ mod tests {
         let mut params = VDict::new();
         params.insert(Value::Str("json".to_string()), Value::Dict(odd));
         assert!(check_param_secrets(&params, "call", "http", "prime.call", true).is_ok());
+    }
+
+    fn document_with_plugin_env(plugin: &str, var: &str, value: Value) -> Value {
+        let mut env = VDict::new();
+        env.insert(Value::Str(var.to_string()), value);
+        let mut cfg = VDict::new();
+        cfg.insert(Value::Str("env".to_string()), Value::Dict(env));
+        let mut plugins = VDict::new();
+        plugins.insert(Value::Str(plugin.to_string()), Value::Dict(cfg));
+        let mut runtime = VDict::new();
+        runtime.insert(Value::Str("plugins".to_string()), Value::Dict(plugins));
+        let mut document = VDict::new();
+        document.insert(Value::Str("runtime".to_string()), Value::Dict(runtime));
+        Value::Dict(document)
+    }
+
+    #[test]
+    fn a_trusted_documents_own_runtime_env_secret_is_fine() {
+        let document = document_with_plugin_env("gh", "TOKEN", secret_value("github"));
+        assert!(check_runtime_env_secrets(&document, true).is_ok());
+    }
+
+    #[test]
+    fn an_untrusted_documents_own_runtime_env_secret_is_a_compile_error() {
+        // issue #598/#725: cof's own `_check_runtime_env_secrets` checks
+        // every document it compiles, including a `use` child's own
+        // `runtime:` block -- never read at run time, but still not
+        // honoured from a document that isn't run by path.
+        let document = document_with_plugin_env("gh", "TOKEN", secret_value("github"));
+        let err = check_runtime_env_secrets(&document, false).unwrap_err();
+        assert_eq!(
+            err.0,
+            "runtime.plugins.gh.env.TOKEN names secret 'github': only a document run by \
+             path may name a secret (a limited document, a library entry or a generated \
+             plan cannot)."
+        );
+    }
+
+    #[test]
+    fn a_malformed_runtime_env_secret_is_a_compile_error_even_when_trusted() {
+        let mut malformed = VDict::new();
+        malformed.insert(Value::Str("secret".to_string()), Value::from("github"));
+        malformed.insert(Value::Str("extra".to_string()), Value::from("x"));
+        let document = document_with_plugin_env("gh", "TOKEN", Value::Dict(malformed));
+        let err = check_runtime_env_secrets(&document, true).unwrap_err();
+        assert!(err.0.contains("runtime.plugins.gh.env.TOKEN"), "{}", err.0);
+        assert!(err.0.contains("unknown key"), "{}", err.0);
+    }
+
+    #[test]
+    fn a_document_with_no_runtime_env_secret_is_fine_whatever_its_trust() {
+        let document = document_with_plugin_env("gh", "TOKEN", Value::from("plain"));
+        assert!(check_runtime_env_secrets(&document, false).is_ok());
     }
 }
