@@ -41,6 +41,10 @@ effects:
       within: {from: input.within}
       max_bytes: 5
   - type: tool
+    name: over_max_bytes_file_absent
+    provider: fs
+    params: {mode: exists, path: out/big.bin}
+  - type: tool
     name: non_2xx_writes_nothing
     provider: http
     on_error: continue
@@ -48,6 +52,10 @@ effects:
       url: "{{input.base_url}}/missing.bin"
       save_to: out/missing.bin
       within: {from: input.within}
+  - type: tool
+    name: non_2xx_file_absent
+    provider: fs
+    params: {mode: exists, path: out/missing.bin}
   - type: tool
     name: cleanup
     provider: fs
