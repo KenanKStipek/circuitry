@@ -750,6 +750,7 @@ dependencies = [
 name = "electricity-config"
 version = "0.1.0"
 dependencies = [
+ "electricity-bytecode",
  "electricity-json",
  "electricity-value",
  "indexmap",

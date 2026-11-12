@@ -1378,6 +1378,7 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                secret_headers: indexmap::IndexMap::new(),
             }))),
             on_error: OnError::Fail,
             labels: None,
