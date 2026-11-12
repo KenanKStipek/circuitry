@@ -63,6 +63,16 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
             cause: ErrorCause::None,
         },
         SendError::Other(text) => runtime_error(text),
+        // Never actually reached through this function: `save_to`'s own
+        // dispatch (the only caller that ever builds a `BodySink`)
+        // intercepts both of these itself, with `plugins/http.py::
+        // _save_body`'s own exact text. Kept here only so this match
+        // stays exhaustive.
+        SendError::BodyOverCap { declared } => runtime_error(match declared {
+            Some(n) => format!("the response body is {n} bytes, over the cap"),
+            None => "the response body is over the cap".to_string(),
+        }),
+        SendError::Sink(text) => runtime_error(text),
     }
 }
 
@@ -1483,6 +1493,246 @@ fn replace_exclusively(temp: &Path, path: &Path) -> Result<(), ToolError> {
     Ok(())
 }
 
+/// A temporary file created for one hop's own streamed download --
+/// deleted on `Drop` unless [`TempFileGuard::keep`] disarms it first
+/// (issue #726: every exit from the redirect loop but the one true
+/// 2xx success leaves no file behind, whatever return point it takes).
+struct TempFileGuard(Option<PathBuf>);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+impl TempFileGuard {
+    fn path(&self) -> Option<&Path> {
+        self.0.as_deref()
+    }
+
+    fn keep(mut self) -> PathBuf {
+        self.0
+            .take()
+            .expect("TempFileGuard::keep called at most once")
+    }
+}
+
+/// Creates a fresh, empty temporary file beside *target*'s own path,
+/// the same naming/open-flags [`write_temp_file`] uses for an
+/// already-complete body -- opened for incremental writes instead.
+#[cfg(unix)]
+fn open_save_temp_file(target: &SaveTarget) -> Result<(PathBuf, std::fs::File), ToolError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let directory = make_save_directories(target)?;
+    let file_name = target
+        .path
+        .file_name()
+        .expect("save_target always builds path with a file name");
+    let temp_name = format!(
+        ".{}.{:016x}.part",
+        file_name.to_string_lossy(),
+        random_u64()
+    );
+    let temp = directory.join(temp_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o666);
+    options.custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(&temp).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })?;
+    Ok((temp, file))
+}
+
+#[cfg(not(unix))]
+fn open_save_temp_file(target: &SaveTarget) -> Result<(PathBuf, std::fs::File), ToolError> {
+    let directory = make_save_directories(target)?;
+    let file_name = target
+        .path
+        .file_name()
+        .expect("save_target always builds path with a file name");
+    let temp_name = format!(
+        ".{}.{:016x}.part",
+        file_name.to_string_lossy(),
+        random_u64()
+    );
+    let temp = directory.join(temp_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    let file = options.open(&temp).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })?;
+    Ok((temp, file))
+}
+
+/// [`send_hop`]'s own success-with-save-to result: the body streamed
+/// straight to *guard*'s own temp file, never collected into memory
+/// (issue #726) -- *bytes*/*sha256* are the digest [`BodySink::write`]
+/// updated per chunk, so [`finalize_streamed_save`] never has to read
+/// the file back just to hash it again.
+struct StreamedSave {
+    guard: TempFileGuard,
+    bytes: u64,
+    sha256: String,
+}
+
+/// `plugins/http.py::_save_body`'s own `RuntimeError`/`ConnectionError`
+/// texts for `send_to_sink`'s own two failure shapes -- *save* is
+/// always `Some` here (the only caller [`send_hop`] ever builds a
+/// [`http_client::BodySink`] for).
+fn save_over_cap_error(declared: Option<usize>, save: &SaveTarget) -> ToolError {
+    let text = match declared {
+        Some(n) => format!(
+            "HttpPlugin: the response body is {n} bytes, over max_bytes ({}); nothing was saved.",
+            save.max_bytes
+        ),
+        None => format!(
+            "HttpPlugin: the response body is over max_bytes ({}); nothing was saved.",
+            save.max_bytes
+        ),
+    };
+    runtime_error(text)
+}
+
+/// One hop's own request/response, streaming straight to a fresh
+/// temporary file when *save* is set (issue #726) instead of
+/// collecting the body into memory at all -- bounded by *save*'s own
+/// `max_bytes`, the same way [`http_client::send_capped`] bounds a
+/// different caller's own cap, but erroring (with [`TempFileGuard`]
+/// deleting whatever was already written) rather than silently
+/// truncating, matching `plugins/http.py::_save_body`'s own
+/// `_SAVE_CHUNK_BYTES` loop. `RawResponse::body` is always empty in
+/// that case; the caller reads the temp file back itself for a
+/// non-2xx error excerpt (bounded the same way -- a documented,
+/// narrow divergence from `cof run`'s own unbounded `exc.read()` on
+/// that path, DESIGN.md §13).
+async fn send_hop(
+    client: &http_client::HttpClient,
+    connect_target: &http_client::ConnectTarget,
+    raw_request: &http_client::RawRequest,
+    timeout: http_client::TimeoutModel,
+    save: Option<&SaveTarget>,
+    original_url: &str,
+) -> Result<(http_client::RawResponse, Option<StreamedSave>), ToolError> {
+    let Some(save) = save else {
+        let response = http_client::send(client, connect_target, raw_request, timeout)
+            .await
+            .map_err(|e| send_error_to_tool_error(e, original_url))?;
+        return Ok((response, None));
+    };
+    let (temp_path, mut file) = open_save_temp_file(save)?;
+    let guard = TempFileGuard(Some(temp_path));
+    let mut digest = Sha256::new();
+    let mut written: u64 = 0;
+    let max_bytes = usize::try_from(save.max_bytes).unwrap_or(usize::MAX);
+    let result = {
+        let mut write = |chunk: &[u8]| -> Result<(), String> {
+            digest.update(chunk);
+            written += chunk.len() as u64;
+            std::io::Write::write_all(&mut file, chunk).map_err(|e| e.to_string())
+        };
+        let sink = http_client::BodySink {
+            max_bytes,
+            write: &mut write,
+        };
+        http_client::send_to_sink(client, connect_target, raw_request, timeout, sink).await
+    };
+    match result {
+        Ok(response) => Ok((
+            response,
+            Some(StreamedSave {
+                guard,
+                bytes: written,
+                sha256: format!("{:x}", digest.finalize()),
+            }),
+        )),
+        Err(http_client::SendError::BodyOverCap { declared }) => {
+            Err(save_over_cap_error(declared, save))
+        }
+        Err(http_client::SendError::Sink(text)) => Err(runtime_error(format!(
+            "HttpPlugin: could not save {}: {text}",
+            guard
+                .path()
+                .map(Path::display)
+                .map(|d| d.to_string())
+                .unwrap_or_default()
+        ))),
+        Err(err) => Err(send_error_to_tool_error(err, original_url)),
+    }
+}
+
+/// The one true 2xx-success return under `params.save_to` streaming
+/// (issue #726): moves [`StreamedSave`]'s own already-written,
+/// already-hashed temp file into place -- the only place this module
+/// ever calls [`TempFileGuard::keep`].
+fn finalize_streamed_save(
+    parsed: &ParsedRequest,
+    original_url: &str,
+    response: http_client::RawResponse,
+    save: &SaveTarget,
+    streamed: StreamedSave,
+) -> Result<ToolResult, ToolError> {
+    let status = response.status;
+    let ok = !(parsed.fail_on_error && status >= 400);
+    let content_type = find_header(&response.headers, "content-type").map(str::to_string);
+    let temp_path = streamed.guard.keep();
+    if let Err(err) = move_into_place(&temp_path, save) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    let mut headers_dict = Dict::new();
+    for (k, v) in &response.headers {
+        headers_dict.insert(Value::Str(k.clone()), Value::Str(v.clone()));
+    }
+    let mut raw = Dict::new();
+    raw.insert(
+        Value::Str("status".to_string()),
+        Value::from(i64::from(status)),
+    );
+    raw.insert(Value::Str("headers".to_string()), Value::Dict(headers_dict));
+    raw.insert(
+        Value::Str("url".to_string()),
+        Value::Str(original_url.to_string()),
+    );
+    let mut value = Dict::new();
+    value.insert(
+        Value::Str("path".to_string()),
+        Value::Str(save.path.display().to_string()),
+    );
+    value.insert(
+        Value::Str("bytes".to_string()),
+        Value::from(streamed.bytes as i64),
+    );
+    value.insert(
+        Value::Str("sha256".to_string()),
+        Value::Str(streamed.sha256),
+    );
+    value.insert(
+        Value::Str("content_type".to_string()),
+        content_type.map(Value::Str).unwrap_or(Value::None),
+    );
+    value.insert(
+        Value::Str("status".to_string()),
+        Value::from(i64::from(status)),
+    );
+    Ok(ToolResult {
+        value: Value::Dict(value),
+        raw: Value::Dict(raw),
+        stdout: None,
+        stderr: None,
+        exit_code: None,
+        ok,
+        stdout_parsed: false,
+    })
+}
+
 /// `plugins/http.py::HttpPlugin.execute`'s own `save_to` branch of its
 /// final `ToolResult` -- `value: {path, bytes, sha256, content_type,
 /// status}`, `raw` without a `body` key, and nothing written for a
@@ -1965,15 +2215,22 @@ impl ToolPlugin for HttpPlugin {
                 body: current_body.clone(),
             };
 
-            let send_result =
-                http_client::send(&client, &connect_target, &raw_request, timeout).await;
+            let send_result = send_hop(
+                &client,
+                &connect_target,
+                &raw_request,
+                timeout,
+                parsed.save.as_ref(),
+                &original_url,
+            )
+            .await;
             if call.token.is_set() {
                 return Err(ToolError::message("cancelled".to_string()));
             }
 
-            let response = match send_result {
-                Err(err) => return Err(send_error_to_tool_error(err, &original_url)),
-                Ok(response) => response,
+            let (mut response, streamed) = match send_result {
+                Err(err) => return Err(err),
+                Ok(pair) => pair,
             };
 
             let status = response.status;
@@ -1985,7 +2242,33 @@ impl ToolPlugin for HttpPlugin {
                 if let Some(body_error) = response.body_error.clone() {
                     return Err(send_error_to_tool_error(body_error, &original_url));
                 }
+                if let Some(streamed) = streamed {
+                    return finalize_streamed_save(
+                        &parsed,
+                        &original_url,
+                        response,
+                        parsed
+                            .save
+                            .as_ref()
+                            .expect("send_hop only returns Some(StreamedSave) when parsed.save is"),
+                        streamed,
+                    );
+                }
                 return build_result(&parsed, &original_url, response, None, false, call.scrub);
+            }
+            // Not a 2xx success: whatever `send_hop` streamed to a temp
+            // file (if `params.save_to` is set) is read back once here
+            // (bounded already by `save.max_bytes`) so the existing
+            // error-excerpt/redirect logic below can keep reading
+            // `response.body` exactly as it always has; `streamed`'s own
+            // `TempFileGuard` deletes the file at the end of this
+            // iteration regardless of which of the branches below is
+            // taken next (`finalize_streamed_save` above is the only
+            // place that ever keeps one).
+            if let Some(streamed) = &streamed {
+                if let Some(path) = streamed.guard.path() {
+                    response.body = std::fs::read(path).unwrap_or_default();
+                }
             }
 
             if matches!(status, 301 | 302 | 303 | 307 | 308) {

@@ -615,6 +615,54 @@ async fn save_to_writes_the_body_and_reports_path_bytes_and_sha256() {
 }
 
 #[tokio::test]
+async fn save_to_streams_a_multi_chunk_body_without_buffering_it_whole() {
+    // Big enough that hyper hands it to the client across several
+    // frames over loopback (never one single read) -- a correctness
+    // proof that the chunk-by-chunk hash/write in `send_hop` agrees
+    // with the whole body, not a memory-usage measurement in itself.
+    let body: Vec<u8> = (0..600_000usize).map(|i| (i % 251) as u8).collect();
+    let response_head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response_head.into_bytes(), body.clone()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("multi-chunk");
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("big.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::from(10_000_000i64)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(
+        dict_get(&result.value, "bytes"),
+        Some(&Value::from(body.len() as i64))
+    );
+    let expected_sha256 = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&body);
+        format!("{:x}", hasher.finalize())
+    };
+    assert_eq!(
+        dict_get(&result.value, "sha256"),
+        Some(&Value::Str(expected_sha256))
+    );
+    assert_eq!(std::fs::read(within.join("big.bin")).unwrap(), body);
+}
+
+#[tokio::test]
 async fn save_to_writes_nothing_on_a_non_2xx_status() {
     let body = b"not found";
     let response = format!(
@@ -718,7 +766,49 @@ async fn save_to_over_max_bytes_fails_and_leaves_no_file() {
     )
     .await
     .unwrap_err();
-    assert!(err.message.contains("over max_bytes"));
+    assert_eq!(
+        err.message,
+        "HttpPlugin: the response body is 10 bytes, over max_bytes (5); nothing was saved."
+    );
+    assert!(!within.join("a.bin").exists());
+    assert_eq!(
+        std::fs::read_dir(&within).unwrap().count(),
+        0,
+        "no partial/temp file left behind"
+    );
+}
+
+#[tokio::test]
+async fn save_to_over_max_bytes_with_no_content_length_fails_mid_stream_and_leaves_no_file() {
+    // No `Content-Length` (so nothing to check up front, unlike the
+    // test above): the cap is only discovered once the running total
+    // actually passes it, mid-stream -- cof's own text for that case
+    // has no byte count in it at all.
+    let body = b"0123456789";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{}",
+        String::from_utf8_lossy(body)
+    );
+    let addr = respond_once(Box::leak(response.into_bytes().into_boxed_slice()));
+    let within = save_to_temp_dir("max-bytes-no-length");
+
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::from(5i64)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: the response body is over max_bytes (5); nothing was saved."
+    );
     assert!(!within.join("a.bin").exists());
     assert_eq!(
         std::fs::read_dir(&within).unwrap().count(),

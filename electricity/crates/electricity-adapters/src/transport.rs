@@ -417,6 +417,11 @@ fn send_error_outcome(err: SendError) -> CurlOutcome {
             format!("transfer closed with {expected} bytes remaining to read (got {read})"),
         ),
         SendError::Other(text) => (2, text),
+        // Never actually reached: only `http.rs`'s own `save_to`
+        // dispatch ever builds a `BodySink`. Kept here only so this
+        // match stays exhaustive.
+        SendError::BodyOverCap { declared } => (2, format!("{declared:?}")),
+        SendError::Sink(text) => (2, text),
     };
     CurlOutcome {
         returncode: code,
@@ -457,6 +462,10 @@ fn body_error_outcome(err: SendError, partial_body: &[u8]) -> CurlOutcome {
         SendError::Timeout => (28, "Operation timed out".to_string()),
         SendError::Connect { kind, text } => (connect_kind_exit(kind), text),
         SendError::Other(text) => (2, text),
+        // Never actually reached (same reasoning as `send_error_outcome`
+        // above).
+        SendError::BodyOverCap { declared } => (2, format!("{declared:?}")),
+        SendError::Sink(text) => (2, text),
     };
     CurlOutcome {
         returncode: code,

@@ -349,6 +349,18 @@ fn send_error(url: &str, err: SendError) -> AdapterError {
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         },
+        // Never actually reached: only `http.rs`'s own `save_to`
+        // dispatch ever builds a `BodySink`, so an adapter's plain
+        // `send`/`send_streaming` call never sees either variant.
+        // Kept here only so this match stays exhaustive.
+        SendError::BodyOverCap { .. } | SendError::Sink(_) => AdapterError {
+            message: format!(
+                "cyberdiner: request to {url} failed: {err_text}",
+                err_text = err
+            ),
+            retry: RetryInfo::not_retryable(),
+            py_class: PyExc::RuntimeError,
+        },
     }
 }
 
