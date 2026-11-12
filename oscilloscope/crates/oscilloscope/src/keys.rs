@@ -214,8 +214,7 @@ pub struct App {
     /// would jump the cursor to Now instead of moving it one column
     /// from wherever it is already drawn.
     pub signal_drawn_col: Option<usize>,
-    /// The latest redraw's own trace window start (issue #734,
-    /// finding 2): `signal_drawn_col` can be a column the window no
+    /// The latest redraw's own trace window start (#734): `signal_drawn_col` can be a column the window no
     /// longer shows at all (a stale selection from long before the
     /// window last scrolled) -- `signal_scrub`'s own first press
     /// seeds from `signal_drawn_col` only when it is still at or
@@ -394,7 +393,7 @@ impl App {
     /// last, the shared selection's own column included, issue #704
     /// rule 2), never from Now directly, or the first press would
     /// jump the cursor there instead of moving it one column from
-    /// wherever it already is. Issue #734, finding 2: that column
+    /// wherever it already is. #734: that column
     /// is only honoured when the latest draw's own window still
     /// shows it (`signal_window_start`) -- a stale selection the
     /// window has long since scrolled past seeds from Now instead,
@@ -3349,7 +3348,7 @@ mod tests {
         assert_eq!(app.signal_cursor_col, Some(3), "never past Now");
     }
 
-    /// Issue #734, finding 2: `signal_drawn_col` can hold a column
+    /// #734: `signal_drawn_col` can hold a column
     /// the window has long since scrolled past (the shared tree
     /// selection's own, parked on a step that finished minutes ago)
     /// while following Now -- the first `←` must not teleport the

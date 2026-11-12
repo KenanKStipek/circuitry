@@ -5755,7 +5755,7 @@ fn draw_combined_chart_cell(
 
 /// Whether a tick's own text, `tick_len` columns starting at
 /// `tick_start`, keeps at least one blank column clear of a label
-/// at `[label_start, label_end)`, on either side (issue #734, S3)
+/// at `[label_start, label_end)`, on either side (#734)
 /// -- shared by the single-run Signal's own seconds row (and its
 /// tiles, which draw through the same function) and the Combined
 /// Signal's own, rather than each keeping its own inline check.
@@ -5770,7 +5770,7 @@ fn mark_clears_label(
 
 /// The Now label, and the Ahead label after it when there is one,
 /// cut to fit within `budget` columns without ever running past the
-/// pane's own right edge (issue #734, S3): Ahead is dropped first,
+/// pane's own right edge (#734): Ahead is dropped first,
 /// then the elapsed `\u{b7} <duration>` part of the Now label
 /// itself -- the clock (`Now HH:MM:SS`) is never broken to make
 /// room for either; too narrow even for the bare clock drops the
@@ -5832,7 +5832,7 @@ fn draw_combined_seconds_row(
         oscilloscope_core::format::format_duration(screen.now_elapsed_s)
     );
     // The label starts one column before the sweep itself, not at
-    // it (from the frame). Issue #734, S3: cut to fit the room left
+    // it (from the frame). #734: cut to fit the room left
     // to the pane's own right edge, never running past it -- the
     // Combined Signal has no Ahead label of its own.
     let now_span = now_rel.map(|r| {
@@ -6334,7 +6334,7 @@ fn draw_combined_readings(
         let tokens_text = oscilloscope_core::format::format_tokens(r.largest_tokens);
         let prefix = format!("{:<6} ", "Largest");
         let suffix = format!("{tokens_text} \u{b7} {share_text}");
-        // Issue #734, S5: the label alone is cut with `⋯` when the
+        // #734: the label alone is cut with `⋯` when the
         // whole line would otherwise overflow -- the figure and the
         // share after it always stay whole.
         let doc_cut = readings_cut_leading_label(
@@ -6365,7 +6365,7 @@ fn draw_combined_readings(
         line_width,
     )));
     frame.render_widget(
-        // Never wrapped (issue #734, S5/§3.8: "cut with ⋯, never
+        // Never wrapped (#734, §3.8: "cut with ⋯, never
         // wrapped in a row") -- the Largest line's own label is
         // already cut above to fit, and the golden's own width never
         // overflows any of the others.
@@ -6609,7 +6609,7 @@ fn draw_signal(
             Constraint::Length(now_pane_rows),
         ])
         .split(body);
-    // Issue #734, finding 2: `signal_scrub`'s own first `←→` press
+    // #734: `signal_scrub`'s own first `←→` press
     // seeds from `app.signal_drawn_col` only when that column is
     // still inside the window this very draw is about to show --
     // `signal_window_start` is this draw's own answer, read back by
@@ -7276,7 +7276,7 @@ fn draw_signal_seconds_row(
     } else {
         None
     };
-    // Issue #734, S3/finding 3 and 9: cut Now (and Ahead after it)
+    // #734: cut Now (and Ahead after it)
     // to fit the room left to the pane's own right edge, Ahead
     // dropped first, never running either past it.
     let (now_text, ahead_text) = match (&now_label_full, now_label_col) {
@@ -7323,7 +7323,7 @@ fn draw_signal_seconds_row(
         let x = data_x + col as u16;
         let text = oscilloscope_core::format::format_signal_elapsed(seconds as f64);
         // At least one blank column always separates a tick from
-        // the Now label (issue #734, S3: the shared
+        // the Now label (#734: the shared
         // `mark_clears_label`, the Combined Signal's own seconds
         // row also uses).
         let before_now = match now_x {
@@ -7627,8 +7627,7 @@ fn pad_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
 
 /// A Readings line's own spans, cut with `⋯` only once their
 /// combined text would actually overflow `width` -- applied to
-/// every line on every Signal screen's own Readings pane (issue
-/// #734, S5), never just the Largest line's own label, which
+/// every line on every Signal screen's own Readings pane (#734), never just the Largest line's own label, which
 /// already fits by construction and so is left untouched here.
 fn readings_cut_line(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
     let total: usize = spans.iter().map(|s| s.content.chars().count()).sum();
@@ -7965,7 +7964,7 @@ fn draw_signal_readings(
             Some((label, tokens)) => {
                 let prefix = "Largest  ";
                 let tokens_text = oscilloscope_core::format::format_tokens(*tokens);
-                // Issue #734, S5: the label alone is cut with `⋯`
+                // #734: the label alone is cut with `⋯`
                 // when the whole line would otherwise overflow -- the
                 // token figure after it always stays whole.
                 let label_cut = readings_cut_leading_label(
@@ -9461,7 +9460,7 @@ fn store_cut_label(label: &str, width: usize) -> String {
 /// name), cut with `⋯` when it and the fixed text after it together
 /// would overflow the line -- the fixed text always stays whole,
 /// never pushed off the edge by a label that would otherwise run
-/// into it (issue #734, S5: §3.8's "cut with ⋯, never wrapped").
+/// into it (#734; §3.8's "cut with ⋯, never wrapped").
 /// `fixed_len` already counts the gap after the label, so a label
 /// that exactly fills what's left is kept whole -- never cut one
 /// character early the way `store_cut_label`'s own reserved
@@ -18245,7 +18244,7 @@ mod tape_frame_goldens {
     }
 
     /// Peak keeps its own decimal under a minute, on a whole second
-    /// included (issue #734, finding 6): `at 3.0s`, never `at 3s`.
+    /// included (#734): `at 3.0s`, never `at 3s`.
     #[test]
     fn combined_signal_totals_peak_keeps_a_decimal_under_a_minute() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -18343,8 +18342,7 @@ mod tape_frame_goldens {
 
     /// A long Largest document name never wraps the Readings pane
     /// onto a second line -- it's cut with `⋯` instead, and the
-    /// token figure and the share after it stay whole (issue #734,
-    /// S5).
+    /// token figure and the share after it stay whole (#734).
     #[test]
     fn combined_signal_readings_never_wraps_the_largest_line() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -18411,7 +18409,7 @@ mod tape_frame_goldens {
 
     /// Every Combined Readings line, not just Largest, is cut with
     /// `⋯` rather than clipped bare once the pane is too narrow
-    /// for it (issue #734, S5/finding 4): `Runs` and `Scale` both
+    /// for it (#734): `Runs` and `Scale` both
     /// overflow a 30-wide pane.
     #[test]
     fn combined_signal_readings_cuts_every_line_at_width_30() {
@@ -18644,8 +18642,7 @@ mod tape_frame_goldens {
 
     /// A tile's own Now label, running past Now's own 3/4 share on
     /// a long run, drops its own elapsed part rather than
-    /// overflowing the tile's own right edge (issue #734,
-    /// S3/finding 3) -- the clock itself stays whole, never cut.
+    /// overflowing the tile's own right edge (#734) -- the clock itself stays whole, never cut.
     #[test]
     fn signal_tile_now_label_drops_its_elapsed_part_rather_than_overflow() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -18711,7 +18708,7 @@ mod tape_frame_goldens {
 
     /// A tile too narrow even for the bare clock hides the Now
     /// label entirely rather than ever cutting the clock itself
-    /// (issue #734, S3): the clock is never broken.
+    /// (#734): the clock is never broken.
     #[test]
     fn signal_tile_hides_the_now_label_entirely_when_even_the_clock_wont_fit() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -20824,7 +20821,7 @@ mod tape_frame_goldens {
         terminal.backend().buffer().clone()
     }
 
-    /// Issue #734, finding 7: an ended run's own window ends at Run
+    /// #734: an ended run's own window ends at Run
     /// End, at the pane's own right edge, not the live rule's own
     /// three-quarters share.
     fn draw_chart_only_ended(
@@ -20865,7 +20862,7 @@ mod tape_frame_goldens {
         terminal.backend().buffer().clone()
     }
 
-    /// Issue #734, finding 7: an ended run's own window ends at Run
+    /// #734: an ended run's own window ends at Run
     /// End, at the pane's own right edge, not the live 3/4 share
     /// `trace_window_start` gives a still-running one.
     #[test]
@@ -20891,8 +20888,7 @@ mod tape_frame_goldens {
     /// The single-run Signal's own Now and Ahead labels, together
     /// too long for the room past Now's own 3/4 share on a long
     /// run, drop Ahead first -- the clock itself stays whole and
-    /// never runs past the pane's own right edge (issue #734,
-    /// S3/finding 9).
+    /// never runs past the pane's own right edge (#734).
     #[test]
     fn signal_drops_the_ahead_label_before_the_now_label_overflows() {
         let screen = oscilloscope_core::screens::SignalScreen {
@@ -21192,7 +21188,7 @@ mod tape_frame_goldens {
 
     /// A long Largest step name never wraps the single-run Signal's
     /// own Readings pane -- it's cut with `⋯`, and the token figure
-    /// after it stays whole (issue #734, S5).
+    /// after it stays whole (#734).
     #[test]
     fn signal_readings_never_wraps_the_largest_line() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -21250,7 +21246,7 @@ mod tape_frame_goldens {
 
     /// Every line on the single-run Signal's own Readings pane, not
     /// just Largest, is cut with `⋯` once the pane is too narrow
-    /// for it (issue #734, S5/finding 4): `Quiet`'s own line is
+    /// for it (#734): `Quiet`'s own line is
     /// longer than a 30-wide pane leaves room for.
     #[test]
     fn signal_readings_cuts_the_quiet_line_at_width_30() {

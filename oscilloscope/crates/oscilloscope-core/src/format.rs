@@ -476,7 +476,7 @@ mod tests {
         assert_eq!(format_signal_elapsed(3723.0), "1h02m03s");
     }
 
-    /// Peak's own reading (issue #734, finding 6): a decimal under
+    /// Peak's own reading (#734): a decimal under
     /// a minute even on a whole second, unlike the plain second
     /// marks above -- the same boundaries, `0`, `59`, `59.5`, `60`,
     /// `3599` and `3600` seconds.
@@ -492,7 +492,7 @@ mod tests {
 
     /// At the default 100 ms per column (ten columns a second), an
     /// 8-cell label like `1h02m03s` still fits a mark every second
-    /// -- the ruling's own worked example.
+    /// -- the example #734 gives.
     #[test]
     fn signal_mark_step_fits_every_second_at_100ms_per_column() {
         assert_eq!(signal_mark_step_s(10, 3723.0), 1);
