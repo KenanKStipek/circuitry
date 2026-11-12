@@ -928,8 +928,8 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 // `meta.live` is removed before this
                                 // attempt's own result/error is written, so
                                 // the final node is byte-identical to a run
-                                // with no live publishing at all (#741 part
-                                // B) -- explicit, not merely left for this
+                                // with no live publishing at all (#741) --
+                                // explicit, not merely left for this
                                 // scope's own end, so it happens before the
                                 // result-handling code below writes this
                                 // attempt's own final meta values.
@@ -1689,7 +1689,7 @@ mod tests {
         let root = snapshot.as_dict().unwrap();
         let node = root.get(&Value::from("fetch")).unwrap().as_dict().unwrap();
         let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
-        // `meta.live` is gone from the final node (#741 part B): the
+        // `meta.live` is gone from the final node (#741): the
         // plugin above did publish one while it ran, but it must never
         // survive into this attempt's own final write.
         assert!(meta.get(&Value::from("live")).is_none());

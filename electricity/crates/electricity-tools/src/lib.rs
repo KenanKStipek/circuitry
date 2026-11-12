@@ -238,7 +238,7 @@ pub struct CheckResult {
 ///   only ever gets its own process group while the run is armed)
 ///   reads this, not *token* itself.
 /// - *on_live*: `Some` only for a process-backed tool the caller wants
-///   `meta.live` published for while it runs (#741 part B) --
+///   `meta.live` published for while it runs (#741) --
 ///   [`process::run_tracked`]'s own readers call it, already throttled
 ///   to at most once a second plus one trailing call after a second of
 ///   quiet, with the current tail/byte-count snapshot; the caller

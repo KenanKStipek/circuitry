@@ -1,5 +1,5 @@
-//! A process-backed `tool` effect's own running `meta.live` (#741 part
-//! B) -- the same shape the agent tool (#636) and streamed prompts
+//! A process-backed `tool` effect's own running `meta.live` (#741) --
+//! the same shape the agent tool (#636) and streamed prompts
 //! (#674, `exec/prompt/live.rs`) already publish, fed by
 //! [`electricity_tools::process::run_tracked`]'s own tail/byte-count
 //! callback (`electricity_tools::ToolCall::on_live`) instead of an
@@ -17,8 +17,8 @@ fn now_iso_string() -> String {
     chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false)
 }
 
-/// The five providers `meta.live` is published for (#741 part B's own
-/// E2) -- every process-backed provider that runs through
+/// The five providers `meta.live` is published for (#741) -- every
+/// process-backed provider that runs through
 /// `electricity_tools::process::run_tracked`, except the agent CLIs
 /// (which get the agent tool's own #636 live summary instead) and
 /// `http` (which has no running subprocess output to publish at all).

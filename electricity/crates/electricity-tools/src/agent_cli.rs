@@ -372,7 +372,7 @@ pub async fn run_agent_cli(
         new_session: true,
     };
     // The agent CLIs never publish `meta.live`'s process-tool shape
-    // (#741 part B's own scope, issue #636's agent-tool live summary
+    // (#741's own scope, issue #636's agent-tool live summary
     // being the one `meta.live` an agent effect gets instead).
     match process::run_tracked(cmd, &opts, token, None).await {
         Ok(completed) => Ok(completed),
