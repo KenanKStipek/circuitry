@@ -860,8 +860,18 @@ impl Differ {
             .pointer("/runtime/last_run/completed_at")
             .and_then(Value::as_str)
             .map(str::to_string);
-        let name_prefix = self
-            .run_id
+        // `self.run_id` is only ever set by a `run_start` event; an
+        // events-less watch (`osi watch` of a bare `state.live.json`)
+        // never sends one, so the exit summary falls back to the
+        // state's own `_run_id`, the same fallback the header already
+        // uses for its own name.
+        let run_id = self.run_id.clone().or_else(|| {
+            state
+                .get("_run_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        let name_prefix = run_id
             .as_deref()
             .map(|id| format!("{}  ", crate::names::run_name(id)))
             .unwrap_or_default();
@@ -1300,7 +1310,7 @@ mod tests {
             lines,
             vec![LogLine {
                 ts: Some("t".to_string()),
-                text: "■ run started  modest-fern  abc123".to_string(),
+                text: "■ run started  high-zebra  abc123".to_string(),
                 kind: LogKind::RunStart,
                 path: None,
             }]
@@ -2097,6 +2107,23 @@ mod tests {
         });
         let line = differ.finish(&ended, None).expect("a summary line");
         assert!(line.text.starts_with("■ run ok"), "{line:?}");
+    }
+
+    #[test]
+    fn finish_names_the_run_from_state_run_id_with_no_events_at_all() {
+        // `osi watch` of a bare `state.live.json` never sends a
+        // `run_start` event, so `Differ::run_id` stays `None` --
+        // the exit summary still names the run from the state's own
+        // `_run_id`, the same fallback the header already uses.
+        let mut differ = Differ::new();
+        let ended = json!({
+            "_run_id": "936ff268-5f52-479a-887f-fda1a47dae63",
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        let name = crate::names::run_name("936ff268-5f52-479a-887f-fda1a47dae63");
+        assert_eq!(line.text, format!("■ run {name}  ok"), "{line:?}");
     }
 
     #[test]

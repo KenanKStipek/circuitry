@@ -123,7 +123,10 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
 /// rows would read identically"). `config_labels` is `runs`'s own
 /// config column, already resolved to a basename (or `None`) by the
 /// caller, since both callers already need it for their own purposes
-/// too.
+/// too. Issue #717: the name already tells two such runs apart once
+/// both have one, so a run with a known `run_id` never counts toward
+/// a collision and never gets the parent directory added -- it stays
+/// only for runs that have no name yet.
 pub fn disambiguated_document_labels(
     runs: &[DiscoveredRun],
     config_labels: &[Option<String>],
@@ -140,13 +143,23 @@ pub fn disambiguated_document_labels(
 
     let mut counts: std::collections::HashMap<(&str, &Option<String>), usize> =
         std::collections::HashMap::new();
-    for (doc, cfg) in plain_doc_labels.iter().zip(config_labels.iter()) {
+    for ((doc, cfg), run) in plain_doc_labels
+        .iter()
+        .zip(config_labels.iter())
+        .zip(runs.iter())
+    {
+        if run.run_id.is_some() {
+            continue;
+        }
         *counts.entry((doc.as_str(), cfg)).or_insert(0) += 1;
     }
 
     runs.iter()
         .enumerate()
         .map(|(i, run)| {
+            if run.run_id.is_some() {
+                return plain_doc_labels[i].clone();
+            }
             let key = (plain_doc_labels[i].as_str(), &config_labels[i]);
             let collides = counts.get(&key).copied().unwrap_or(0) > 1;
             if collides {
@@ -351,6 +364,26 @@ mod tests {
             })
             .collect();
         assert_eq!(labels, vec!["a/triage.yml", "b/triage.yml"]);
+    }
+
+    #[test]
+    fn build_rows_tells_two_named_runs_apart_without_the_parent_directory() {
+        // Same basename, same config basename, but both runs already
+        // have a run id -- the name tells them apart (issue #717), so
+        // the parent-directory tie-break never kicks in.
+        let mut a = run("/a/x.yml", Some("/x/config.json"));
+        a.run_id = Some("936ff268-5f52-479a-887f-fda1a47dae63".to_string());
+        let mut b = run("/b/x.yml", Some("/x/config.json"));
+        b.run_id = Some("d2c8267e-2864-4e04-89d6-4f174bc64516".to_string());
+        let rows = build_rows(&[a, b]);
+        let labels: Vec<&str> = rows[1..]
+            .iter()
+            .map(|r| match r {
+                Row::Run { document_label, .. } => document_label.as_str(),
+                Row::All { .. } => unreachable!(),
+            })
+            .collect();
+        assert_eq!(labels, vec!["x.yml", "x.yml"]);
     }
 
     #[test]

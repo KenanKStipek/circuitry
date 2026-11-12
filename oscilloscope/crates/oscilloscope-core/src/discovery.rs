@@ -253,26 +253,39 @@ pub fn match_scanned_process(
 /// one level of subdirectories) must be to count as running.
 const LIVE_STATE_FRESHNESS: Duration = Duration::from_secs(10);
 
-/// The document named by `events`'s own first line, when it parses
-/// as a `run_start` event carrying one -- `None` for a missing,
-/// empty or unparseable file, or a first line that isn't a
-/// `run_start` at all (never read any further into the file: the
-/// first line is always `run_start` when the stream has one).
-fn orchestration_from_events_first_line(events: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(events).ok()?;
-    let first_line = text.lines().next()?;
-    let value: serde_json::Value = serde_json::from_str(first_line).ok()?;
-    value.get("orchestration")?.as_str().map(str::to_string)
+/// `events`'s own first line, parsed once as JSON -- `None` for a
+/// missing, empty or unparseable file, or a first line that isn't
+/// valid JSON at all. Reads only that one line (a `BufRead`, never
+/// the whole file into memory): the first line is always `run_start`
+/// when the stream has one, so nothing here ever reads any further.
+fn first_event(events: &Path) -> Option<serde_json::Value> {
+    use std::io::BufRead;
+    let file = std::fs::File::open(events).ok()?;
+    let mut first_line = String::new();
+    std::io::BufReader::new(file)
+        .read_line(&mut first_line)
+        .ok()?;
+    serde_json::from_str(first_line.trim_end()).ok()
 }
 
-/// `run_id` (issue #717), the same way `orchestration_from_events_
-/// first_line` already reads `orchestration` off the same line --
-/// `None` under the same conditions.
-fn run_id_from_events_first_line(events: &Path) -> Option<String> {
-    let text = std::fs::read_to_string(events).ok()?;
-    let first_line = text.lines().next()?;
-    let value: serde_json::Value = serde_json::from_str(first_line).ok()?;
-    value.get("run_id")?.as_str().map(str::to_string)
+/// The document and `run_id` (issue #717) `events`'s own first line
+/// names, read together off one [`first_event`] call rather than two
+/// separate reads of the same file.
+fn orchestration_and_run_id_from_events_first_line(
+    events: &Path,
+) -> (Option<String>, Option<String>) {
+    let Some(value) = first_event(events) else {
+        return (None, None);
+    };
+    let orchestration = value
+        .get("orchestration")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    let run_id = value
+        .get("run_id")
+        .and_then(|v| v.as_str())
+        .map(str::to_string);
+    (orchestration, run_id)
 }
 
 /// `run_id`, from `state.live.json`'s own top-level `_run_id` (both
@@ -292,7 +305,7 @@ fn run_id_from_state_file(live_state: &Path) -> Option<String> {
 /// because one is absent or unreadable.
 fn discovered_run_id(events: Option<&Path>, live_state: Option<&Path>) -> Option<String> {
     events
-        .and_then(run_id_from_events_first_line)
+        .and_then(|e| orchestration_and_run_id_from_events_first_line(e).1)
         .or_else(|| live_state.and_then(run_id_from_state_file))
 }
 
@@ -305,10 +318,11 @@ fn live_state_run_if_fresh(dir: &Path, now: SystemTime) -> Option<DiscoveredRun>
     }
     let events = dir.join("events.jsonl");
     let events = events.exists().then_some(events);
-    let orchestration = events
-        .as_deref()
-        .and_then(orchestration_from_events_first_line);
-    let run_id = discovered_run_id(events.as_deref(), Some(&live_state));
+    let (orchestration, run_id) = match events.as_deref() {
+        Some(e) => orchestration_and_run_id_from_events_first_line(e),
+        None => (None, None),
+    };
+    let run_id = run_id.or_else(|| run_id_from_state_file(&live_state));
     Some(DiscoveredRun {
         run_id,
         run_dir: Some(dir.to_path_buf()),

@@ -11,7 +11,7 @@ log:
   ▶ prime.drafts.iter_2.draft  prompt scripted/scripted-model "Write one sentence about birds."
   ✓ prime.drafts.iter_2.draft  0.0s  ↑6 ↓4
   ⟳ prime.drafts pass 3/3  ETA 0.0s
-  ■ run ok  0.0s
+  ■ run pale-otter  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.drafts: Done skip=None retrying=false

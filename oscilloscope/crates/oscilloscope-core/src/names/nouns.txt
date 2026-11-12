@@ -8,7 +8,6 @@ badger
 bamboo
 basil
 bay
-beaver
 beech
 birch
 bison
@@ -22,7 +21,6 @@ cherry
 chinook
 cliff
 clover
-cobra
 comet
 condor
 coral
@@ -66,15 +64,12 @@ hawk
 hazel
 heron
 hickory
-hollow
 holly
-hornet
 hummock
 ibex
 iris
 island
 ivy
-jackal
 jaguar
 jasper
 jay
@@ -116,7 +111,6 @@ oak
 oasis
 ocelot
 olive
-opal
 orca
 osprey
 otter
@@ -124,7 +118,6 @@ owl
 oxbow
 ozark
 panda
-pansy
 panther
 pebble
 peony
@@ -151,7 +144,6 @@ river
 rook
 rose
 rowan
-sage
 salmon
 sapling
 savanna
@@ -185,11 +177,9 @@ turtle
 valley
 vine
 violet
-viper
 vole
 vulture
 warbler
-weasel
 whale
 wigeon
 willow

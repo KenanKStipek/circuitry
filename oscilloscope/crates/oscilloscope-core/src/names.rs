@@ -80,6 +80,21 @@ pub fn disambiguated_names(run_ids: &[Option<&str>]) -> Vec<Option<String>> {
         .collect()
 }
 
+/// The NAME column's own width wherever one is drawn (issue #717's own narrow-width rule): as wide as the
+/// longest name actually on this screen, plus 2 for a column break before the next field -- never a fixed
+/// width, so a screen whose names are all short (or none named yet) never reserves more room than it needs,
+/// leaving the rest for whichever field would otherwise be clipped. `names` is whatever a draw call is about
+/// to show, already [`disambiguated_names`]'d; a screen with no named row at all still reserves the minimum
+/// two columns, so a row that later gains a name doesn't reflow every other row around it.
+pub fn name_column_width(names: &[Option<&str>]) -> usize {
+    names
+        .iter()
+        .flatten()
+        .map(|n| n.chars().count())
+        .max()
+        .map_or(2, |longest| longest + 2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,15 +109,15 @@ mod tests {
         // visible change to this test, not a silent drift.
         assert_eq!(
             run_name("936ff268-5f52-479a-887f-fda1a47dae63"),
-            "misty-valley"
+            "square-jay"
         );
         assert_eq!(
             run_name("d2c8267e-2864-4e04-89d6-4f174bc64516"),
-            "wooly-ginger"
+            "ochre-desert"
         );
         assert_eq!(
             run_name("0299262e-51a9-4956-bed4-743a78822a9e"),
-            "mindful-sparrow"
+            "icy-geyser"
         );
     }
 
@@ -151,7 +166,7 @@ mod tests {
     #[test]
     fn disambiguated_names_passes_through_a_single_run_unchanged() {
         let names = disambiguated_names(&[Some("936ff268-5f52-479a-887f-fda1a47dae63")]);
-        assert_eq!(names, vec![Some("misty-valley".to_string())]);
+        assert_eq!(names, vec![Some("square-jay".to_string())]);
     }
 
     #[test]
@@ -159,8 +174,8 @@ mod tests {
         // Two distinct ids verified ahead of time to hash to the same
         // bare name (`wary-tulip`) with different id suffixes, standing
         // in for the rare real collision the suffix exists for.
-        let a = "0000d948-aaaa-bbbb-cccc-dddddddddddd";
-        let b = "00010000-aaaa-bbbb-cccc-dddddddddddd";
+        let a = "00000016-aaaa-bbbb-cccc-dddddddddddd";
+        let b = "0000007f-aaaa-bbbb-cccc-dddddddddddd";
         assert_eq!(run_name(a), run_name(b), "fixture pair must collide");
         let names = disambiguated_names(&[Some(a), Some(b)]);
         assert_eq!(
@@ -183,5 +198,20 @@ mod tests {
         let names = disambiguated_names(&[Some("run-a"), Some("run-b")]);
         assert_ne!(names[0], None);
         assert!(!names[0].as_ref().unwrap().contains('\u{b7}'));
+    }
+
+    #[test]
+    fn name_column_width_fits_the_longest_name_plus_two() {
+        assert_eq!(name_column_width(&[Some("ab"), Some("abcde")]), 7);
+    }
+
+    #[test]
+    fn name_column_width_has_a_minimum_with_no_name_at_all() {
+        assert_eq!(name_column_width(&[None, None]), 2);
+    }
+
+    #[test]
+    fn name_column_width_ignores_an_unnamed_row_among_named_ones() {
+        assert_eq!(name_column_width(&[Some("abcd"), None]), 6);
     }
 }
