@@ -611,9 +611,6 @@ pub struct FocusedStep {
     /// [`Self::usual_busy_p50_s`]'s own p90 -- `None` below the
     /// 5-run threshold even with a p50 in hand.
     pub usual_busy_p90_s: Option<f64>,
-    /// [`Self::usual_busy_p50_s`]'s own run count -- `None` exactly
-    /// when it is.
-    pub usual_busy_count: Option<usize>,
     /// Issue #704's own Attempts section: `meta.fallback_attempts`,
     /// oldest first -- a prompt's own earlier, replaced attempts,
     /// each with whatever the run recorded of its provider/model,
@@ -770,12 +767,12 @@ pub(crate) fn build_focused_step(
             stdout: node
                 .and_then(|n| n.meta.get("stdout"))
                 .and_then(Value::as_str)
-                .map(|s| tail_lines(s, 20))
+                .map(str::to_string)
                 .filter(|s| !s.is_empty()),
             stderr: node
                 .and_then(|n| n.meta.get("stderr"))
                 .and_then(Value::as_str)
-                .map(|s| tail_lines(s, 20))
+                .map(str::to_string)
                 .filter(|s| !s.is_empty()),
         }
     } else if row.kind == RowKind::Prompt || row.kind == RowKind::Reflector {
@@ -840,9 +837,6 @@ pub(crate) fn build_focused_step(
     // duration rather than its tokens.
     let usual_busy_p50_s = history_usual.and_then(|s| s.busy_p50_s);
     let usual_busy_p90_s = history_usual.and_then(|s| s.busy_p90_s);
-    let usual_busy_count = usual_busy_p50_s
-        .is_some()
-        .then(|| history_usual.unwrap().count);
     let share_pct = {
         let total = if matches!(row.kind, RowKind::Prompt | RowKind::Reflector) {
             let (sent, received) = node
@@ -886,7 +880,6 @@ pub(crate) fn build_focused_step(
         meta_extra,
         usual_busy_p50_s,
         usual_busy_p90_s,
-        usual_busy_count,
         description: plan.description(&row.path),
     }
 }
@@ -1505,19 +1498,6 @@ fn tape_finished_agent_what(duration_s: Option<f64>, raw: &AgentRawSummary) -> S
 /// off the already-flattened node so a row's own text costs no more
 /// than this one lookup -- `details_for` re-flattens the whole state
 /// on every call, which a per-row loop here must never pay for).
-/// The last `n` lines of `text`, joined back with `\n` -- a tool
-/// step's own stdout/stderr section (issue #716) reads only this
-/// much, never the whole output a long-running command can leave
-/// behind. `text` itself, unchanged, when it already has `n` lines
-/// or fewer.
-fn tail_lines(text: &str, n: usize) -> String {
-    let total = text.lines().count();
-    if total <= n {
-        return text.to_string();
-    }
-    text.lines().skip(total - n).collect::<Vec<_>>().join("\n")
-}
-
 /// A tool step's own full command and args, rendered -- `None` for
 /// anything but a tool leaf, or one whose own `start` event carries
 /// no rendered params yet (a loop pass's own tool child,
