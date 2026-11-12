@@ -1,21 +1,31 @@
-//! `cli/config.py`'s own config-resolution port, narrowed to the one
-//! branch electricity ever reaches: the CLI's `<config.json>` is always
-//! an explicit path (never discovered), so this is `resolve_config`'s
-//! `--config <path>`/`CIRCUITRY_CONFIG` branch -- `SANE_DEFAULTS` deep-
+//! `cli/config.py`'s own config-resolution port. [`resolve_config`] is
+//! `resolve_config`'s explicit-path branch (`--config <path>` on
+//! electricity's own legacy `electricity <config.json> <doc>` form,
+//! where the positional *is* that explicit path, with no
+//! `CIRCUITRY_CONFIG` of its own to layer in) -- `SANE_DEFAULTS` deep-
 //! merged with the named file, then the `CIRCUITRY_*` environment
-//! overlays (`_apply_env_vars`) -- with no global config, no project-
-//! config discovery/trust, and no `CIRCUITRY_CONFIG` env var of its own
-//! (the positional *is* that explicit path). `ConfigSource`/`sources`
-//! reporting (`cof config`'s own `Config:` line) has no electricity
-//! surface either, so it is not ported.
+//! overlays (`_apply_env_vars`).
+//!
+//! [`resolve_config_for_run`] is the `run` subcommand's own entry
+//! point (issue #728): when `--config` is absent, it ports
+//! `resolve_config`'s *other* branch -- global config, then a
+//! discovered project config (`circuitry.config.json`/`config.json` in
+//! the working directory) gated by [`crate::config_trust`]'s trust
+//! check and narrowed against the global allowlists, then the same
+//! `CIRCUITRY_*` overlays. `ConfigSource`/`sources` reporting (`cof
+//! config`'s own `Config:` line) has no electricity surface and is not
+//! ported; a discovered-but-skipped project config's one warning
+//! (`ProjectConfigStatus.skip_warning`) is, since it lands in a run's
+//! own `warnings` on both engines.
 
+use crate::config_trust::{self, TrustState};
 use crate::util::{get, is_truthy};
 use electricity_json::ReadError;
 use electricity_value::{Dict, Value};
 use std::collections::HashMap;
 use std::fmt;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// `cli/config.py::ConfigError` -- a config file the caller pointed at
 /// cannot be used. Also [`crate::validate_complexity`]/
@@ -290,12 +300,27 @@ pub fn resolve_config(
     explicit_path: &Path,
     env: &HashMap<String, String>,
 ) -> Result<CircuitryConfig, ConfigError> {
-    let display_path = pathlib_str(explicit_path);
-    let bytes = std::fs::read(explicit_path).map_err(|err| read_error(&display_path, &err))?;
+    let file_dict = load_config_file(explicit_path, None)?;
+    let merged = deep_merge(&sane_defaults(), &file_dict);
+    let merged = apply_env_vars(merged, env);
+    Ok(config_from_dict(&merged))
+}
+
+/// `cli/config.py::_load_json_file`: reads *path* as a JSON object,
+/// every message tagged for *env_var* the way `_config_error_message`
+/// tags it -- `Some("CIRCUITRY_CONFIG")` for that env var's own
+/// resolution branch, `None` everywhere else (an explicit `--config`
+/// path, or a file discovered rather than named).
+fn load_config_file(path: &Path, env_var: Option<&str>) -> Result<Dict, ConfigError> {
+    let display_path = pathlib_str(path);
+    let bytes = std::fs::read(path).map_err(|err| read_error(&display_path, &err, env_var))?;
     let text = String::from_utf8(bytes).map_err(|_| {
-        ConfigError(format!(
-            "Config file is not valid UTF-8 text: {display_path}"
-        ))
+        config_error_message(
+            &display_path,
+            env_var,
+            "is not valid UTF-8 text",
+            format!("Config file is not valid UTF-8 text: {display_path}"),
+        )
     })?;
     let raw = electricity_json::loads(&text).map_err(|err| match err {
         ReadError::Syntax {
@@ -303,46 +328,90 @@ pub fn resolve_config(
             lineno,
             colno,
             ..
-        } => ConfigError(format!(
-            "Config file {display_path} is not valid JSON: {message} (line {lineno}, column {colno})"
-        )),
+        } => config_error_message(
+            &display_path,
+            env_var,
+            &format!("is not valid JSON: {message} (line {lineno}, column {colno})"),
+            format!(
+                "Config file {display_path} is not valid JSON: {message} (line {lineno}, column {colno})"
+            ),
+        ),
         ReadError::DuplicateKey { message } => ConfigError(message),
         ReadError::Depth { pos } => {
             let (lineno, colno) = line_col(&text, pos);
-            ConfigError(format!(
-                "Config file {display_path} is not valid JSON: exceeded the maximum nesting depth (line {lineno}, column {colno})"
-            ))
+            config_error_message(
+                &display_path,
+                env_var,
+                &format!("is not valid JSON: exceeded the maximum nesting depth (line {lineno}, column {colno})"),
+                format!(
+                    "Config file {display_path} is not valid JSON: exceeded the maximum nesting depth (line {lineno}, column {colno})"
+                ),
+            )
         }
     })?;
     if !matches!(raw, Value::Dict(_)) {
         let found = json_root_type_name(&raw);
-        return Err(ConfigError(format!(
-            "Config file {display_path} must contain a JSON object at the root; found {found}."
-        )));
+        return Err(config_error_message(
+            &display_path,
+            env_var,
+            &format!("must contain a JSON object at the root; found {found}"),
+            format!(
+                "Config file {display_path} must contain a JSON object at the root; found {found}."
+            ),
+        ));
     }
     // `raw` implements `Drop`, so its `Dict` field can't be moved out by
     // destructuring (`match raw { Value::Dict(dict) => dict, ... }`) --
     // only read through a borrow, then cloned.
-    let file_dict = raw.as_dict().expect("checked above").clone();
-
-    let merged = deep_merge(&sane_defaults(), &file_dict);
-    let merged = apply_env_vars(merged, env);
-    Ok(config_from_dict(&merged))
+    Ok(raw.as_dict().expect("checked above").clone())
 }
 
-fn read_error(display_path: &str, err: &io::Error) -> ConfigError {
+/// `cli/config.py::_config_error_message`: with *env_var*, names the
+/// variable instead of just the path it resolved to (so a stale export
+/// in a shell profile is diagnosable); without one, *default* verbatim.
+fn config_error_message(
+    display_path: &str,
+    env_var: Option<&str>,
+    reason: &str,
+    default: String,
+) -> ConfigError {
+    match env_var {
+        Some(var) => ConfigError(format!(
+            "{var} points to {display_path}, which {reason}; unset it or fix the path"
+        )),
+        None => ConfigError(default),
+    }
+}
+
+fn read_error(display_path: &str, err: &io::Error, env_var: Option<&str>) -> ConfigError {
     match err.kind() {
-        io::ErrorKind::NotFound => ConfigError(format!("Config file not found: {display_path}")),
-        io::ErrorKind::IsADirectory => ConfigError(format!(
-            "Config path is a directory, not a file: {display_path}"
-        )),
-        io::ErrorKind::PermissionDenied => ConfigError(format!(
-            "Config file could not be read: {display_path} (Permission denied)"
-        )),
-        _ => ConfigError(format!(
-            "Config file could not be read: {display_path} ({})",
-            strerror(err)
-        )),
+        io::ErrorKind::NotFound => config_error_message(
+            display_path,
+            env_var,
+            "does not exist",
+            format!("Config file not found: {display_path}"),
+        ),
+        io::ErrorKind::IsADirectory => config_error_message(
+            display_path,
+            env_var,
+            "is a directory, not a file",
+            format!("Config path is a directory, not a file: {display_path}"),
+        ),
+        io::ErrorKind::PermissionDenied => config_error_message(
+            display_path,
+            env_var,
+            "could not be read (Permission denied)",
+            format!("Config file could not be read: {display_path} (Permission denied)"),
+        ),
+        _ => config_error_message(
+            display_path,
+            env_var,
+            &format!("could not be read ({})", strerror(err)),
+            format!(
+                "Config file could not be read: {display_path} ({})",
+                strerror(err)
+            ),
+        ),
     }
 }
 
@@ -443,6 +512,224 @@ fn set_nested_base_url(result: &mut Dict, block: &str, name: &str, url: &str) {
     block_dict.insert(Value::Str(name.to_string()), Value::Dict(name_dict));
     runtime.insert(Value::Str(block.to_string()), Value::Dict(block_dict));
     result.insert(Value::Str("runtime".to_string()), Value::Dict(runtime));
+}
+
+/// `cli/config.py::DEFAULT_CONFIG_FILENAMES`.
+const DEFAULT_CONFIG_FILENAMES: [&str; 2] = ["circuitry.config.json", "config.json"];
+
+/// `cli/config.py::GLOBAL_CONFIG_PATH`: `<home>/.config/circuitry/config.json`.
+pub fn global_config_path(home: &Path) -> PathBuf {
+    home.join(".config").join("circuitry").join("config.json")
+}
+
+/// `cli/config_trust.py::trust_store_path`: `trusted.json` beside the
+/// global config.
+pub fn trust_store_path(home: &Path) -> PathBuf {
+    global_config_path(home)
+        .parent()
+        .expect("global_config_path always has a parent")
+        .join(config_trust::TRUST_STORE_FILENAME)
+}
+
+/// `cli/config.py::discover_project_config`: the first of
+/// [`DEFAULT_CONFIG_FILENAMES`] that exists as a file directly in
+/// *cwd*.
+pub fn discover_project_config(cwd: &Path) -> Option<PathBuf> {
+    DEFAULT_CONFIG_FILENAMES
+        .iter()
+        .map(|name| cwd.join(name))
+        .find(|path| path.is_file())
+}
+
+/// `cli/config.py::_ALLOWLIST_KEYS`.
+const ALLOWLIST_KEYS: [&str; 3] = ["enabled_adapters", "enabled_plugins", "enabled_tools"];
+
+/// `cli/config.py::_narrow_allowlists`: a discovered project config may
+/// only narrow an allowlist the global config set, never widen it.
+/// *project_path_display* is the discovered file's own `str(Path(...))`
+/// text, for the warning.
+fn narrow_allowlists(
+    merged: &mut Dict,
+    global_config: &Dict,
+    project_config: &Dict,
+    project_path_display: &str,
+) {
+    for key in ALLOWLIST_KEYS {
+        let lowercase = key != "enabled_plugins";
+        let Some(global_list) = normalize_allowlist(get(global_config, key), lowercase) else {
+            continue;
+        };
+        if !project_config.contains_key(&Value::Str(key.to_string())) {
+            continue;
+        }
+        let project_list = normalize_allowlist(get(project_config, key), lowercase);
+        match project_list {
+            None => {
+                log::warn!(
+                    "Project config {project_path_display} cannot re-open {key}; keeping the \
+                     global list {}.",
+                    crate::allowlist::format_list(&global_list)
+                );
+                merged.insert(
+                    Value::Str(key.to_string()),
+                    Value::List(global_list.into_iter().map(Value::Str).collect()),
+                );
+            }
+            Some(project_list) => {
+                let widened: Vec<String> = project_list
+                    .iter()
+                    .filter(|name| !global_list.contains(name))
+                    .cloned()
+                    .collect();
+                if !widened.is_empty() {
+                    log::warn!(
+                        "Project config {project_path_display} cannot widen {key} beyond the \
+                         global list; ignoring {}.",
+                        crate::allowlist::format_list(&widened)
+                    );
+                }
+                let narrowed: Vec<Value> = project_list
+                    .into_iter()
+                    .filter(|name| global_list.contains(name))
+                    .map(Value::Str)
+                    .collect();
+                merged.insert(Value::Str(key.to_string()), Value::List(narrowed));
+            }
+        }
+    }
+}
+
+/// [`resolve_config`]'s own result, plus the warnings a run reports
+/// alongside it (`CircuitryConfig.resolution_warnings`'s own electricity
+/// surface: just the one skipped-project-config line, since there is no
+/// `ConfigSource`/`sources` reporting here at all -- this module's own
+/// doc comment).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConfigForRun {
+    pub config: CircuitryConfig,
+    pub warnings: Vec<String>,
+}
+
+/// `cli/config.py::resolve_config`, in full: the `run` subcommand's own
+/// config resolution (issue #728) when `--config` is optional, unlike
+/// [`resolve_config`]'s single explicit-path branch.
+///
+/// Order: *explicit_path* (`--config`) > `CIRCUITRY_CONFIG` (in *env*) >
+/// global config (`<home>/.config/circuitry/config.json`) layered with a
+/// discovered, trusted project config (`circuitry.config.json`/
+/// `config.json` in *cwd*) > built-in defaults alone. An explicit path or
+/// `CIRCUITRY_CONFIG` *replaces* the global/project layers rather than
+/// layering on top of them, exactly as `resolve_config` does; a read/parse
+/// problem in the *discovered* global or project file is non-fatal (a
+/// `log::warn!`, same as the reference's own `logger.warning`, and that
+/// layer is simply skipped) where the same problem in an explicit path or
+/// `CIRCUITRY_CONFIG` is a fatal [`ConfigError`] (`load_config_file`'s own
+/// env_var-tagged message when it's `CIRCUITRY_CONFIG`).
+///
+/// `home` is `None` when the process has no resolvable home directory at
+/// all (`std::env::home_dir()` returning `None`) -- then there is no
+/// global config and no trust store to consult, same as a `cof` process
+/// in that state would find neither `Path.home()` branch either.
+pub fn resolve_config_for_run(
+    explicit_path: Option<&Path>,
+    cwd: &Path,
+    home: Option<&Path>,
+    env: &HashMap<String, String>,
+) -> Result<ConfigForRun, ConfigError> {
+    let mut warnings = Vec::new();
+    let env_config = non_empty(env, "CIRCUITRY_CONFIG");
+
+    let merged = if let Some(path) = explicit_path {
+        let file_dict = load_config_file(path, None)?;
+        deep_merge(&sane_defaults(), &file_dict)
+    } else if let Some(env_path) = env_config {
+        let file_dict = load_config_file(Path::new(env_path), Some("CIRCUITRY_CONFIG"))?;
+        deep_merge(&sane_defaults(), &file_dict)
+    } else {
+        let mut merged = sane_defaults();
+        let mut global_config = Dict::new();
+        if let Some(home) = home {
+            let global_path = global_config_path(home);
+            if global_path.is_file() {
+                match load_config_file(&global_path, None) {
+                    Ok(dict) => {
+                        global_config = dict.clone();
+                        merged = deep_merge(&merged, &dict);
+                    }
+                    Err(err) => log::warn!(
+                        "Skipping malformed global config {}: {}",
+                        global_path.display(),
+                        err.0
+                    ),
+                }
+            }
+        }
+
+        if let Some(discovered) = discover_project_config(cwd) {
+            match std::fs::read(&discovered) {
+                Ok(data) => {
+                    // `check_trust`'s own env-var check runs before it ever
+                    // touches a store path, so a process with no resolvable
+                    // home still honours `CIRCUITRY_TRUST_PROJECT_CONFIG` --
+                    // only the store-backed branch needs a real `home` to
+                    // mean anything, same as the reference's own
+                    // `Path.home()`-rooted `trust_store_path`.
+                    let state = if config_trust::env_trusts_project_config(env) {
+                        TrustState::Env
+                    } else {
+                        match home {
+                            Some(home) => config_trust::check_trust(
+                                &discovered,
+                                &data,
+                                &trust_store_path(home),
+                                env,
+                            ),
+                            None => TrustState::Untrusted,
+                        }
+                    };
+                    if state.applied() {
+                        match load_config_file(&discovered, None) {
+                            Ok(project_dict) => {
+                                merged = deep_merge(&merged, &project_dict);
+                                narrow_allowlists(
+                                    &mut merged,
+                                    &global_config,
+                                    &project_dict,
+                                    &pathlib_str(&discovered),
+                                );
+                            }
+                            Err(err) => log::warn!(
+                                "Skipping malformed project config {}: {}",
+                                discovered.display(),
+                                err.0
+                            ),
+                        }
+                    } else if let Some(warning) = config_trust::skip_warning(&discovered, state) {
+                        warnings.push(warning);
+                    }
+                }
+                Err(err) => {
+                    // `read_config_bytes` raises inside the same `try` that
+                    // catches a parse failure (`cli/config.py::
+                    // resolve_config`), so an unreadable discovered file is
+                    // skipped with the same "Skipping malformed project
+                    // config" warning as a malformed one, not silently.
+                    log::warn!(
+                        "Skipping malformed project config {}: {}",
+                        discovered.display(),
+                        err
+                    );
+                }
+            }
+        }
+        merged
+    };
+
+    let merged = apply_env_vars(merged, env);
+    Ok(ConfigForRun {
+        config: config_from_dict(&merged),
+        warnings,
+    })
 }
 
 #[cfg(test)]
@@ -592,5 +879,176 @@ mod tests {
         let path = scratch.write_config(r#"{"environment": "staging"}"#);
         let cfg = resolve_config(&path, &HashMap::new()).unwrap();
         assert_eq!(cfg.environment, "dev");
+    }
+
+    #[test]
+    fn resolve_config_for_run_with_an_explicit_path_matches_resolve_config() {
+        let scratch = ScratchDir::new("for-run-explicit");
+        let path = scratch.write_config(r#"{"default_model": "gpt-4"}"#);
+        let resolved =
+            resolve_config_for_run(Some(&path), &scratch.0, None, &HashMap::new()).unwrap();
+        assert_eq!(resolved.config.default_model, Some("gpt-4".to_string()));
+        assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_for_run_honors_circuitry_config_over_discovery() {
+        let scratch = ScratchDir::new("for-run-env-config");
+        let env_path = scratch.0.join("env-config.json");
+        fs::write(&env_path, r#"{"default_model": "from-env-var"}"#).unwrap();
+        fs::write(
+            scratch.0.join("circuitry.config.json"),
+            r#"{"default_model": "from-project"}"#,
+        )
+        .unwrap();
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_CONFIG".to_string(),
+            env_path.display().to_string(),
+        );
+        let resolved = resolve_config_for_run(None, &scratch.0, None, &env).unwrap();
+        assert_eq!(
+            resolved.config.default_model,
+            Some("from-env-var".to_string())
+        );
+    }
+
+    #[test]
+    fn circuitry_config_env_var_errors_are_fatal_and_tagged() {
+        let scratch = ScratchDir::new("for-run-env-config-missing");
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_CONFIG".to_string(),
+            scratch.0.join("missing.json").display().to_string(),
+        );
+        let err = resolve_config_for_run(None, &scratch.0, None, &env).unwrap_err();
+        assert!(err.0.starts_with("CIRCUITRY_CONFIG points to"));
+        assert!(err.0.ends_with("unset it or fix the path"));
+    }
+
+    #[test]
+    fn resolve_config_for_run_discovers_a_trusted_project_config() {
+        let scratch = ScratchDir::new("for-run-trusted-project");
+        let project_path = scratch.0.join("circuitry.config.json");
+        let data = br#"{"default_model": "from-project"}"#;
+        fs::write(&project_path, data).unwrap();
+        let home = scratch.0.join("home");
+        let store_path = trust_store_path(&home);
+        let key = config_trust::trust_key(&project_path);
+        let digest = config_trust::config_digest(data);
+        fs::create_dir_all(store_path.parent().unwrap()).unwrap();
+        fs::write(
+            &store_path,
+            format!(
+                r#"{{"trusted": {{{:?}: {{"sha256": {:?}, "trusted_at": "2026-01-01T00:00:00+00:00"}}}}}}"#,
+                key, digest
+            ),
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_config_for_run(None, &scratch.0, Some(&home), &HashMap::new()).unwrap();
+        assert_eq!(
+            resolved.config.default_model,
+            Some("from-project".to_string())
+        );
+        assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_for_run_skips_an_untrusted_project_config_with_a_warning() {
+        let scratch = ScratchDir::new("for-run-untrusted-project");
+        fs::write(
+            scratch.0.join("circuitry.config.json"),
+            r#"{"default_model": "from-project"}"#,
+        )
+        .unwrap();
+        let home = scratch.0.join("home");
+
+        let resolved =
+            resolve_config_for_run(None, &scratch.0, Some(&home), &HashMap::new()).unwrap();
+        // The sane default, not the skipped project config's own value.
+        assert_eq!(
+            resolved.config.default_model,
+            Some("llama3.1:8b".to_string())
+        );
+        assert_eq!(resolved.warnings.len(), 1);
+        assert!(resolved.warnings[0].starts_with("Skipped project config"));
+        assert!(resolved.warnings[0].contains("it is not trusted"));
+    }
+
+    #[test]
+    fn resolve_config_for_run_env_var_trusts_a_project_config_with_no_store() {
+        let scratch = ScratchDir::new("for-run-env-trusted-project");
+        fs::write(
+            scratch.0.join("circuitry.config.json"),
+            r#"{"default_model": "from-project"}"#,
+        )
+        .unwrap();
+        let home = scratch.0.join("home");
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_TRUST_PROJECT_CONFIG".to_string(),
+            "1".to_string(),
+        );
+
+        let resolved = resolve_config_for_run(None, &scratch.0, Some(&home), &env).unwrap();
+        assert_eq!(
+            resolved.config.default_model,
+            Some("from-project".to_string())
+        );
+        assert!(resolved.warnings.is_empty());
+    }
+
+    #[test]
+    fn resolve_config_for_run_narrows_but_never_widens_a_global_allowlist() {
+        let scratch = ScratchDir::new("for-run-narrow-allowlist");
+        let home = scratch.0.join("home");
+        let global_path = global_config_path(&home);
+        fs::create_dir_all(global_path.parent().unwrap()).unwrap();
+        fs::write(&global_path, r#"{"enabled_tools": ["json", "shell"]}"#).unwrap();
+        let project_path = scratch.0.join("circuitry.config.json");
+        let data = br#"{"enabled_tools": ["shell", "http"]}"#;
+        fs::write(&project_path, data).unwrap();
+        let store_path = trust_store_path(&home);
+        let key = config_trust::trust_key(&project_path);
+        let digest = config_trust::config_digest(data);
+        fs::write(
+            &store_path,
+            format!(
+                r#"{{"trusted": {{{:?}: {{"sha256": {:?}, "trusted_at": "2026-01-01T00:00:00+00:00"}}}}}}"#,
+                key, digest
+            ),
+        )
+        .unwrap();
+
+        let resolved =
+            resolve_config_for_run(None, &scratch.0, Some(&home), &HashMap::new()).unwrap();
+        // `http` is dropped (not in the global list); `shell` survives
+        // (in both); `json` (global-only) is untouched by the project's
+        // own narrower list, which never widens it back in since it
+        // isn't named there at all -- it simply isn't in the project's
+        // list either way, so the intersection still drops it.
+        assert_eq!(
+            resolved.config.enabled_tools,
+            Some(vec!["shell".to_string()])
+        );
+    }
+
+    #[test]
+    fn discover_project_config_prefers_circuitry_config_json() {
+        let scratch = ScratchDir::new("discover-prefers-circuitry");
+        fs::write(scratch.0.join("config.json"), "{}").unwrap();
+        fs::write(scratch.0.join("circuitry.config.json"), "{}").unwrap();
+        assert_eq!(
+            discover_project_config(&scratch.0),
+            Some(scratch.0.join("circuitry.config.json"))
+        );
+    }
+
+    #[test]
+    fn discover_project_config_is_none_when_neither_filename_exists() {
+        let scratch = ScratchDir::new("discover-none");
+        assert_eq!(discover_project_config(&scratch.0), None);
     }
 }

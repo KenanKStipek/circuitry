@@ -27,11 +27,21 @@ Decisions" instead of citing an external project file repeatedly:
   generation); electricity only runs orchestrations once they're written. Once electricity passes
   the full conformance suite, `cof run` itself delegates execution to electricity (§12, M4) — one
   engine, with Python kept as the authoring tool.
-- CLI shape: `electricity <config.json> <orchestration.yml> -e key=value... --out state.json
-  [--resume ...] [--pretty] [--profile <path>]`; the same `config.json` format and the same
-  final-state JSON shape as `cof run --out`. Both files are operator-chosen on the command line
-  and therefore fully trusted — no document-discovery mechanism, no document-trust
-  classification, no project-config search path.
+- CLI shape: `electricity run <orchestration.yml> [-e key=value]... [--config config.json]
+  [--out state.json] [--resume ...] [--pretty] [--profile <path>] [--allow-capabilities cap,cap]
+  [--adapter name] [--quiet]`, cof `run`'s own option names and meanings (issue #728) --
+  `--resume`/`--state`/`--force` are #727's own milestone and are not accepted by this build's
+  parser yet (an unrecognized option, same as any other); every other flag in this synopsis is.
+  The legacy
+  `electricity <config.json> <orchestration.yml> ...` form (config always the first positional,
+  never discovered) keeps working as an alias. The orchestration file is always operator-chosen on
+  the command line and therefore fully trusted — no document-discovery mechanism, no
+  document-trust classification. `--config` is the one exception to "explicit only": when it's
+  omitted, `run` discovers a config file exactly as `cof run` does — `CIRCUITRY_CONFIG`, then a
+  project config (`circuitry.config.json`/`config.json`) in the working directory gated by `cof
+  trust`'s own trust store (read-only: electricity never writes it), then the global config
+  (`~/.config/circuitry/config.json`) — same `config.json` format and the same final-state JSON
+  shape as `cof run --out` either way.
   Provider API keys come only from environment variables, never from config.json, state, or a CLI
   flag — with two named exceptions where the reference itself reads a credential from config as a
   fallback (the `cyberdiner` adapter's bearer token, §9.4/§9.6; the `surrealdb` runtime plugin's
@@ -42,8 +52,9 @@ Decisions" instead of citing an external project file repeatedly:
 - Profiles are supported, by explicit file path only: `--profile <path>`. There is no lookup by
   name and no search of the document's or the working directory's `profiles/` folder — the
   reference's own name-based discovery (`discover_profile_path`) is replaced by the operator
-  naming the file directly, consistent with "explicit config only, both files operator-chosen"
-  above. Everything else matches the reference exactly: profile schema and validation,
+  naming the file directly — the orchestration file (and `--profile`'s own path) stay explicit
+  only, consistent with the CLI-shape bullet above; only `--config` gained discovery. Everything
+  else matches the reference exactly: profile schema and validation,
   precedence, model locking, and the `effective_settings.profile` record (§6.11). Needed in M1
   (§15), not deferred.
 - `use` children resolve by filesystem path only; there is no library-name/remote-library
@@ -102,11 +113,17 @@ Decisions" instead of citing an external project file repeatedly:
 models (or scripted fakes, for conformance testing), produce a final state identical to what
 `cof run` would have produced for the same inputs.
 
-**Scope (v1).** A CLI binary (`electricity <config.json> <orchestration.yml> [-e key=value]...
-[--out state.json] [--state <file>] [--resume <id>|last] [--force] [--pretty] [--live-state <path>]
-[--profile <path>] [--dump-ir]`) plus an embeddable library crate exposing the same run
+**Scope (v1).** A CLI binary (`electricity run <orchestration.yml> [-e key=value]... [--config
+config.json] [--out state.json] [--state <file>] [--resume <id>|last] [--force] [--pretty]
+[--live-state <path>] [--profile <path>] [--allow-capabilities cap,cap] [--adapter name]
+[--quiet] [--dump-ir]`, and the legacy `electricity <config.json> <orchestration.yml> ...` form
+as an alias) plus an embeddable library crate exposing the same run
 semantics to a host Rust program (e.g. an application embedding the engine directly rather than shelling out to the
 binary). Both surfaces share one workspace of language, VM, tool, adapter, and plugin crates.
+`--state`/`--resume`/`--force` are this v1 scope's own resume feature (issue #727); issue #728's
+own `electricity run` ships every other flag in this synopsis first, with those three still
+unrecognized options until #727 lands (`electricity/README.md`'s own CLI bullet states this
+current-state subset; this bullet is the full v1 target).
 `--resume last` reads the most recently written `--out` file for this orchestration path, tracked
 in a small CLI-only stash file (`$XDG_STATE_HOME/electricity/last_run.json` on Linux, the platform
 equivalent elsewhere — this location is an electricity-only convenience and carries no parity
@@ -123,12 +140,14 @@ requirement of its own, unlike the `--out` state format it points at).
 | MCP **server** surface (`circuitry-mcp`, `host_claude` adapter) | electricity is a runner, not an interactive agent host; `host_claude`'s `generate()` has no transport of its own — it calls back into a live MCP session that only exists inside `cof`'s server (tools-adapters-plugins §3.9). electricity registers the adapter name only to reproduce `cof`'s own "cannot be built from config" error. |
 | REST trigger / scheduler | Deployment-time concern layered over a runner, not the runner itself; nothing here precludes a caller from wrapping the CLI or library in one later. |
 | The step cache (`cache:`, `cof cache`, `--no-cache`) | Removed from Circuitry itself (#353); electricity never had it to begin with. |
-| `cof trust` / document discovery / untrusted-document `runtime:` filtering | Explicit config only, both files operator-chosen = trusted (Decisions, above). Every config key and every document `runtime:` key electricity reads is honored as-is; there is no discovery mechanism and no notion of an untrusted document to filter against (runtime-semantics §8.6's `ORCHESTRATION_RUNTIME_KEYS` trust split collapses to "always trusted"). |
+| Document discovery / untrusted-document `runtime:` filtering | The orchestration file is always operator-chosen on the command line = trusted (Decisions, above, now narrowed to the document only — `--config` gained discovery in issue #728). Every document `runtime:` key electricity reads is honored as-is; there is no notion of an untrusted document to filter against (runtime-semantics §8.6's `ORCHESTRATION_RUNTIME_KEYS` trust split collapses to "always trusted"). |
 | Mustache partials (`{{> name}}`) | Removed from both Circuitry and electricity (Decisions, above); chevron's partial loading reads an arbitrary file from the process CWD by name, which is both a parity-fragile feature (no production document uses it) and a minor file-disclosure surface for no real benefit. |
 
-**Production-only surface.** electricity's only way to trust a file is for an operator to name
-it on the command line or in the embedding API; there is no API-key discovery beyond environment
-variables (Decisions, above).
+**Production-only surface.** electricity's only way to trust an orchestration file is for an
+operator to name it on the command line or in the embedding API; there is no API-key discovery
+beyond environment variables (Decisions, above). A config file is the one exception: `electricity
+run` discovers and reads `cof`'s own trust store for one found in the working directory, the same
+way `cof run` does (Decisions, above) — read-only, never written by electricity.
 
 ---
 
@@ -1045,7 +1064,7 @@ reference's own message and failure point word for word (the Decisions above).
 | Interrupted by SIGTERM | `143` |
 | Interrupted by SIGHUP (the terminal closed), unless SIGHUP was ignored at start (`nohup`) | `129` |
 | A malformed `-e` value (`KEY=VALUE` parsing failure) — the one pre-run usage error the reference's own CLI never explicitly catches, left to Typer/Click's default `BadParameter` handling | `2` |
-| Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path | `1` |
+| Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path, `run`'s own missing-orchestration-positional check (issue #728: not one of the enumerated usage errors either, since the positional stands in for `--last`) | `1` |
 
 All three interrupted cases still write `--out` exactly like an ordinary failure (runtime-semantics
 §6.5, §8.4) — the exit code alone distinguishes them; resumability is identical across all
@@ -1075,8 +1094,10 @@ nothing; success without `--out` prints the final state as JSON; a run failure p
 payload — so stderr during a run carries two kinds of line: `Warning: ...` (from `--events`/
 `--live-state` write failures folded into `result.warnings` at the end, plus any "Applied host
 settings" notice from step 6) and `WARNING: ...` (Circuitry's own `logging` module, at its
-reference CLI's default `WARNING` level — there is no `--verbose`/`--quiet` flag of electricity's
-own to change it, so this is always on). The latter are reached through the `log` crate, the same
+reference CLI's default `WARNING` level — there is no `--verbose` flag of electricity's own, and
+`run`'s own `--quiet` (issue #728) is accepted but changes nothing here either: it is parsed for
+parity with `cof run`'s own flag, not wired to anything, since this WARNING-level logging is
+already `cof run --quiet`'s own behavior — so this is always on). The latter are reached through the `log` crate, the same
 facade `electricity-cel`'s own absent-path warning already used before this (its own Cargo.toml
 doc comment foretold it): `electricity-vm`'s `core/dynamic.py`/`core/conditional.py` on_error/
 `finally:` degradation warnings, `core/tool.py`'s own invalid-`runtime.tools.timeout_seconds`
@@ -1296,9 +1317,11 @@ these before it ever reaches the orchestration's own state:
   run-wide concurrency-limiter handle dropped before the snapshot is taken** (it isn't
   JSON-serializable at all) but every other private, non-document key the reference also carries
   on this tree — `_orchestration_dir` (the absolute directory a relative `use path:` falls back
-  to, §5.2), `_allowlists`, and `_capability_allow` (always `[]` for electricity, since there is
-  no `--allow-capabilities` flag) — left in place and redacted along with everything else, not
-  stripped out, so the snapshot's key set matches `cof run --out`'s byte-for-byte.
+  to, §5.2), `_allowlists`, and `_capability_allow` (`run`'s own `--allow-capabilities`, issue
+  #728, sorted and deduplicated the same way `cof run`'s own `RunRequest.allow_capabilities`
+  is — `[]` when the flag is absent, same as before) — left in place and redacted along with
+  everything else, not stripped out, so the snapshot's key set matches `cof run --out`'s
+  byte-for-byte.
 
   **`sources`** tracks which layer resolved each effective setting, using the reference's own
   fixed vocabulary of layer labels (`"cli"`, `"orchestration"`, `"config"`, `"default"`, plus
@@ -1358,8 +1381,7 @@ for how the file itself is located:
 - **No discovery.** The reference resolves a bare `--profile <name>` by searching
   `<orchestration_dir>/profiles/<name>.yml` then `<cwd>/profiles/<name>.yml` (and the `.yaml`
   variant of each, `discover_profile_path`). electricity has no such search: `--profile <path>`
-  names the file directly, consistent with "explicit config only, both files operator-chosen"
-  (§1). A path that doesn't resolve to a readable file is **not** one of §6.9's enumerated
+  names the file directly, explicit only, same as the orchestration file (§1). A path that doesn't resolve to a readable file is **not** one of §6.9's enumerated
   pre-run usage errors: the reference's own `load_profile` runs inside the run's single
   top-level try block, *after* state/orchestration loading, the allowlist check, and capability
   consent, but still before `interface.inputs` checking (`runtime_shim.run`'s own call order) —
@@ -1448,16 +1470,19 @@ for how the file itself is located:
   only `--profile` given still auto-loads.
 - **Run-level model/adapter/out precedence.** The reference's own chain is
   `cli > profile > orchestration > config > default` for `model`/`adapter`, and
-  `cli > profile > resume-default-out > default` for `out`. electricity has no `--model`,
-  `--adapter`, `--scoring`, `--routing`, or `--decompose` CLI flags to rank above a profile
-  (Decisions, §1), so its chain is the remainder: for `model`/`adapter`, **profile > orchestration
-  default > config default**; for `out`, **profile > resume-default (§6.8) > default (nothing
-  written)**. A profile's `model`/`adapter`/`out`, when set, therefore wins outright over the
-  orchestration's own top-level `model:`/`adapter:` — exactly as it does for the reference once
-  its own absent CLI overrides are factored out — and `runtime.effective_settings.sources`
-  (§6.10) records `"profile"` for whichever of `model`/`adapter`/`out`/`persistence` a profile
-  actually supplied, matching `resolve_effective_settings`'s own four `sources[...] = "profile"`
-  assignments exactly.
+  `cli > profile > resume-default-out > default` for `out`. electricity's `run` subcommand has
+  `--adapter` (issue #728), which ranks exactly where the reference's own `cli` tier does —
+  `runtime.effective_settings.sources.adapter` records `"cli"` for it, the same string the
+  reference's own `--adapter` records. There is still no `--model`, `--scoring`, `--routing`, or
+  `--decompose` CLI flag (Decisions, §1), so `model`'s own chain is the remainder: **profile >
+  orchestration default > config default**; `out`'s is **the plain `--out` flag (already ranked
+  above everything, unaffected by this issue) > profile > resume-default (§6.8) > default
+  (nothing written)**. A profile's `model`/`out`, when set and not beaten by a higher tier,
+  therefore wins outright over the orchestration's own top-level `model:` — exactly as it does
+  for the reference once its own absent CLI overrides are factored out — and
+  `runtime.effective_settings.sources` (§6.10) records `"profile"` for whichever of
+  `model`/`adapter`/`out`/`persistence` a profile actually supplied and `--adapter` didn't beat,
+  matching `resolve_effective_settings`'s own `sources[...] = "profile"` assignments exactly.
 - **A profile's `persistence:` block**, when present, **replaces** `runtime.persistence`
   outright rather than merging with whatever the orchestration or config already set — the two
   backends take disjoint config keys, so a partial overlay would produce one that is neither.
@@ -2565,9 +2590,17 @@ of M0-H's run wiring. **Loop progress** (the second bullet) landed with M1's own
 
 ## 11. Configuration
 
-Explicit config file only — no discovery, no `cof trust` (Decisions, §1). Both the config file
-and the orchestration file are operator-chosen and therefore trusted; electricity never
-evaluates any notion of document trust at run time.
+The legacy `electricity <config.json> <orchestration.yml>` form keeps its config file explicit
+only — no discovery, no `cof trust` (Decisions, §1). `electricity run` (issue #728) discovers one
+when `--config` is absent, porting `cli/config.py::resolve_config`'s non-explicit branch exactly:
+`CIRCUITRY_CONFIG`, then a project config (`circuitry.config.json`/`config.json`) discovered in
+the working directory and gated by `cof trust`'s own trust store (`trusted.json` beside the
+global config) — read-only, electricity never writes it — narrowed against the global config's
+own allowlists the same way (`_narrow_allowlists`), then the global config
+(`~/.config/circuitry/config.json`). Either way, the orchestration file stays operator-chosen and
+therefore trusted; electricity never evaluates any notion of document trust at run time
+(§1's Decisions/Non-goals: document trust and config-file discovery are separate concerns, and
+only the latter changed).
 
 **The user's private `.env`** (issue #468). Before resolving the config file, the `electricity`
 binary's own startup ports `cli/config.py::load_user_env`: it loads the private `.env` file
@@ -2834,6 +2867,8 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 | — | **`runtime._decomposition_planner_path`** (issue #522's Settled question 9): an undocumented test hook (`core/decompose.py:75-78`) letting Circuitry's own test suite point the planner at a path other than the bundled `curation/agents/decompose.yml` — only Circuitry's own tests ever set it; `cof` honours an override (`core/decompose.py:356-370`'s `_planner_path`) if one is set. | **Not read at all** — electricity always runs the synced `PLANNER_YAML`, regardless of this key. | Yes — a config file setting this key makes `cof run` load a different planner document while electricity keeps running the bundled one; accepted because only Circuitry's own tests are known to set it, and they always run against `cof`, never `electricity`. |
 | — | **A WARNING line logged with `exc_info=True`** (issue #522's own PR comment): `cof run` writes the line's own text to stderr, then a full Python traceback on the lines after it, for every one of these sites — the two decomposition lines (`Decomposition planner failed for prompt %r`/`Decomposition child failed for prompt %r`), the reflector's own prime-template fallback (`core/reflector.py:342`), and the two complexity-scoring lines (`core/prompt.py:920-924`, `:984-988`). | **Print the WARNING line alone, no traceback** — `log::warn!` has no Python exception object to format one from in the first place; the conformance harness only ever compares the prefixed `WARNING:`-style line itself, never the traceback that follows it on a real `cof run`, so no case shows the difference. | No — accepted for every site in this set; a future WARNING line ported the same way inherits the same rule without a new row here. |
 | — | **An undeclared function/method call whose own argument is an unset `state.` read** (issue #657/#658): `nope(state.x)`/`state.x.nope()` with `x` unset. cof's evaluator (cel-python) resolves the function/method name before evaluating its arguments (`celpy.evaluation.Evaluator.method_eval`), so it always reports the undeclared reference. The `cel` crate resolves every argument first (`objects.rs::call_function`'s own `args?`), so an unset argument's own marker error wins instead — `False` plus the unset-path warning, naming `x`, not an undeclared-reference error. Only reachable when the call's own name genuinely isn't declared; `cof check`'s own free-name rule never looks at function/method names (by design — the two engines' function sets differ), so this can't be caught before run time on either side. | **Accept the gap, documented, not reproduced** — reordering the `cel` crate's own argument/name resolution would mean patching a pinned external dependency for one narrow edge case; short-circuiting itself is unaffected either way (`false && nope(state.x)` stays `false`, with no warning, on both engines, since neither side ever evaluates the call at all there). | No — a narrow, library-ordering difference between cel-python and the `cel` crate, not a design choice; revisit only if a production document's CEL actually calls an undeclared function/method on an unset argument. |
+| — | **A `cof run` usage error's own invoking program name and decorative panel** (issue #728): `cof run`'s own `UsageError.show` (typer's `rich_markup_mode="rich"`) names the real invoking program (`cof`, or `python -m circuitry.cli.app` under a test harness — not fixed across environments either) in its `Usage:`/`Try ... --help` lines, and wraps `Error: <message>` in a Rich panel (a box whose width depends on the terminal/`COLUMNS`, plus a `(Possible options: ...)` close-match suggestion list) rather than a plain line — confirmed empirically: the same invocation renders a differently-wrapped box at `COLUMNS=40` than at a wider width, so even two real `cof run` runs don't always render this identically. | **electricity run**'s own usage errors print a plain frame instead — `Usage: electricity run [OPTIONS] [orchestration]`, `Try 'electricity run --help' for help.`, a blank line, then `Error: <message>`, always `electricity` as the program name, never a panel or close-match suggestions. `<message>` itself matches the corresponding text inside `cof run`'s own panel (`No such option: <flag>`, `Got unexpected extra argument(s) (<args>)`, `Invalid value: Invalid -e format: ...`) — compared against that substring, never cof's whole frame. | No — the panel and program name are third-party/environment-dependent presentation, not Circuitry's own text; the message core is matched exactly. |
+| — | **`cof run`'s own missing/not-found-orchestration messages add a `cof list` tip** (issue #728): `Error: Missing orchestration. Use --last or provide a path/name.`/`Error: Orchestration not found: <name>` are each followed by a second stdout line, `Tip: run cof list to see available orchestrations.`. | **Omit the tip line** — electricity has no `list` subcommand of its own for it to name; the `Error: ...` line itself matches `cof run`'s exactly, compared on its own. | No — electricity genuinely has nothing for the tip to point at; accepted, not a text-matching gap. |
 
 ## 14. Security model
 
@@ -2879,17 +2914,24 @@ electricity's security posture mirrors Circuitry's (Decisions, §1: "same securi
   RestrictedPython + forked-child + rlimit sandboxing is what bounds that specific plugin; the
   bridge's value is a crash boundary and a kill switch, and this distinction is stated plainly to
   users, not implied to be stronger than it is.
-- **Capability ceiling on generated plans — always unrestricted for electricity, not a gate it
-  enforces.** The reference's own capability ceiling is installed only for a *library-sourced*
+- **Capability ceiling on generated plans — unrestricted for an ordinary path run, but not
+  unconditionally.** The reference's own capability ceiling is installed for a *library-sourced*
   document (a shared-library fetch, a remote library source, or a path inside a library cache
-  directory) or a `use: ref:` child reached from one — **never** for a document run directly by
-  path, which is electricity's only mode (Decisions, §1). Since electricity also rejects `ref:`
-  outright (§4 step 4, §13), neither condition that installs a ceiling in the reference can ever
-  apply to electricity: the ceiling is **always `None`/unrestricted** for every electricity run,
-  reflector- and decomposition-generated plans included. This is worth stating plainly rather than
-  describing electricity as "enforcing a capability ceiling" (an earlier draft implied it does) —
-  the risk is someone building a *stricter* gate that then diverges from what `cof run` itself
-  does for the exact same path-run document, not someone building a gate that's too loose.
+  directory) or a `use: ref:` child reached from one. electricity rejects `ref:` outright (§4
+  step 4, §13) and has no shared-library fetch or remote-library-source run of its own
+  (Decisions, §1), but it does still resolve the one path condition: `electricity_config::
+  is_cache_path` (issue #728, issue #337's own anti-bypass rule) checks whether the orchestration
+  path given resolves inside the library cache directory (`CIRCUITRY_CACHE_DIR`/`XDG_CACHE_HOME`/
+  `~/.cache/circuitry/library` — electricity has no configured library source of its own, so this
+  is the only cache root there is to check against). A path run from there is gated exactly as a
+  library-sourced one would be: `required_capabilities` (the document's own tool providers, by
+  `plugins/capabilities.py`'s table, plus every reachable `use` child's) must be covered by
+  `trusted.json`'s `document_capabilities` entry for that file (read-only — electricity never
+  writes it) union `--allow-capabilities`, or the run is refused before anything executes, with
+  the reference's own `refusal_message` text and exit code. Every *other* path run keeps the
+  ceiling **`None`/unrestricted**, exactly as before. This is worth stating plainly rather than
+  describing electricity as unconditionally never enforcing a capability ceiling (an earlier draft
+  of this bullet claimed exactly that) — the one condition electricity can still hit is this one.
 
 ---
 

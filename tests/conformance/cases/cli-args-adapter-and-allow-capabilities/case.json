@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #728 (`electricity run`'s own `--adapter`/`--allow-capabilities`)",
+  "description": "A document with no prompt/use of its own: --adapter still ranks as the cli source over the config's own default_adapter ('scripted'), and --allow-capabilities still lands in _capability_allow, sorted and deduplicated, even though nothing in this document needs either -- both observable only in runtime.effective_settings, never in the document's own output. 'ollama' (not an agent-CLI adapter) avoids needing a fakes/ binary for an adapter this case never actually dispatches.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "cli_args": ["--adapter", "ollama", "--allow-capabilities", "network,shell,shell"]
+}
