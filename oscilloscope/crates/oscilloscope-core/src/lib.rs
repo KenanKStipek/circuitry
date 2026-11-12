@@ -31,5 +31,6 @@ pub mod render;
 pub mod screens;
 pub mod select;
 pub mod store;
+pub mod summary;
 pub mod supervise;
 pub mod transcript;
