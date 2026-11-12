@@ -558,7 +558,9 @@ fn render_tool_call<R: ParamsCtx>(
 /// -- *rendered* is this effect's own literal params
 /// ([`render_tool_call`]'s own cel branch above), *ctx* the same live
 /// scope an `if`/`while` CEL condition at this position would see
-/// ([`ParamsCtx::whole`]). No I/O, no capability, no plugin registry.
+/// ([`ParamsCtx::cel_state`], the same narrowed read an `if`/`while`
+/// CEL condition at this position gets). No I/O, no capability, no
+/// plugin registry.
 fn evaluate_cel_tool<R: ParamsCtx>(
     rendered: &Value,
     ctx: &R,
@@ -572,7 +574,7 @@ fn evaluate_cel_tool<R: ParamsCtx>(
         dict.and_then(|d| d.get(&Value::Str("strict".to_string()))),
         Some(Value::Bool(true))
     );
-    let state = ctx.whole();
+    let state = ctx.cel_state(expr);
     // `core/cel_eval.py::evaluate_cel_value` raises `CelEvaluationError` for
     // every evaluation failure, including a strict unset path and a result
     // with no JSON form; the schema mismatch below is a plain `ValueError`

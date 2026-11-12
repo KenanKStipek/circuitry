@@ -46,6 +46,18 @@ pub trait ParamsCtx: ScopeRoot {
     /// own doc comment for why it's a separate method from
     /// [`ScopeRoot::lookup`].
     fn resolve_from(&self, path: &str) -> Option<Value>;
+
+    /// The `state` a `cel` tool effect's own expression should evaluate
+    /// against -- the same bindings an `if`/`while` CEL condition at this
+    /// position sees. Defaults to [`ScopeRoot::whole`] (every existing
+    /// caller but the live, store-backed one); `exec::live_scope::LiveRoot`
+    /// overrides this with `live_scope::build_cel_state`'s own narrowed
+    /// read, exactly like `exec::conditional`/`exec::loop_`'s own CEL arms
+    /// already do, rather than paying for a full [`ScopeRoot::whole`]
+    /// snapshot on every `cel` tool call (issue #723).
+    fn cel_state(&self, _expr: &str) -> Value {
+        self.whole()
+    }
 }
 
 impl ParamsCtx for Value {
