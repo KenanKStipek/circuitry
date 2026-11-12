@@ -209,6 +209,14 @@ pub struct ToolOp {
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `http`'s own literal `params.headers` entries whose value is a
+    /// `{secret: <name>, prefix?: <text>}` reference (issue #725), by
+    /// header name -- extracted once, at compile time, from the
+    /// document's own literal `params.headers` only (never from
+    /// `params_json`, which the compiler's own placement check refuses
+    /// to carry one in at all). Empty for every provider but `http`,
+    /// and for `http` whenever its own `headers` names no secret.
+    pub secret_headers: IndexMap<String, crate::secrets::SecretRef>,
     /// `ToolDefinition.prompt_file`: an `agent` effect's `params.prompt` of
     /// `{file: {from: <state path>}, within: <dir>}` (issue #591), compiled
     /// for parity with `cof check`; `prompt` is then absent from `params`.

@@ -987,6 +987,7 @@ pub fn pre_input_checks(
     if let Some(message) = electricity_config::prompt_sent_errors(effective_runtime)
         .into_iter()
         .chain(electricity_config::parsed_stdout_errors(effective_runtime))
+        .chain(electricity_config::runtime_env_secret_errors(effective_runtime))
         .next()
     {
         return Err(RunCheckError::Compile(message));

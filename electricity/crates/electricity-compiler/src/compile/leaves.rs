@@ -524,7 +524,15 @@ pub(crate) fn compile_tool(
         }
     }
 
-    let params_node = if electricity_value::pycompat::py_strip(provider).to_lowercase() == "cel" {
+    let normalized_provider = electricity_value::pycompat::py_strip(provider).to_lowercase();
+    let secret_headers = crate::compile::secrets::check_param_secrets(
+        params,
+        name,
+        &normalized_provider,
+        effect_path,
+    )?;
+
+    let params_node = if normalized_provider == "cel" {
         build_cel_params(
             params,
             params_json.as_deref(),
@@ -566,6 +574,7 @@ pub(crate) fn compile_tool(
 
     let op = ToolOp {
         provider: provider.to_string(),
+        secret_headers,
         params: params_node,
         params_json: params_json_text,
         prompt: prompt_text,

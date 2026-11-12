@@ -10,6 +10,11 @@ description = "config.json -> effective settings for electricity orchestrations 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
+# `runtime_env_secrets`'s own well-formedness check (issue #725) --
+# `electricity_bytecode::secrets` is the one shared, dependency-cycle-
+# free home for the `{secret: ...}` shape predicates both this crate
+# and `electricity-compiler` need.
+electricity-bytecode = { path = "../electricity-bytecode" }
 indexmap = { version = "2", features = ["serde"] }
 regex = "1"
 # `logger.warning` parity for `CircuitryConfig.from_dict`'s own "Unknown

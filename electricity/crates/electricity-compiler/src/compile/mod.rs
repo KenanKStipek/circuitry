@@ -10,6 +10,7 @@ pub mod expect;
 pub mod leaves;
 pub mod names;
 pub mod params;
+pub mod secrets;
 pub mod templates;
 
 use crate::{CompileError, DocumentOrigin, compose, prompt_files};

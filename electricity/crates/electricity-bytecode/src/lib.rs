@@ -91,6 +91,7 @@ pub mod program;
 pub mod refusal;
 pub mod refusal_text;
 pub mod region;
+pub mod secrets;
 pub mod template;
 
 pub use effects::{
