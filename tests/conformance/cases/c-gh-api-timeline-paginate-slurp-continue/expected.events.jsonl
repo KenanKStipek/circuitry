@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-11-11T22:07:49.426Z","ev":"run_start","run_id":"c47c65b9-de9c-4f6e-af17-0ad5d4b721f3","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":9881}
+{"v":1,"seq":1,"ts":"2026-11-11T22:07:49.427Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-11T22:07:49.427Z","ev":"start","id":1,"path":"prime.timeline"}
+{"v":1,"seq":3,"ts":"2026-11-11T22:07:49.489Z","ev":"end","id":1,"path":"prime.timeline","ok":false,"ms":62,"error":"<FAKES_DIR>/gh failed (exit 1): gh: Not Found (HTTP 404)"}
+{"v":1,"seq":4,"ts":"2026-11-11T22:07:49.489Z","ev":"end","id":0,"path":"prime","ok":true,"ms":62}
+{"v":1,"seq":5,"ts":"2026-11-11T22:07:49.490Z","ev":"run_end","ok":true}

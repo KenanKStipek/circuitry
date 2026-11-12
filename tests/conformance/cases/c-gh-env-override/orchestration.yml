@@ -1,0 +1,7 @@
+name: c-gh-env-override
+effects:
+  - type: tool
+    name: probe
+    provider: gh
+    params:
+      args: ["env", "probe"]

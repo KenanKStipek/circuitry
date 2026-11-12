@@ -75,9 +75,9 @@ Decisions" instead of citing an external project file repeatedly:
   starts — §6.9).
 - electricity's v1 CLI has no `--dry-run`, `--validate-only`, or `--verbose` flag; the
   `runtime.last_run` fields of the same names (§6.10) are therefore always written `false`.
-- The native tool set for v1 is `shell`, `json`, `fs`, `awk`, `imagemagick`, `ffmpeg`, `http`,
-  `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `mcp`, `surrealdb`, `email_smtp`
-  (§8.1).
+- The native tool set for v1 is `shell`, `json`, `fs`, `awk`, `imagemagick`, `ffmpeg`, `gh`,
+  `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `cel`, `mcp`, `surrealdb`,
+  `email_smtp` (§8.1).
 - Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2), a
   native `anthropic` adapter (§9.3), a native `openai` adapter (its own file, reusing the
   family's message/response helpers and shared transport but registered separately, for its
@@ -1906,7 +1906,7 @@ still differ from CPython 3.11's for a code point assigned meaning after Unicode
 ### 8.1 Native tool plugins (v1)
 
 Rust-native implementations of the tools the owner's production documents use: `shell`, `json`,
-`fs`, `awk`, `imagemagick`, `ffmpeg`, `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`,
+`fs`, `awk`, `imagemagick`, `ffmpeg`, `gh`, `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`,
 `validate_yaml`, `mcp`, `surrealdb`, `email_smtp` (Decisions, §1). Each implements the shared trait mirroring
 `ToolPlugin` (tools-adapters-plugins §1.1):
 
@@ -1937,6 +1937,8 @@ parity-critical points, cited by section):
 | `fs` (§2.3) | no sandbox — parity means matching the *absence* of a jail, not inventing one; `delete` on a missing path is `value: false`, not an error. |
 | `awk`/`imagemagick` (§2.4) | binary candidates searched in order (`awk, gawk, mawk`; `magick, convert`); `binary`/`env` only from `runtime.plugins.<name>`, never from params. |
 | `ffmpeg` (§2.5) | two metacharacter tiers: `flags`/`input`/`output`/`extra_inputs` reject `|`/`;` too; `filter_complex` does not, since those are legitimate filter-graph syntax there. |
+| `gh` | `GenericSubprocessTool`, one binary candidate (`gh`, no fallback name); `params.args` forwarded to it as argv, never a shell; authentication is whatever `gh auth login` already set up outside circuitry, same as `cof run`. |
+| `cel` | Evaluated with the same CEL evaluator and live scope `if`/`while` use; `params` stay literal (never rendered); the result is written as JSON with timestamps and durations as ISO 8601 and map keys in their authored order (the vendored `cel` crate, `electricity/vendor/cel`); `strict` and `schema` as `plugins/cel.py`. |
 | `http` (§2.6) | a 4xx/5xx is a returned `ok=false` result (never a raised error); a connection failure *is* raised — this distinction drives retry classification; `http_error_excerpt`'s four-tier extraction (`error.message` → `error` → `message`/`detail` → redacted raw body) reproduced exactly. |
 | `clock` (§2.7) | IANA timezone database required (`chrono-tz` or `tz`), not a bare UTC-offset model. |
 | `hash`/`uuid`/`env_vars`/`regex` (§2.8–2.11) | `env_vars`'s own `_SECRET_PATTERN` is narrower than and independent of the central redaction deny-list — both must exist, not one standing in for the other. |
