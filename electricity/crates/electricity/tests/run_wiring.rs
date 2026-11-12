@@ -1210,6 +1210,112 @@ async fn a_secret_echoed_by_the_server_is_masked_everywhere_a_run_writes() {
             !text.contains(secret_value),
             "{label} must carry no part of the secret: {text}"
         );
+        assert!(
+            !text.contains(&secret_value[..4]),
+            "{label} must carry no fragment of the secret either: {text}"
+        );
+    }
+}
+
+/// Issue #725's acceptance (2), the error-excerpt path: a secret that
+/// straddles `http_error_excerpt`'s own 500-character cap, in a non-2xx
+/// response body, is scrubbed before the cut -- so no fragment from
+/// either side of it reaches the saved state, the events file or the
+/// live-state file, matching the whole-value case above.
+#[tokio::test]
+async fn a_secret_straddling_the_error_excerpts_cut_leaves_no_fragment_in_any_run_artifact() {
+    // Neither the first nor the last 4 characters are a word ("value",
+    // "sekrit", ...) that might otherwise appear elsewhere in the
+    // state/events/live-state JSON structure itself, which would make a
+    // fragment check here a false positive rather than a real leak.
+    let secret_value = "zq9x7f3c-electricity-725-fragment-k2wp9mdt";
+    let var = "ELECTRICITY_RUN_WIRING_SECRET_FRAGMENT_TEST";
+    // SAFETY: a test-local name no other test reads.
+    unsafe {
+        std::env::set_var(var, secret_value);
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        let body = format!("{}{secret_value}{}", "a".repeat(490), "b".repeat(200));
+        assert!(body.find(secret_value).unwrap() < 500);
+        assert!(body.find(secret_value).unwrap() + secret_value.len() > 500);
+        let response = format!(
+            "HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\
+             Connection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    let dir = temp_dir("secret-fragment");
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(r#"{{"runtime": {{"secrets": {{"api": {{"env": "{var}"}}}}}}}}"#),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "effects:\n  - type: tool\n    name: call\n    provider: http\n    on_error: \
+             continue\n    params:\n      url: http://{addr}/\n      headers: \
+             {{Authorization: {{secret: api, prefix: \"Bearer \"}}}}\n"
+        ),
+    );
+    let events_path = dir.join("events.jsonl");
+    let live_state_path = dir.join("live-state.json");
+    let req = RunRequest {
+        config_path: Some(config),
+        orchestration_path: doc,
+        inputs: IndexMap::new(),
+        out_path: None,
+        pretty: false,
+        live_state_path: Some(live_state_path.clone()),
+        events_path: Some(events_path.clone()),
+        profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
+        armed: true,
+    };
+
+    let result = run(&req).await;
+    unsafe {
+        std::env::remove_var(var);
+    }
+
+    assert!(result.ok, "{:?}", result.error);
+    let state = result.state.as_ref().unwrap();
+    let state_text = electricity::out::render_state(state, false).unwrap();
+    let events_text = fs::read_to_string(&events_path).unwrap();
+    let live_state_text = fs::read_to_string(&live_state_path).unwrap();
+
+    assert!(
+        state_text.contains("[secret:api]"),
+        "the error excerpt must show the placeholder: {state_text}"
+    );
+    for (label, text) in [
+        ("state", state_text.as_str()),
+        ("events", events_text.as_str()),
+        ("live-state", live_state_text.as_str()),
+    ] {
+        assert!(
+            !text.contains(secret_value),
+            "{label} must carry no part of the secret: {text}"
+        );
+        assert!(
+            !text.contains(&secret_value[..4]),
+            "{label} must carry no fragment from the start of the secret: {text}"
+        );
+        assert!(
+            !text.contains(&secret_value[secret_value.len() - 4..]),
+            "{label} must carry no fragment from the end of the secret: {text}"
+        );
     }
 }
 
