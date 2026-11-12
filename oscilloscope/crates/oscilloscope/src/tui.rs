@@ -10273,6 +10273,10 @@ fn help_cell_len(cell: &HelpCell) -> usize {
     cell.iter().map(|(t, _)| t.chars().count()).sum()
 }
 
+fn help_cell_is_blank(cell: &HelpCell) -> bool {
+    help_cell_len(cell) == 0
+}
+
 fn help_cell_spans(cell: &HelpCell, width: usize) -> Vec<Span<'static>> {
     let mut spans: Vec<Span<'static>> =
         cell.iter().map(|(t, s)| Span::styled(t.clone(), *s)).collect();
@@ -10306,7 +10310,7 @@ fn help_row(
     desc2: HelpCell,
     width: u16,
 ) -> Vec<Line<'static>> {
-    let has_second = !key2.is_empty() || !desc2.is_empty();
+    let has_second = !help_cell_is_blank(&key2) || !help_cell_is_blank(&desc2);
     if width >= HELP_NARROW_WIDTH {
         let mut spans = help_cell_spans(&key1, 7);
         spans.extend(help_cell_spans(&desc1, 28));
@@ -10492,7 +10496,7 @@ fn tape_help_key_rows(
         help_cell("›", muted),
         help_cell("path separator, dim parents", default),
         help_cell("› preview", muted),
-        help_cell("a finished step's preview", default),
+        help_cell("a finished step preview", default),
         width,
     ));
     lines.extend(help_row(
@@ -10522,9 +10526,9 @@ fn tape_help_key_rows(
     ));
     lines.extend(help_row(
         help_cell("↑ ↓", default),
-        help_cell("Totals: tokens sent · received", default),
+        help_cell("Totals: sent · received", default),
         help_cell("┼", muted),
-        help_cell("the `t` view's own deviation tick", default),
+        help_cell("the `t` view's tick", default),
         width,
     ));
     lines
@@ -10662,7 +10666,7 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
             (" ".into(), default),
             ("·".into(), ahead),
         ],
-        help_cell("a step: failed · running · ahead", default),
+        help_cell("failed · running · ahead", default),
         help_cell("⟳", loop_style),
         help_cell("a loop station", default),
         width,
@@ -10682,16 +10686,21 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Line<'sta
         width,
     ));
     lines.extend(help_row(
+        help_cell("-%", below_usual),
+        help_cell("below usual: accent colour", default),
         vec![
             ("+25%".into(), above_usual),
             (" ".into(), default),
             ("+50%".into(), far_above_usual),
-            (" ".into(), default),
-            ("-%".into(), below_usual),
         ],
-        help_cell("deviation: amber · red · accent", default),
+        help_cell("amber · red, above usual", default),
+        width,
+    ));
+    lines.extend(help_row(
         help_cell("scale", muted),
         help_cell("fixed for the whole run", default),
+        help_cell("", default),
+        help_cell("", default),
         width,
     ));
     for _ in lines.len()..14 {
@@ -10790,12 +10799,12 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool, unit: u64, width: u16) -> Vec<
         help_cell("lane", default),
         help_cell("one lane per pass or branch", default),
         help_cell("fork/join", default),
-        help_cell("where paths split · rejoin", default),
+        help_cell("paths split · rejoin", default),
         width,
     ));
     lines.extend(help_row(
         help_cell("·", dim),
-        help_cell("a lane not taken, once decided", default),
+        help_cell("not taken, once decided", default),
         help_cell("Following", default),
         help_cell("f toggles · stays on Now", default),
         width,
@@ -23803,15 +23812,12 @@ mod tape_frame_goldens {
         );
     }
 
-    /// Issue #738: the Tape's own Help opens on its Key page (§3.7's
-    /// glyph legend plus the Tape's own additions -- breadcrumbs,
-    /// previews, the Now band and a loop's slots/queue), and `←→`
-    /// (`crate::keys::HelpPage`) reaches its Keys page (§4's own key
-    /// bar keys plus the movement aliases, `/` and `e` the key bar
-    /// itself does not show) -- the two no longer both fit the fixed
-    /// 72×18 overlay together.
+    /// Issue #738: at 120x30 the Tape's own Help has the room to
+    /// show every key and the Key together, on one page -- `←→`
+    /// (`crate::keys::HelpPage`) draws the same merged content
+    /// either way, since there is nothing else to switch to.
     #[test]
-    fn the_tapes_help_overlay_pages_between_key_and_keys() {
+    fn the_tapes_help_overlay_merges_keys_and_key_at_120x30() {
         let plan = demo_plan();
         let (_history_dir, history) = demo_history();
         let now = RUN2_FROZEN_NOW;
@@ -23863,6 +23869,103 @@ mod tape_frame_goldens {
                 .unwrap();
             terminal.backend().to_string()
         };
+        for page in [crate::keys::HelpPage::Key, crate::keys::HelpPage::Keys] {
+            let merged = draw_at(page);
+            assert!(
+                merged.contains("Help · Tape")
+                    && !merged.contains("Help · Tape · Key")
+                    && !merged.contains("Help · Tape · Keys"),
+                "expected the merged page's own title, with no page suffix:\n{merged}"
+            );
+            assert!(
+                merged.contains("select a row") && merged.contains("tokens: units or vs usual"),
+                "expected §4's own Tape keys:\n{merged}"
+            );
+            assert!(
+                merged.contains("same as ↑ ↓")
+                    && merged.contains("filter rows")
+                    && merged.contains("errors only"),
+                "expected the movement aliases and /-e, settling issue #684's own frame-locked blank rows:\n{merged}"
+            );
+            assert!(
+                merged.contains("follow Now") && merged.contains("unfold meta"),
+                "expected the global f/m keys:\n{merged}"
+            );
+            assert!(
+                merged.contains("done · failed") && merged.contains("running · ahead"),
+                "expected §3.7's shared glyph legend:\n{merged}"
+            );
+            assert!(
+                merged.contains("now band: clock · elapsed"),
+                "expected the Now band's own Key line:\n{merged}"
+            );
+            assert!(
+                merged.contains("passes waiting to run") && merged.contains("path separator"),
+                "expected the loop-line/breadcrumb Key lines:\n{merged}"
+            );
+        }
+    }
+
+    /// Below the merged page's own room (issue #738), the Tape's
+    /// Help falls back to its fixed-height overlay, paged between
+    /// its own keys (§4's key bar keys plus the movement aliases,
+    /// `/` and `e` the key bar itself does not show) and its Key
+    /// (§3.7's glyph legend plus the Tape's own additions --
+    /// breadcrumbs, previews, the Now band and a loop's slots/queue)
+    /// with `←→`.
+    #[test]
+    fn the_tapes_help_overlay_pages_between_key_and_keys_at_80x24() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let draw_at = |page: crate::keys::HelpPage| {
+            let mut app = crate::keys::App::new(false);
+            app.selected_path = Some("prime.gate.reply".to_string());
+            app.dialog = Dialog::Help;
+            app.help_page = page;
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        Some(&tape_screen),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .unwrap();
+            terminal.backend().to_string()
+        };
         let key_page = draw_at(crate::keys::HelpPage::Key);
         assert!(
             key_page.contains("Help · Tape · Key") && !key_page.contains("Help · Tape · Keys"),
@@ -23873,8 +23976,7 @@ mod tape_frame_goldens {
             "expected §3.7's shared glyph legend:\n{key_page}"
         );
         assert!(
-            key_page.contains("now band: clock· elapsed")
-                || key_page.contains("now band: clock · elapsed"),
+            key_page.contains("now band: clock · elapsed"),
             "expected the Now band's own Key line:\n{key_page}"
         );
         assert!(
@@ -24013,16 +24115,16 @@ mod tape_frame_goldens {
         };
         for (launched, watch) in [
             (
-                to_text(signal_help_lines(&ctx, false)),
-                to_text(signal_help_lines(&ctx, true)),
+                to_text(signal_help_lines(&ctx, false, 72)),
+                to_text(signal_help_lines(&ctx, true, 72)),
             ),
             (
-                to_text(flow_help_lines(&ctx, false)),
-                to_text(flow_help_lines(&ctx, true)),
+                to_text(flow_help_lines(&ctx, false, 50, 72)),
+                to_text(flow_help_lines(&ctx, true, 50, 72)),
             ),
             (
-                to_text(store_help_lines(&ctx, 50, false)),
-                to_text(store_help_lines(&ctx, 50, true)),
+                to_text(store_help_lines(&ctx, 50, false, 72)),
+                to_text(store_help_lines(&ctx, 50, true, 72)),
             ),
         ] {
             assert!(launched.contains("confirms if running"), "{launched}");
@@ -24188,7 +24290,8 @@ mod tape_frame_goldens {
             "not the generic list:\n{text}"
         );
         // Issue #738: a tile's own share of tokens, the `check`
-        // tile, `… N more` and the running store's own tile.
+        // tile, `… N more`, a running container's own accent `●`
+        // and a live leaf's own dim (italic in `terminal`) style.
         assert!(text.contains("Key"), "expected a Key section:\n{text}");
         assert!(
             text.contains("area is its share of tokens")
@@ -24196,8 +24299,12 @@ mod tape_frame_goldens {
             "expected the tile/check Key lines:\n{text}"
         );
         assert!(
-            text.contains("the smaller stores, folded") && text.contains("pulses while live"),
+            text.contains("the smaller stores, folded") && text.contains("a running container"),
             "expected the more/running Key lines:\n{text}"
+        );
+        assert!(
+            text.contains("a live leaf"),
+            "expected the live-leaf Key line:\n{text}"
         );
     }
 
