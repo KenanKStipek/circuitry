@@ -79,9 +79,16 @@ release alongside the Python distributions, marked as a preview.
   no `--resume` or `--state` yet.
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
-- **CLI.** `--resume`/`--state`/`--force`/`--last` aren't accepted yet (#727).
-  `--profile` takes a path, not a name, and there is no `--dry-run`,
-  `--validate-only`, `--verbose` or `--skip-preflight`. `.toon` documents and
+- **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
+  `--out`/`-o`, `--live-state`, `--events`, `--allow-capabilities`,
+  `--adapter` and `--quiet` -- the same names, meaning and config discovery.
+  Every other `cof run` option is engine-specific, not yet accepted:
+  `--resume`/`--state`/`-s`/`--force`/`--last` (#727); `--profile` (name,
+  not a path) and `--profile-from-state`; `--print`, `--dry-run`,
+  `--validate-only`, `--json`, `--verbose`/`-v`, `--tail`,
+  `--skip-preflight`; `--model`, `--explain-routing`, `--decompose-out`,
+  and the four complexity switches `--scoring`/`--routing`/`--decompose`/
+  `--split` (each with its own `--no-...` form). `.toon` documents and
   `use: {ref: ...}` are refused. Windows isn't supported.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
   JSON Schema shapes (#507); a reflector plan containing a date (#512).

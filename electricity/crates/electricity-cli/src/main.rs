@@ -74,33 +74,45 @@ never discovered) keeps working as an alias; --profile/--pretty/--dump-ir
 are electricity-only additions, available under either form.
 
 Options:
-  -V, --version       Print the version and exit
-  -h, --help          Print this message and exit
+  -V, --version       Print the version and exit. Legacy form only -- `cof
+                      run` has no `-V`/`--version` of its own, so neither
+                      does `electricity run` (an unrecognized option there,
+                      same as cof's).
+  -h, --help          Print this message and exit. Legacy form only, same
+                      as -V/--version above -- under `run`, use the long
+                      --help below (cof run's own `-h` is likewise
+                      unrecognized; only --help is).
+  --help              Print this message and exit. Works under both forms.
   -e key=value        Pass an orchestration input, checked against its
                       declared interface.inputs the same way `cof run -e`
                       does. Repeatable; a later -e for the same key wins.
-  --config <path>     `run` only: path to config JSON (or CIRCUITRY_CONFIG,
+  --config <path>, -c `run` only: path to config JSON (or CIRCUITRY_CONFIG,
                       or discovery -- see above). The legacy form's first
-                      positional is this value, always explicit.
-  --out <path>        Write the final state to <path> instead of stdout.
+                      positional is this value, always explicit; --config/-c
+                      is rejected there as redundant.
+  --out <path>, -o    Write the final state to <path> instead of stdout.
+                      The -o alias is `run` only, matching cof's own.
   --pretty            Sort state keys and indent by 2 spaces -- the final
                       state, whether printed to stdout (no --out) or
                       written to --out's own file.
   --live-state <path> Mirror the running state to <path> as it changes.
   --events <path>     Write a JSONL event stream to <path>.
   --allow-capabilities cap,cap
-                      `run` only: comma-separated capabilities to
-                      pre-approve for this run (cof's own
-                      --allow-capabilities meaning and escape hatch).
-  --adapter <name>    `run` only: this run's default adapter, beating a
-                      loaded --profile, the orchestration and the config.
-  --quiet             `run` only: suppress non-essential output (accepted
-                      for parity; electricity prints no such output today).
+                      Comma-separated capabilities to pre-approve for this
+                      run (cof's own --allow-capabilities meaning and
+                      escape hatch). Available under either form.
+  --adapter <name>    This run's default adapter, beating a loaded
+                      --profile, the orchestration and the config.
+                      Available under either form.
+  --quiet             Suppress non-essential output (accepted for parity;
+                      electricity prints no such output today). Available
+                      under either form.
   --profile <path>    Load a profile (adapter/model/inputs/persistence
                       overrides, routing pins and provider denials) from
                       an explicit path -- no name discovery.
   --dump-ir           Print the compiled IR as JSON and exit. Unstable: this
-                      format is a debugging aid and can change in any release.";
+                      format is a debugging aid and can change in any release.
+                      Legacy form only -- no `cof run` equivalent.";
 
 /// A successfully parsed run request -- every flag [`USAGE`] lists that
 /// isn't `--dump-ir`/`--version`/`--help`, from either
@@ -128,6 +140,13 @@ struct RunArgs {
     /// `--quiet` (issue #728, `run` only) -- accepted for parity; has
     /// no observable effect today (USAGE's own note).
     quiet: bool,
+    /// Whether this came from `electricity run <doc> ...` rather than
+    /// the legacy `electricity <config.json> <doc> ...` form -- the one
+    /// thing [`run_action`]'s own later usage-error site (a malformed
+    /// `-e` entry) needs to pick [`print_run_usage_error`]'s plain
+    /// frame over the legacy form's `USAGE` text, matching which of
+    /// `cof run`'s own two argument shapes produced the same error.
+    via_run: bool,
 }
 
 enum Action {
@@ -143,6 +162,15 @@ enum Action {
     MissingOrchestration,
     DumpIr(String, String, Vec<String>),
     UsageError(String),
+    /// A usage error under `electricity run` specifically (issue #728)
+    /// -- rendered in [`print_run_usage_error`]'s own plain frame
+    /// (`Usage:`/`Try ... --help`/blank line/`Error: <message>`), not
+    /// [`UsageError`]'s own legacy-form text, since `cof run`'s real
+    /// errors arrive in a differently-shaped frame (a Rich panel with
+    /// its own program name, close-match suggestions and width-
+    /// dependent wrapping -- DESIGN.md's own row) that this plain
+    /// frame approximates rather than reproduces byte for byte.
+    RunUsageError(String),
 }
 
 /// One recognized flag's own arity -- whether [`parse_flags`] consumes a
@@ -173,8 +201,38 @@ const KNOWN_FLAGS: &[(&str, Arity)] = &[
     ("--adapter", Arity::Value),
 ];
 
-fn flag_arity(flag: &str) -> Option<&'static Arity> {
-    KNOWN_FLAGS
+/// `electricity run <doc> ...`'s own flag table (issue #728) --
+/// deliberately a *different* table from [`KNOWN_FLAGS`], not that one
+/// filtered: `-V`/`--version`/`-h` have no `cof run` equivalent at all
+/// (`cof run --version`/`-V`/`-h` are themselves unrecognized options,
+/// unlike the bare `cof --version`/`-h` on the group), so under `run`
+/// they must fail the exact same way an unknown flag does, not be
+/// recognized as a boolean that happens to go unused -- [`classify`]'s
+/// own `run` branch relies on that (an unrecognized `-V` is caught by
+/// [`parse_flags`] before it could ever win over a usage error
+/// elsewhere on the line, cof's own behavior -- see that branch's doc
+/// comment). `--help` (long form only, no `-h`) is included: `cof run
+/// --help` does succeed. `-c`/`-o` are `cof run`'s own short aliases
+/// for `--config`/`--out`.
+const RUN_FLAGS: &[(&str, Arity)] = &[
+    ("--help", Arity::Boolean),
+    ("--dump-ir", Arity::Boolean),
+    ("--pretty", Arity::Boolean),
+    ("--quiet", Arity::Boolean),
+    ("-e", Arity::Value),
+    ("--out", Arity::Value),
+    ("-o", Arity::Value),
+    ("--live-state", Arity::Value),
+    ("--events", Arity::Value),
+    ("--profile", Arity::Value),
+    ("--config", Arity::Value),
+    ("-c", Arity::Value),
+    ("--allow-capabilities", Arity::Value),
+    ("--adapter", Arity::Value),
+];
+
+fn flag_arity<'a>(flags: &'a [(&'static str, Arity)], flag: &str) -> Option<&'a Arity> {
+    flags
         .iter()
         .find(|(name, _)| *name == flag)
         .map(|(_, arity)| arity)
@@ -183,12 +241,17 @@ fn flag_arity(flag: &str) -> Option<&'static Arity> {
 /// Every flag and positional in *args*, in one pass -- a token starting
 /// with `-` that isn't exactly `-` (tolerated as a plain positional, the
 /// conventional stdin/stdout placeholder, never a flag) and isn't in
-/// [`KNOWN_FLAGS`] is an `Err` naming it (issue #431's CLI section:
-/// "An unknown flag is a usage error (exit 2)"). A value-taking flag
-/// with no following argument is also an `Err` (this preview's own
-/// usage error; cof's own Click-layer "Option '...' requires an
-/// argument." is third-party CLI framework text, not Circuitry's own, so
-/// not matched word for word).
+/// *flags* ([`KNOWN_FLAGS`] for the legacy form, [`RUN_FLAGS`] under
+/// `run`) is an `Err` naming it, worded `No such option: <flag>` --
+/// `cof run`'s own Click-layer core text for the same case (issue
+/// #728), minus the usage/help-hint lines and rich decorative panel
+/// around it, which [`classify`]'s own `run` branch -- the only caller
+/// this text is actually compared against -- renders itself (USAGE's
+/// own electricity-cli DESIGN.md row). A value-taking flag with no
+/// following argument is also an `Err` (this preview's own usage
+/// error; cof's own Click-layer "Option '...' requires an argument."
+/// is third-party CLI framework text, not Circuitry's own, so not
+/// matched word for word).
 struct ParsedFlags {
     version: bool,
     help: bool,
@@ -206,7 +269,10 @@ struct ParsedFlags {
     positionals: Vec<String>,
 }
 
-fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
+fn parse_flags(
+    args: &[String],
+    flags: &'static [(&'static str, Arity)],
+) -> Result<ParsedFlags, String> {
     let mut parsed = ParsedFlags {
         version: false,
         help: false,
@@ -244,9 +310,9 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
         } else {
             (arg, None)
         };
-        let Some(arity) = flag_arity(flag_name) else {
+        let Some(arity) = flag_arity(flags, flag_name) else {
             if arg.starts_with('-') {
-                return Err(format!("unrecognized option '{arg}'"));
+                return Err(format!("No such option: {arg}"));
             }
             parsed.positionals.push(arg.to_string());
             i += 1;
@@ -277,11 +343,11 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
                 };
                 match flag_name {
                     "-e" => parsed.inputs.push(value),
-                    "--out" => parsed.out = Some(value),
+                    "--out" | "-o" => parsed.out = Some(value),
                     "--live-state" => parsed.live_state = Some(value),
                     "--events" => parsed.events = Some(value),
                     "--profile" => parsed.profile = Some(value),
-                    "--config" => parsed.config = Some(value),
+                    "--config" | "-c" => parsed.config = Some(value),
                     "--allow-capabilities" => parsed.allow_capabilities = Some(value),
                     "--adapter" => parsed.adapter = Some(value),
                     _ => unreachable!("every Arity::Value flag is handled above"),
@@ -294,6 +360,26 @@ fn parse_flags(args: &[String]) -> Result<ParsedFlags, String> {
 }
 
 fn classify(args: &[String]) -> Action {
+    // `electricity run <doc> ...` (issue #728): `run` must be the very
+    // first token -- cof's own `run` is likewise the first word after
+    // `cof`, never reachable after a flag -- so a config file actually
+    // named `run` (no extension) stays reachable through the legacy
+    // two-positional form below, just not as that form's *first*
+    // argument. Routed *before* the legacy form's own `-V`/`--version`/
+    // `-h`/`--help` pre-check below: unlike the legacy form (and unlike
+    // the top-level `cof` group's own eager `--version`), `cof run`
+    // itself has no `-V`/`--version`/`-h` of its own at all -- each is
+    // itself an unrecognized option there -- and even `cof run --help`
+    // loses to an unknown option anywhere else on the same line (cof's
+    // own option parser raises on the first one it can't place while
+    // scanning the whole line, before any eager callback, `--help`'s
+    // included, ever runs), so `run`'s own flags are parsed with
+    // [`RUN_FLAGS`] in full -- never short-circuited early -- before
+    // `--help` is honoured.
+    if args.first().map(String::as_str) == Some("run") {
+        return classify_run(&args[1..]);
+    }
+
     // `-V`/`--version` and `-h`/`--help` win over everything, including a
     // usage error elsewhere in the same command line -- checked directly
     // against the raw tokens, before flag validation, so `electricity
@@ -306,52 +392,7 @@ fn classify(args: &[String]) -> Action {
         return Action::Help;
     }
 
-    // `electricity run <doc> ...` (issue #728): `run` must be the very
-    // first token -- cof's own `run` is likewise the first word after
-    // `cof`, never reachable after a flag -- so a config file actually
-    // named `run` (no extension) stays reachable through the legacy
-    // two-positional form below, just not as that form's *first*
-    // argument. `--dump-ir` is not offered under this form: it has no
-    // `cof run` equivalent at all, and stays reachable through the
-    // legacy form instead (USAGE's own note on electricity-only flags).
-    if args.first().map(String::as_str) == Some("run") {
-        let parsed = match parse_flags(&args[1..]) {
-            Ok(parsed) => parsed,
-            Err(message) => return Action::UsageError(message),
-        };
-        if parsed.version {
-            return Action::Version;
-        }
-        if parsed.help {
-            return Action::Help;
-        }
-        if parsed.dump_ir {
-            return Action::UsageError(
-                "--dump-ir is not available under `electricity run`; use `electricity \
-                 <config.json> <orchestration.yml> --dump-ir` instead"
-                    .to_string(),
-            );
-        }
-        return match parsed.positionals.as_slice() {
-            [] => Action::MissingOrchestration,
-            [orchestration] => Action::Run(RunArgs {
-                config: parsed.config,
-                orchestration: orchestration.clone(),
-                inputs: parsed.inputs,
-                out: parsed.out,
-                pretty: parsed.pretty,
-                live_state: parsed.live_state,
-                events: parsed.events,
-                profile: parsed.profile,
-                allow_capabilities: parsed.allow_capabilities,
-                adapter: parsed.adapter,
-                quiet: parsed.quiet,
-            }),
-            [_, extra, ..] => Action::UsageError(format!("unexpected extra argument '{extra}'")),
-        };
-    }
-
-    let parsed = match parse_flags(args) {
+    let parsed = match parse_flags(args, KNOWN_FLAGS) {
         Ok(parsed) => parsed,
         Err(message) => return Action::UsageError(message),
     };
@@ -363,6 +404,19 @@ fn classify(args: &[String]) -> Action {
     }
     if parsed.help {
         return Action::Help;
+    }
+
+    // `--config` is `run`-only (issue #728's own config-discovery
+    // seam): the legacy form's first positional already *is* the
+    // config path, always explicit, so a second `--config` on the same
+    // line is ambiguous rather than silently ignored -- USAGE's own
+    // `` `run` only'' label for this flag is enforced here, not just
+    // documented.
+    if parsed.config.is_some() {
+        return Action::UsageError(
+            "--config is `run` only; the legacy form's first positional is the config path"
+                .to_string(),
+        );
     }
 
     if parsed.dump_ir {
@@ -389,8 +443,65 @@ fn classify(args: &[String]) -> Action {
             allow_capabilities: parsed.allow_capabilities,
             adapter: parsed.adapter,
             quiet: parsed.quiet,
+            via_run: false,
         }),
         _ => Action::UsageError("no config file or orchestration given".to_string()),
+    }
+}
+
+/// `electricity run <doc> ...` (issue #728), *args* being everything
+/// after the literal `run` token -- [`RUN_FLAGS`], never [`KNOWN_FLAGS`]
+/// ([`classify`]'s own doc comment on why `-V`/`--version`/`-h` are
+/// excluded). Every usage error this returns is
+/// [`Action::RunUsageError`], not [`Action::UsageError`] -- rendered in
+/// `cof run`'s own plain-frame shape, not the legacy form's.
+fn classify_run(args: &[String]) -> Action {
+    let parsed = match parse_flags(args, RUN_FLAGS) {
+        Ok(parsed) => parsed,
+        Err(message) => return Action::RunUsageError(message),
+    };
+    if parsed.help {
+        return Action::Help;
+    }
+    if parsed.dump_ir {
+        return Action::RunUsageError(
+            "--dump-ir is not available under `electricity run`; use `electricity \
+             <config.json> <orchestration.yml> --dump-ir` instead"
+                .to_string(),
+        );
+    }
+    match parsed.positionals.as_slice() {
+        [] => Action::MissingOrchestration,
+        [orchestration] => Action::Run(RunArgs {
+            config: parsed.config,
+            orchestration: orchestration.clone(),
+            inputs: parsed.inputs,
+            out: parsed.out,
+            pretty: parsed.pretty,
+            live_state: parsed.live_state,
+            events: parsed.events,
+            profile: parsed.profile,
+            allow_capabilities: parsed.allow_capabilities,
+            adapter: parsed.adapter,
+            quiet: parsed.quiet,
+            via_run: true,
+        }),
+        // `click.exceptions.UsageError`'s own literal template keeps
+        // `(s)` regardless of how many extras there are (Click 8.5's
+        // `"Got unexpected extra argument{s} ({args})"`, `s="(s)"`
+        // either way) -- every extra beyond the one orchestration
+        // positional is named, space-joined, matching `cof run a.yml
+        // b.yml` naming only `b.yml` (the first positional is consumed
+        // as *orchestration*, same as cof's own single `[orchestration]`
+        // argument).
+        [_, extra, more @ ..] => {
+            let mut extras = vec![extra.as_str()];
+            extras.extend(more.iter().map(String::as_str));
+            Action::RunUsageError(format!(
+                "Got unexpected extra argument(s) ({})",
+                extras.join(" ")
+            ))
+        }
     }
 }
 
@@ -747,10 +858,35 @@ fn exit_code_for(result: &RunResult) -> ExitCode {
     }
 }
 
+/// `cof run`'s own usage-error frame, plain: `Usage:`, `Try ... --help`,
+/// a blank line, then `Error: <message>` -- `UsageError.show`'s own
+/// shape minus two things DESIGN.md's own row says this build does not
+/// reproduce: the invoking program's own name (`cof`'s own argv[0] --
+/// `cof`, or `python -m circuitry.cli.app` under the test harness,
+/// never fixed across environments either), and the Rich panel
+/// (`typer`'s own `rich_markup_mode="rich"`) real `cof run` wraps
+/// `Error: ...` in instead of a plain line -- a box whose own width
+/// depends on the terminal/`COLUMNS`, so even two real `cof run`
+/// invocations don't always render it identically, and a close-match
+/// suggestion list (`Possible options: ...`) this hand-written parser
+/// does not attempt. *message* is compared against the corresponding
+/// substring of `cof run`'s own panel contents, not this whole frame.
+fn print_run_usage_error(message: &str) {
+    write_stderr(&format!(
+        "Usage: electricity run [OPTIONS] [orchestration]\n\
+         Try 'electricity run --help' for help.\n\
+         \n\
+         Error: {message}\n"
+    ));
+}
+
 /// `--allow-capabilities a,b` -> `["a", "b"]` -- `cli/app.py::
 /// _parse_allow_capabilities`'s own split/trim/drop-empty, minus its
-/// `frozenset` dedup (`electricity_config::allowlist::capability_allow`
-/// sorts and doesn't need distinct values to do so correctly).
+/// `frozenset` dedup -- done instead by
+/// `electricity_config::allowlist::capability_allow`, which both sorts
+/// and deduplicates before this ever reaches `_capability_allow`/the
+/// capability-consent gate, the same two-step split `cli/app.py` and
+/// `cli/runtime_shim.py::run` make between them.
 fn parse_allow_capabilities(value: Option<&str>) -> Vec<String> {
     let Some(value) = value else {
         return Vec::new();
@@ -840,7 +976,15 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         Ok(inputs) => inputs,
         Err(message) => {
             signal_guard.disarm();
-            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+            if run_args.via_run {
+                // `click.BadParameter`'s own `Invalid value: <message>`
+                // prefix (`cof run`'s own panel contents for the same
+                // malformed `-e` entry) -- `message` itself already
+                // matches `_parse_env_vars`'s own text word for word.
+                print_run_usage_error(&format!("Invalid value: {message}"));
+            } else {
+                write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+            }
             return ExitCode::from(2);
         }
     };
@@ -1022,6 +1166,10 @@ fn main() -> ExitCode {
         }
         Action::UsageError(message) => {
             write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+            ExitCode::from(2)
+        }
+        Action::RunUsageError(message) => {
+            print_run_usage_error(&message);
             ExitCode::from(2)
         }
     };
@@ -1542,8 +1690,23 @@ mod unit_tests {
     fn run_subcommand_with_two_positionals_is_a_usage_error() {
         assert!(matches!(
             classify(&["run".to_string(), "a.yml".to_string(), "b.yml".to_string()]),
-            Action::UsageError(_)
+            Action::RunUsageError(_)
         ));
+    }
+
+    #[test]
+    fn run_subcommand_extra_argument_names_every_extra_cofs_own_way() {
+        match classify(&[
+            "run".to_string(),
+            "a.yml".to_string(),
+            "b.yml".to_string(),
+            "c.yml".to_string(),
+        ]) {
+            Action::RunUsageError(message) => {
+                assert_eq!(message, "Got unexpected extra argument(s) (b.yml c.yml)");
+            }
+            _ => panic!("expected RunUsageError"),
+        }
     }
 
     #[test]
@@ -1554,31 +1717,96 @@ mod unit_tests {
                 "doc.yml".to_string(),
                 "--dump-ir".to_string()
             ]),
-            Action::UsageError(_)
+            Action::RunUsageError(_)
         ));
     }
 
     #[test]
     fn run_subcommand_unknown_flag_is_a_usage_error() {
-        assert!(matches!(
-            classify(&[
-                "run".to_string(),
-                "doc.yml".to_string(),
-                "--bogus".to_string()
-            ]),
-            Action::UsageError(_)
-        ));
+        match classify(&[
+            "run".to_string(),
+            "doc.yml".to_string(),
+            "--bogus".to_string(),
+        ]) {
+            Action::RunUsageError(message) => assert_eq!(message, "No such option: --bogus"),
+            _ => panic!("expected RunUsageError"),
+        }
     }
 
+    /// `cof run` has no `-V`/`--version`/`-h` of its own at all --
+    /// each is itself an unrecognized option there (issue #728's own
+    /// review), unlike the legacy form and the top-level group, where
+    /// `-V`/`-h` still win over everything ([`version_flag_wins_over_
+    /// everything`]/[`help_flag_is_recognized`] above, unchanged).
+    /// `--help` (long form) still works under `run`.
     #[test]
-    fn run_subcommand_honors_version_and_help_even_after_run() {
-        assert!(matches!(
-            classify(&["run".to_string(), "--version".to_string()]),
-            Action::Version
-        ));
+    fn run_subcommand_has_no_short_version_or_help_flags_of_its_own() {
+        for flag in ["-V", "--version", "-h"] {
+            match classify(&["run".to_string(), flag.to_string()]) {
+                Action::RunUsageError(message) => {
+                    assert_eq!(message, format!("No such option: {flag}"))
+                }
+                _ => panic!("expected RunUsageError for {flag}"),
+            }
+        }
         assert!(matches!(
             classify(&["run".to_string(), "--help".to_string()]),
             Action::Help
         ));
+    }
+
+    /// An unknown option under `run` wins over `--help`, wherever it
+    /// falls on the line -- `cof run`'s own option parser raises on
+    /// the first unrecognized token while scanning the whole line,
+    /// before any eager callback (`--help`'s included) ever runs.
+    #[test]
+    fn run_subcommand_unknown_option_wins_over_help_in_either_order() {
+        assert!(matches!(
+            classify(&[
+                "run".to_string(),
+                "--bogus".to_string(),
+                "--help".to_string()
+            ]),
+            Action::RunUsageError(_)
+        ));
+        assert!(matches!(
+            classify(&[
+                "run".to_string(),
+                "--help".to_string(),
+                "--bogus".to_string()
+            ]),
+            Action::RunUsageError(_)
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_accepts_the_short_config_and_out_aliases() {
+        match classify(&[
+            "run".to_string(),
+            "doc.yml".to_string(),
+            "-c".to_string(),
+            "config.json".to_string(),
+            "-o".to_string(),
+            "state.json".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert_eq!(run_args.config.as_deref(), Some("config.json"));
+                assert_eq!(run_args.out.as_deref(), Some("state.json"));
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    /// Every flag [`KNOWN_FLAGS`]/[`RUN_FLAGS`] recognizes is actually
+    /// named in [`USAGE`]'s own Options list -- unlike `tests/cli.rs`'s
+    /// own `--help`-output assertion (an external, binary-level check,
+    /// kept as a second line of defense), this is tied directly to the
+    /// parser's own source of truth, so a new flag added to either
+    /// table without updating USAGE fails this immediately.
+    #[test]
+    fn usage_text_names_every_known_and_run_flag() {
+        for (flag, _) in KNOWN_FLAGS.iter().chain(RUN_FLAGS.iter()) {
+            assert!(USAGE.contains(flag), "USAGE never mentions {flag}");
+        }
     }
 }
