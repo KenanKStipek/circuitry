@@ -49,6 +49,11 @@ pub(crate) fn untrusted_secret_error(where_: &str, name: &str) -> CompileError {
 fn walk(
     value: &Value,
     field: String,
+    // The dict key that produced *field*'s own last segment, verbatim
+    // -- never re-derived from *field* by splitting it back apart,
+    // which a header name containing a literal `.` would corrupt
+    // (`field.rsplit('.')` used to do exactly that).
+    last_key: Option<&str>,
     allowed: &IndexMap<String, ()>,
     label: &str,
     trusted: bool,
@@ -64,10 +69,8 @@ fn walk(
         if !trusted {
             return Err(untrusted_secret_error(label, &reference.name));
         }
-        let header_name = field
-            .rsplit('.')
-            .next()
-            .expect("field always has at least one segment")
+        let header_name = last_key
+            .expect("allowed only ever names a field reached through a dict key")
             .to_string();
         found.insert(header_name, reference);
         return Ok(());
@@ -82,9 +85,11 @@ fn walk(
     match value {
         Value::Dict(dict) => {
             for (key, item) in dict {
+                let key_label = key_label(key);
                 walk(
                     item,
-                    format!("{field}.{}", key_label(key)),
+                    format!("{field}.{key_label}"),
+                    Some(&key_label),
                     allowed,
                     label,
                     trusted,
@@ -97,6 +102,7 @@ fn walk(
                 walk(
                     item,
                     format!("{field}[{index}]"),
+                    None,
                     allowed,
                     label,
                     trusted,
@@ -133,6 +139,7 @@ pub(crate) fn check_param_secrets(
     walk(
         &Value::Dict(params.clone()),
         "params".to_string(),
+        None,
         &allowed,
         &label,
         trusted,
@@ -271,6 +278,20 @@ mod tests {
              by path may name a secret (a limited document, a library entry or a generated \
              plan cannot)."
         );
+    }
+
+    #[test]
+    fn a_header_name_containing_a_dot_is_collected_under_its_own_full_name() {
+        let mut headers = VDict::new();
+        headers.insert(
+            Value::Str("X-My.Header".to_string()),
+            secret_value("github"),
+        );
+        let mut params = VDict::new();
+        params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
+        let found = check_param_secrets(&params, "call", "http", "prime.call", true).unwrap();
+        assert_eq!(found.len(), 1);
+        assert_eq!(found.get("X-My.Header").unwrap().name, "github");
     }
 
     #[test]
