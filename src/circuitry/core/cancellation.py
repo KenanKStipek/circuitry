@@ -1055,6 +1055,87 @@ def _read_lines_promptly(
             decode_errors.append(decode_error)
 
 
+def _read_lines_for_live_promptly(
+    stream: Any,
+    stream_name: str,
+    on_chunk: Callable[[str, bytes], None],
+    lines: list[str],
+    decode_errors: list[BaseException],
+) -> None:
+    """Read *stream* -- a ``text=True`` pipe, so an ``io.TextIOWrapper``
+    with the default ``newline=None`` (universal newlines: ``\\r\\n``/
+    ``\\r`` translated to ``\\n`` on read, a split ``\\r\\n`` across two
+    reads handled too) -- line by line until EOF, appending each raw line
+    to *lines* and calling *on_chunk* with ``(stream_name, line.encode())``
+    as it arrives (#741's live tail).
+
+    This is :func:`_read_lines_promptly` generalized to either stream and
+    to a tail callback instead of a plain per-line one: reading through
+    the stream's own translation, the same one ``communicate()`` itself
+    applies, rather than off its raw underlying buffer, means the lines
+    appended to *lines* -- and so the final ``stdout``/``stderr`` text
+    ``run_tracked`` reconstructs from them -- are exactly what a plain
+    ``communicate()`` would have produced, CRLF included (#741 follow-up:
+    an earlier version of this function read raw bytes off ``stream.
+    buffer`` instead, which skips that translation entirely and left CRLF
+    in the final text that a plain run never would have). The tail is fed
+    a copy of each already-translated line, re-encoded as UTF-8 for
+    :class:`~circuitry.subprocess_live._TailBuffer`'s own decoder --
+    never the raw, pre-translation wire bytes -- so it is always a true
+    suffix of the same text ``meta.stdout``/``meta.stderr`` end up
+    holding, whatever the pipe's own encoding is.
+
+    *on_chunk* is never allowed to stop this loop, for the same reason
+    ``on_line`` isn't (see :func:`_read_lines_promptly`): a failing
+    publish must not leave the child's pipe undrained. Invalid bytes
+    mid-stream raise here exactly as they do for :func:`_read_lines_
+    promptly`'s own stdout -- recorded into *decode_errors* for
+    ``run_tracked`` to re-raise once every reader thread has been joined,
+    the rest of the child's output drained from the raw byte stream
+    underneath with ``errors="replace"`` (nothing reads these lines for
+    anything but keeping the pipe open to EOF by then).
+    """
+    callback_failed = False
+    decode_error: BaseException | None = None
+
+    def _feed(text: str) -> None:
+        nonlocal callback_failed
+        if callback_failed:
+            return
+        try:
+            on_chunk(stream_name, text.encode("utf-8", errors="replace"))
+        except Exception:
+            callback_failed = True
+            logger.exception(
+                "run_tracked on_live_chunk callback failed; no longer calling it"
+            )
+
+    try:
+        for raw_line in stream:
+            lines.append(raw_line)
+            _feed(raw_line)
+    except ValueError as exc:
+        decode_error = exc
+        buffer = getattr(stream, "buffer", None)
+        if buffer is not None:
+            try:
+                for raw_bytes in buffer:
+                    text = raw_bytes.decode(stream.encoding, errors="replace")
+                    lines.append(text)
+                    _feed(text)
+            except OSError:
+                pass
+    except OSError:
+        pass
+    finally:
+        try:
+            stream.close()
+        except OSError:
+            pass
+        if decode_error is not None:
+            decode_errors.append(decode_error)
+
+
 def _communicate_promptly(
     proc: subprocess.Popen[Any],
     *,
@@ -1223,6 +1304,7 @@ def run_tracked(
     pass_fds: Sequence[int] = (),
     new_session: bool = False,
     on_line: Callable[[str], None] | None = None,
+    on_live_chunk: Callable[[str, bytes], None] | None = None,
 ) -> subprocess.CompletedProcess[Any]:
     """``subprocess.run``, but tracked by :func:`get_token` for the whole
     time the child can block (#356).
@@ -1259,6 +1341,20 @@ def run_tracked(
     with ``text=True``) still fail this call once the child has fully exited
     and the reader thread has drained the rest of its output, the same as a
     plain ``communicate()`` always has for the same bytes (#636 follow-up).
+
+    ``on_live_chunk``, when given, is called with ``("stdout" | "stderr",
+    line.encode())`` as each line arrives on either stream, each from a
+    reader thread of its own, reading through the pipe's own
+    ``TextIOWrapper`` (``text=True``'s default ``newline=None``, the same
+    universal-newline translation ``communicate()`` itself applies) —
+    never off its raw underlying buffer, so the returned
+    ``CompletedProcess.stdout``/``.stderr``, reconstructed from those same
+    translated lines, are exactly what a plain ``communicate()`` would
+    have produced, CRLF included (#741). Invalid bytes mid-stream still
+    fail this call once every reader thread has drained the rest of the
+    child's output, the same as a plain ``communicate()`` always has for
+    the same bytes. Never combined with ``on_line`` — nothing in this
+    catalog needs both at once.
     """
     token = get_token()
     token.check()
@@ -1294,29 +1390,65 @@ def run_tracked(
     # `proc.stdin`, so `communicate()` below never touches it and `with
     # proc:`'s own `__exit__` never double-closes it.
     stdout_lines: list[str] | None = None
-    reader_thread: threading.Thread | None = None
-    reader_started = False
+    stderr_lines: list[str] | None = None
     decode_errors: list[BaseException] = []
+    reader_threads: list[threading.Thread] = []
     if on_line is not None and proc.stdout is not None:
         stdout_lines = []
         raw_stdout = proc.stdout
         proc.stdout = None
-        reader_thread = threading.Thread(
-            target=_read_lines_promptly,
-            args=(raw_stdout, on_line, stdout_lines, decode_errors),
-            daemon=True,
+        reader_threads.append(
+            threading.Thread(
+                target=_read_lines_promptly,
+                args=(raw_stdout, on_line, stdout_lines, decode_errors),
+                daemon=True,
+            )
         )
+    # `on_live_chunk` steals both `proc.stdout` and `proc.stderr` the same
+    # way, each through `_read_lines_for_live_promptly` -- the final text
+    # is reconstructed from the very same translated lines it appends
+    # to *_lines, so it is unaffected byte for byte (#741).
+    if on_live_chunk is not None:
+        if proc.stdout is not None:
+            stdout_lines = []
+            raw_stdout_live = proc.stdout
+            proc.stdout = None
+            reader_threads.append(
+                threading.Thread(
+                    target=_read_lines_for_live_promptly,
+                    args=(raw_stdout_live, "stdout", on_live_chunk, stdout_lines, decode_errors),
+                    daemon=True,
+                )
+            )
+        if proc.stderr is not None:
+            stderr_lines = []
+            raw_stderr_live = proc.stderr
+            proc.stderr = None
+            reader_threads.append(
+                threading.Thread(
+                    target=_read_lines_for_live_promptly,
+                    args=(raw_stderr_live, "stderr", on_live_chunk, stderr_lines, decode_errors),
+                    daemon=True,
+                )
+            )
+    # Only threads whose own `.start()` actually succeeded land here --
+    # joining one that never started raises `RuntimeError: cannot join
+    # thread before it is started`, masking whatever `.start()` itself
+    # raised (#636 review's own `reader_started` flag, generalized from
+    # one thread to this list).
+    started_threads: list[threading.Thread] = []
     with proc, token.track(proc):
         try:
             # Started only once *proc* is already tracked -- not right
             # after `Popen` -- so a signal delivered between stealing
-            # `proc.stdout` above and getting here, or a failed
-            # `Thread.start()` itself, can't orphan the CLI: either way
-            # `proc` is already inside `token.track(proc)` and this `with`
-            # block's own cleanup below still runs (#636 follow-up).
-            if reader_thread is not None:
+            # `proc.stdout`/`proc.stderr` above and getting here, or a
+            # failed `Thread.start()` itself, can't orphan the child:
+            # either way `proc` is already inside `token.track(proc)` and
+            # this `with` block's own cleanup below still runs (#636
+            # follow-up).
+            for reader_thread in reader_threads:
                 reader_thread.start()
-                reader_started = True
+                started_threads.append(reader_thread)
             try:
                 stdout, stderr = _communicate_promptly(
                     proc, input=input, timeout=timeout, pgid=pgid,
@@ -1347,14 +1479,16 @@ def run_tracked(
         finally:
             # The process has been waited on by now on every path above
             # (normally inside `communicate()`, or by the `except` blocks'
-            # own `proc.wait()`), so the child's stdout write end is closed
-            # and this thread is at or near EOF already -- bounded anyway,
-            # so a bug here can never join forever.
-            if reader_thread is not None and reader_started:
+            # own `proc.wait()`), so the child's stdout/stderr write ends
+            # are closed and these threads are at or near EOF already --
+            # bounded anyway, so a bug here can never join forever.
+            for reader_thread in started_threads:
                 reader_thread.join(timeout=5)
 
     if stdout_lines is not None:
         stdout = "".join(stdout_lines)
+    if stderr_lines is not None:
+        stderr = "".join(stderr_lines)
     if decode_errors:
         # Re-raised loudly, the same as a plain `communicate()` always has
         # for the same bytes -- a decode error must fail this step, not

@@ -21,10 +21,13 @@ from ..adapters._retry import (
 from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
+from ..plugins._subprocess import GenericSubprocessTool
 from ..plugins.agent import AgentPlugin
 from ..plugins.base import ToolResult
 from ..plugins.cel import CelPlugin
+from ..plugins.ffmpeg import FfmpegPlugin
 from ..plugins.http import HttpPlugin
+from ..plugins.shell import ShellPlugin
 from ..secrets import (
     SecretError,
     SecretRef,
@@ -1040,12 +1043,20 @@ class ToolRuntime:
                     else:
                         live_cm = nullcontext()
 
-                    def _on_live(snapshot: dict[str, Any]) -> None:
+                    def _on_live(snapshot: dict[str, Any] | None) -> None:
                         # meta.live never carries anything the secrets
                         # scrubber would need to touch (numbers, times, ids,
                         # the model name and tool names only), but it goes
                         # through the same scrub as any other tool result
-                        # regardless (#598).
+                        # regardless (#598). A subprocess tool (#741) calls
+                        # this with None right after its own run ends --
+                        # success, failure or cancellation alike -- to
+                        # clear meta.live itself, since cancellation raises
+                        # a BaseException that never reaches this method's
+                        # own `meta.pop("live", None)` below.
+                        if snapshot is None:
+                            store.unset(f"{self.defn.name}.meta.live")
+                            return
                         store.set(
                             f"{self.defn.name}.meta.live",
                             dispatch_secrets.scrub(snapshot) if dispatch_secrets else snapshot,
@@ -1074,6 +1085,16 @@ class ToolRuntime:
                                     if attempt_index > 0
                                     else None
                                 ),
+                            )
+                        elif isinstance(
+                            plugin, (GenericSubprocessTool, ShellPlugin, FfmpegPlugin)
+                        ):
+                            # A running subprocess tool publishes its latest
+                            # output the same way the agent tool does (#741).
+                            result = plugin.execute(
+                                params=plugin_params,
+                                timeout_seconds=timeout_seconds,
+                                on_live=_on_live,
                             )
                         else:
                             result = plugin.execute(
