@@ -214,6 +214,16 @@ pub struct ToolOp {
     /// for parity with `cof check`; `prompt` is then absent from `params`.
     /// electricity refuses the cof-only `agent` plugin, so nothing reads it.
     pub prompt_file: Option<DispatchFile>,
+    /// `ToolDefinition.limited`: true for a tool effect compiled from a
+    /// document not run by path (a `use`-nested child, a reflector or
+    /// decomposition plan, stdin, an SDK string). Only the `systemone`
+    /// provider's file access is confined by this.
+    pub limited: bool,
+    /// `ToolDefinition.confine_to`: the project a limited `systemone`
+    /// effect's `within` must stay inside, from the document's own
+    /// `confinement_root`; `None` when not limited, or when a limited
+    /// document has no project of its own.
+    pub confine_to: Option<String>,
 }
 
 /// `UseDefinition.path`/`.orchestration`/`.inline` — exactly one present
