@@ -29,7 +29,10 @@ Decisions" instead of citing an external project file repeatedly:
   engine, with Python kept as the authoring tool.
 - CLI shape: `electricity run <orchestration.yml> [-e key=value]... [--config config.json]
   [--out state.json] [--resume ...] [--pretty] [--profile <path>] [--allow-capabilities cap,cap]
-  [--adapter name] [--quiet]`, cof `run`'s own option names and meanings (issue #728); the legacy
+  [--adapter name] [--quiet]`, cof `run`'s own option names and meanings (issue #728) --
+  `--resume`/`--state`/`--force` are #727's own milestone and are not accepted by this build's
+  parser yet (an unrecognized option, same as any other); every other flag in this synopsis is.
+  The legacy
   `electricity <config.json> <orchestration.yml> ...` form (config always the first positional,
   never discovered) keeps working as an alias. The orchestration file is always operator-chosen on
   the command line and therefore fully trusted — no document-discovery mechanism, no
@@ -117,6 +120,10 @@ config.json] [--out state.json] [--state <file>] [--resume <id>|last] [--force] 
 as an alias) plus an embeddable library crate exposing the same run
 semantics to a host Rust program (e.g. an application embedding the engine directly rather than shelling out to the
 binary). Both surfaces share one workspace of language, VM, tool, adapter, and plugin crates.
+`--state`/`--resume`/`--force` are this v1 scope's own resume feature (issue #727); issue #728's
+own `electricity run` ships every other flag in this synopsis first, with those three still
+unrecognized options until #727 lands (`electricity/README.md`'s own CLI bullet states this
+current-state subset; this bullet is the full v1 target).
 `--resume last` reads the most recently written `--out` file for this orchestration path, tracked
 in a small CLI-only stash file (`$XDG_STATE_HOME/electricity/last_run.json` on Linux, the platform
 equivalent elsewhere — this location is an electricity-only convenience and carries no parity
@@ -2856,6 +2863,8 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 | — | **`runtime._decomposition_planner_path`** (issue #522's Settled question 9): an undocumented test hook (`core/decompose.py:75-78`) letting Circuitry's own test suite point the planner at a path other than the bundled `curation/agents/decompose.yml` — only Circuitry's own tests ever set it; `cof` honours an override (`core/decompose.py:356-370`'s `_planner_path`) if one is set. | **Not read at all** — electricity always runs the synced `PLANNER_YAML`, regardless of this key. | Yes — a config file setting this key makes `cof run` load a different planner document while electricity keeps running the bundled one; accepted because only Circuitry's own tests are known to set it, and they always run against `cof`, never `electricity`. |
 | — | **A WARNING line logged with `exc_info=True`** (issue #522's own PR comment): `cof run` writes the line's own text to stderr, then a full Python traceback on the lines after it, for every one of these sites — the two decomposition lines (`Decomposition planner failed for prompt %r`/`Decomposition child failed for prompt %r`), the reflector's own prime-template fallback (`core/reflector.py:342`), and the two complexity-scoring lines (`core/prompt.py:920-924`, `:984-988`). | **Print the WARNING line alone, no traceback** — `log::warn!` has no Python exception object to format one from in the first place; the conformance harness only ever compares the prefixed `WARNING:`-style line itself, never the traceback that follows it on a real `cof run`, so no case shows the difference. | No — accepted for every site in this set; a future WARNING line ported the same way inherits the same rule without a new row here. |
 | — | **An undeclared function/method call whose own argument is an unset `state.` read** (issue #657/#658): `nope(state.x)`/`state.x.nope()` with `x` unset. cof's evaluator (cel-python) resolves the function/method name before evaluating its arguments (`celpy.evaluation.Evaluator.method_eval`), so it always reports the undeclared reference. The `cel` crate resolves every argument first (`objects.rs::call_function`'s own `args?`), so an unset argument's own marker error wins instead — `False` plus the unset-path warning, naming `x`, not an undeclared-reference error. Only reachable when the call's own name genuinely isn't declared; `cof check`'s own free-name rule never looks at function/method names (by design — the two engines' function sets differ), so this can't be caught before run time on either side. | **Accept the gap, documented, not reproduced** — reordering the `cel` crate's own argument/name resolution would mean patching a pinned external dependency for one narrow edge case; short-circuiting itself is unaffected either way (`false && nope(state.x)` stays `false`, with no warning, on both engines, since neither side ever evaluates the call at all there). | No — a narrow, library-ordering difference between cel-python and the `cel` crate, not a design choice; revisit only if a production document's CEL actually calls an undeclared function/method on an unset argument. |
+| — | **A `cof run` usage error's own invoking program name and decorative panel** (issue #728): `cof run`'s own `UsageError.show` (typer's `rich_markup_mode="rich"`) names the real invoking program (`cof`, or `python -m circuitry.cli.app` under a test harness — not fixed across environments either) in its `Usage:`/`Try ... --help` lines, and wraps `Error: <message>` in a Rich panel (a box whose width depends on the terminal/`COLUMNS`, plus a `(Possible options: ...)` close-match suggestion list) rather than a plain line — confirmed empirically: the same invocation renders a differently-wrapped box at `COLUMNS=40` than at a wider width, so even two real `cof run` runs don't always render this identically. | **electricity run**'s own usage errors print a plain frame instead — `Usage: electricity run [OPTIONS] [orchestration]`, `Try 'electricity run --help' for help.`, a blank line, then `Error: <message>`, always `electricity` as the program name, never a panel or close-match suggestions. `<message>` itself matches the corresponding text inside `cof run`'s own panel (`No such option: <flag>`, `Got unexpected extra argument(s) (<args>)`, `Invalid value: Invalid -e format: ...`) — compared against that substring, never cof's whole frame. | No — the panel and program name are third-party/environment-dependent presentation, not Circuitry's own text; the message core is matched exactly. |
+| — | **`cof run`'s own missing/not-found-orchestration messages add a `cof list` tip** (issue #728): `Error: Missing orchestration. Use --last or provide a path/name.`/`Error: Orchestration not found: <name>` are each followed by a second stdout line, `Tip: run cof list to see available orchestrations.`. | **Omit the tip line** — electricity has no `list` subcommand of its own for it to name; the `Error: ...` line itself matches `cof run`'s exactly, compared on its own. | No — electricity genuinely has nothing for the tip to point at; accepted, not a text-matching gap. |
 
 ## 14. Security model
 
@@ -2901,17 +2910,24 @@ electricity's security posture mirrors Circuitry's (Decisions, §1: "same securi
   RestrictedPython + forked-child + rlimit sandboxing is what bounds that specific plugin; the
   bridge's value is a crash boundary and a kill switch, and this distinction is stated plainly to
   users, not implied to be stronger than it is.
-- **Capability ceiling on generated plans — always unrestricted for electricity, not a gate it
-  enforces.** The reference's own capability ceiling is installed only for a *library-sourced*
+- **Capability ceiling on generated plans — unrestricted for an ordinary path run, but not
+  unconditionally.** The reference's own capability ceiling is installed for a *library-sourced*
   document (a shared-library fetch, a remote library source, or a path inside a library cache
-  directory) or a `use: ref:` child reached from one — **never** for a document run directly by
-  path, which is electricity's only mode (Decisions, §1). Since electricity also rejects `ref:`
-  outright (§4 step 4, §13), neither condition that installs a ceiling in the reference can ever
-  apply to electricity: the ceiling is **always `None`/unrestricted** for every electricity run,
-  reflector- and decomposition-generated plans included. This is worth stating plainly rather than
-  describing electricity as "enforcing a capability ceiling" (an earlier draft implied it does) —
-  the risk is someone building a *stricter* gate that then diverges from what `cof run` itself
-  does for the exact same path-run document, not someone building a gate that's too loose.
+  directory) or a `use: ref:` child reached from one. electricity rejects `ref:` outright (§4
+  step 4, §13) and has no shared-library fetch or remote-library-source run of its own
+  (Decisions, §1), but it does still resolve the one path condition: `electricity_config::
+  is_cache_path` (issue #728, issue #337's own anti-bypass rule) checks whether the orchestration
+  path given resolves inside the library cache directory (`CIRCUITRY_CACHE_DIR`/`XDG_CACHE_HOME`/
+  `~/.cache/circuitry/library` — electricity has no configured library source of its own, so this
+  is the only cache root there is to check against). A path run from there is gated exactly as a
+  library-sourced one would be: `required_capabilities` (the document's own tool providers, by
+  `plugins/capabilities.py`'s table, plus every reachable `use` child's) must be covered by
+  `trusted.json`'s `document_capabilities` entry for that file (read-only — electricity never
+  writes it) union `--allow-capabilities`, or the run is refused before anything executes, with
+  the reference's own `refusal_message` text and exit code. Every *other* path run keeps the
+  ceiling **`None`/unrestricted**, exactly as before. This is worth stating plainly rather than
+  describing electricity as unconditionally never enforcing a capability ceiling (an earlier draft
+  of this bullet claimed exactly that) — the one condition electricity can still hit is this one.
 
 ---
 

@@ -560,11 +560,26 @@ fn orchestration_dir_string(path: &std::path::Path) -> String {
 /// effective_settings.runtime` (confirmed byte-for-byte against the
 /// golden run corpus's own `json_parse_failure` case) -- one value, not
 /// two that could drift apart.
+/// `plugins/capabilities.py::capabilities_of`, unioned over every tool
+/// provider *document*'s own top-level effects reference -- `cli/
+/// document_consent.py::required_capabilities`'s own top-level half
+/// (`use` children are each a separate call, at the two call sites
+/// below, same as the reference's own `ref_child_requirements` loop).
+fn required_capabilities(document: &Value) -> std::collections::BTreeSet<String> {
+    let (_, tools) = electricity_config::walk_orchestration_refs(document, false);
+    let mut required = std::collections::BTreeSet::new();
+    for tool in &tools {
+        required.extend(electricity_config::capabilities_of(tool));
+    }
+    required
+}
+
 fn build_runtime_config(
     effective_runtime: Option<&Value>,
     cfg: &CircuitryConfig,
     orchestration_dir: &str,
     allow_capabilities: &[String],
+    capability_ceiling: Option<&std::collections::BTreeSet<String>>,
 ) -> Value {
     let mut dict = effective_runtime
         .and_then(Value::as_dict)
@@ -603,6 +618,20 @@ fn build_runtime_config(
                 .collect(),
         ),
     );
+    // `capability_gate.py::install_capability_ceiling`: a document run
+    // outside the library cache directory has no ceiling at all
+    // (`None`, the key popped/never written -- matches this function's
+    // own pre-#728 behavior exactly, unchanged); one run from inside it
+    // gets the consented set actually installed, sorted, even when
+    // that set is empty (a document needing no capability still gets
+    // `_capability_ceiling: []`, not an absent key, once the gate
+    // itself applies).
+    if let Some(ceiling) = capability_ceiling {
+        dict.insert(
+            Value::Str("_capability_ceiling".to_string()),
+            Value::List(ceiling.iter().cloned().map(Value::Str).collect()),
+        );
+    }
     Value::Dict(dict)
 }
 
@@ -1274,6 +1303,69 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
+    // Capability consent for a document inside the library cache
+    // directory (issue #337, ported for #728): naming that path
+    // directly must not dodge the same gate a library-name run would
+    // hit. `cli/document_consent.py::enforce_consent`'s own
+    // `gate_whole_document` is also true for a `cof fetch`/`cof
+    // run-library` asset and a remote library-source run by bare
+    // name -- neither has an electricity equivalent (every electricity
+    // run names a document by path), so [`electricity_config::
+    // is_cache_path`] is the only condition that can ever gate a
+    // electricity run. An ordinary path run outside the cache
+    // directory is never gated (`ceiling` stays `None`, same as
+    // today).
+    let capability_ceiling: Option<std::collections::BTreeSet<String>> =
+        if electricity_config::is_cache_path(
+            &req.orchestration_path,
+            &current_env_vars(),
+            std::env::home_dir().as_deref(),
+        ) {
+            let mut required = required_capabilities(&loaded.document);
+            for (_, child) in electricity_compiler::use_children::iter_use_children(
+                &loaded.document,
+                Some(&req.orchestration_path),
+            ) {
+                required.extend(required_capabilities(&child));
+            }
+            if required.is_empty() {
+                Some(std::collections::BTreeSet::new())
+            } else {
+                let allowed: std::collections::BTreeSet<String> =
+                    req.allow_capabilities.iter().cloned().collect();
+                // `document_content_digest`'s own byte identity, minus
+                // its `{file: ...}` prompt-reference extension (#396):
+                // a document that itself names no prompt file digests
+                // identically either way, which covers every document
+                // this gate's own conformance coverage exercises; one
+                // that does would compute a different digest here than
+                // `cof trust` recorded it under, so a past consent for
+                // it would never be found (fails closed, never open).
+                let digest = electricity_config::config_trust::config_digest(
+                    &std::fs::read(&req.orchestration_path).unwrap_or_default(),
+                );
+                let consented = std::env::home_dir()
+                    .map(|home| electricity_config::trust_store_path(&home))
+                    .and_then(|store_path| {
+                        electricity_config::consented_capabilities(&digest, &store_path)
+                    })
+                    .unwrap_or_default();
+                let covered: std::collections::BTreeSet<String> =
+                    consented.union(&allowed).cloned().collect();
+                let missing: std::collections::BTreeSet<String> =
+                    required.difference(&covered).cloned().collect();
+                if !missing.is_empty() {
+                    fail!(electricity_config::refusal_message(
+                        &req.orchestration_path.display().to_string(),
+                        &missing,
+                    ));
+                }
+                Some(covered)
+            }
+        } else {
+            None
+        };
+
     // `--profile <path>` (issue #495, lane R): loaded right after the
     // allowlist check and before effective settings (DESIGN §6.11,
     // `electricity_config::profile`'s own vm-lanes.md row) -- an
@@ -1492,6 +1584,7 @@ pub async fn run_orchestration_with_config(
         &cfg,
         &orchestration_dir,
         &req.allow_capabilities,
+        capability_ceiling.as_ref(),
     );
 
     // Step 12 (part 1): `state.setdefault("runtime", {})` -- Python's

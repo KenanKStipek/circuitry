@@ -35,6 +35,7 @@
 //! [mod]: crate::effective_settings
 
 mod allowlist;
+mod capabilities;
 mod capability_gate;
 mod complexity;
 mod config;
@@ -54,6 +55,10 @@ pub use allowlist::{
     Allowlists, adapter_denial, allowlists, capability_allow, check_allowlist,
     orchestration_denials, profile_provider_denials, provider_token_to_adapter, require_adapter,
     tool_denial, walk_orchestration_refs,
+};
+pub use capabilities::{
+    FS_WRITE, NETWORK, PYTHON_EVAL, SHELL, cache_root, capabilities_of, consented_capabilities,
+    is_cache_path, refusal_message,
 };
 pub use capability_gate::{
     CAPABILITY_CEILING_KEY, CapabilityConsentError, capabilities_beyond_ceiling,

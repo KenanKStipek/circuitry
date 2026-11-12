@@ -300,17 +300,24 @@ pub fn allowlists(config: &CircuitryConfig) -> Allowlists {
 }
 
 /// `runtime_config["_capability_allow"]`: `--allow-capabilities`' own
-/// parsed set, sorted (`cli/runtime_shim.py::run`'s own `sorted(req.
-/// allow_capabilities) if req.allow_capabilities else []`) -- read by a
-/// `use: ref:` child's own capability-consent re-check
-/// (`core/use.py::UseRuntime._capability_allow_override`), which
-/// electricity does not build yet (DESIGN.md's own `use: {ref: ...}`
-/// refusal), so this has no observable effect on any document
-/// electricity runs today. Ported now rather than left a stub so a
+/// parsed set, deduplicated and sorted (`cli/app.py::
+/// _parse_allow_capabilities` already returns a `frozenset`, so `cli/
+/// runtime_shim.py::run`'s own `sorted(req.allow_capabilities)` is
+/// sorting an already-distinct set) -- this lands verbatim in `state.
+/// runtime.effective_settings.runtime._capability_allow` on every run
+/// (every conformance case's own `expected.out.json` carries it), so a
+/// repeated name on the command line (`--allow-capabilities
+/// shell,shell`) must not survive into a second engine's own output as
+/// a duplicate. Also read by a `use: ref:` child's own capability-
+/// consent re-check (`core/use.py::UseRuntime._capability_allow_
+/// override`), which electricity does not build yet (DESIGN.md's own
+/// `use: {ref: ...}` refusal) -- that half of the port has no
+/// observable effect on any document electricity runs today, kept so a
 /// later `use: ref:` lane finds the plumbing already in place.
 pub fn capability_allow(allow_capabilities: &[String]) -> Vec<String> {
     let mut sorted = allow_capabilities.to_vec();
     sorted.sort();
+    sorted.dedup();
     sorted
 }
 
@@ -453,6 +460,14 @@ mod tests {
         assert_eq!(
             capability_allow(&["shell".to_string(), "fs-write".to_string()]),
             vec!["fs-write".to_string(), "shell".to_string()]
+        );
+    }
+
+    #[test]
+    fn capability_allow_deduplicates_a_repeated_name() {
+        assert_eq!(
+            capability_allow(&["shell".to_string(), "shell".to_string()]),
+            vec!["shell".to_string()]
         );
     }
 

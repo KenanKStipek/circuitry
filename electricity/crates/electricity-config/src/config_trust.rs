@@ -142,8 +142,11 @@ pub fn skip_warning(path: &Path, state: TrustState) -> Option<String> {
 /// Python's `shlex.quote`, narrowed to what a filesystem path ever
 /// needs: empty, or containing anything outside
 /// `[A-Za-z0-9_@%+=:,./-]`, is single-quoted (with any embedded `'`
-/// escaped `'"'"'`); otherwise returned verbatim.
-fn shell_quote(s: &str) -> String {
+/// escaped `'"'"'`); otherwise returned verbatim. `pub(crate)`: also
+/// used by [`crate::capabilities::refusal_message`], the same
+/// `shlex.quote(label)` call `cli/document_consent.py::refusal_message`
+/// makes.
+pub(crate) fn shell_quote(s: &str) -> String {
     let safe = !s.is_empty()
         && s.chars()
             .all(|c| c.is_ascii_alphanumeric() || "@%+=:,./-_".contains(c));

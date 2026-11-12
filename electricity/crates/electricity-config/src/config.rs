@@ -567,7 +567,8 @@ fn narrow_allowlists(
             None => {
                 log::warn!(
                     "Project config {project_path_display} cannot re-open {key}; keeping the \
-                     global list {global_list:?}."
+                     global list {}.",
+                    crate::allowlist::format_list(&global_list)
                 );
                 merged.insert(
                     Value::Str(key.to_string()),
@@ -575,14 +576,16 @@ fn narrow_allowlists(
                 );
             }
             Some(project_list) => {
-                let widened: Vec<&String> = project_list
+                let widened: Vec<String> = project_list
                     .iter()
                     .filter(|name| !global_list.contains(name))
+                    .cloned()
                     .collect();
                 if !widened.is_empty() {
                     log::warn!(
                         "Project config {project_path_display} cannot widen {key} beyond the \
-                         global list; ignoring {widened:?}."
+                         global list; ignoring {}.",
+                        crate::allowlist::format_list(&widened)
                     );
                 }
                 let narrowed: Vec<Value> = project_list
@@ -665,13 +668,24 @@ pub fn resolve_config_for_run(
         if let Some(discovered) = discover_project_config(cwd) {
             match std::fs::read(&discovered) {
                 Ok(data) => {
-                    let store_path = home
-                        .map(trust_store_path)
-                        .unwrap_or_else(|| discovered.clone());
-                    let state = if home.is_some() {
-                        config_trust::check_trust(&discovered, &data, &store_path, env)
+                    // `check_trust`'s own env-var check runs before it ever
+                    // touches a store path, so a process with no resolvable
+                    // home still honours `CIRCUITRY_TRUST_PROJECT_CONFIG` --
+                    // only the store-backed branch needs a real `home` to
+                    // mean anything, same as the reference's own
+                    // `Path.home()`-rooted `trust_store_path`.
+                    let state = if config_trust::env_trusts_project_config(env) {
+                        TrustState::Env
                     } else {
-                        TrustState::Untrusted
+                        match home {
+                            Some(home) => config_trust::check_trust(
+                                &discovered,
+                                &data,
+                                &trust_store_path(home),
+                                env,
+                            ),
+                            None => TrustState::Untrusted,
+                        }
                     };
                     if state.applied() {
                         match load_config_file(&discovered, None) {
@@ -694,16 +708,17 @@ pub fn resolve_config_for_run(
                         warnings.push(warning);
                     }
                 }
-                Err(_) => {
-                    // Unreadable: treated the same as untrusted, same
-                    // degrade `find_config_path` applies (`check_trust`
-                    // itself never raises -- it only ever returns a
-                    // `TrustState`) -- nothing to report, since the
-                    // reference's own malformed-file warning never fires
-                    // for an unreadable file either (`read_config_bytes`
-                    // raising is a *fatal* `ConfigError` only on an
-                    // explicit path, never reached for a discovered one
-                    // here).
+                Err(err) => {
+                    // `read_config_bytes` raises inside the same `try` that
+                    // catches a parse failure (`cli/config.py::
+                    // resolve_config`), so an unreadable discovered file is
+                    // skipped with the same "Skipping malformed project
+                    // config" warning as a malformed one, not silently.
+                    log::warn!(
+                        "Skipping malformed project config {}: {}",
+                        discovered.display(),
+                        err
+                    );
                 }
             }
         }
