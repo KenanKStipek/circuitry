@@ -2941,8 +2941,13 @@ fn the_help_overlay_lists_the_tapes_own_key_and_pages_to_its_keys() {
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
-    let (mut master, _slave_path, child, captured_buf) =
+    let (mut master, slave_path, child, captured_buf) =
         spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+    // Below the room the merged page (issue #738) needs, the Tape's
+    // own Help stays paged -- this test is about that fallback, not
+    // the default 120x40 pty, which already has room to merge.
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(300));
 
     send_bytes(&mut master, b"?");
     let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Key", Duration::from_secs(10));
@@ -2968,6 +2973,119 @@ fn the_help_overlay_lists_the_tapes_own_key_and_pages_to_its_keys() {
     send_bytes(&mut master, b"\x1b");
     std::thread::sleep(Duration::from_millis(300));
 
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: at 120x30 the Tape's own Help has the room to merge
+/// its keys and its Key onto one page -- the title carries no page
+/// suffix, both halves show together, and `T` still cycles the
+/// theme (and its own banner) with the overlay open.
+#[test]
+fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+    resize_pty(&slave_path, 120, 30);
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
+        "expected the merged page's own title, with no page suffix; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("select a row") && screen.contains("tokens:"),
+        "expected §4's own Tape keys on the merged page; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("done · failed") && screen.contains("running · ahead"),
+        "expected §3.7's own glyph legend on the merged page; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"T");
+    let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
+    assert!(
+        screen.contains("Key"),
+        "expected the Help overlay to stay open after T; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: `?` on the Signal, the Flow and the Store each show
+/// that screen's own Help, named in the title, with that screen's
+/// own Key -- not the Tape's.
+#[test]
+fn the_help_overlay_lists_each_other_screens_own_key() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, _slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"1");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Signal", Duration::from_secs(10));
+    assert!(
+        screen.contains("scrub the cursor") && screen.contains("finished prompt"),
+        "expected the Signal's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"2");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Flow", Duration::from_secs(10));
+    assert!(
+        screen.contains("select a station") && screen.contains("a station: done"),
+        "expected the Flow's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"3");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Store", Duration::from_secs(10));
+    assert!(
+        screen.contains("select a row") && screen.contains("area is its share of tokens"),
+        "expected the Store's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"0");
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
     send_bytes(&mut master, b"y");
