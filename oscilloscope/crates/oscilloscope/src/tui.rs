@@ -1115,13 +1115,13 @@ fn tape_breadcrumb_spans(
     name_style: Style,
     dim_style: Style,
 ) -> Vec<Span<'static>> {
-    // At least one cell of the field stays a trailing gap no matter
-    // what fits (issue #737's "always leaves one space before the
-    // next column", and never glued to it either) -- every branch
-    // below fits its own content into `budget`, one cell narrower
+    // At least two cells of the field stay a trailing gap no matter
+    // what fits -- the design's own frames never show a name and
+    // its what text fewer than two cells apart -- every branch
+    // below fits its own content into `budget`, two cells narrower
     // than `width` itself, and pads out to `width` whatever that
     // leaves.
-    let budget = width.saturating_sub(1);
+    let budget = width.saturating_sub(2);
     let segments: Vec<&str> = label.split(" › ").collect();
     let Some((last, parents)) = segments.split_last() else {
         return vec![Span::styled(" ".repeat(width), name_style)];
@@ -1159,7 +1159,8 @@ fn tape_breadcrumb_spans(
         // never the generic container wrapping them.
         let kept = tape_breadcrumb_kept_parents(parents, lead);
         let dim_text = format!("{} › ⋯ › ", kept.join(" › "));
-        let cut_len = dim_text.chars().count() + last.chars().count();
+        let dim_len = dim_text.chars().count();
+        let cut_len = dim_len + last.chars().count();
         if cut_len <= budget {
             let pad = width - cut_len;
             return vec![
@@ -1167,6 +1168,21 @@ fn tape_breadcrumb_spans(
                 Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
             ];
         }
+        let _ = dim_len;
+    }
+    // Not even the narrowest kept lead (`iter_0 › ⋯ › `) leaves room
+    // for the step's own name whole -- the step's own name is never
+    // the part that gives way ("keeping ... the step's own name",
+    // issue #737), so the elision marker drops its own kept segment
+    // before that ever happens.
+    let bare_dim = "⋯ › ".to_string();
+    let bare_cut_len = bare_dim.chars().count() + last.chars().count();
+    if bare_cut_len <= budget {
+        let pad = width - bare_cut_len;
+        return vec![
+            Span::styled(bare_dim, dim_style),
+            Span::styled(format!("{last}{}", " ".repeat(pad)), name_style),
+        ];
     }
     vec![Span::styled(
         format!("{:<width$}", truncate_text(last, budget)),
@@ -1405,7 +1421,13 @@ fn tape_row_line(
             let natural = tape_breadcrumb_preview(&row.label, 4096, lead_segments)
                 .chars()
                 .count();
-            let counts_budget = name_field_width.saturating_sub(natural + 1);
+            // `tape_breadcrumb_spans`' own budget reserves two
+            // trailing cells of its own, so the name field this
+            // leaves it must be at least `natural + 2`, not `+ 1`,
+            // or it would cut `row.label` a second time for no
+            // reason, right after computing `natural` as its own
+            // uncut width.
+            let counts_budget = name_field_width.saturating_sub(natural + 2);
             let counts_text = tape_loop_slots_text(&loop_what, counts_budget);
             let name_render_width = name_field_width - counts_budget;
             spans.extend(
@@ -1438,11 +1460,35 @@ fn tape_row_line(
             );
         }
     }
+    let is_loop = row.kind == oscilloscope_core::render::RowKind::Loop;
+    let is_running_loop = is_loop
+        && matches!(
+            row.status.kind,
+            StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+        );
+    let token_line_opt = tape_token_column(&row.tokens, unit, tokens_view_usual, ctx);
+    // Issue #737: a *running* loop's own counts (the point of its
+    // own line) spend the token column's own cells first, when this
+    // loop has none of its own to show there at all (no real
+    // sparkline, `token_line_opt` already `None`) -- only once even
+    // that doesn't fit the full text does `tape_loop_slots_text`'s
+    // own short form take over. Never a pending or finished loop's
+    // own different `what` text (`loop · each g · N passes`, `N
+    // passes · M wide · K done`), which keeps its own, unextended
+    // budget same as any other row. Never past a narrow width's own
+    // `what_width` of 0 either: that column's own slack comes from
+    // the name field instead (`narrow_loop_counts`, above).
+    let donate_tokens = is_running_loop && token_line_opt.is_none() && what_width > 0;
+    let loop_what_width = if donate_tokens {
+        what_width + token_width
+    } else {
+        what_width
+    };
     spans.push(Span::styled(
         format!(
-            "{:<what_width$}",
-            if row.kind == oscilloscope_core::render::RowKind::Loop {
-                tape_loop_slots_text(&loop_what, what_width)
+            "{:<loop_what_width$}",
+            if is_loop {
+                tape_loop_slots_text(&loop_what, loop_what_width)
             } else if row.what_is_agent_text {
                 tape_agent_what_text(&loop_what, what_width)
             } else {
@@ -1451,7 +1497,10 @@ fn tape_row_line(
         ),
         bg(what_style),
     ));
-    match tape_token_column(&row.tokens, unit, tokens_view_usual, ctx) {
+    if donate_tokens {
+        return Line::from(spans);
+    }
+    match token_line_opt {
         Some(token_line) => {
             // The token column is right-aligned flush to the pane's
             // own inner edge (§3.5: "numbers are always printed next
@@ -1967,31 +2016,153 @@ fn draw_tape_list(
     // 80 and up keeps the clock and gives the what column whatever
     // the name and the token field don't already need.
     let token_width = 16;
-    let name_width = if narrow {
-        (inner.width as usize).saturating_sub(2 + token_width)
-    } else {
-        // Issue #737: the name column widens to fit the longest
-        // breadcrumb actually on screen (a running row's own
-        // indent counted in), up to a third of the list's own
-        // width, and never narrower than the design's own 19-cell
-        // floor -- so a document with nothing longer than that
-        // still lays out exactly as before.
-        let longest = screen
+    let longest = screen
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            TapeItem::Row(r) => Some(r.indent * 2 + r.label.chars().count()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    // Issue #737: the name column widens to fit the longest
+    // breadcrumb actually on screen (a running row's own indent
+    // counted in), up to a third of the list's own width, and never
+    // narrower than the design's own 19-cell floor -- so a document
+    // with nothing longer than that still lays out exactly as
+    // before. The 19-cell floor always wins over the cap itself: at
+    // an overall width narrow enough that a third of it is less
+    // than 19 (every tile; a single-run attach below ~57), the
+    // floor is the one real bound, not a cap the `.min` below would
+    // otherwise collapse under it.
+    let name_width_at = |cap_numerator: usize, cap_denominator: usize| -> usize {
+        let cap = ((inner.width as usize * cap_numerator) / cap_denominator).max(19);
+        (longest + 2).max(19).min(cap)
+    };
+    let lead_rows_at = |name_width: usize| -> Vec<(&str, &str, usize, usize)> {
+        screen
             .items
             .iter()
             .filter_map(|it| match it {
-                TapeItem::Row(r) => Some(r.indent * 2 + r.label.chars().count()),
+                TapeItem::Row(r) => Some((
+                    r.path.as_str(),
+                    r.label.as_str(),
+                    name_width.saturating_sub(r.indent * 2),
+                    r.indent,
+                )),
                 _ => None,
             })
-            .max()
-            .unwrap_or(0);
-        // The 19-cell floor always wins over the cap itself: at an
-        // overall width narrow enough that a third of it is less
-        // than 19 (every tile; a single-run attach below ~57), the
-        // floor is the one real bound, not a cap the `.min` below
-        // would otherwise collapse under it.
-        let cap = ((inner.width as usize) / 3).max(19);
-        (longest + 2).max(19).min(cap)
+            .collect()
+    };
+    fn for_lead_segments<'a>(
+        lead_rows: &[(&'a str, &'a str, usize, usize)],
+    ) -> Vec<(&'a str, &'a str, usize)> {
+        lead_rows.iter().map(|(p, l, w, _)| (*p, *l, *w)).collect()
+    }
+    // "Two different steps never read the same, so keep more
+    // segments when the short form would collide": whether every
+    // *finished or ahead* row's own already-cut-to-its-own-width
+    // preview (indent 0 -- a full, absolute breadcrumb, which must
+    // be globally unique) is still unique at its own grown
+    // `lead_segments`. A tree row's own *relative* label -- indent
+    // past 0 -- is deliberately never checked here: two different
+    // loops' own same-numbered pass may read identically relative
+    // to their own loop (the design's own allowed case, resolved by
+    // the tree's own indentation, never by text), and no amount of
+    // width ever changes that text, so counting it as a collision
+    // would escalate forever for no real gain.
+    let still_collides = |lead_rows: &[(&str, &str, usize, usize)],
+                          lead_segments: &std::collections::HashMap<String, usize>|
+     -> bool {
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut collides = false;
+        for (path, label, width, indent) in lead_rows {
+            if *indent > 0 {
+                continue;
+            }
+            let text = tape_breadcrumb_preview(
+                label,
+                *width,
+                lead_segments.get(*path).copied().unwrap_or(1),
+            );
+            if !seen.insert(text) {
+                collides = true;
+            }
+        }
+        collides
+    };
+    // A tree row's own relative label can't lose its own first
+    // (distinguishing) segment to a column too narrow to keep it
+    // alongside the step's own name (`tape_breadcrumb_spans`' own
+    // last resort, dropping it entirely, once
+    // `"{first} › ⋯ › {last}"` itself doesn't fit) -- this is never a
+    // true collision (`still_collides` rightly never checks a tree
+    // row at all), but it still needs more room, the same way one
+    // does, up to the same 40% ceiling.
+    let loses_its_distinguishing_segment = |lead_rows: &[(&str, &str, usize, usize)]| -> bool {
+        lead_rows.iter().any(|(_, label, width, indent)| {
+            if *indent == 0 {
+                return false;
+            }
+            let segments: Vec<&str> = label.split(" › ").collect();
+            let Some((last, parents)) = segments.split_last() else {
+                return false;
+            };
+            if parents.is_empty() {
+                return false;
+            }
+            // Whichever of `tape_breadcrumb_spans`' own two whole-
+            // name forms it would actually draw -- the full label
+            // when that itself fits, else the cut keeping only the
+            // first segment -- already reserves its own two-cell
+            // gap (`tape_breadcrumb_spans`' own `budget`); the real
+            // fallback with no kept segment at all drops the row's
+            // own distinguishing pass, so it always needs more room.
+            let full_len = format!("{} › {last}", parents.join(" › ")).chars().count();
+            let cut_len = format!("{} › ⋯ › {last}", parents[0]).chars().count();
+            let real_budget = width.saturating_sub(2);
+            full_len > real_budget && cut_len > real_budget
+        })
+    };
+    let (name_width, lead_segments) = if narrow {
+        (
+            (inner.width as usize).saturating_sub(2 + token_width),
+            std::collections::HashMap::new(),
+        )
+    } else {
+        let base_name_width = name_width_at(1, 3);
+        let base_lead_rows = lead_rows_at(base_name_width);
+        let base_lead_segments = tape_breadcrumb_lead_segments(&for_lead_segments(&base_lead_rows));
+        if !still_collides(&base_lead_rows, &base_lead_segments)
+            && !loses_its_distinguishing_segment(&base_lead_rows)
+        {
+            (base_name_width, base_lead_segments)
+        } else {
+            // Issue #737: "the name column may widen up to 40% of
+            // the list width, but no further" -- a ceiling, not a
+            // target: the smallest width at or past the usual third
+            // that actually resolves every collision (and keeps
+            // every tree row's own first segment) wins, so a wider
+            // column never takes more from the `what` column's own
+            // share than it needs.
+            let ceiling_name_width = name_width_at(2, 5).max(base_name_width);
+            let mut resolved = None;
+            for width in (base_name_width + 1)..=ceiling_name_width {
+                let rows = lead_rows_at(width);
+                let segments = tape_breadcrumb_lead_segments(&for_lead_segments(&rows));
+                if !still_collides(&rows, &segments) && !loses_its_distinguishing_segment(&rows) {
+                    resolved = Some((width, segments));
+                    break;
+                }
+            }
+            resolved.unwrap_or_else(|| {
+                let rows = lead_rows_at(ceiling_name_width);
+                (
+                    ceiling_name_width,
+                    tape_breadcrumb_lead_segments(&for_lead_segments(&rows)),
+                )
+            })
+        }
     };
     let what_width = if narrow {
         0
@@ -2000,24 +2171,6 @@ fn draw_tape_list(
         // space.
         (inner.width as usize).saturating_sub(9 + 2 + name_width + token_width)
     };
-    // Issue #737: "two different steps never read the same, so keep
-    // more segments when the short form would collide" -- computed
-    // once here, over every row's own already-cut-to-its-own-width
-    // preview, since two rows can only ever actually look the same
-    // once each has been cut to fit its own column.
-    let lead_rows: Vec<(&str, &str, usize)> = screen
-        .items
-        .iter()
-        .filter_map(|it| match it {
-            TapeItem::Row(r) => Some((
-                r.path.as_str(),
-                r.label.as_str(),
-                name_width.saturating_sub(r.indent * 2),
-            )),
-            _ => None,
-        })
-        .collect();
-    let lead_segments = tape_breadcrumb_lead_segments(&lead_rows);
 
     let mut lines: Vec<(Option<String>, Line<'static>)> = Vec::new();
     let mut kinds: Vec<TapeListLineKind> = Vec::new();
@@ -16015,7 +16168,7 @@ mod tape_breadcrumb_tests {
     }
 
     #[test]
-    fn a_short_label_pads_to_width_with_one_space_before_the_next_column() {
+    fn a_short_label_pads_to_width_with_room_before_the_next_column() {
         let text = plain(tape_breadcrumb_spans(
             "drafts",
             12,
@@ -16043,8 +16196,40 @@ mod tape_breadcrumb_tests {
         assert_eq!(text.chars().count(), 24);
     }
 
+    /// Issue #737: a running leaf's own relative label (`iter_2 ›
+    /// build › compile`, two levels under its own files loop) drops
+    /// the plain container (`build`) before it would ever drop the
+    /// pass that tells it apart from its own sibling (`iter_3`), and
+    /// the step's own name is never the part that gives way --
+    /// `nowarea_probe.py`'s own 120x30 case, where the column is
+    /// just wide enough for the cut form and no wider.
     #[test]
-    fn the_cut_always_leaves_at_least_one_trailing_space() {
+    fn a_sibling_leaf_drops_its_container_before_its_own_pass_or_name() {
+        let a = plain(tape_breadcrumb_spans(
+            "iter_2 › build › compile",
+            25,
+            1,
+            Style::default(),
+            Style::default(),
+        ));
+        let b = plain(tape_breadcrumb_spans(
+            "iter_3 › build › compile",
+            25,
+            1,
+            Style::default(),
+            Style::default(),
+        ));
+        assert_eq!(a.trim_end(), "iter_2 › ⋯ › compile");
+        assert_eq!(b.trim_end(), "iter_3 › ⋯ › compile");
+        assert_ne!(a, b, "the two siblings' own cuts must still read apart");
+        // At least two cells of gap before the next column, never
+        // glued to it (the design's own frames never show fewer).
+        assert_eq!(a.chars().count(), 25);
+        assert!(a.ends_with("  "), "{a:?}");
+    }
+
+    #[test]
+    fn the_cut_always_leaves_at_least_two_trailing_spaces() {
         let text = plain(tape_breadcrumb_spans(
             "a › b › a_step_name_much_longer_than_the_column",
             20,
@@ -16053,7 +16238,7 @@ mod tape_breadcrumb_tests {
             Style::default(),
         ));
         assert_eq!(text.chars().count(), 20);
-        assert_eq!(text.chars().last(), Some(' '), "{text:?}");
+        assert!(text.ends_with("  "), "{text:?}");
     }
 
     #[test]

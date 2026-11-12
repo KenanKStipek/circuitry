@@ -21,7 +21,7 @@
 {border.focus}│{/}{status.success}✓ {/}{fg.muted}iter_0 › {/}{fg.default}draft                          {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}130 t{/}{border.focus}│{/}
 {border.focus}│{/}{status.success}✓ {/}{fg.muted}iter_1 › {/}{fg.default}draft                          {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱   {/}{fg.default}131 t{/}{border.focus}│{/}
 {border.focus}│{/}{accent.primary}━━ {/}{accent.primary bold}Now 12:50:50 · 3.6s {/}{accent.primary}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}
-{border.focus}│{/}{accent.secondary bold}⟳ {/}{fg.default bold}drafts {/}{fg.muted}2/2 busy · 1 queued              {/}{accent.secondary}▃▃       {/}{fg.muted}130 t/p{/}{border.focus}│{/}
+{border.focus}│{/}{accent.secondary bold}⟳ {/}{fg.default bold}drafts  {/}{fg.muted}2/2 busy · 1 queued             {/}{accent.secondary}▃▃       {/}{fg.muted}130 t/p{/}{border.focus}│{/}
 {border.focus}│  {/}{accent.primary bold}● {/}{fg.muted}iter_0 › {/}{fg.default bold}pause                                        {/}{border.focus}│{/}
 {border.focus}│  {/}{accent.primary bold}● {/}{fg.muted}iter_1 › {/}{fg.default bold}pause                                        {/}{border.focus}│{/}
 {border.focus}│{/}{fg.faint}· iter_2 › draft                          usually 155 t   {/}{border.focus}│{/}

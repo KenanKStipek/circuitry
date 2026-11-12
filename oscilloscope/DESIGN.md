@@ -2949,14 +2949,26 @@ nothing of its own (a `dynamic`, `use`, `try`/`finally`, a loop pass) is never
 a line of its own, only a breadcrumb segment on whichever line ends
 up where it would have sat; a running loop's own line carries its
 counts (`busy of slots Slots Busy`, `· N Pass(es) Queued` past zero)
-in its own `what` column rather than a separate rule, so at a
-narrow width with no `what` column at all (§5) that count is simply
-not shown, the same as every other row's own `what` text there; and
-a finished or ahead row's breadcrumb runs from the outermost
+in its own `what` column rather than a separate rule; that text
+never loses a digit to the column it sits in -- first spending the
+token column's own cells when the loop has none of its own to show
+there, then, only once the full text still doesn't fit, a short
+form (`N/M busy · K queued`); at a narrow width with no `what`
+column of its own at all (§5) the loop's own name field gives up its
+own unused room to the same counts instead, in whichever form fits;
+and a finished or ahead row's breadcrumb runs from the outermost
 enclosing loop's own pass down to the row itself, every parent
 segment and `›` in `fg.muted`, the step's own name in the row's
 colour -- a tree row's own label drops whatever prefix its own
-ancestor row in the tree already said. For the Flow: a loop forks into one lane per *pass*,
+ancestor row in the tree already said. The name column widens to
+fit the longest label on screen, up to a third of the list's own
+width, always with at least two cells before the next column, never
+glued to it; if two rows would still read the same there, the
+column may widen further, up to 40% of the list's own width but no
+more. A label still too long loses segments in this order: a plain
+container's own name (`build`) first, then a loop's own name, then a
+pass (`iter_N`) only as the very last resort -- the first segment
+and the step's own name are never the part that gives way. For the Flow: a loop forks into one lane per *pass*,
 never per `max_concurrency` slot -- §2.3's own prose reads "one lane
 per slot (`max_concurrency` or the pass count when unbounded)", but
 the frames draw a lane per pass throughout (a loop 3 passes wide, 2
