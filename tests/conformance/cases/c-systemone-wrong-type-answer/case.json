@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "The mock server answers a noul question with a choice-typed answer -- the effect fails with meta.raw.error_kind invalid_answer, never reaching the document's own default on_error: fail absorption.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml"
+}

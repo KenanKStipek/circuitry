@@ -89,6 +89,8 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         config: &NONE,
         token,
         armed: false,
+        limited: false,
+        confine_to: None,
     }
 }
 

@@ -22,7 +22,10 @@ pub fn status_is_retryable(status: u16) -> bool {
 /// own retry decision this crate ever classifies by status/cause
 /// rather than retrying unconditionally.
 fn is_http_family_provider(provider: &str) -> bool {
-    matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
+    matches!(
+        provider,
+        "http" | "web_fetch" | "webhook" | "linear" | "systemone"
+    )
 }
 
 /// `core/tool.py::ToolRuntime._is_retryable_failure` (PR #454) --

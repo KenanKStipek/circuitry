@@ -46,17 +46,49 @@ fn dict_get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
     dict.get(&Value::Str(key.to_string()))
 }
 
+/// `core/compiler.py::_refuse_systemone_provider_switch`: a profile cannot
+/// switch a tool effect to or from `systemone` -- that tool's file access
+/// is confined when the document compiles.
+fn refuse_systemone_provider_switch(
+    tool_op: &electricity_bytecode::effects::ToolOp,
+    new_provider: &str,
+    path: &str,
+    profile_name: Option<&str>,
+) -> Result<(), String> {
+    let old = electricity_value::pycompat::py_strip(&tool_op.provider).to_lowercase();
+    let new = electricity_value::pycompat::py_strip(new_provider).to_lowercase();
+    if old == new || (old != "systemone" && new != "systemone") {
+        return Ok(());
+    }
+    let profile = match profile_name {
+        Some(name) => format!("profile {}", Value::Str(name.to_string()).py_repr()),
+        None => "a profile".to_string(),
+    };
+    Err(format!(
+        "{profile}: effect '{path}' cannot change its provider from {} to {}: a systemone \
+         tool's file access is confined when the document compiles, so a profile cannot \
+         switch a tool to or from systemone.",
+        Value::Str(tool_op.provider.clone()).py_repr(),
+        Value::Str(new_provider.to_string()).py_repr(),
+    ))
+}
+
 /// Applies *override*'s `model`/`provider`/`routing` entries onto *op*,
 /// following Python's own `hasattr` field mapping (`core/compiler.py:
 /// 500-505`): a field with no counterpart on this op's own leaf type is
 /// silently ignored, exactly like Python's `hasattr` guard.
-fn apply_fields(op: &mut Op, override_: &Dict) {
+fn apply_fields(
+    op: &mut Op,
+    override_: &Dict,
+    path: &str,
+    profile_name: Option<&str>,
+) -> Result<(), String> {
     let model = dict_get(override_, "model").and_then(Value::as_str);
     let provider = dict_get(override_, "provider").and_then(Value::as_str);
     let routing = dict_get(override_, "routing");
 
     let NodeKind::Leaf(leaf) = &mut op.kind else {
-        return;
+        return Ok(());
     };
     match leaf.as_mut() {
         LeafKind::Prompt(prompt_op) => {
@@ -79,11 +111,13 @@ fn apply_fields(op: &mut Op, override_: &Dict) {
                 tool_op.model = Some(model.to_string());
             }
             if let Some(provider) = provider {
+                refuse_systemone_provider_switch(tool_op, provider, path, profile_name)?;
                 tool_op.provider = provider.to_string();
             }
         }
         LeafKind::Use(_) | LeafKind::Yield(_) | LeafKind::Reflector(_) | LeafKind::Report(_) => {}
     }
+    Ok(())
 }
 
 /// `_disable_subtree`: *op* and every descendant rebuilt with
@@ -130,12 +164,16 @@ fn disable_region(region: &mut Region) {
 /// walked, and any overrides of their own applied, *before* this node's
 /// own `enabled: false` (if present) disables the whole subtree,
 /// exactly as Python's own `replace(...)` order does.
-fn overlay_op(op: &mut Op, effects: &IndexMap<String, Dict>) {
+fn overlay_op(
+    op: &mut Op,
+    effects: &IndexMap<String, Dict>,
+    profile_name: Option<&str>,
+) -> Result<(), String> {
     let own_key = override_key(&op.path);
     let mut disable = false;
     if !own_key.is_empty() {
         if let Some(override_) = effects.get(&own_key) {
-            apply_fields(op, override_);
+            apply_fields(op, override_, &own_key, profile_name)?;
             disable = matches!(dict_get(override_, "enabled"), Some(Value::Bool(false)));
         }
     }
@@ -143,41 +181,47 @@ fn overlay_op(op: &mut Op, effects: &IndexMap<String, Dict>) {
     match &mut op.kind {
         NodeKind::Leaf(leaf) => {
             if let LeafKind::Reflector(reflector) = leaf.as_mut() {
-                overlay_region(&mut reflector.inner, effects);
+                overlay_region(&mut reflector.inner, effects, profile_name)?;
             }
         }
-        NodeKind::Control(region) => overlay_region(region, effects),
+        NodeKind::Control(region) => overlay_region(region, effects, profile_name)?,
     }
 
     if disable {
         disable_subtree(op);
     }
+    Ok(())
 }
 
-fn overlay_region(region: &mut Region, effects: &IndexMap<String, Dict>) {
+fn overlay_region(
+    region: &mut Region,
+    effects: &IndexMap<String, Dict>,
+    profile_name: Option<&str>,
+) -> Result<(), String> {
     match region {
         Region::Block { ops, .. } => {
             for op in ops.iter_mut() {
-                overlay_op(op, effects);
+                overlay_op(op, effects, profile_name)?;
             }
         }
         Region::Parallel { branches, .. } => {
             for op in branches.iter_mut() {
-                overlay_op(op, effects);
+                overlay_op(op, effects, profile_name)?;
             }
         }
         Region::TryFinally { body, finally } => {
-            overlay_region(body, effects);
-            overlay_region(finally, effects);
+            overlay_region(body, effects, profile_name)?;
+            overlay_region(finally, effects, profile_name)?;
         }
         Region::If { then_, else_, .. } => {
-            overlay_region(then_, effects);
+            overlay_region(then_, effects, profile_name)?;
             if let Some(else_region) = else_ {
-                overlay_region(else_region, effects);
+                overlay_region(else_region, effects, profile_name)?;
             }
         }
-        Region::Loop { body, .. } => overlay_region(body, effects),
+        Region::Loop { body, .. } => overlay_region(body, effects, profile_name)?,
     }
+    Ok(())
 }
 
 /// `apply_effect_overrides` (`core/compiler.py:451-482`): applies a
@@ -188,13 +232,18 @@ fn overlay_region(region: &mut Region, effects: &IndexMap<String, Dict>) {
 /// A no-op for an empty *effects* map, matching the caller's own guard
 /// (settled question 1, issue #518) -- but harmless either way, since
 /// an empty map matches nothing.
-pub fn apply_effect_overrides(program: &mut Program, effects: &IndexMap<String, Dict>) {
+pub fn apply_effect_overrides(
+    program: &mut Program,
+    effects: &IndexMap<String, Dict>,
+    profile_name: Option<&str>,
+) -> Result<(), String> {
     if effects.is_empty() {
-        return;
+        return Ok(());
     }
     if let NodeKind::Control(region) = &mut program.root.kind {
-        overlay_region(region, effects);
+        overlay_region(region, effects, profile_name)?;
     }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -381,7 +430,7 @@ mod tests {
                 ("routing", Value::Str("fast".to_string())),
             ],
         )]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -402,10 +451,43 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_cannot_switch_a_tool_away_from_systemone() {
+        let mut program = compile(
+            "effects:\n  - type: tool\n    name: decide\n    provider: systemone\n    params: {}\n",
+        );
+        let effects = overrides_of(&[("decide", &[("provider", Value::Str("http".to_string()))])]);
+        let err = apply_effect_overrides(&mut program, &effects, Some("my-profile")).unwrap_err();
+        assert_eq!(
+            err,
+            "profile 'my-profile': effect 'decide' cannot change its provider from \
+             'systemone' to 'http': a systemone tool's file access is confined when the \
+             document compiles, so a profile cannot switch a tool to or from systemone."
+        );
+    }
+
+    #[test]
+    fn a_profile_cannot_switch_a_tool_to_systemone() {
+        let mut program = compile(
+            "effects:\n  - type: tool\n    name: decide\n    provider: json\n    params: {}\n",
+        );
+        let effects = overrides_of(&[(
+            "decide",
+            &[("provider", Value::Str("systemone".to_string()))],
+        )]);
+        let err = apply_effect_overrides(&mut program, &effects, None).unwrap_err();
+        assert_eq!(
+            err,
+            "a profile: effect 'decide' cannot change its provider from 'json' to \
+             'systemone': a systemone tool's file access is confined when the document \
+             compiles, so a profile cannot switch a tool to or from systemone."
+        );
+    }
+
+    #[test]
     fn routing_false_becomes_a_bool_opt_out() {
         let mut program = compile("effects:\n  - type: prompt\n    name: p\n    template: hi\n");
         let effects = overrides_of(&[("p", &[("routing", Value::Bool(false))])]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -435,7 +517,7 @@ mod tests {
                 ("routing", Value::Str("fast".to_string())),
             ],
         )]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -465,7 +547,7 @@ mod tests {
                 ("enabled", Value::Bool(false)),
             ],
         )]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -485,7 +567,7 @@ mod tests {
                 ("model", Value::Str("m2".to_string())),
             ],
         )]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -506,7 +588,7 @@ mod tests {
         let mut program =
             compile("effects:\n  - type: tool\n    name: t\n    provider: json\n    params: {}\n");
         let effects = overrides_of(&[("t", &[("nonsense", Value::Str("foo".to_string()))])]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -530,7 +612,7 @@ mod tests {
              name: cleanup\n        provider: json\n        params: {}\n",
         );
         let effects = overrides_of(&[("d", &[("enabled", Value::Bool(false))])]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -555,7 +637,7 @@ mod tests {
              type: tool\n        name: y\n        provider: json\n        params: {}\n",
         );
         let effects = overrides_of(&[("gate", &[("enabled", Value::Bool(false))])]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -579,7 +661,7 @@ mod tests {
              - type: tool\n        name: step\n        provider: json\n        params: {}\n",
         );
         let effects = overrides_of(&[("lp", &[("enabled", Value::Bool(false))])]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -602,7 +684,7 @@ mod tests {
              name: inner_step\n        template: go\n",
         );
         let effects = overrides_of(&[("planit", &[("enabled", Value::Bool(false))])]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),
@@ -631,7 +713,7 @@ mod tests {
                 &[("model", Value::Str("still-applied".to_string()))],
             ),
         ]);
-        apply_effect_overrides(&mut program, &effects);
+        apply_effect_overrides(&mut program, &effects, None).unwrap();
         let root_ops = block_ops(match &program.root.kind {
             NodeKind::Control(region) => region,
             _ => unreachable!(),

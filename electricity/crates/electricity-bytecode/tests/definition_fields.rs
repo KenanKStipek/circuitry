@@ -154,12 +154,7 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add("ToolDefinition", "expect", "effects::ToolOp::expect");
     add("ToolDefinition", "enabled", "op::Op::enabled");
     add("ToolDefinition", "group", "effects::ToolOp::group");
-    add(
-        "ToolDefinition",
-        "limited",
-        "documented divergence: no IR field -- only the cof-only systemone \
-         plugin and http's save_to read it, and electricity refuses both",
-    );
+    add("ToolDefinition", "limited", "effects::ToolOp::limited");
     add(
         "ToolDefinition",
         "prompt_file",
@@ -168,8 +163,7 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
     add(
         "ToolDefinition",
         "confine_to",
-        "documented divergence: no IR field -- only the cof-only systemone \
-         plugin reads it, and electricity refuses that plugin",
+        "effects::ToolOp::confine_to",
     );
 
     // ExpectDef -> region::ExpectCondition

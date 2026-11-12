@@ -255,6 +255,8 @@ async fn golden_corpus_execute_tool() {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         };
         let op = Op {
             path: EffectPath::root().push_name(&name),

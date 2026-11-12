@@ -154,6 +154,46 @@
     }
   },
   {
+    "name": "circuitry_systemone_url_overlays_the_file_config",
+    "kind": "resolve_config",
+    "input": {
+      "file_text": "{\"runtime\": {\"plugins\": {\"systemone\": {\"base_url\": \"http://127.0.0.1:1\"}}}}",
+      "is_directory": false,
+      "path_through_file": false,
+      "invalid_utf8": false,
+      "env": {
+        "CIRCUITRY_SYSTEMONE_URL": "http://127.0.0.1:2"
+      }
+    },
+    "expect": {
+      "ok": true,
+      "config": {
+        "default_model": "llama3.1:8b",
+        "default_adapter": "ollama",
+        "plugins": [],
+        "enabled_adapters": null,
+        "enabled_plugins": null,
+        "enabled_tools": null,
+        "environment": "dev",
+        "runtime": {
+          "adapters": {
+            "ollama": {
+              "base_url": "http://localhost:11434"
+            }
+          },
+          "plugins": {
+            "comfyui": {
+              "base_url": "http://localhost:8188"
+            },
+            "systemone": {
+              "base_url": "http://127.0.0.1:2"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
     "name": "an_unknown_environment_falls_back_to_dev",
     "kind": "resolve_config",
     "input": {

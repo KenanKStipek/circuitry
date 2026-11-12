@@ -67,6 +67,8 @@ fn stringify_item(path: EffectPath, name: &str) -> Op {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
