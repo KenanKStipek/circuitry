@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /api/v1/systemone
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"model":"typesafe-1-20240101","usage":{"input_tokens":42,"output_tokens":17},"answers":{"risky":{"type":"noul","noul":0.1,"confidence":0.95},"verdict":{"type":"choice","choice":"approve","probabilities":{"approve":0.9,"reject":0.1},"confidence":0.8},"confidence_score":{"type":"score","score":2,"legend":"high","probabilities":{"0":0.05,"1":0.15,"2":0.8}}}}'
