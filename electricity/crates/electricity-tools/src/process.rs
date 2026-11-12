@@ -196,44 +196,14 @@ pub struct LiveTail {
 const LIVE_TAIL_MAX_LINES: usize = 20;
 const LIVE_TAIL_MAX_BYTES: usize = 4096;
 
-/// *buf*'s own last [`LIVE_TAIL_MAX_BYTES`] bytes, trimmed further to
-/// its last [`LIVE_TAIL_MAX_LINES`] lines -- the byte cap is applied
-/// first (so this never scans further back than that many bytes to
-/// find line boundaries), the line cap second, so the result is always
-/// within both at once. A trailing `\n` never counts as its own empty
-/// line; everything else between newlines does, including a final
-/// run with no trailing `\n` at all (`tail -n`'s own convention for a
-/// file missing its final newline).
-fn tail_slice(buf: &[u8], max_lines: usize, max_bytes: usize) -> &[u8] {
-    let window = &buf[buf.len().saturating_sub(max_bytes)..];
-    if max_lines == 0 || window.is_empty() {
-        return window;
-    }
-    let ends_with_newline = window[window.len() - 1] == b'\n';
-    let scanned = if ends_with_newline {
-        &window[..window.len() - 1]
-    } else {
-        window
-    };
-    let newline_positions: Vec<usize> = scanned
-        .iter()
-        .enumerate()
-        .filter(|&(_, &b)| b == b'\n')
-        .map(|(i, _)| i)
-        .collect();
-    let total_lines = newline_positions.len() + 1;
-    if total_lines <= max_lines {
-        return window;
-    }
-    let lines_to_drop = total_lines - max_lines;
-    let start = newline_positions[lines_to_drop - 1] + 1;
-    &window[start..]
-}
-
 /// *text*'s own last *max_bytes* bytes, cut at a `char` boundary (never
 /// mid-character) -- the start is dropped, never the end, matching
 /// `tail -c`'s own convention. A no-op once *text* is already within
-/// the cap.
+/// the cap. [`tail_text`] only ever calls this on one already-split
+/// line at a time, never on several lines joined together, so a cut
+/// here is always the spec's own "a single line longer than the cap",
+/// never a fragment of some shorter line that happened to sit next to
+/// it.
 fn cap_to_last_bytes(text: &str, max_bytes: usize) -> &str {
     if text.len() <= max_bytes {
         return text;
@@ -255,24 +225,82 @@ fn cap_to_last_bytes(text: &str, max_bytes: usize) -> &str {
 /// always a true suffix of the same text `meta.stdout`/`meta.stderr`
 /// end up holding, never split on a `\r` the final text never kept as
 /// its own line break (ffmpeg's own `\r`-separated progress lines,
-/// for one). Decoded, then translated, then line-capped, then
-/// byte-capped again, in that order: translation only ever shrinks
-/// text, but lossy replacement of invalid bytes can grow it (one
-/// invalid byte becomes a 3-byte replacement character), so the
-/// result is only guaranteed within [`LIVE_TAIL_MAX_BYTES`] once the
-/// last cap runs after that expansion, not before it.
+/// for one) -- and a `\r\n` split across two separate pipe reads is
+/// still one line end, since this always re-decodes the whole
+/// accumulated buffer from scratch, never a stateful partial left
+/// over from an earlier call.
+///
+/// Capped exactly the way the live-tail spec describes, in this
+/// order:
+/// 1. decode lossily, then translate, over a raw window generous
+///    enough that every line that can possibly survive both caps
+///    below is always fully inside it (never the window's own edge
+///    landing inside such a line and masquerading as this function's
+///    own "single over-long line" case);
+/// 2. split into lines -- an unterminated final run counts as its own
+///    line, live, as soon as it's been read, same as any other;
+/// 3. keep the last [`LIVE_TAIL_MAX_LINES`] of those;
+/// 4. cap *each* kept line, independently, to its own last
+///    [`LIVE_TAIL_MAX_BYTES`] bytes ([`cap_to_last_bytes`]) -- the
+///    only place a single line's own bytes are ever cut, and only
+///    ever a suffix of that one line;
+/// 5. drop whole lines from the front -- never a partial one -- until
+///    what's left, rejoined, is itself within [`LIVE_TAIL_MAX_BYTES`].
 fn tail_text(buf: &[u8]) -> String {
-    let window = &buf[buf.len().saturating_sub(LIVE_TAIL_MAX_BYTES)..];
+    // 4x the aggregate cap: even in the worst case for both ends of
+    // decoding at once -- every one of the up to `LIVE_TAIL_MAX_LINES`
+    // lines that could survive step 3 independently near the
+    // per-line cap (which the aggregate cap in step 5 alone already
+    // limits to at most one or two such lines), *and* `\r\n` shrinking
+    // 2:1 on translation (its own worst case) -- the true raw bytes
+    // behind that surviving content still fit in half of this window,
+    // leaving a window's width of margin to find the oldest surviving
+    // line's own start before this function ever reaches the window's
+    // own edge.
+    const RAW_WINDOW_BYTES: usize = LIVE_TAIL_MAX_BYTES * 4;
+    let window = &buf[buf.len().saturating_sub(RAW_WINDOW_BYTES)..];
     let decoded = String::from_utf8_lossy(window);
     let translated = universal_newlines(&decoded);
-    // `tail_slice` only ever cuts at a `\n` byte, which a multi-byte
-    // UTF-8 character never contains, so reusing it on *translated*'s
-    // own bytes (line cap only -- `usize::MAX` keeps the byte window
-    // from trimming anything here) can never land mid-character.
-    let line_capped = tail_slice(translated.as_bytes(), LIVE_TAIL_MAX_LINES, usize::MAX);
-    let line_capped = std::str::from_utf8(line_capped)
-        .expect("cutting translated text at a newline byte stays valid utf-8");
-    cap_to_last_bytes(line_capped, LIVE_TAIL_MAX_BYTES).to_string()
+
+    if translated.is_empty() {
+        return String::new();
+    }
+    let ends_with_newline = translated.ends_with('\n');
+    let body = if ends_with_newline {
+        &translated[..translated.len() - 1]
+    } else {
+        translated.as_str()
+    };
+    let mut lines: Vec<&str> = body.split('\n').collect();
+    if lines.len() > LIVE_TAIL_MAX_LINES {
+        lines.drain(0..lines.len() - LIVE_TAIL_MAX_LINES);
+    }
+    let mut capped: Vec<&str> = lines
+        .into_iter()
+        .map(|line| cap_to_last_bytes(line, LIVE_TAIL_MAX_BYTES))
+        .collect();
+
+    // Whole lines dropped from the front until what's left -- joined
+    // by `\n`, plus one trailing `\n` if the original text had one --
+    // fits the aggregate cap. Every remaining line is already within
+    // the cap on its own (step 4, above), so this can only ever drop
+    // a line in full, never keep a fragment of one.
+    loop {
+        let separators = capped.len().saturating_sub(1);
+        let trailing = usize::from(ends_with_newline && !capped.is_empty());
+        let total: usize =
+            capped.iter().map(|line| line.len()).sum::<usize>() + separators + trailing;
+        if total <= LIVE_TAIL_MAX_BYTES || capped.is_empty() {
+            break;
+        }
+        capped.remove(0);
+    }
+
+    let mut result = capped.join("\n");
+    if ends_with_newline && !capped.is_empty() {
+        result.push('\n');
+    }
+    result
 }
 
 fn live_tail(stdout_buf: &[u8], stderr_buf: &[u8]) -> LiveTail {
@@ -986,37 +1014,75 @@ mod tests {
     }
 
     #[test]
-    fn tail_slice_keeps_the_last_twenty_lines() {
+    fn tail_text_keeps_the_last_twenty_lines() {
         let mut buf = String::new();
         for i in 0..25 {
             buf.push_str(&format!("line{i}\n"));
         }
-        let tail = tail_slice(buf.as_bytes(), 20, 1_000_000);
-        let text = std::str::from_utf8(tail).unwrap();
-        let lines: Vec<&str> = text.lines().collect();
+        let text = tail_text(buf.as_bytes());
+        let lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();
         assert_eq!(lines.len(), 20);
         assert_eq!(lines[0], "line5");
         assert_eq!(lines[19], "line24");
     }
 
     #[test]
-    fn tail_slice_keeps_at_most_four_kib_even_well_under_the_line_cap() {
-        // One 10,000-byte line, no newline at all -- a single partial
-        // line, well under the 20-line cap, so the 4 KiB byte cap is
-        // the only thing trimming it.
-        let buf = vec![b'a'; 10_000];
-        let tail = tail_slice(&buf, 20, 4096);
-        assert_eq!(tail.len(), 4096);
-        assert!(tail.iter().all(|&b| b == b'a'));
+    fn tail_text_shows_the_current_partial_line_live() {
+        // The spec's own example (`printf "working\u{2026}"; sleep 60`):
+        // no line end has arrived at all yet, but the partial line
+        // must still show, immediately, exactly as read so far.
+        assert_eq!(tail_text("working\u{2026}".as_bytes()), "working\u{2026}");
     }
 
     #[test]
-    fn tail_slice_counts_an_unterminated_final_line_as_its_own_line() {
-        let buf = b"a\nb\nc";
-        assert_eq!(tail_slice(buf, 2, 4096), b"b\nc");
-        assert_eq!(tail_slice(buf, 1, 4096), b"c");
-        // A trailing `\n` never counts as its own empty line.
-        assert_eq!(tail_slice(b"a\nb\nc\n", 2, 4096), b"b\nc\n");
+    fn tail_text_caps_a_single_over_long_line_to_its_last_bytes_from_a_char_boundary() {
+        // One 10,000-byte line, no newline at all -- a single partial
+        // line, well under the 20-line cap, so the 4 KiB byte cap is
+        // the only thing trimming it, to exactly its own last 4096
+        // bytes (ASCII here, so every byte offset is already a char
+        // boundary).
+        let buf = vec![b'a'; 10_000];
+        let text = tail_text(&buf);
+        assert_eq!(text.len(), LIVE_TAIL_MAX_BYTES);
+        assert!(text.chars().all(|c| c == 'a'));
+    }
+
+    #[test]
+    fn tail_text_drops_whole_lines_from_the_front_to_stay_within_the_byte_cap() {
+        // Ten 1000-byte lines -- each one, and the 20-line cap by
+        // count, nowhere near their own limit on their own, so only
+        // the aggregate byte cap (10,010 bytes joined) is trimming
+        // this, one whole line at a time from the front, down to the
+        // last four (1001 bytes apiece with their own separator,
+        // 4004 <= 4096; a fifth would push it to 5005).
+        fn line(i: usize) -> String {
+            format!("{i:04}{}", "a".repeat(996))
+        }
+        let buf: String = (0..10).map(|i| format!("{}\n", line(i))).collect();
+        let text = tail_text(buf.as_bytes());
+        assert!(
+            text.len() <= LIVE_TAIL_MAX_BYTES,
+            "got {} bytes",
+            text.len()
+        );
+        let lines: Vec<&str> = text.split('\n').filter(|l| !l.is_empty()).collect();
+        assert_eq!(lines, vec![line(6), line(7), line(8), line(9)]);
+    }
+
+    #[test]
+    fn tail_text_never_keeps_a_fragment_of_a_dropped_line() {
+        // Two 3000-byte lines, each well under the per-line cap on its
+        // own, whose combined 6001 bytes (with the one separator) is
+        // over the aggregate cap. A flat byte-suffix cut over the
+        // whole joined text (the bug this replaces) would land 1905
+        // bytes into the *first* line, keeping its own back half; the
+        // first line must instead be dropped whole, leaving only the
+        // second line's own text, not one `a` byte surviving.
+        let first = "a".repeat(3000);
+        let second = "b".repeat(3000);
+        let buf = format!("{first}\n{second}");
+        let text = tail_text(buf.as_bytes());
+        assert_eq!(text, second);
     }
 
     #[test]
@@ -1028,8 +1094,8 @@ mod tests {
     #[test]
     fn tail_text_translates_crlf_and_a_lone_cr_the_same_way_the_final_output_does() {
         // ffmpeg's own stderr progress is `\r`-separated, with no `\n`
-        // at all; `tail_slice`'s own byte-level line cap would see it
-        // as one giant line unless this translation runs first.
+        // at all; splitting lines on bare `\n` alone would see it as
+        // one giant line unless this translation runs first.
         assert_eq!(tail_text(b"line1\rline2\rline3"), "line1\nline2\nline3");
         assert_eq!(tail_text(b"a\r\nb\r\nc"), "a\nb\nc");
     }
@@ -1054,15 +1120,12 @@ mod tests {
     #[test]
     fn tail_text_cuts_valid_multibyte_text_cleanly_at_the_byte_cap() {
         // 3-byte CJK characters whose own byte length never divides
-        // evenly into `LIVE_TAIL_MAX_BYTES`, so the raw window taken
-        // before decoding lands mid-character; the lossy decode turns
-        // that lone fragment into one replacement character, and the
-        // byte cap re-applied after decoding must drop exactly that
-        // fragment, never keep it or cut a *whole* character in half.
-        let buf: Vec<u8> = std::iter::repeat('\u{6587}')
-            .take(2000)
-            .collect::<String>()
-            .into_bytes();
+        // evenly into `LIVE_TAIL_MAX_BYTES`, so the single-line byte
+        // cap's own start (`LIVE_TAIL_MAX_BYTES` bytes back from the
+        // end) lands mid-character; it must walk forward to the next
+        // real char boundary rather than keep a split character's
+        // trailing bytes as-is.
+        let buf: Vec<u8> = "\u{6587}".repeat(2000).into_bytes();
         let text = tail_text(&buf);
         assert!(
             text.len() <= LIVE_TAIL_MAX_BYTES,
