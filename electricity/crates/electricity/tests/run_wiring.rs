@@ -10,6 +10,8 @@ use electricity::run::{RunRequest, Signal};
 use electricity_vm::CancellationToken;
 use indexmap::IndexMap;
 use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 
 fn temp_dir(name: &str) -> PathBuf {
@@ -1007,11 +1009,13 @@ async fn a_tool_naming_the_cel_plugin_runs_for_real() {
     );
 }
 
-/// Issue #598: electricity resolves no secret, so an `http` header naming
-/// one is refused up front with the standard preview message.
+/// Issue #725: electricity now resolves `runtime.secrets.<name>`, so an
+/// `http` header naming one is no longer refused up front -- it runs,
+/// and fails at dispatch (never writing no state at all the way a
+/// walker refusal does) when the secret isn't actually defined.
 #[tokio::test]
-async fn an_http_header_naming_a_secret_is_refused_with_the_marker() {
-    let dir = temp_dir("secret-header");
+async fn an_http_header_naming_an_undefined_secret_fails_the_effect_not_the_walker() {
+    let dir = temp_dir("secret-header-undefined");
     let config = write(&dir, "config.json", "{}");
     let doc = write(
         &dir,
@@ -1024,18 +1028,45 @@ async fn an_http_header_naming_a_secret_is_refused_with_the_marker() {
 
     assert!(!result.ok);
     assert!(
-        result.state.is_none(),
-        "a refusal must write no state at all"
+        !result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains(electricity_bytecode::PREVIEW_MARKER),
+        "a secret in an http header is a supported shape now, never the preview marker"
     );
-    let error = result.error.unwrap();
-    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(error.contains("prime.call is a tool effect whose params name a secret"));
+    let state = result
+        .state
+        .expect("a dispatch failure still writes state, unlike a walker refusal");
+    let dict = state.as_dict().unwrap();
+    let prime = dict
+        .get(&electricity_value::Value::Str("prime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let call = prime
+        .get(&electricity_value::Value::Str("call".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let meta = call
+        .get(&electricity_value::Value::Str("meta".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        meta.get(&electricity_value::Value::Str("error".to_string())),
+        Some(&electricity_value::Value::Str(
+            "secret 'api' is not defined in runtime.secrets.".to_string()
+        ))
+    );
 }
 
-/// Issue #598: a secret in the host `env` of a tool the document names is
-/// refused up front too.
+/// Issue #725: a secret in the host `env` of a tool the document names
+/// now resolves (or fails the effect naming it) instead of being
+/// refused up front.
 #[tokio::test]
-async fn a_secret_in_a_named_tools_host_env_is_refused_with_the_marker() {
+async fn a_secret_in_a_named_tools_host_env_fails_the_effect_when_undefined() {
     let dir = temp_dir("secret-env");
     let config = write(
         &dir,
@@ -1053,12 +1084,133 @@ async fn a_secret_in_a_named_tools_host_env_is_refused_with_the_marker() {
 
     assert!(!result.ok);
     assert!(
-        result.state.is_none(),
-        "a refusal must write no state at all"
+        !result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains(electricity_bytecode::PREVIEW_MARKER),
+        "a secret in a subprocess tool's host env is a supported shape now"
     );
-    let error = result.error.unwrap();
-    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(error.contains("a secret in runtime.plugins.awk.env.TOKEN is not supported"));
+    let state = result
+        .state
+        .expect("a dispatch failure still writes state, unlike a walker refusal");
+    let dict = state.as_dict().unwrap();
+    let prime = dict
+        .get(&electricity_value::Value::Str("prime".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let run_it = prime
+        .get(&electricity_value::Value::Str("run_it".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    let meta = run_it
+        .get(&electricity_value::Value::Str("meta".to_string()))
+        .unwrap()
+        .as_dict()
+        .unwrap();
+    assert_eq!(
+        meta.get(&electricity_value::Value::Str("error".to_string())),
+        Some(&electricity_value::Value::Str(
+            "secret 'api' is not defined in runtime.secrets.".to_string()
+        ))
+    );
+}
+
+/// Issue #725's acceptance (2): a well-defined secret reaches the
+/// header, and the saved state, the events file, the live-state file
+/// and the error text each carry no part of it at all -- only the
+/// prefixed placeholder a server's own echo of it is replaced by.
+#[tokio::test]
+async fn a_secret_echoed_by_the_server_is_masked_everywhere_a_run_writes() {
+    let secret_value = "sekrit-9f3c-value";
+    let var = "ELECTRICITY_RUN_WIRING_SECRET_ECHO_TEST";
+    // SAFETY: a test-local name no other test reads.
+    unsafe {
+        std::env::set_var(var, secret_value);
+    }
+
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut buf = [0u8; 8192];
+        let n = stream.read(&mut buf).unwrap();
+        let request_text = String::from_utf8_lossy(&buf[..n]).to_string();
+        let auth = request_text
+            .lines()
+            .find(|line| line.to_lowercase().starts_with("authorization:"))
+            .and_then(|line| line.split_once(':').map(|(_, value)| value))
+            .map(str::trim)
+            .unwrap_or_default()
+            .to_string();
+        let body = format!("echo: {auth}");
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        let _ = stream.write_all(response.as_bytes());
+    });
+
+    let dir = temp_dir("secret-echo");
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(r#"{{"runtime": {{"secrets": {{"api": {{"env": "{var}"}}}}}}}}"#),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "effects:\n  - type: tool\n    name: call\n    provider: http\n    params:\n      \
+             url: http://{addr}/\n      headers: {{Authorization: {{secret: api, prefix: \"Bearer \"}}}}\n"
+        ),
+    );
+    let events_path = dir.join("events.jsonl");
+    let live_state_path = dir.join("live-state.json");
+    let req = RunRequest {
+        config_path: Some(config),
+        orchestration_path: doc,
+        inputs: IndexMap::new(),
+        out_path: None,
+        pretty: false,
+        live_state_path: Some(live_state_path.clone()),
+        events_path: Some(events_path.clone()),
+        profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
+        armed: true,
+    };
+
+    let result = run(&req).await;
+    unsafe {
+        std::env::remove_var(var);
+    }
+
+    assert!(result.ok, "{:?}", result.error);
+    let state = result.state.as_ref().unwrap();
+    let state_text = electricity::out::render_state(state, false).unwrap();
+    let events_text = fs::read_to_string(&events_path).unwrap();
+    let live_state_text = fs::read_to_string(&live_state_path).unwrap();
+
+    let placeholder = "[secret:api]";
+    assert!(
+        state_text.contains(&format!("Bearer {placeholder}")),
+        "the server's own echo must show the placeholder: {state_text}"
+    );
+    for (label, text) in [
+        ("state", state_text.as_str()),
+        ("events", events_text.as_str()),
+        ("live-state", live_state_text.as_str()),
+    ] {
+        assert!(
+            !text.contains(secret_value),
+            "{label} must carry no part of the secret: {text}"
+        );
+    }
 }
 
 /// Issue #511: a `provider:` that is not a cof plugin at all is never

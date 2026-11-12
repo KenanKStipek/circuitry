@@ -56,9 +56,7 @@ pub fn secret_ref_error(value: &Value) -> Option<String> {
     };
     let mut extra: Vec<String> = dict
         .keys()
-        .filter(|key| {
-            !matches!(key, Value::Str(s) if s == SECRET_KEY || s == PREFIX_KEY)
-        })
+        .filter(|key| !matches!(key, Value::Str(s) if s == SECRET_KEY || s == PREFIX_KEY))
         .map(Value::py_repr)
         .collect();
     extra.sort();
@@ -105,10 +103,14 @@ pub fn is_secret_ref(value: &Value) -> bool {
     let Value::Dict(dict) = value else {
         return false;
     };
-    let keys_ok = dict.keys().all(|key| {
-        matches!(key, Value::Str(s) if s == SECRET_KEY || s == PREFIX_KEY)
-    });
-    keys_ok && matches!(dict.get(&Value::Str(SECRET_KEY.to_string())), Some(Value::Str(_)))
+    let keys_ok = dict
+        .keys()
+        .all(|key| matches!(key, Value::Str(s) if s == SECRET_KEY || s == PREFIX_KEY));
+    keys_ok
+        && matches!(
+            dict.get(&Value::Str(SECRET_KEY.to_string())),
+            Some(Value::Str(_))
+        )
 }
 
 /// `secrets.py::secret_ref` -- *value* as a [`SecretRef`], or `None`
@@ -187,20 +189,30 @@ mod tests {
     #[test]
     fn a_non_string_name_is_malformed() {
         let value = dict_of(&[("secret", Value::from(5_i64))]);
-        assert!(secret_ref_error(&value).unwrap().contains("must name a runtime.secrets"));
+        assert!(
+            secret_ref_error(&value)
+                .unwrap()
+                .contains("must name a runtime.secrets")
+        );
     }
 
     #[test]
     fn a_name_starting_with_a_digit_or_dash_is_malformed() {
         for name in ["1abc", "-abc"] {
             let value = dict_of(&[("secret", Value::from(name))]);
-            assert!(secret_ref_error(&value).is_some(), "{name} should be malformed");
+            assert!(
+                secret_ref_error(&value).is_some(),
+                "{name} should be malformed"
+            );
         }
     }
 
     #[test]
     fn a_prefix_with_a_line_break_is_malformed() {
-        let value = dict_of(&[("secret", Value::from("api")), ("prefix", Value::from("a\nb"))]);
+        let value = dict_of(&[
+            ("secret", Value::from("api")),
+            ("prefix", Value::from("a\nb")),
+        ]);
         assert!(secret_ref_error(&value).unwrap().contains("line break"));
     }
 

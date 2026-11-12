@@ -184,6 +184,7 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            secret_headers: &[],
         };
         UuidPlugin.execute(params, &call).await
     }

@@ -35,7 +35,11 @@ fn runtime_env_secret_paths(runtime: Option<&Value>) -> Vec<(String, Value)> {
         for (var, value) in env {
             if has_secret_key(value) {
                 found.push((
-                    format!("runtime.plugins.{}.env.{}", plugin_name.py_str(), var.py_str()),
+                    format!(
+                        "runtime.plugins.{}.env.{}",
+                        plugin_name.py_str(),
+                        var.py_str()
+                    ),
                     value.clone(),
                 ));
             }
@@ -77,7 +81,10 @@ mod tests {
         let mut secret = Dict::new();
         secret.insert(Value::Str("secret".to_string()), Value::from("github"));
         let runtime = runtime_with_env("awk", "TOKEN", Value::Dict(secret));
-        assert_eq!(runtime_env_secret_errors(Some(&runtime)), Vec::<String>::new());
+        assert_eq!(
+            runtime_env_secret_errors(Some(&runtime)),
+            Vec::<String>::new()
+        );
     }
 
     #[test]
@@ -98,6 +105,9 @@ mod tests {
     #[test]
     fn an_ordinary_string_env_value_has_no_error() {
         let runtime = runtime_with_env("awk", "TOKEN", Value::from("plain"));
-        assert_eq!(runtime_env_secret_errors(Some(&runtime)), Vec::<String>::new());
+        assert_eq!(
+            runtime_env_secret_errors(Some(&runtime)),
+            Vec::<String>::new()
+        );
     }
 }

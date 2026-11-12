@@ -152,6 +152,7 @@ pub fn resolve_plugin<'a>(
 /// `Err` is the resolved plugin's own raised
 /// [`electricity_tools::ToolError`], unchanged. [`execute_tool`] is the
 /// one place this crate ever turns it into a [`VmError::Raised`].
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tool(
     plugin: &ResolvedPlugin<'_>,
     provider: &str,
@@ -160,6 +161,7 @@ pub async fn run_tool(
     timeout_seconds: u32,
     token: &CancellationToken,
     armed: bool,
+    secret_headers: &[String],
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
     let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
@@ -168,6 +170,7 @@ pub async fn run_tool(
         config: &config,
         token,
         armed,
+        secret_headers,
     };
     plugin.as_dyn().execute(params, &call).await
 }
@@ -423,6 +426,22 @@ fn reject_params_json_override(overlay: &Dict) -> Result<(), String> {
 /// already be normalized here), then replaces it with the truncation
 /// marker once that encoding is over [`electricity_redaction::
 /// RAW_META_MAX_BYTES`].
+/// `core/tool.py::_scrub_result` (issue #725): *result* with every
+/// secret this dispatch resolved replaced by its placeholder, wherever
+/// the plugin's own output echoes it.
+fn scrub_result(
+    secrets: &electricity_tools::secrets::SecretValues,
+    result: ToolResult,
+) -> ToolResult {
+    ToolResult {
+        value: secrets.scrub(&result.value),
+        raw: secrets.scrub(&result.raw),
+        stdout: result.stdout.as_deref().map(|s| secrets.scrub_str(s)),
+        stderr: result.stderr.as_deref().map(|s| secrets.scrub_str(s)),
+        ..result
+    }
+}
+
 fn capped_raw(raw: Value) -> Value {
     let redacted = electricity_redaction::redact(raw);
     let encoded = match electricity_json::dumps_default_str(
@@ -616,6 +635,127 @@ fn evaluate_cel_tool<R: ParamsCtx>(
     Ok(ToolResult::new(value, Value::Dict(raw)))
 }
 
+/// `core/tool.py::ToolRuntime._secret_headers` (issue #725): resolves
+/// *compiled*'s literal `params.headers` references actually present in
+/// *rendered*'s own `headers`, caching each resolved secret in *secrets*
+/// for the rest of this dispatch. `Ok(None)` when `headers` names no
+/// secret at all (the common case, including every non-`http` tool,
+/// whose `compiled` is always empty); `Err` when a header's rendered
+/// value looks like a reference but doesn't match a literal one at the
+/// same header name exactly -- reached only when `params_json` (the one
+/// thing that can still change `headers` after compile time) adds or
+/// overrides one, since the compiler's own placement check already
+/// guarantees every literal one is well-formed and exactly here.
+async fn resolve_secret_headers(
+    name: &str,
+    compiled: &IndexMap<String, electricity_bytecode::secrets::SecretRef>,
+    rendered: &Value,
+    runtime_config: &Value,
+    token: &CancellationToken,
+    secrets: &mut electricity_tools::secrets::SecretValues,
+) -> Result<Option<Dict>, electricity_tools::ToolError> {
+    let Some(Value::Dict(headers)) = rendered
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("headers".to_string())))
+    else {
+        return Ok(None);
+    };
+    let mut any = false;
+    for (key, value) in headers {
+        if !electricity_bytecode::secrets::has_secret_key(value) {
+            continue;
+        }
+        any = true;
+        let header_name = key.py_str();
+        let rendered_ref = electricity_bytecode::secrets::secret_ref(value);
+        if compiled.get(&header_name) != rendered_ref.as_ref() {
+            return Err(electricity_tools::ToolError::message(format!(
+                "Tool effect '{name}' params.headers.{header_name}: a {{secret: ...}} \
+                 value is honoured only when the document writes it in params.headers \
+                 itself."
+            )));
+        }
+    }
+    if !any {
+        return Ok(None);
+    }
+    let mut new_headers = headers.clone();
+    for (header_name, secret_ref) in compiled {
+        if !headers.contains_key(&Value::Str(header_name.clone())) {
+            continue;
+        }
+        let resolved = secrets
+            .resolve(&secret_ref.name, &secret_ref.prefix, runtime_config, token)
+            .await?;
+        new_headers.insert(Value::Str(header_name.clone()), Value::Str(resolved));
+    }
+    Ok(Some(new_headers))
+}
+
+/// `core/tool.py::ToolRuntime._runtime_with_env_secrets` (issue #725):
+/// *runtime_config* with every `{secret: ...}` value of this provider's
+/// own `runtime.plugins.<name>.env` resolved, caching each in *secrets*.
+/// `Ok(None)` (use *runtime_config* unchanged) whenever that `env` names
+/// no secret at all -- true for every provider that reads no host `env`
+/// override, and for one that does but whose `env` is plain strings.
+async fn resolve_env_secrets(
+    provider: &str,
+    runtime_config: &Value,
+    token: &CancellationToken,
+    secrets: &mut electricity_tools::secrets::SecretValues,
+) -> Result<Option<Value>, electricity_tools::ToolError> {
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
+    let Some(plugins) = runtime_config
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("plugins".to_string())))
+        .and_then(Value::as_dict)
+    else {
+        return Ok(None);
+    };
+    let Some(Value::Dict(cfg)) = plugins.get(&Value::Str(normalized.clone())) else {
+        return Ok(None);
+    };
+    let Some(Value::Dict(env)) = cfg.get(&Value::Str("env".to_string())) else {
+        return Ok(None);
+    };
+    for (var, value) in env {
+        if let Some(problem) = electricity_bytecode::secrets::secret_ref_error(value)
+            .filter(|_| electricity_bytecode::secrets::has_secret_key(value))
+        {
+            return Err(electricity_tools::ToolError::message(format!(
+                "runtime.plugins.{normalized}.env.{}: a secret reference {problem}.",
+                var.py_str()
+            )));
+        }
+    }
+    let refs: Vec<(Value, electricity_bytecode::secrets::SecretRef)> = env
+        .iter()
+        .filter_map(|(var, value)| {
+            electricity_bytecode::secrets::secret_ref(value).map(|r| (var.clone(), r))
+        })
+        .collect();
+    if refs.is_empty() {
+        return Ok(None);
+    }
+    let mut new_env = env.clone();
+    for (var, secret_ref) in refs {
+        let resolved = secrets
+            .resolve(&secret_ref.name, &secret_ref.prefix, runtime_config, token)
+            .await?;
+        new_env.insert(var, Value::Str(resolved));
+    }
+    let mut new_cfg = cfg.clone();
+    new_cfg.insert(Value::Str("env".to_string()), Value::Dict(new_env));
+    let mut new_plugins = plugins.clone();
+    new_plugins.insert(Value::Str(normalized), Value::Dict(new_cfg));
+    let mut new_runtime = runtime_config
+        .as_dict()
+        .cloned()
+        .expect("checked Some(Dict) above via plugins lookup");
+    new_runtime.insert(Value::Str("plugins".to_string()), Value::Dict(new_plugins));
+    Ok(Some(Value::Dict(new_runtime)))
+}
+
 /// A single `tool` effect's own owning entry point -- a close port of
 /// `core/tool.py::ToolRuntime.execute`. See this module's own doc
 /// comment for the full behavioural mapping and this milestone's
@@ -680,6 +820,13 @@ pub async fn execute_tool<R: ParamsCtx>(
         return Err(VmError::tool(denial));
     }
 
+    // The secrets this pass resolved (issue #725): resolved once, at
+    // dispatch, and scrubbed out of everything the plugin returns or
+    // raises -- one `SecretValues` for this whole effect dispatch, not
+    // per attempt, so a retried attempt reuses the same cached value
+    // rather than resolving (and risking a different answer from) a
+    // `command` secret twice.
+    let mut dispatch_secrets = electricity_tools::secrets::SecretValues::new();
     let mut next_delay_ms = base_backoff_ms;
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
@@ -755,6 +902,11 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `timeout_ms: {from: ...}` with no usable value is never
         // retried -- a retry reads the same state.
         let mut timeout_unresolved = false;
+        // `core/tool.py`'s own `secret_unresolved` (issue #725): a
+        // secret that failed to resolve, or a header that looks like a
+        // reference but isn't the document's own literal one, is never
+        // retried -- a retry would hit the same failure.
+        let mut secret_unresolved = false;
 
         match render_tool_call(
             name,
@@ -768,18 +920,105 @@ pub async fn execute_tool<R: ParamsCtx>(
             }
             Ok(rendered) => {
                 let rendered_value = Value::Dict(rendered);
-                set_leaf(
-                    store,
-                    &meta_node,
-                    "params_rendered",
-                    electricity_redaction::redact(rendered_value.clone()),
-                );
+                let is_http =
+                    electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http";
+
+                // Issue #725: an `http` effect's literal `params.headers`
+                // secret reference(s), resolved (and validated against
+                // whatever `params_json` may have changed about `headers`
+                // since compile time) before anything else this attempt
+                // does.
+                let secret_headers_result = if is_http && !tool.secret_headers.is_empty() {
+                    resolve_secret_headers(
+                        name,
+                        &tool.secret_headers,
+                        &rendered_value,
+                        run_ctx.runtime_config,
+                        token,
+                        &mut dispatch_secrets,
+                    )
+                    .await
+                } else {
+                    Ok(None)
+                };
+                if let Err(err) = &secret_headers_result {
+                    secret_unresolved = true;
+                    failure = Some(err.clone());
+                }
+
+                // The (lower-cased) header names a secret actually
+                // resolved this attempt -- `HttpPlugin`'s own redirect
+                // default and cross-origin header-stripping set
+                // (`ToolCall::secret_headers`).
+                let secret_header_names: Vec<String> = match &secret_headers_result {
+                    Ok(Some(new_headers)) => new_headers
+                        .keys()
+                        .map(|key| key.py_str().to_lowercase())
+                        .collect(),
+                    _ => Vec::new(),
+                };
+
+                // `plugin_params` in `core/tool.py`: the headers a resolved
+                // secret actually dispatches with; `rendered_value` itself
+                // (and therefore `meta.params_rendered`) keeps the
+                // placeholder-shaped reference, never the real value.
+                let mut dispatch_value = rendered_value.clone();
+                let mut params_rendered_record =
+                    electricity_redaction::redact(rendered_value.clone());
+                if let Ok(Some(new_headers)) = &secret_headers_result {
+                    if let Value::Dict(dict) = &mut dispatch_value {
+                        dict.insert(
+                            Value::Str("headers".to_string()),
+                            Value::Dict(new_headers.clone()),
+                        );
+                    }
+                    if let Value::Dict(record) = &mut params_rendered_record {
+                        if let Some(Value::Dict(headers_record)) =
+                            record.get_mut(&Value::Str("headers".to_string()))
+                        {
+                            for (header_name, secret_ref) in &tool.secret_headers {
+                                if new_headers.contains_key(&Value::Str(header_name.clone())) {
+                                    headers_record.insert(
+                                        Value::Str(header_name.clone()),
+                                        Value::Str(secret_ref.placeholder()),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                set_leaf(store, &meta_node, "params_rendered", params_rendered_record);
+
+                // Issue #725: this provider's own `runtime.plugins.<name>.
+                // env` secret reference(s), resolved the same way, for
+                // every provider (not just `http`) and every attempt (a
+                // retry may read a different host env override, though
+                // never a different *document*).
+                let env_secret_result = if failure.is_none() {
+                    resolve_env_secrets(
+                        &tool.provider,
+                        run_ctx.runtime_config,
+                        token,
+                        &mut dispatch_secrets,
+                    )
+                    .await
+                } else {
+                    Ok(None)
+                };
+                if let Err(err) = &env_secret_result {
+                    secret_unresolved = true;
+                    failure = Some(err.clone());
+                }
+                let effective_runtime_config: Value = match &env_secret_result {
+                    Ok(Some(modified)) => modified.clone(),
+                    _ => run_ctx.runtime_config.clone(),
+                };
 
                 // This attempt's own timeout budget, read after the params
                 // render and before the plugin is built, as in Python
                 // (issue #564).
                 let timeout_result =
-                    resolve_timeout_seconds(tool, name, ctx, run_ctx.runtime_config);
+                    resolve_timeout_seconds(tool, name, ctx, &effective_runtime_config);
                 timeout_unresolved = timeout_result.is_err();
                 let timeout_seconds = timeout_result.clone().unwrap_or_default();
 
@@ -789,15 +1028,23 @@ pub async fn execute_tool<R: ParamsCtx>(
                 // resolved here, outside the acquire `select!` below, so
                 // a per-plugin config error fails this attempt at once,
                 // never waiting for (and then releasing unused) a
-                // concurrency slot (PR #454).
-                let plugin_result = match timeout_result {
-                    Err(message) => Err(electricity_tools::ToolError {
-                        py_class: electricity_tools::PyExc::ValueError,
-                        message,
-                        cause: electricity_tools::ErrorCause::None,
-                    }),
-                    Ok(_) => {
-                        resolve_plugin(run_ctx.registry, &tool.provider, run_ctx.runtime_config)
+                // concurrency slot (PR #454). A secret that already
+                // failed to resolve above skips straight to that same
+                // failure, never reaching `resolve_plugin` at all.
+                let plugin_result = if let Some(err) = &failure {
+                    Err(err.clone())
+                } else {
+                    match timeout_result {
+                        Err(message) => Err(electricity_tools::ToolError {
+                            py_class: electricity_tools::PyExc::ValueError,
+                            message,
+                            cause: electricity_tools::ErrorCause::None,
+                        }),
+                        Ok(_) => resolve_plugin(
+                            run_ctx.registry,
+                            &tool.provider,
+                            &effective_runtime_config,
+                        ),
                     }
                 };
                 match plugin_result {
@@ -875,16 +1122,17 @@ pub async fn execute_tool<R: ParamsCtx>(
                                     biased;
                                     result = async {
                                         if is_cel {
-                                            evaluate_cel_tool(&rendered_value, ctx)
+                                            evaluate_cel_tool(&dispatch_value, ctx)
                                         } else {
                                             run_tool(
                                                 &resolved,
                                                 &tool.provider,
-                                                rendered_value,
-                                                run_ctx.runtime_config,
+                                                dispatch_value,
+                                                &effective_runtime_config,
                                                 timeout_seconds,
                                                 token,
                                                 run_ctx.armed,
+                                                &secret_header_names,
                                             ).await
                                         }
                                     } => Some(result),
@@ -941,6 +1189,15 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 match dispatch {
                                     Err(err) => failure = Some(err),
                                     Ok(result) => {
+                                        // Issue #725: every secret this dispatch
+                                        // resolved, replaced wherever the
+                                        // plugin's own result echoes it, before
+                                        // any of it is written to the store.
+                                        let result = if dispatch_secrets.is_empty() {
+                                            result
+                                        } else {
+                                            scrub_result(&dispatch_secrets, result)
+                                        };
                                         let value_for_expect = result.value.clone();
                                         set_leaf(store, &effect_node, "value", result.value);
                                         match result.stdout {
@@ -1253,6 +1510,19 @@ pub async fn execute_tool<R: ParamsCtx>(
         set_leaf(store, &meta_node, "completed_at", now_iso());
 
         if let Some(failure) = failure {
+            // Issue #725: a raised failure echoing a secret (its own
+            // text, or a server's error body `http_error_excerpt`
+            // folded in) never carries the value into `meta.error`
+            // either -- a new message text, so no cause/traceback
+            // carries it.
+            let failure = if dispatch_secrets.is_empty() {
+                failure
+            } else {
+                electricity_tools::ToolError {
+                    message: dispatch_secrets.scrub_str(&failure.message),
+                    ..failure
+                }
+            };
             set_leaf(
                 store,
                 &meta_node,
@@ -1269,6 +1539,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             // failure -- never for a failed `expect:`, which is always
             // retryable regardless of provider (`expect_failed` above).
             let retryable = !timeout_unresolved
+                && !secret_unresolved
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
                     http_status_for_retry,
@@ -1386,6 +1657,7 @@ mod tests {
             300,
             &token,
             false,
+            &[],
         )
         .await
         .unwrap_err();
@@ -1408,6 +1680,7 @@ mod tests {
             300,
             &token,
             false,
+            &[],
         )
         .await
         .unwrap_err();
@@ -1429,6 +1702,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
         }
     }
@@ -3918,6 +4192,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
         }
     }
@@ -3937,6 +4212,7 @@ mod tests {
                     expect: None,
                     description: None,
                     group: None,
+                    secret_headers: IndexMap::new(),
                     prompt_file: None,
                 }),
             )),

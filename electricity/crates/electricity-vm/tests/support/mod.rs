@@ -105,6 +105,7 @@ pub fn json_tool_leaf(path: EffectPath, name: &str, params: IndexMap<Value, Para
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
         }))),
         on_error: OnError::Fail,

@@ -779,6 +779,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
         }
     }

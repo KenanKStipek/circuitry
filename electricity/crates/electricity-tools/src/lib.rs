@@ -45,6 +45,7 @@ pub use electricity_bytecode::plugin_names;
 pub mod process;
 pub mod regex;
 pub mod registry;
+pub mod secrets;
 pub mod shell;
 pub mod subprocess_tool;
 #[cfg(feature = "test-tools")]
@@ -242,6 +243,15 @@ pub struct ToolCall<'a> {
     pub config: &'a Value,
     pub token: &'a CancellationToken,
     pub armed: bool,
+    /// Issue #725: the (lower-cased) names of an `http` effect's own
+    /// `headers` whose value `electricity_vm::exec::tool` resolved from a
+    /// `{secret: ...}` reference, before building this call -- empty for
+    /// every other provider, and for `http` when no header came from a
+    /// secret. `HttpPlugin::execute` reads this for two things only:
+    /// `params.redirects`' own default (`strip_auth` instead of `follow`
+    /// when non-empty), and which headers a followed cross-origin
+    /// redirect strips alongside `Authorization`.
+    pub secret_headers: &'a [String],
 }
 
 /// DESIGN.md §8.1's shared tool-plugin trait, mirroring `plugins/
@@ -323,6 +333,7 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            secret_headers: &[],
         }
     }
 

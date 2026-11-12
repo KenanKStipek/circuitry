@@ -201,6 +201,7 @@ mod tests {
             config,
             token,
             armed: false,
+            secret_headers: &[],
         }
     }
 

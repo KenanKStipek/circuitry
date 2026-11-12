@@ -897,6 +897,7 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            secret_headers: &[],
         };
         FsPlugin.execute(params, &call).await
     }

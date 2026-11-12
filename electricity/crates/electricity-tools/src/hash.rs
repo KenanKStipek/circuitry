@@ -232,6 +232,7 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            secret_headers: &[],
         };
         HashPlugin.execute(params, &call).await
     }

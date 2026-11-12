@@ -284,6 +284,7 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            secret_headers: &[],
         };
         tool.execute(params, &call).await
     }

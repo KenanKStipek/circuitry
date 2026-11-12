@@ -88,6 +88,7 @@ async fn golden_corpus_json_tool() {
         config: &none_config,
         token: &token,
         armed: false,
+        secret_headers: &[],
     };
     let mut failures = Vec::new();
     for (i, case) in corpus.json_tool_cases.into_iter().enumerate() {

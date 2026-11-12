@@ -268,6 +268,7 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            secret_headers: &[],
         }
     }
 

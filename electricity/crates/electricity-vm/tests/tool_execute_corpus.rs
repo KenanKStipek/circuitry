@@ -254,6 +254,7 @@ async fn golden_corpus_execute_tool() {
             expect,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
         };
         let op = Op {

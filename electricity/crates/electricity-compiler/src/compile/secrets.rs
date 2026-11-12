@@ -13,7 +13,9 @@
 //! runs is trusted (DESIGN.md §11), so that branch never fires.
 
 use crate::CompileError;
-use electricity_bytecode::secrets::{SecretRef, has_secret_key, is_secret_ref, secret_ref, secret_ref_error};
+use electricity_bytecode::secrets::{
+    SecretRef, has_secret_key, is_secret_ref, secret_ref, secret_ref_error,
+};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 
@@ -64,7 +66,13 @@ fn walk(
     match value {
         Value::Dict(dict) => {
             for (key, item) in dict {
-                walk(item, format!("{field}.{}", key_label(key)), allowed, label, found)?;
+                walk(
+                    item,
+                    format!("{field}.{}", key_label(key)),
+                    allowed,
+                    label,
+                    found,
+                )?;
             }
         }
         Value::List(items) => {
@@ -121,7 +129,10 @@ mod tests {
     #[test]
     fn a_well_placed_http_header_secret_is_collected() {
         let mut headers = VDict::new();
-        headers.insert(Value::Str("Authorization".to_string()), secret_value("github"));
+        headers.insert(
+            Value::Str("Authorization".to_string()),
+            secret_value("github"),
+        );
         let mut params = VDict::new();
         params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
         let found = check_param_secrets(&params, "call", "http", "prime.call").unwrap();
@@ -134,17 +145,26 @@ mod tests {
         let mut params = VDict::new();
         params.insert(Value::Str("body".to_string()), secret_value("github"));
         let err = check_param_secrets(&params, "call", "http", "prime.call").unwrap_err();
-        assert!(err.0.contains("is allowed only as a value in an http effect's params.headers"));
+        assert!(
+            err.0
+                .contains("is allowed only as a value in an http effect's params.headers")
+        );
     }
 
     #[test]
     fn a_secret_in_a_non_http_providers_params_is_a_compile_error() {
         let mut headers = VDict::new();
-        headers.insert(Value::Str("Authorization".to_string()), secret_value("github"));
+        headers.insert(
+            Value::Str("Authorization".to_string()),
+            secret_value("github"),
+        );
         let mut params = VDict::new();
         params.insert(Value::Str("headers".to_string()), Value::Dict(headers));
         let err = check_param_secrets(&params, "call", "shell", "prime.call").unwrap_err();
-        assert!(err.0.contains("is allowed only as a value in an http effect's params.headers"));
+        assert!(
+            err.0
+                .contains("is allowed only as a value in an http effect's params.headers")
+        );
     }
 
     #[test]

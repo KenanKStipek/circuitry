@@ -107,7 +107,20 @@ pub fn plugin_binary_override(cfg: &Value) -> Option<String> {
 }
 
 /// `plugins/_subprocess.py::plugin_env_override` -- the mapping-shape
-/// validation and its exact error text.
+/// validation and its exact error text. Issue #725: a well-formed
+/// `{secret: <name>, prefix?: <text>}` value is accepted here too,
+/// substituted with a placeholder text -- the one caller that never
+/// goes through the real dispatch's own resolution first
+/// (`electricity`'s own preflight, which only ever calls
+/// [`crate::ToolPlugin::check`] on the plugin this builds, never
+/// `execute`) has no secret to resolve it with anyway. The real
+/// dispatch (`electricity_vm::exec::tool`) always resolves every
+/// `runtime.plugins.<name>.env` secret into a plain string *before*
+/// calling [`crate::build_plugin`], so this function never actually
+/// sees an unresolved one on that path at all; a malformed one still
+/// fails here, the same backstop `electricity_config::
+/// runtime_env_secret_errors` already is for everywhere else that
+/// reads this same config.
 pub fn plugin_env_override(
     cfg: &Value,
     plugin_name: &str,
@@ -134,22 +147,25 @@ pub fn plugin_env_override(
     };
     let mut map = HashMap::with_capacity(dict.len());
     for (k, v) in dict {
-        // Issue #598: `cof run` resolves a `{secret: ...}` value when the
-        // tool dispatches; this build resolves none (the run is refused up
-        // front for a tool the document names; this catches the rest).
-        if matches!(v, Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())))
-        {
-            return Err(ToolError {
-                py_class: PyExc::RuntimeError,
-                message: format!(
-                    "electricity {} {}: a secret in runtime.plugins.{plugin_name}.env.{} is not \
-                     supported until a later milestone; use `cof run` instead",
-                    env!("CARGO_PKG_VERSION"),
-                    electricity_bytecode::PREVIEW_MARKER,
-                    k.py_str()
-                ),
-                cause: ErrorCause::None,
-            });
+        if electricity_bytecode::secrets::has_secret_key(v) {
+            match electricity_bytecode::secrets::secret_ref(v) {
+                Some(secret_ref) => {
+                    map.insert(k.py_str(), secret_ref.placeholder());
+                    continue;
+                }
+                None => {
+                    let problem = electricity_bytecode::secrets::secret_ref_error(v)
+                        .expect("has_secret_key true and secret_ref None implies malformed");
+                    return Err(ToolError {
+                        py_class: PyExc::ValueError,
+                        message: format!(
+                            "runtime.plugins.{plugin_name}.env.{}: a secret reference {problem}.",
+                            k.py_str()
+                        ),
+                        cause: ErrorCause::None,
+                    });
+                }
+            }
         }
         map.insert(k.py_str(), v.py_str());
     }
@@ -596,19 +612,36 @@ mod tests {
     }
 
     #[test]
-    fn plugin_env_override_refuses_a_secret_with_the_preview_marker() {
+    fn plugin_env_override_accepts_a_well_formed_secret_as_a_placeholder() {
+        // Issue #725: this function never resolves a secret (it has no
+        // `runtime.secrets` to resolve it from) -- a well-formed one is
+        // accepted as a placeholder, never an error; the real dispatch
+        // always resolves it into a plain string before this function
+        // ever sees the env map at all.
         let mut reference = DictType::new();
         reference.insert(Value::from("secret"), Value::from("api"));
         let mut env = DictType::new();
         env.insert(Value::from("TOKEN"), Value::Dict(reference));
         let mut cfg = DictType::new();
         cfg.insert(Value::from("env"), Value::Dict(env));
+        let overrides = plugin_env_override(&Value::Dict(cfg), "awk")
+            .unwrap()
+            .unwrap();
+        assert_eq!(overrides.get("TOKEN").unwrap(), "[secret:api]");
+    }
+
+    #[test]
+    fn plugin_env_override_still_refuses_a_malformed_secret() {
+        let mut malformed = DictType::new();
+        malformed.insert(Value::from("secret"), Value::from("api"));
+        malformed.insert(Value::from("extra"), Value::from("x"));
+        let mut env = DictType::new();
+        env.insert(Value::from("TOKEN"), Value::Dict(malformed));
+        let mut cfg = DictType::new();
+        cfg.insert(Value::from("env"), Value::Dict(env));
         let err = plugin_env_override(&Value::Dict(cfg), "awk").unwrap_err();
-        assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
-        assert!(
-            err.message
-                .contains("a secret in runtime.plugins.awk.env.TOKEN")
-        );
+        assert!(err.message.contains("runtime.plugins.awk.env.TOKEN"));
+        assert!(err.message.contains("unknown key"));
     }
 
     #[test]
