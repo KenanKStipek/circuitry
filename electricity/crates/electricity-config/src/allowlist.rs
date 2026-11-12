@@ -313,7 +313,7 @@ pub fn allowlists(config: &CircuitryConfig) -> Allowlists {
 /// override`), which electricity does not build yet (DESIGN.md's own
 /// `use: {ref: ...}` refusal) -- that half of the port has no
 /// observable effect on any document electricity runs today, kept so a
-/// later `use: ref:` lane finds the plumbing already in place.
+/// later `use: ref:` port finds the plumbing already in place.
 pub fn capability_allow(allow_capabilities: &[String]) -> Vec<String> {
     let mut sorted = allow_capabilities.to_vec();
     sorted.sort();

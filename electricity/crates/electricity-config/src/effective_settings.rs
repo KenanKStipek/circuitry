@@ -412,7 +412,7 @@ pub fn effective_settings(
 
 /// [`effective_settings`], with a loaded `--profile` layered in at
 /// Python's own `profile > orchestration > config > default`
-/// precedence (issue #495, lane R), and `--adapter <name>` (issue
+/// precedence (#495), and `--adapter <name>` (issue
 /// #728) ranked above all of it (`cli/effective_settings.py::
 /// resolve_effective_settings`'s own `cli` tier) -- there is still no
 /// `--model`/`--out` override flag of electricity's own, so `cli_
