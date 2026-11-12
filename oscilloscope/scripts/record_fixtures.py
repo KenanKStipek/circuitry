@@ -285,17 +285,27 @@ effects:
 """,
     ),
     Case(
-        # Issue #737: a loop inside a loop, each wide enough to run
-        # more than one pass at once, plus a plain step running
-        # alongside them -- the Tape's own Now area tree, exercised
-        # against a real recorded run rather than a hand-built one.
+        # Issue #737's own document: a loop inside a loop, each wide
+        # enough to run more than one pass at once, plus a plain step
+        # running alongside them -- the Tape's own Now area tree,
+        # exercised against a real recorded run rather than a
+        # hand-built one, five files wide so two passes finish
+        # (`iter_0`/`iter_1`) while a third of five is still queued.
         name="nested_tree_loops",
+        timeout_s=20.0,
         doc="""\
 interface:
   inputs:
     groups: {type: array, default: ["a", "b"]}
-    files: {type: array, default: [1, 2, 3]}
+    files: {type: array, default: [1, 2, 3, 4, 5]}
 effects:
+  - name: setup
+    type: tool
+    provider: shell
+    params:
+      command: sleep
+      args: ["1"]
+      allowed_commands: ["sleep"]
   - name: work
     type: dynamic
     flow: tree
@@ -324,21 +334,21 @@ effects:
                     provider: shell
                     params:
                       command: sleep
-                      args: ["2"]
+                      args: ["4"]
                       allowed_commands: ["sleep"]
                   - name: check
                     type: tool
                     provider: shell
                     params:
                       command: sleep
-                      args: ["1"]
+                      args: ["2"]
                       allowed_commands: ["sleep"]
       - name: watcher
         type: tool
         provider: shell
         params:
           command: sleep
-          args: ["7"]
+          args: ["40"]
           allowed_commands: ["sleep"]
   - name: done
     type: tool
@@ -1183,6 +1193,21 @@ def main() -> int:
         for case in AGENT_LIVE_CASES:
             record_one(case, cof_bin, engine="cof")
         return check_no_leaked_paths()
+
+    # `--case NAME`: re-record one named `CASES` entry only, leaving
+    # every other committed fixture untouched -- the same reasoning
+    # as `--parity-only`'s own, for a single case rather than a whole
+    # list.
+    for i, arg in enumerate(sys.argv):
+        if arg == "--case" and i + 1 < len(sys.argv):
+            wanted = sys.argv[i + 1]
+            matches = [c for c in CASES if c.name == wanted]
+            if not matches:
+                print(f"record_fixtures.py: no case named {wanted!r}", file=sys.stderr)
+                return 1
+            for case in matches:
+                record_one(case, cof_bin, engine="cof")
+            return check_no_leaked_paths()
 
     # `--parity-only`: re-record just PARITY_CASES (issue #431's lane
     # E2), leaving every other committed fixture untouched -- each

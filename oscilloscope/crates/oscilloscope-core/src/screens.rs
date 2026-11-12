@@ -1521,9 +1521,20 @@ fn tape_tool_what(row: &Row, node: Option<&NodeMeta>, plan: &PlanTree) -> String
                 .and_then(|m| m.entries.first())
                 .and_then(|e| e.tool_command.clone())
         });
+    // A running row with no duration at all -- neither the live
+    // state nor `--events` has a start for it yet (issue #737: a
+    // `LikelyRunning` row the status inference predicts ahead of
+    // the engine actually writing its own node) -- never shows a
+    // bare provider word with nothing beside it; it reads `starting`
+    // until a real start time arrives.
+    let running = matches!(
+        row.status.kind,
+        StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+    );
     match (row.duration_s, command) {
         (Some(d), Some(cmd)) => format!("{} · {cmd}", crate::format::format_duration(d)),
         (Some(d), None) => crate::format::format_duration(d),
+        (None, _) if running => "starting".to_string(),
         (None, Some(cmd)) => cmd,
         (None, None) => String::new(),
     }
@@ -2767,19 +2778,32 @@ fn tape_loop_not_yet_started(row: &Row, flat: &BTreeMap<String, NodeMeta>) -> bo
 /// own publish, or the final merge for the last one -- so `osi`'s own
 /// `--events`-driven live state can read a stale `done` for one or
 /// more publish cycles after a pass actually finished. Counted here
-/// instead straight from every *leaf* row under each of this loop's
-/// own passes (grouped by pass index, at any depth -- a nested
-/// loop's own passes count once each toward their enclosing loop,
-/// never once per leaf under them): a pass is busy with any leaf
-/// still running under it, done once every leaf under it has
-/// finished one way or another and none is still pending -- `(done,
-/// busy)`, busy never a count of steps.
+/// instead straight from every row under each of this loop's own
+/// passes (grouped by pass index, at any depth -- a nested loop's
+/// own passes count once each toward their enclosing loop, never
+/// once per leaf under them), leaf or container alike: a pass is
+/// busy with any row still running under it (a container with no
+/// leaf of its own yet included -- an `if` deciding its branch, a
+/// nested loop before its own first pass has dispatched), done once
+/// every row under it has finished one way or another and none is
+/// still pending -- `(done, busy)`, busy never a count of steps. A
+/// pass whose only child is a container that finished without ever
+/// starting a leaf of its own (an `if` that took neither branch)
+/// still counts as done this way, since the container's own row is
+/// counted too, not only leaves.
 fn tape_loop_pass_counts(rows: &[Row], loop_path: &str) -> (u64, u64) {
     let prefix = format!("{loop_path}.iter_");
     // (any_running, all_terminal) per pass index.
     let mut per_pass: BTreeMap<u64, (bool, bool)> = BTreeMap::new();
     for r in rows {
-        if !r.kind.is_leaf() {
+        if matches!(
+            r.kind,
+            RowKind::Pass
+                | RowKind::Root
+                | RowKind::QuickSteps
+                | RowKind::Report
+                | RowKind::Unknown
+        ) {
             continue;
         }
         let Some(rest) = r.path.strip_prefix(prefix.as_str()) else {
@@ -2809,8 +2833,8 @@ fn tape_loop_pass_counts(rows: &[Row], loop_path: &str) -> (u64, u64) {
     (done, busy)
 }
 
-/// The Now area's own tree (issue #737, the layout decided on the
-/// issue): every running leaf and every running loop, grouped under
+/// The Now area's own tree (issue #737): every running leaf and
+/// every running loop, grouped under
 /// its own nearest running Loop ancestor (`None` for a top-level
 /// one), each group in start order, each loop followed immediately
 /// by its own children, indented one level deeper. A plain container
@@ -3023,13 +3047,26 @@ pub fn build_tape(
             row.status.kind,
             StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
         );
-        let is_active_leaf = row.kind.is_leaf() && running_like;
+        // `RowKind::Use` writes its own state node like a leaf does
+        // (`is_leaf()`'s own reason to include it), but it is a
+        // container like `dynamic`/`try`/`finally` for this grouping:
+        // once its own loaded sub-document starts a child of its
+        // own, that child is the running row, never `use` as well.
+        let is_container_kind =
+            row.kind != RowKind::Loop && (!row.kind.is_leaf() || row.kind == RowKind::Use);
+        let is_active_leaf = running_like && row.kind.is_leaf() && row.kind != RowKind::Use;
         let is_active_loop =
             row.kind == RowKind::Loop && running_like && !tape_loop_not_yet_started(row, flat);
-        let is_superseded_container = running_like
-            && row.kind != RowKind::Loop
-            && !row.kind.is_leaf()
-            && has_started_descendant(&row.path);
+        let is_superseded_container =
+            running_like && is_container_kind && has_started_descendant(&row.path);
+        // A running container with nothing yet started under it
+        // (its own node written, but no child of its own observed
+        // yet) is itself the deepest running node on its path, so it
+        // is the running row -- under the Now band, never among the
+        // finished rows above it (issue #737: "a running dynamic
+        // sorts in among the finished rows").
+        let is_active_container =
+            running_like && is_container_kind && !has_started_descendant(&row.path);
         if is_active_leaf {
             bucket2.push(row);
         } else if is_active_loop {
@@ -3046,6 +3083,8 @@ pub fn build_tape(
             // draw one either (only ever the design's own `✓`/`✗`
             // once it, too, has finished).
             continue;
+        } else if is_active_container {
+            bucket2.push(row);
         } else if matches!(row.status.kind, StatusKind::Pending | StatusKind::Skipped)
             || tape_loop_not_yet_started(row, flat)
         {
@@ -3136,14 +3175,24 @@ pub fn build_tape(
     for row in &bucket1 {
         // A loop row's own `N done` reads off `row.loop_progress.done`
         // inside `tape_row_content` -- patched here first with the
-        // real pass-status count (`tape_loop_pass_counts`), never the
-        // engine's own delayed `progress.done` (issue #737).
+        // greater of the engine's own `progress.done` and the real
+        // pass-status count (`tape_loop_pass_counts`): the engine's
+        // figure can lag a pass behind while the loop is still
+        // running (issue #737), but the counted figure can itself
+        // undercount a pass whose only child finished without ever
+        // starting a row of its own kind this function tracks (a
+        // nested loop's own last pass merging away its rows) -- once
+        // the loop itself is finished, the engine's own total is
+        // always the real one whenever counting falls short of it.
         let patched_loop;
         let content_row: &Row = if row.kind == RowKind::Loop {
             if let Some(lp) = row.loop_progress {
                 let (done, _busy) = tape_loop_pass_counts(rows, &row.path);
                 patched_loop = Row {
-                    loop_progress: Some(crate::render::LoopProgress { done, ..lp }),
+                    loop_progress: Some(crate::render::LoopProgress {
+                        done: done.max(lp.done),
+                        ..lp
+                    }),
                     ..(*row).clone()
                 };
                 &patched_loop
@@ -5105,6 +5154,31 @@ mod tests {
         );
     }
 
+    /// Issue #737: a `LikelyRunning` row with no duration at all --
+    /// no node of its own yet, and no `--events` start either --
+    /// reads `starting`, never a bare provider word with nothing
+    /// beside it.
+    #[test]
+    fn tape_tool_what_reads_starting_with_no_duration_at_all() {
+        let plan = PlanTree::empty();
+        let row = Row {
+            path: "prime.check".to_string(),
+            depth: 1,
+            label: "check".to_string(),
+            kind: RowKind::Tool,
+            status: RowStatus {
+                kind: StatusKind::LikelyRunning,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        assert_eq!(tape_tool_what(&row, None, &plan), "starting");
+    }
+
     /// Issue #704 rule 4's own Meta section: `meta.error` is already
     /// its own Error section, never repeated here under its own raw
     /// key.
@@ -5536,7 +5610,7 @@ mod tests {
     }
 
     /// Issue #737: `tape_loop_pass_counts` reads a pass's own busy/
-    /// done straight off its own leaves' already-derived status,
+    /// done straight off its own rows' already-derived status,
     /// never off the engine's own `meta.progress.done` (which a
     /// pass's own node here doesn't even carry a figure for at all --
     /// only `loop_progress` does, and this function never reads
@@ -5585,6 +5659,32 @@ mod tests {
         // Pass 1: one leaf still running -- busy, never counted done
         // just because its first leaf already finished. Pass 2: not
         // started at all -- neither.
+        assert_eq!(tape_loop_pass_counts(&rows, "prime.drafts"), (1, 1));
+    }
+
+    /// Issue #737: a pass whose only child is a container that
+    /// finished without ever starting a leaf of its own (an `if`
+    /// that took neither branch) still counts as done, since the
+    /// container's own row -- not only a leaf's -- counts toward the
+    /// pass's status.
+    #[test]
+    fn tape_loop_pass_counts_counts_a_pass_whose_only_child_is_a_finished_container() {
+        let rows = vec![
+            tape_row(
+                "prime.drafts.iter_0.gate",
+                2,
+                "iter_0 › gate",
+                RowKind::If,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.gate",
+                2,
+                "iter_1 › gate",
+                RowKind::If,
+                StatusKind::Running,
+            ),
+        ];
         assert_eq!(tape_loop_pass_counts(&rows, "prime.drafts"), (1, 1));
     }
 
@@ -5687,7 +5787,7 @@ mod tests {
         let _ = (a, b);
     }
 
-    /// Issue #737 (W6): a running row with no `created_at` of its
+    /// Issue #737: a running row with no `created_at` of its
     /// own yet (the live state hasn't caught up) still shows a real
     /// start time, read from `--events`' own `start` line for that
     /// path.

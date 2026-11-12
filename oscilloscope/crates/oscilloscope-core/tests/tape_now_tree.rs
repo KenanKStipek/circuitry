@@ -1,8 +1,9 @@
 //! The Tape's Now area with nested parallel loops (issue #737), over
-//! `tests/fixtures/nested_tree_loops`: a real recorded run of a tree
-//! loop (`groups`, 2 wide) each pass running another tree loop
-//! (`files`, 2 wide) of a `dynamic` (`build`: `compile` then `check`),
-//! beside an unrelated `watcher` tool.
+//! `tests/fixtures/nested_tree_loops`: a real recorded run of issue
+//! #737's own document (a `setup` step, then a tree loop `groups`, 2
+//! wide, each pass running another tree loop `files`, 2 wide, 5
+//! passes, of a `dynamic` `build` -- `compile` then `check` -- beside
+//! an unrelated `watcher` tool).
 
 use std::path::{Path, PathBuf};
 
@@ -26,8 +27,10 @@ fn load_plan() -> PlanTree {
 
 /// The snapshot at `index` in `snapshots.jsonl`, plus the `now` the
 /// moment it was recorded at (its run's own start plus its own `t`),
-/// so a replay reads exactly as live as the real run did.
-fn load_snapshot(index: usize) -> (Value, String) {
+/// so a replay reads exactly as live as the real run did. `None`
+/// before the root node's own `created_at` has landed at all (the
+/// run's very first snapshot or two).
+fn load_snapshot(index: usize) -> Option<(Value, String)> {
     let dir = fixtures_dir().join("nested_tree_loops");
     let text = std::fs::read_to_string(dir.join("snapshots.jsonl")).expect("snapshots.jsonl");
     let line = text
@@ -37,15 +40,14 @@ fn load_snapshot(index: usize) -> (Value, String) {
     let wrapper: Value = serde_json::from_str(line).expect("valid JSON line");
     let state = wrapper["state"].clone();
     let t = wrapper["t"].as_f64().expect("snapshot has its own t");
-    let run_start = chrono::DateTime::parse_from_rfc3339(
-        state["prime"]["meta"]["created_at"].as_str().unwrap(),
-    )
-    .expect("run_start is RFC-3339");
+    let created_at = state["prime"]["meta"]["created_at"].as_str()?;
+    let run_start =
+        chrono::DateTime::parse_from_rfc3339(created_at).expect("run_start is RFC-3339");
     let now = run_start + chrono::Duration::milliseconds((t * 1000.0).round() as i64);
-    (
+    Some((
         state,
         now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-    )
+    ))
 }
 
 fn load_events_up_to(now: &str) -> Vec<Value> {
@@ -67,7 +69,8 @@ fn load_events_up_to(now: &str) -> Vec<Value> {
 
 fn build_tape_at(index: usize, selected: Option<&str>) -> oscilloscope_core::screens::TapeScreen {
     let plan = load_plan();
-    let (state, now) = load_snapshot(index);
+    let (state, now) =
+        load_snapshot(index).unwrap_or_else(|| panic!("snapshot {index} has no created_at yet"));
     let mut model = RunModel::new();
     for raw in load_events_up_to(&now) {
         if let Some(event) = oscilloscope_core::observe::parse_event(&raw) {
@@ -119,12 +122,33 @@ fn tree_rows(tape: &oscilloscope_core::screens::TapeScreen) -> Vec<&TapeRow> {
     out
 }
 
+/// Nothing marked running (or ahead of it) ever sits above the Now
+/// band -- the earlier bug this generalizes, "a running dynamic sorts
+/// in among the finished rows" (issue #737).
+fn assert_nothing_running_above_the_band(tape: &oscilloscope_core::screens::TapeScreen) {
+    let mut above_band = true;
+    for item in &tape.items {
+        match item {
+            TapeItem::NowBand { .. } => above_band = false,
+            TapeItem::Row(r) if above_band => assert!(
+                !matches!(
+                    r.status.kind,
+                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                ),
+                "{} reads running above the Now band",
+                r.label
+            ),
+            _ => {}
+        }
+    }
+}
+
 #[test]
 fn the_now_area_is_a_tree_with_both_loops_busy_and_the_watcher_top_level() {
-    // Early in the run: every pass's own first step (`compile`) is
-    // running, nothing has finished yet, and a third pass of each
-    // files loop still waits for a slot.
-    let tape = build_tape_at(1, None);
+    // Early in the run (index 3): every pass's own first step
+    // (`compile`) is running, nothing has finished yet, and three of
+    // each files loop's own five passes still wait for a slot.
+    let tape = build_tape_at(3, None);
     let tree = tree_rows(&tape);
 
     // No container row (a loop pass, `build`, the tree-flow `work`)
@@ -167,10 +191,11 @@ fn the_now_area_is_a_tree_with_both_loops_busy_and_the_watcher_top_level() {
         files.iter().map(|r| &r.label).collect::<Vec<_>>()
     );
     assert!(files.iter().all(|r| r.indent == 1));
+    // 5 passes, 2 wide: two running, none done yet -- 3 left queued.
     assert!(
         files
             .iter()
-            .all(|r| r.what == "2 of 2 Slots Busy · 1 Pass Queued"),
+            .all(|r| r.what == "2 of 2 Slots Busy \u{b7} 3 Passes Queued"),
         "{:?}",
         files
             .iter()
@@ -183,7 +208,9 @@ fn the_now_area_is_a_tree_with_both_loops_busy_and_the_watcher_top_level() {
     let labels: std::collections::BTreeSet<&str> = files.iter().map(|r| r.label.as_str()).collect();
     assert_eq!(
         labels,
-        ["iter_0 › files", "iter_1 › files"].into_iter().collect()
+        ["iter_0 \u{203a} files", "iter_1 \u{203a} files"]
+            .into_iter()
+            .collect()
     );
 
     // Every `compile` leaf is running, two levels deep under its own
@@ -230,53 +257,64 @@ fn the_now_area_is_a_tree_with_both_loops_busy_and_the_watcher_top_level() {
     let dup: Vec<_> = seen.iter().filter(|(_, n)| **n > 1).collect();
     assert!(dup.is_empty(), "{dup:?}");
 
-    // Nothing running sits above the Now band.
-    let mut above_band = true;
-    for item in &tape.items {
-        match item {
-            TapeItem::NowBand { .. } => above_band = false,
-            TapeItem::Row(r) if above_band => assert!(
-                !matches!(
-                    r.status.kind,
-                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
-                ),
-                "{} reads running above the Now band",
-                r.label
-            ),
-            _ => {}
-        }
-    }
+    assert_nothing_running_above_the_band(&tape);
 }
 
 #[test]
-fn a_files_loop_that_started_its_third_pass_reads_the_first_two_as_busy_then_done() {
-    // Between round 1 (two passes dispatched at once) and round 2
-    // (`iter_2`, waiting for a slot): both of round 1's own passes
-    // are busy -- neither is a row of its own; by the next instant
-    // `iter_2` has started (its own `compile` is a running tree row,
-    // two levels under its own files loop) and nothing is queued any
-    // more (`2 of 2 Slots Busy`, no `Pass Queued` left at all).
-    let early = build_tape_at(1, None);
+fn queued_passes_drop_from_three_to_one_as_the_first_two_finish() {
+    // Index 3: round 1 (two passes dispatched at once, three still
+    // queued of five). Index 6: round 1's own two passes have both
+    // finished, round 2 (`iter_2`/`iter_3`) has started, and only
+    // `iter_4` (the fifth, odd one out) is left queued.
+    let early = build_tape_at(3, None);
     let early_files = tree_rows(&early)
         .into_iter()
-        .find(|r| r.kind == RowKind::Loop && r.label == "iter_0 › files")
-        .expect("iter_0 › files is running")
+        .find(|r| r.kind == RowKind::Loop && r.label == "iter_0 \u{203a} files")
+        .expect("iter_0 \u{203a} files is running")
         .what
         .clone();
-    assert_eq!(early_files, "2 of 2 Slots Busy · 1 Pass Queued");
+    assert_eq!(early_files, "2 of 2 Slots Busy \u{b7} 3 Passes Queued");
 
-    let later = build_tape_at(4, None);
+    let later = build_tape_at(6, None);
     let later_tree = tree_rows(&later);
     let later_files = later_tree
         .iter()
-        .find(|r| r.kind == RowKind::Loop && r.label == "iter_0 › files")
-        .expect("iter_0 › files is still running");
-    assert_eq!(later_files.what, "1 of 2 Slots Busy");
+        .find(|r| r.kind == RowKind::Loop && r.label == "iter_0 \u{203a} files")
+        .expect("iter_0 \u{203a} files is still running");
+    assert_eq!(later_files.what, "2 of 2 Slots Busy \u{b7} 1 Pass Queued");
     assert!(
-        later_tree
-            .iter()
-            .any(|r| r.kind == RowKind::Tool && r.label.ends_with("iter_2 › build › compile")),
+        later_tree.iter().any(|r| r.kind == RowKind::Tool
+            && r.label.ends_with("iter_2 \u{203a} build \u{203a} compile")),
         "{:?}",
         later_tree.iter().map(|r| &r.label).collect::<Vec<_>>()
     );
+    assert_nothing_running_above_the_band(&later);
+}
+
+#[test]
+fn the_last_odd_pass_leaves_one_slot_idle_with_nothing_queued() {
+    // Index 10: rounds 1 and 2 (four of five passes) have both
+    // finished; only `iter_4`, the fifth and last pass, is running --
+    // one of the loop's own two slots idle, nothing left to queue.
+    let tape = build_tape_at(10, None);
+    let tree = tree_rows(&tape);
+    let files: Vec<&&TapeRow> = tree
+        .iter()
+        .filter(|r| r.kind == RowKind::Loop && r.label.ends_with("files"))
+        .collect();
+    assert_eq!(
+        files.len(),
+        2,
+        "{:?}",
+        files.iter().map(|r| &r.label).collect::<Vec<_>>()
+    );
+    assert!(
+        files.iter().all(|r| r.what == "1 of 2 Slots Busy"),
+        "{:?}",
+        files
+            .iter()
+            .map(|r| (&r.label, &r.what))
+            .collect::<Vec<_>>()
+    );
+    assert_nothing_running_above_the_band(&tape);
 }

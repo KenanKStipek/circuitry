@@ -2942,10 +2942,10 @@ Burst, only the one unused row the panel's own height leaves after
 Next Signal. The design's own frames never show two loops running
 at once, nested or side by side, so the Now area's own tree for that
 case (issue #737) is read off the frames' own single-loop form
-extended, not stated outright: a running container (a loop or a
-leaf) that has running work under it appears once, its running
-children indented two cells per level; a container with nothing of
-its own (a `dynamic`, `use`, `try`/`finally`, a loop pass) is never
+extended, not stated outright: a running leaf appears as its own
+row; a running loop appears once, as its own row, with its running
+children indented two cells per level under it; a container with
+nothing of its own (a `dynamic`, `use`, `try`/`finally`, a loop pass) is never
 a line of its own, only a breadcrumb segment on whichever line ends
 up where it would have sat; a running loop's own line carries its
 counts (`busy of slots Slots Busy`, `· N Pass(es) Queued` past zero)

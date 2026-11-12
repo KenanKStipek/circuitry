@@ -1,8 +1,15 @@
 interface:
   inputs:
     groups: {type: array, default: ["a", "b"]}
-    files: {type: array, default: [1, 2, 3]}
+    files: {type: array, default: [1, 2, 3, 4, 5]}
 effects:
+  - name: setup
+    type: tool
+    provider: shell
+    params:
+      command: sleep
+      args: ["1"]
+      allowed_commands: ["sleep"]
   - name: work
     type: dynamic
     flow: tree
@@ -31,21 +38,21 @@ effects:
                     provider: shell
                     params:
                       command: sleep
-                      args: ["2"]
+                      args: ["4"]
                       allowed_commands: ["sleep"]
                   - name: check
                     type: tool
                     provider: shell
                     params:
                       command: sleep
-                      args: ["1"]
+                      args: ["2"]
                       allowed_commands: ["sleep"]
       - name: watcher
         type: tool
         provider: shell
         params:
           command: sleep
-          args: ["7"]
+          args: ["40"]
           allowed_commands: ["sleep"]
   - name: done
     type: tool
