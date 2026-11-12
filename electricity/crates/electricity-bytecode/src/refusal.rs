@@ -94,6 +94,10 @@ const TOOL_CEL_PROVIDERS: &[&str] = &["cel"];
 /// on the same subprocess machinery as [`TOOLS_PROCESS_PROVIDERS`] but
 /// with its own flag, since it was added after that set (#719).
 const TOOL_GH_PROVIDERS: &[&str] = &["gh"];
+/// The `systemone` provider (#724): `POST <base_url>/v1/systemone`,
+/// built on the shared HTTP client ([`TOOL_HTTP_PROVIDERS`]'s own
+/// stack) but with its own flag, since it was added after that set.
+const TOOL_SYSTEMONE_PROVIDERS: &[&str] = &["systemone"];
 
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -238,6 +242,8 @@ pub struct Supported<'a> {
     pub tool_cel: bool,
     /// Issue #722: `gh` ([`TOOL_GH_PROVIDERS`]).
     pub tool_gh: bool,
+    /// Issue #724: `systemone` ([`TOOL_SYSTEMONE_PROVIDERS`]).
+    pub tool_systemone: bool,
     /// Lane K2 (#448, #516): scoring and routing are wired into
     /// `prompt` from this lane on -- read nowhere by the walker itself
     /// (nothing in a compiled [`Program`] says "this effect is
@@ -290,6 +296,7 @@ impl<'a> Supported<'a> {
             tool_validate_yaml: false,
             tool_cel: false,
             tool_gh: false,
+            tool_systemone: false,
             complexity: false,
             decomposition: false,
             providers,
@@ -351,6 +358,8 @@ impl<'a> Supported<'a> {
             tool_cel: true,
             // issue #722
             tool_gh: true,
+            // issue #724
+            tool_systemone: true,
             // lane K2 (#448, #516)
             complexity: true,
             // lane L2b (#448, #522)
@@ -375,6 +384,7 @@ impl<'a> Supported<'a> {
             || (self.tool_validate_yaml && TOOL_VALIDATE_YAML_PROVIDERS.contains(&name))
             || (self.tool_cel && TOOL_CEL_PROVIDERS.contains(&name))
             || (self.tool_gh && TOOL_GH_PROVIDERS.contains(&name))
+            || (self.tool_systemone && TOOL_SYSTEMONE_PROVIDERS.contains(&name))
     }
 }
 
@@ -1010,10 +1020,10 @@ mod tests {
     }
 
     #[test]
-    fn systemone_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
-        // `systemone` (issue #580) is a cof-only plugin until it is ported:
-        // it is in `PLUGIN_NAMES` (so it is not mistaken for an unknown
-        // name) and no build supports it.
+    fn systemone_is_a_known_cof_plugin_and_is_refused_with_the_preview_marker_while_off() {
+        // `systemone` (issue #724) is in `PLUGIN_NAMES` (so it is not
+        // mistaken for an unknown name) and still refused under the exact
+        // M0 capability set.
         assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"systemone"));
         let tool = leaf_op(
             EffectPath::root().push_name("decide"),
@@ -1031,6 +1041,23 @@ mod tests {
         let text = crate::refusal_text::format_refusal(&refusal);
         assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
         assert!(text.contains("systemone"));
+    }
+
+    #[test]
+    fn a_systemone_provider_is_accepted_once_tool_systemone_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("decide"),
+            LeafKind::Tool(tool_op_with_provider(
+                "systemone",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_systemone: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]

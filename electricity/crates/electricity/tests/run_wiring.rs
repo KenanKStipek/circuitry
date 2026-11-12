@@ -947,9 +947,18 @@ async fn a_disabled_tool_naming_an_unbuildable_plugin_is_refused_with_the_marker
 /// Issue #580: `systemone` is a cof-only plugin, so a document naming it is
 /// refused up front with the standard preview message and writes no state.
 #[tokio::test]
-async fn a_tool_naming_the_cof_only_systemone_plugin_is_refused_with_the_marker() {
-    let dir = temp_dir("systemone-cof-only");
-    let config = write(&dir, "config.json", "{}");
+async fn a_tool_naming_the_systemone_plugin_runs_for_real() {
+    // Issue #724: `systemone` is runnable now. No mock HTTP server is
+    // wired into this end-to-end harness, so this dispatches for real
+    // against a loopback port nothing listens on -- an ordinary run
+    // failure with state (the connection-refused `RuntimeError`), not
+    // the preview refusal `systemone` used to get.
+    let dir = temp_dir("systemone-runs");
+    let config = write(
+        &dir,
+        "config.json",
+        "{\"runtime\": {\"plugins\": {\"systemone\": {\"base_url\": \"http://127.0.0.1:1\"}}}}",
+    );
     let doc = write(
         &dir,
         "doc.yml",
@@ -961,13 +970,12 @@ async fn a_tool_naming_the_cof_only_systemone_plugin_is_refused_with_the_marker(
 
     assert!(!result.ok);
     assert!(
-        result.state.is_none(),
-        "a refusal must write no state at all"
+        result.state.is_some(),
+        "an ordinary run failure still writes state"
     );
     let error = result.error.unwrap();
-    assert!(error.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(error.contains("systemone"));
-    assert!(error.contains("use `cof run` instead"));
+    assert!(!error.contains(electricity_bytecode::PREVIEW_MARKER));
+    assert!(error.contains("systemone server not reachable at"));
 }
 
 /// Issue #723: `cel` is runnable now, so this case now exercises the
