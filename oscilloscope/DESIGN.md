@@ -2917,14 +2917,27 @@ blank padding instead, the same at every width; rows read in plan
 order, not real finish order, once a run has ended (finish order would scramble a loop's
 own passes by whichever of two near-simultaneous steps the engine
 happened to write first); and prompt previews are off for the
-Starting, Ended and Failed states. The Help overlay's own §3.7 glyph/
-line/colour Key and §4's own movement aliases, `/` and `e` no longer
-both fit the fixed 72×18 overlay together (issue #738, also settling
-#684's own frame-locked blank rows): `?` opens on the Key page
-(`crate::keys::HelpPage::Key`, the default), and `←→` reaches the
-Keys page; a screen whose own Keys and Key do both fit one page
-together (Signal, Flow, Store today) draws the same combined content
-on either page instead, and ←→ there is a no-op. For the Signal: a
+Starting, Ended and Failed states. The Help overlay (§3.7's glyph/
+line/colour Key, §4's own keyboard shortcuts) sizes its own popup to
+its content, capped at the screen, and splits onto as many pages as
+a small terminal needs (issue #738, also settling #684's own
+frame-locked blank rows and a regression a first fix pass left: below
+74 columns the close row -- the only hint a second page exists -- was
+cut from a fixed 18-row overlay). `?` always opens on the Key page
+(page `0`, `App::help_page`'s own default); `←→` moves a free-running
+counter the draw side wraps into whatever range the current page
+count actually is, so pressing it keeps working the same way however
+many pages that turns out to be. The close row names the other page
+when there are exactly two (today's common case: a screen's own Keys
+rows and Key rows each fit one page on their own, but not combined),
+or reads `page N of M` once either needed more than one page to
+itself. When both groups together fit one page (Tape at 120 columns
+and up, every other screen from 80 up), they merge onto it and the
+title carries no page suffix at all. A row whose own meaning
+overflows its column -- not just an overlay narrower than both
+columns together -- gets a full-width line of its own, and so does
+the other pair of that row, so the right column never shifts and
+nothing is cut at the border. For the Signal: a
 decision row's own trailing suffix (`·
 drafts ×2 · 261 t`) names the very next top-level row's own progress
 when that row is an already-active loop -- the design's own prose
@@ -2987,9 +3000,11 @@ each screen's own Key page actually lists is read off the frames and
 the renderers, not stated in prose anywhere else, and every symbol is
 drawn in the real style the screen draws it in, never a generic muted
 placeholder. At 120x30 the Tape's own Help has the room to merge every
-key and its Key onto one page; narrower terminals keep paging between
-them with `←→`, and `?` always reopens on the default page regardless
-of where a previous Help left off.
+key and its Key onto one page; every screen's own Help sizes to its
+content that way, capped at the screen, and otherwise pages between
+its own Keys and Key (and, below either group's own room on its own,
+onto still more pages) with `←→`. `?` always reopens on the default
+page regardless of where a previous Help left off.
 
 Every screen's Key starts from §3.7's shared glyphs it actually draws
 (never `❯`, the Select/All/Store screens' own row cursor -- every
@@ -3006,11 +3021,12 @@ columns' own partial cells (`▁`–`█`, `▀`/`▔`), the released tokens'
 own deviation colours, the fixed scale, `■` Run End and `›` in a
 step's own name; the Flow's own station glyphs, ghost lanes' own `·`
 and off-screen `◂`/`▸` markers, folded lanes' own `+N`, the token bar
-at its real unit, `▾` Following and the rail's own `━` position; the
+at its real unit, `▾` Now and the rail's own `━` position; the
 Store's own tile area, the `check` tile, `… N more`, a running
 container's own accent `●`, a live leaf's own dim (italic in
-`terminal`) style, the Largest table's own `❯` cursor and the status
-line's own `✓`/`✗`/`›`; and Select's, All's and the Combined
+`terminal`) style, the Largest table's own `❯` cursor, the status
+line's own `✓`/`✗`/`›` and its own `↑↓` sent/received tokens; and
+Select's, All's and the Combined
 Signal's own `●` running mark (per-run colour on All and the
 Combined Signal, the accent colour alone on Select, which keeps no
 run colour of its own), `—`/`gone`, the shared scale and a run's own
