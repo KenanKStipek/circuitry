@@ -2558,9 +2558,10 @@ reconstruction that would need (re-truncating `flat`/`rows` to the
 cursor's own timestamp, the way the goldens' own test harness
 truncates a fixture); see "Not yet shipped" below. The Help overlay
 (`?`) is Signal's own dedicated one (`signal_help_lines`), the same
-fixed `2,5,72,18` overlay the Tape's own `Help · Tape` uses, listing
-exactly `←→`, `+/-`, `n`, `⏎` and the globals every key bar shares --
-never the shared, centred overlay Flow and Cost still fall back to.
+fixed `2,5,72,18` overlay the Tape's own `Help · Tape · Key`/`· Keys`
+uses, listing exactly `←→`, `+/-`, `n`, `⏎` and the globals every key
+bar shares, plus its own Key (issue #738) -- never the shared,
+centred overlay Flow and Cost still fall back to.
 
 **Sizes.** 120 columns and up: the trace sits above the Now pane and
 Readings, side by side (roughly 52/48); 80-119: Readings drops, the
@@ -2916,13 +2917,15 @@ blank padding instead, the same at every width; rows read in plan
 order, not real finish order, once a run has ended (finish order would scramble a loop's
 own passes by whichever of two near-simultaneous steps the engine
 happened to write first); and prompt previews are off for the
-Starting, Ended and Failed states. The Help overlay's own six blank
-rows (`design/frames/tape--help--120x30.mock` rows 15-20) are left
-blank here too, rather than given the movement aliases, `/`, `e`,
-`T`, `c` and `f` §4 also names as Tape keys: populating them changes
-over 300 of the frame's own cells at once, the kind of change this
-repository's own goldens ask to be reported rather than allow-listed
-away. For the Signal: a decision row's own trailing suffix (`·
+Starting, Ended and Failed states. The Help overlay's own §3.7 glyph/
+line/colour Key and §4's own movement aliases, `/` and `e` no longer
+both fit the fixed 72×18 overlay together (issue #738, also settling
+#684's own frame-locked blank rows): `?` opens on the Key page
+(`crate::keys::HelpPage::Key`, the default), and `←→` reaches the
+Keys page; a screen whose own Keys and Key do both fit one page
+together (Signal, Flow, Store today) draws the same combined content
+on either page instead, and ←→ there is a no-op. For the Signal: a
+decision row's own trailing suffix (`·
 drafts ×2 · 261 t`) names the very next top-level row's own progress
 when that row is an already-active loop -- the design's own prose
 never says a decision's row shows anything about a *different*
@@ -2949,6 +2952,24 @@ band's own `● n run · m wait` reading only makes sense that way; and
 below 100 columns, the design's own prose naming only the Story
 pane's own drop there.
 
+**From the frames, not from the design text: the Key's own contents
+(issue #738).** §3.7 and §4 name the glyphs and keys; which of them
+each screen's own Key page actually lists is read off the frames and
+the renderers, not stated in prose anywhere else. Every screen's Key
+starts from §3.7's shared glyphs it actually draws (never `❯`, the
+Select/All screens' own row cursor -- every other screen highlights a
+row's own background instead) and adds: the Tape's own Now band,
+a loop line's `slots`/`queued` (§3.4's `2 of 2 Slots Busy · 1 Pass
+Queued`), breadcrumbs and preview lines (both `›`), the token bar and
+the vs-usual column's `+25%`/`below` deviation colours; the Signal's
+own `┃` Now sweep over the axis's dashes ahead of it, `sent`/`received`
+above/below the axis, a tool's own bar, the second marks and the
+fixed scale; the Flow's own station glyphs, folded lanes' own `+N`,
+the token bar and Following; the Store's own tile area, the `check`
+tile, `… N more` and the running tile's own pulse; and Select's, All's
+and the Combined Signal's own `●` running mark, `—`/`gone`, run
+colours, the shared scale and a run's own name (#717).
+
 **Not yet shipped.** §2.2's own "the step rows and the Now pane
 follow the cursor's column" (the scrubbed-cursor half of §6.3e's
 own "Keys" above): ←/→ move the cursor, draw it, and drive
@@ -2957,17 +2978,15 @@ Now pane keep showing the run's current state regardless, not the
 state as of that past column. The Totals row's cost figure reads `—` on every
 screen until a run reports one (`meta.cost_usd`,
 `runtime.last_run.totals.cost_usd`); the frames' scripted adapter
-never does, so every frame reads `—` too. The Help overlay's own six
-blank rows stay blank (above, "from the frames, not the design
-text"), and §3.5's own "100–119 columns shorten long titles and
-labels" is not yet given its own title-shortening rule at that
-width specifically -- the detail pane does show there, same as
-120 +, just with whichever title ratatui's own border truncation
-gives a long one. Below three finished runs, the Run End row reads
-`ETA — · no history yet` (§3.5); the Help overlay's own "Tokens"
-legend states the run's own actual unit and, once there have been
-enough runs to pool, the real count pooled, not fixed `50 t`/`3`
-figures.
+never does, so every frame reads `—` too. §3.5's own "100–119 columns
+shorten long titles and labels" is not yet given its own
+title-shortening rule at that width specifically -- the detail pane
+does show there, same as 120 +, just with whichever title ratatui's
+own border truncation gives a long one. Below three finished runs,
+the Run End row reads `ETA — · no history yet` (§3.5); the Key
+page's own `usual` line states the run's own actual unit and, once
+there have been enough runs to pool, the real count pooled, not
+fixed `50 t`/`3` figures.
 
 **Part 5 groundwork (issue #698): the run registry, discovery and
 history's `config`/`run_dir`.** Part 5 of the epic (#677) is the
@@ -3062,10 +3081,9 @@ Select, same as a plain `osi watch`): `q` "quit at once", not
 "confirms if running" (a watch owns no process of its own to ever
 confirm quitting against), and `c` "inert · launched only", not
 "cancel · confirms" (only a run `osi` launched itself can ever be
-cancelled). `signal_help_lines`/`flow_help_lines`/`store_help_lines`
-each take an `is_watch` flag for exactly this; the Tape's own Help
-never showed `c` at all (§4's own frame-locked blank rows), so it
-needs no change.
+cancelled). `signal_help_lines`/`flow_help_lines`/`store_help_lines`/
+`tape_help_lines` each take an `is_watch` flag for exactly this (the
+Tape's own Keys page, issue #738, now lists `c` too).
 
 With no running orchestrations, the empty Select shows where
 discovery looked, and a Recent Runs table built from
