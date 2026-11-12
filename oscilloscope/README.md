@@ -156,8 +156,8 @@ so another `osi` process -- or a script -- can find it.
   finds the orchestrations already running on this machine -- the
   registry, a `ps` scan for `cof run`/`electricity` processes, and any
   `state.live.json` in the current directory or one level of
-  subdirectories -- and prints one plain line per run (document, config,
-  engine, pid, run directory), then exits 0. On a TTY with no `--log`, it
+  subdirectories -- and prints one plain line per run (document, name,
+  config, engine, pid, run directory), then exits 0. On a TTY with no `--log`, it
   opens the Select screen instead (below).
 - **`OSI_PROCESS_SCAN=0`:** list only the registry, skipping the `ps`
   scan and the current-directory source entirely -- for tests and a
@@ -651,7 +651,7 @@ running loop folded into three observed lanes plus one ahead lane
 reading its own slot's history, the pass pane and the story:
 
 ```
- osi  demo.yml · ● Running 3.6s                                                                        FLOW    12:50:50 
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                         FLOW    12:50:50 
 ╭─ Flow · 6/14 · ▰ = 50 t · Following ─────────────────────────────────────────────────────────────────────────────────╮
 │                                                                                               ▾ Now 12:50:50 · 3.6s  │
 │■ Start   ── ✓ kind    ── ✓ tests   ── ◆ gate    ─┬─ ✓ reply   ─┴── ⟳ drafts  ─┬─ ✓ draft   ── ● pause   ─┴── · flaky │
@@ -672,7 +672,7 @@ reading its own slot's history, the pass pane and the story:
 │ Totals ↑796 ↓69 · 865 t  +12% Usual  6/14 Effects  ETA 12:50:52  Cost —                                              │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯
 ╭─ Pass 1 · cats · Selected ─────────────────────────────────╮╭─ Story · Decisions and Failures ───────────────────────╮
-│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · d2c8267e                      │
+│ Status   ● Running  pause · 0.6s · slot 1                  ││ 12:50:47 ■ run started · ochre-desert                  │
 │ Draft    ✓ Done  ↑118 ↓12 · 130 t  -16% vs usual 154 t     ││ 12:50:50 ◆ gate → then                                 │
 │ Produced Cats nap in sunbeams and judge you quietly.       ││ 12:50:50 ⟳ drafts · 3 passes · 2 wide                  │
 │                                                            ││                                                        │
@@ -755,7 +755,7 @@ fixtures/run2`, replayed to 3.62 s after its own start, the cursor on
 `gate › reply`:
 
 ```
- osi  demo.yml · ● Running 3.6s                                                                       STORE    12:50:50 
+ osi  demo.yml · ochre-desert · ● Running 3.6s                                                        STORE    12:50:50 
 ╭─ Store · Tokens by Store · Area = Tokens Used So Far ────────────────────────────────────────────────────────────────╮
 │  kind · 215 t                 gate · 389 t                                        ● drafts · 261 t                   │
 │  +6% vs usual                  reply · 389 t                                       iter_0 › draft · 130 t            │
