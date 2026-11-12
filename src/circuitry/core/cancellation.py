@@ -1462,10 +1462,10 @@ def run_tracked(
     # deadline, not an unbounded wait, is what `_communicate_promptly`
     # bounds waiting for these by (#741 follow-up).
     reader_done_events: list[threading.Event] = []
-    # `(thread, join_timeout)`: the final join below, after the deadline
-    # has already been kept by `_communicate_promptly` or an except
-    # block's own kill, is only ever a brief formality -- every reader
-    # keeps the same short bound now, `on_line`'s own original 5s included.
+    # `(thread, join_timeout)`: a live-chunk reader's final join below is
+    # only a brief bound, since `_communicate_promptly` already waited for
+    # its EOF against the deadline (or an except block's own kill ended the
+    # step without waiting for it); `on_line`'s reader keeps its 5s bound.
     reader_threads: list[tuple[threading.Thread, float | None]] = []
     if on_line is not None and proc.stdout is not None:
         stdout_lines = []
