@@ -899,6 +899,8 @@ mod tests {
             armed: false,
             secret_headers: &[],
             scrub: None,
+            limited: false,
+            confine_to: None,
         };
         FsPlugin.execute(params, &call).await
     }

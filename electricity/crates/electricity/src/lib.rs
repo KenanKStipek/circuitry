@@ -1731,7 +1731,13 @@ pub async fn run_orchestration_with_config(
     // entries at all (including no `--profile` at all).
     if let Some(profile) = &profile {
         if !profile.effects.is_empty() {
-            electricity_compiler::overrides::apply_effect_overrides(&mut program, &profile.effects);
+            if let Err(err) = electricity_compiler::overrides::apply_effect_overrides(
+                &mut program,
+                &profile.effects,
+                Some(&profile.name),
+            ) {
+                fail!(err);
+            }
         }
     }
 
@@ -2308,6 +2314,7 @@ mod tests {
             secret_headers: indexmap::IndexMap::new(),
             prompt_file: None,
             limited: false,
+            confine_to: None,
         }
     }
 

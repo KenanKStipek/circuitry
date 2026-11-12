@@ -558,7 +558,7 @@ fn fullscreen_step_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)
 /// fixed overlay every screen's own uses, listing exactly its own
 /// keys (never whichever screen opened it, whose own keys don't
 /// work while it's open).
-fn fullscreen_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
+fn fullscreen_help_lines(ctx: &DrawCtx, width: u16) -> Vec<Line<'static>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         ("[ ]", "previous / next effect", "↑ ↓", "scroll"),
         (
@@ -573,11 +573,11 @@ fn fullscreen_help_lines(ctx: &DrawCtx) -> Vec<Line<'static>> {
     ];
     let mut lines: Vec<Line<'static>> = ROWS
         .iter()
-        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .flat_map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
         .collect();
     // Issue #714: `T` cycles the theme here too.
-    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
-    for _ in 0..6 {
+    lines.extend(tape_help_row("T", "colour theme", "", "", ctx, width));
+    for _ in lines.len()..13 {
         lines.push(Line::from(""));
     }
     let key_style = Style::default()
@@ -4997,14 +4997,47 @@ pub fn draw_select_help(frame: &mut Frame, ctx: &DrawCtx) {
             Span::styled(d.to_string(), desc_style),
         ])
     };
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let running = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let done = Style::default().fg(ctx.theme.status_done);
+    let failed = Style::default()
+        .fg(ctx.theme.status_failed)
+        .add_modifier(Modifier::BOLD);
+    let cursor = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let key_row = |sym: &str, style: Style, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{sym:<14}"), style),
+            Span::styled(d.to_string(), default),
+        ])
+    };
+    // Issue #738: the running list's own `●` and the selected row's
+    // own `❯` cursor, Recent Runs' own `✓`/`✗`/`—`/`gone`, every one
+    // in the same style [`draw_select_list`]/[`recent_row_spans`]
+    // really draw it in -- never Select's own `●`, which stays the
+    // accent colour for every run, with no per-run colour of its
+    // own the way the All screen's tiles keep.
     let lines = vec![
         row("↑↓ j k", "Select"),
         row("Home End g G", "Jump to the ends"),
         row("enter", "Open the selected run"),
-        row("T", "Colour theme"),
-        row("?", "This help"),
+        row("T ?", "Colour theme · this help"),
         row("q", "Quit"),
         row("c", "Inert here (no run attached to cancel)"),
+        Line::from(""),
+        Line::from(Span::styled("Key", muted)),
+        key_row("●", running, "a running orchestration"),
+        key_row("◌", muted, "nothing running"),
+        key_row("✓", done, "a finished run, in Recent Runs"),
+        key_row("✗", failed, "a failed run, in Recent Runs"),
+        key_row("—", muted, "no config, or no run directory"),
+        key_row("gone", muted, "its run directory is gone"),
+        key_row("❯", cursor, "the selected row's cursor"),
+        key_row("name", default, "a short name from the run's id"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -6555,6 +6588,19 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
             Span::styled(d.to_string(), desc_style),
         ])
     };
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    let running = ctx.theme.run_colors()[0];
+    let running_style = Style::default().fg(running).add_modifier(Modifier::BOLD);
+    let key_row = |sym: &str, style: Style, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{sym:<16}"), style),
+            Span::styled(d.to_string(), default),
+        ])
+    };
+    // Issue #738: `●`, one colour per run (`run_colors`'s own
+    // first entry stands in for whichever colour a given run
+    // actually keeps); `—`/`gone` both read `fg.muted`.
     let lines = vec![
         row("0-3", "Screens on every tile"),
         row("←→↑↓", "Move the focus"),
@@ -6566,6 +6612,19 @@ pub fn draw_all_help(frame: &mut Frame, ctx: &DrawCtx) {
         row("esc", "Back to Select"),
         row("?", "This help"),
         row("q", "Quit"),
+        Line::from(""),
+        Line::from(Span::styled("Key", muted)),
+        key_row(
+            "●",
+            running_style,
+            "a running orchestration, one colour per run",
+        ),
+        key_row(
+            "— / gone",
+            muted,
+            "no config or run directory · directory gone",
+        ),
+        key_row("name", default, "a short name from the run's id"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -7783,16 +7842,91 @@ pub fn draw_combined_signal_help(frame: &mut Frame, ctx: &DrawCtx) {
             Span::styled(d.to_string(), desc_style),
         ])
     };
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let dim = Style::default().fg(ctx.theme.dim);
+    let default = Style::default().fg(ctx.theme.text);
+    let legend_color = ctx.theme.run_colors()[0];
+    let legend_style = Style::default().fg(legend_color);
+    let now_style = Style::default()
+        .fg(ctx.theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let done_style = Style::default().fg(ctx.theme.status_done);
+    let key_row = |sym: &str, style: Style, d: &str| {
+        Line::from(vec![
+            Span::styled(format!("{sym:<16}"), style),
+            Span::styled(d.to_string(), default),
+        ])
+    };
+    let mixed_row = |sym1: &str, style1: Style, sym2: &str, style2: Style, d: &str| {
+        let used = sym1.chars().count() + 1 + sym2.chars().count();
+        let pad = 16usize.saturating_sub(used).max(1);
+        Line::from(vec![
+            Span::styled(sym1.to_string(), style1),
+            Span::raw(" "),
+            Span::styled(sym2.to_string(), style2),
+            Span::raw(" ".repeat(pad)),
+            Span::styled(d.to_string(), default),
+        ])
+    };
+    // Issue #738, each in the real style the chart draws it in:
+    // `\u{2503}` Now with the axis dashed `\u{254c}` ahead of it, the
+    // stacked token bars and their own round top, the `\u{25a0}`
+    // legend swatch (`run_colors`'s own first entry stands in for
+    // whichever colour a given run actually keeps) and `\u{25cf}`
+    // the run's own current step, a finished prompt's `\u{2713}` and
+    // the Per Run table's own `\u{276f}` cursor.
     let lines = vec![
-        row("\u{2190}\u{2192}", "Scrub the chart"),
-        row("n", "Back to Now"),
+        row("\u{2190}\u{2192} n", "Scrub the chart \u{b7} back to Now"),
         row("\u{2191}\u{2193}", "Select a run"),
         row("enter", "Open the selected run on its Signal"),
-        row("T", "Colour theme"),
-        row("c", "Inert here (no run attached to cancel)"),
-        row("esc", "Back to the tiles"),
-        row("?", "This help"),
+        row("T c", "Colour theme \u{b7} inert here"),
+        row("esc ?", "Back to the tiles \u{b7} this help"),
         row("q", "Quit"),
+        Line::from(""),
+        Line::from(Span::styled("Key", muted)),
+        mixed_row(
+            "\u{2503}",
+            now_style,
+            "\u{254c}",
+            dim,
+            "Now \u{b7} dashed ahead",
+        ),
+        key_row(
+            "\u{2581}\u{2582}\u{2583}\u{2584}\u{2585}\u{2586}\u{2587}\u{2588}",
+            legend_style,
+            "tokens, stacked per run",
+        ),
+        key_row(
+            "\u{2580} \u{2594}",
+            legend_style,
+            "the stack's own round top",
+        ),
+        Line::from(vec![
+            Span::styled("\u{25a0}", legend_style),
+            Span::raw(" "),
+            Span::styled("\u{25cf}", now_style),
+            Span::raw(" "),
+            Span::styled("\u{203a}", muted),
+            Span::raw("        "),
+            Span::styled(
+                "legend swatch \u{b7} the current step \u{b7} its own loop pass",
+                default,
+            ),
+        ]),
+        mixed_row(
+            "\u{2713}",
+            done_style,
+            "\u{276f}",
+            now_style,
+            "a finished prompt \u{b7} the table's cursor (first run's colour)",
+        ),
+        key_row(
+            "colour",
+            default,
+            "one colour per run, shared with the legend",
+        ),
+        key_row("scale", default, "one round top shared by every run's bars"),
+        key_row("name", default, "a short name from the run's id"),
     ];
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface)),
@@ -8788,9 +8922,7 @@ fn signal_step_row_spans(
         SignalStepKind::Loop { status_text } => {
             spans.push((
                 format!("\u{27f3} {} ", row.label),
-                Style::default()
-                    .fg(ctx.theme.accent_primary)
-                    .add_modifier(Modifier::BOLD),
+                signal_loop_style(ctx.theme),
             ));
             spans.push((format!("{status_text}  "), bold));
             if is_last {
@@ -10208,108 +10340,500 @@ fn draw_overlay_at(
 // bare 80×24 terminal (`centered` clamps a taller popup to the
 // screen's own height, which used to cut "press any key to close"
 // off the bottom there).
-/// A row of the Tape's own key/glyph legend (§4's own `Help ·
-/// Tape`), two columns wide: each a short key or glyph in `fg.muted`
-/// followed by what it does in `fg.default`, exactly `(7, 28, 8, 26)`
-/// columns wide -- §6's own "a key in a key bar has a designed
-/// effect, and the Help overlay lists exactly the key bars' keys",
-/// never a leftover key from an older draft of this same screen,
-/// or one some *other* screen's own key bar still has.
-const HELP_ROWS: &[(&str, &str, &str, &str)] = &[
-    ("↑ ↓", "select a row", "0 1 2 3", "Tape Signal Flow Store"),
-    ("enter", "open the step", "?", "this help"),
-    ("p", "prompt previews on or off", "esc", "close · back"),
-    (
-        "t",
-        "tokens: units or vs usual",
-        "q",
-        "quit · confirms if running",
-    ),
-];
-const HELP_LEGEND_ROWS: &[(&str, &str, &str, &str)] = &[(
-    "+25%",
-    "above usual · red past +50%",
-    "◆ ⟳ ■",
-    "decision · loop · run",
-)];
 
-// §4 also names `j`/`k`, `PgUp`/`PgDn`, `Home`/`End`, `g`/`G`, `/`
-// and `e` as Tape keys, and says the Help overlay lists all of it
-// -- but every `tape--help` frame leaves five of its own six rows
-// here blank (`design/frames/tape--help--120x30.mock`, rows
-// 16-20; row 15 is `T`'s own, issue #714), so adding the rest
-// would stop matching the frame on over 300 cells at once, past
-// the point an allow-list still documents a design ambiguity
-// rather than papering over one. Left for the frame to settle; see
-// the PR's own design-questions note.
+/// §4/§5's own 72-wide overlay (the design's `tape--help` frame):
+/// fixed width, but tall enough -- when the terminal has the room --
+/// to carry every key and the Key together on one page; otherwise it
+/// falls back to its own fixed 18-row height, paged between Keys and
+/// Key with `←→` (issue #738).
+const HELP_OVERLAY_WIDTH: u16 = 72;
+const HELP_OVERLAY_HEIGHT: u16 = 18;
 
-fn tape_help_row(key1: &str, desc1: &str, key2: &str, desc2: &str, ctx: &DrawCtx) -> Line<'static> {
-    let muted = Style::default().fg(ctx.theme.fg_muted);
-    let default = Style::default().fg(ctx.theme.text);
-    Line::from(vec![
-        Span::styled(format!("{key1:<7}"), muted),
-        Span::styled(format!("{desc1:<28}"), default),
-        Span::styled(format!("{key2:<8}"), muted),
-        Span::styled(format!("{desc2:<26}"), default),
-    ])
+/// One cell of a help row: one or more differently styled runs of
+/// text, concatenated -- a plain keyboard key or meaning is always
+/// one run; a glyph legend's own symbol or deviation figure can be
+/// more than one, each in its own real colour (issue #738's own
+/// rule that a key reads in the same style its screen draws it,
+/// never a generic muted placeholder).
+type HelpCell = Vec<(String, Style)>;
+
+fn help_cell(text: &str, style: Style) -> HelpCell {
+    vec![(text.to_string(), style)]
 }
 
-fn tape_help_lines(ctx: &DrawCtx, unit: u64, history_runs: Option<usize>) -> Vec<Line<'static>> {
-    let muted = Style::default().fg(ctx.theme.fg_muted);
-    let mut lines: Vec<Line<'static>> = HELP_ROWS
+fn help_cell_len(cell: &HelpCell) -> usize {
+    cell.iter().map(|(t, _)| t.chars().count()).sum()
+}
+
+fn help_cell_is_blank(cell: &HelpCell) -> bool {
+    help_cell_len(cell) == 0
+}
+
+fn help_cell_spans(cell: &HelpCell, width: usize) -> Vec<Span<'static>> {
+    let mut spans: Vec<Span<'static>> = cell
         .iter()
-        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .map(|(t, s)| Span::styled(t.clone(), *s))
         .collect();
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(
-        format!("{:<35}{:<34}", "Tokens", "Glyphs"),
-        muted,
-    )));
-    let runs = history_runs.unwrap_or(oscilloscope_core::history::P50_MIN_RUNS);
-    lines.push(tape_help_row(
-        "▰",
-        &format!("= {unit} t · fixed scale"),
-        "✓ ✗",
-        "done · failed",
-        ctx,
-    ));
-    lines.push(tape_help_row(
-        "usual",
-        &format!("median of {runs} past runs"),
-        "● ·",
-        "running · ahead",
-        ctx,
-    ));
-    lines.extend(
-        HELP_LEGEND_ROWS
-            .iter()
-            .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx)),
-    );
-    // Issue #714: `T` (colour theme) in the first of what the
-    // frame's own blank rows above otherwise still leave open.
-    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
-    lines.push(tape_help_row("tab", "focus the detail pane", "", "", ctx));
-    for _ in 0..4 {
-        lines.push(Line::from(""));
+    // At least one trailing space always separates this cell from
+    // whatever draws next, even when its own text already fills (or
+    // overruns) its column -- a label as wide as its column never
+    // runs straight into the next one's own text again (issue #738).
+    let pad = width.saturating_sub(help_cell_len(cell)).max(1);
+    let pad_style = cell.last().map(|(_, s)| *s).unwrap_or_default();
+    spans.push(Span::styled(" ".repeat(pad), pad_style));
+    spans
+}
+
+/// Below this content width, a row's own two key:meaning pairs no
+/// longer fit side by side -- each stacks onto its own line instead,
+/// so a meaning is never cut for width (issue #738).
+const HELP_NARROW_WIDTH: u16 = 69;
+
+/// One row of a screen's own key/glyph legend (§4's own `Help ·
+/// Tape`): two key:meaning pairs side by side at `(7, 28, 8, 26)`
+/// columns, one stacked per line below [`HELP_NARROW_WIDTH`] --
+/// §6's own "a key in a key bar has a designed effect, and the Help
+/// overlay lists exactly the key bars' keys", never a leftover key
+/// from an older draft of this same screen, or one some *other*
+/// screen's own key bar still has.
+#[allow(clippy::too_many_arguments)]
+const HELP_KEY1_WIDTH: usize = 7;
+const HELP_DESC1_WIDTH: usize = 28;
+const HELP_KEY2_WIDTH: usize = 8;
+const HELP_DESC2_WIDTH: usize = 26;
+
+fn help_row(
+    key1: HelpCell,
+    desc1: HelpCell,
+    key2: HelpCell,
+    desc2: HelpCell,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let has_second = !help_cell_is_blank(&key2) || !help_cell_is_blank(&desc2);
+    // issue #738's layout rule: a pair that doesn't fit its own
+    // column -- not just an overlay narrower than both columns
+    // together -- gets a full-width line of its own, and so does
+    // the other pair of that row, so the right column never shifts
+    // and nothing is ever cut at the border.
+    let fits_inline = width >= HELP_NARROW_WIDTH
+        && help_cell_len(&key1) < HELP_KEY1_WIDTH
+        && help_cell_len(&desc1) < HELP_DESC1_WIDTH
+        && (!has_second
+            || (help_cell_len(&key2) < HELP_KEY2_WIDTH
+                && help_cell_len(&desc2) < HELP_DESC2_WIDTH));
+    if fits_inline {
+        let mut spans = help_cell_spans(&key1, HELP_KEY1_WIDTH);
+        spans.extend(help_cell_spans(&desc1, HELP_DESC1_WIDTH));
+        if has_second {
+            spans.extend(help_cell_spans(&key2, HELP_KEY2_WIDTH));
+            spans.extend(help_cell_spans(&desc2, HELP_DESC2_WIDTH));
+        }
+        vec![Line::from(spans)]
+    } else {
+        let mut lines = vec![Line::from(
+            help_cell_spans(&key1, HELP_KEY1_WIDTH)
+                .into_iter()
+                .chain(desc1.iter().map(|(t, s)| Span::styled(t.clone(), *s)))
+                .collect::<Vec<_>>(),
+        )];
+        if has_second {
+            lines.push(Line::from(
+                help_cell_spans(&key2, HELP_KEY1_WIDTH)
+                    .into_iter()
+                    .chain(desc2.iter().map(|(t, s)| Span::styled(t.clone(), *s)))
+                    .collect::<Vec<_>>(),
+            ));
+        }
+        lines
     }
+}
+
+/// A plain keyboard-key row: both keys in `fg.muted`, both meanings
+/// in `fg.default` -- the shortcut lists every screen's own Keys
+/// page shares.
+fn tape_help_row(
+    key1: &str,
+    desc1: &str,
+    key2: &str,
+    desc2: &str,
+    ctx: &DrawCtx,
+    width: u16,
+) -> Vec<Line<'static>> {
+    let muted = Style::default().fg(ctx.theme.fg_muted);
+    let default = Style::default().fg(ctx.theme.text);
+    help_row(
+        help_cell(key1, muted),
+        help_cell(desc1, default),
+        help_cell(key2, muted),
+        help_cell(desc2, default),
+        width,
+    )
+}
+
+/// The close row at the bottom of a screen's own Help -- `other_page`
+/// names the overlay's other page, `None` for a screen whose Keys
+/// and Key both fit one page together, so there is nothing else to
+/// switch to.
+fn tape_help_close_row(ctx: &DrawCtx, other_page: Option<&str>) -> Line<'static> {
     let key_style = Style::default()
         .fg(ctx.theme.keyhint_key)
         .add_modifier(Modifier::BOLD);
     let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
-    lines.push(Line::from(vec![
+    let mut spans = vec![
         Span::styled("esc ", key_style),
         Span::styled(format!("{:<7}", "Close"), desc_style),
         Span::styled("? ", key_style),
-        Span::styled(format!("{:<56}", "Close"), desc_style),
-    ]));
-    lines
+        Span::styled(format!("{:<10}", "Close"), desc_style),
+    ];
+    if let Some(other_page) = other_page {
+        spans.push(Span::styled("← → ", key_style));
+        spans.push(Span::styled(other_page.to_string(), desc_style));
+    }
+    Line::from(spans)
 }
 
-/// §4/§5's own 72×18 overlay (the design's `tape--help` frame) --
-/// fixed, not sized from [`HELP_TEXT`]'s own length, so the overlay
-/// never resizes as lines are added or removed.
-const HELP_OVERLAY_WIDTH: u16 = 72;
-const HELP_OVERLAY_HEIGHT: u16 = 18;
+/// Which page `help_page` (a free-running counter, issue #738: `←`/
+/// `→` move it without knowing yet how many pages a screen's own
+/// Help needs at its current size) actually lands on once there are
+/// `page_count` of them -- always in range, however far `help_page`
+/// has wrapped.
+fn help_page_index(help_page: i64, page_count: usize) -> usize {
+    if page_count == 0 {
+        return 0;
+    }
+    help_page.rem_euclid(page_count as i64) as usize
+}
+
+/// The close row's own wording for page `index` of `count` (issue
+/// #738): nothing to switch to on the one page a screen whose Keys
+/// and Key both fit together draws; the other page's name on
+/// exactly two (always `Keys` then `Key`, [`help_pages`]'s own
+/// order); `page N of M` once a screen's own Key or Keys needed more
+/// than one page on its own to fit a small enough terminal.
+fn help_close_row_for(ctx: &DrawCtx, index: usize, count: usize) -> Line<'static> {
+    let other_page = match count {
+        0 | 1 => None,
+        2 => Some(if index == 0 {
+            "Key".to_string()
+        } else {
+            "Keys".to_string()
+        }),
+        _ => Some(format!("page {} of {count}", index + 1)),
+    };
+    tape_help_close_row(ctx, other_page.as_deref())
+}
+
+/// The Help popup's own interior room for content, not counting its
+/// two borders or its own close row -- every screen's own paging
+/// (issue #738) sizes its popup, and splits onto this many pages, by
+/// this, so the close row -- the only hint a second page exists --
+/// is never cut, down to a bare 60×24 terminal.
+fn help_available_rows(area_height: u16, popup_y_offset: u16) -> usize {
+    area_height
+        .saturating_sub(popup_y_offset)
+        .saturating_sub(2) // the popup's own top/bottom border
+        .saturating_sub(1) // the close row
+        as usize
+}
+
+/// Packs complete rows (never a key:meaning pair split across a
+/// page break) onto as few pages as fit within `capacity` lines
+/// each (issue #738) -- a row wider than `capacity` on its own
+/// still gets a page to itself rather than being dropped.
+fn paginate_help_blocks(blocks: &[Vec<Line<'static>>], capacity: usize) -> Vec<Vec<Line<'static>>> {
+    let capacity = capacity.max(1);
+    let mut pages: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut current: Vec<Line<'static>> = Vec::new();
+    for block in blocks {
+        if !current.is_empty() && current.len() + block.len() > capacity {
+            pages.push(std::mem::take(&mut current));
+        }
+        current.extend(block.iter().cloned());
+    }
+    pages.push(current);
+    pages
+}
+
+/// The "Key" section header: a blank separator then the label, both
+/// glued to the first row beneath them so a page never ends with
+/// the header alone and nothing of its own below it.
+fn help_key_header(ctx: &DrawCtx) -> Line<'static> {
+    Line::from(Span::styled("Key", Style::default().fg(ctx.theme.fg_muted)))
+}
+
+/// Lays a screen's own Keys rows and Key rows across as many pages
+/// as the popup's own interior (`capacity`) needs (issue #738): both
+/// groups merge onto a single page, sized to their combined content,
+/// when together they fit; otherwise each pages on its own, Keys
+/// first (`?`'s own default page) then Key -- the same order the
+/// merged page reads in.
+fn help_pages(
+    keys_blocks: Vec<Vec<Line<'static>>>,
+    key_header: Line<'static>,
+    key_blocks: Vec<Vec<Line<'static>>>,
+    capacity: usize,
+) -> Vec<Vec<Line<'static>>> {
+    let mut headed_key_blocks: Vec<Vec<Line<'static>>> = Vec::new();
+    let mut key_rows = key_blocks.into_iter();
+    if let Some(first) = key_rows.next() {
+        let mut glued = vec![Line::from(""), key_header];
+        glued.extend(first);
+        headed_key_blocks.push(glued);
+    }
+    headed_key_blocks.extend(key_rows);
+
+    let keys_pages = paginate_help_blocks(&keys_blocks, capacity);
+    let key_pages = paginate_help_blocks(&headed_key_blocks, capacity);
+    if let ([keys_only], [key_only]) = (keys_pages.as_slice(), key_pages.as_slice()) {
+        if keys_only.len() + key_only.len() <= capacity {
+            let mut merged = keys_only.clone();
+            merged.extend(key_only.clone());
+            return vec![merged];
+        }
+    }
+    let mut pages = keys_pages;
+    pages.extend(key_pages);
+    pages
+}
+
+/// Draws one screen's own paged Help overlay (issue #738): the popup
+/// sizes to the current page's own content, capped at the screen,
+/// and the close row names whichever page(s) a shorter terminal
+/// split this screen's Keys/Key onto.
+fn draw_paged_help(
+    frame: &mut Frame,
+    area: Rect,
+    ctx: &DrawCtx,
+    screen_title: &str,
+    pages: Vec<Vec<Line<'static>>>,
+    help_page: i64,
+) {
+    let page_count = pages.len();
+    let index = help_page_index(help_page, page_count);
+    let mut lines = pages.into_iter().nth(index).unwrap_or_default();
+    lines.push(help_close_row_for(ctx, index, page_count));
+    let title = match page_count {
+        2 if index == 0 => format!("{screen_title} · Keys"),
+        2 => format!("{screen_title} · Key"),
+        _ => screen_title.to_string(),
+    };
+    let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+    let popup_height = (lines.len() as u16 + 2).min(area.height.saturating_sub(5));
+    let popup = Rect {
+        x: area.x + 2,
+        y: area.y + 5,
+        width: popup_width,
+        height: popup_height,
+    };
+    frame.render_widget(Clear, popup);
+    let border = ctx.theme.border_focused;
+    frame.render_widget(
+        Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
+        popup,
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_set(ratatui::symbols::border::ROUNDED)
+        .title(tape_block_title(&title, border, ctx))
+        .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    fill_border_rows(frame, inner, border);
+    let content_area = Rect {
+        x: inner.x + 1,
+        y: inner.y,
+        width: inner.width.saturating_sub(1),
+        height: inner.height,
+    };
+    let paragraph = Paragraph::new(lines).style(Style::default().bg(ctx.theme.bg_surface));
+    frame.render_widget(paragraph, content_area);
+}
+
+/// §4's own Tape keys, plus the globals every key bar shares
+/// (`f`/`m`, folded into the `T` row since the overlay's own close
+/// row already covers `esc`) -- never the close row itself, added
+/// by whichever caller below actually lays out the page(s).
+fn tape_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
+    const ROWS: &[(&str, &str, &str, &str)] = &[
+        ("↑ ↓", "select a row", "j k", "same as ↑ ↓"),
+        ("PgUp PgDn", "move a page", "Home End", "first · last row"),
+        (
+            "g G",
+            "same as Home · End",
+            "0 1 2 3",
+            "Tape Signal Flow Store",
+        ),
+        ("enter", "open the step", "tab", "focus the detail pane"),
+        ("p", "previews on or off", "t", "tokens: units or vs usual"),
+        ("/", "filter rows", "e", "errors only"),
+        ("T", "colour theme", "f m", "follow Now · unfold meta"),
+    ];
+    let mut blocks: Vec<Vec<Line<'static>>> = ROWS
+        .iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .collect();
+    blocks.push(if is_watch {
+        tape_help_row(
+            "q",
+            "quit at once",
+            "c",
+            "inert · launched only",
+            ctx,
+            width,
+        )
+    } else {
+        tape_help_row(
+            "q",
+            "quit · confirms if running",
+            "c",
+            "cancel · confirms",
+            ctx,
+            width,
+        )
+    });
+    blocks
+}
+
+/// "median of N past runs", or just "median of past runs" with no
+/// history yet to measure -- `median of 0 past runs` read like
+/// there was a number worth noticing (issue #738). `None` reads as
+/// the design's own assumed floor ([`oscilloscope_core::history::
+/// P50_MIN_RUNS`]), same as always.
+fn tape_usual_runs_text(history_runs: Option<usize>) -> String {
+    match history_runs.unwrap_or(oscilloscope_core::history::P50_MIN_RUNS) {
+        0 => "median of past runs".to_string(),
+        n => format!("median of {n} past runs"),
+    }
+}
+
+/// §3.7's shared glyphs the Tape actually draws, each styled the way
+/// [`tape_glyph_style`]/[`tape_deviation_style`] really paint it
+/// (issue #738), plus the Tape's own additions (the Now band, a
+/// loop line's slots/queue, breadcrumbs and preview lines, the
+/// token bar, the Totals row's own sent/received arrows and the `t`
+/// view's own deviation ticks) -- never `❯` (the Select/All
+/// screens' own row cursor; the Tape highlights a row's own
+/// background instead) or `┃` (the Signal's own Now sweep).
+fn tape_help_key_rows(
+    ctx: &DrawCtx,
+    unit: u64,
+    history_runs: Option<usize>,
+    width: u16,
+) -> Vec<Vec<Line<'static>>> {
+    use oscilloscope_core::render::RowKind;
+    let theme = ctx.theme;
+    let default = Style::default().fg(theme.text);
+    let muted = Style::default().fg(theme.fg_muted);
+    let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
+    let failed = tape_glyph_style(RowKind::Prompt, StatusKind::Failed, theme);
+    let handled = tape_glyph_style(RowKind::Prompt, StatusKind::FailedHandled, theme);
+    let running = tape_glyph_style(RowKind::Prompt, StatusKind::Running, theme);
+    let ahead = tape_glyph_style(RowKind::Prompt, StatusKind::Pending, theme);
+    let decision = tape_glyph_style(RowKind::If, StatusKind::Done, theme);
+    let loop_style = tape_glyph_style(RowKind::Loop, StatusKind::Done, theme);
+    let above_usual = tape_deviation_style(25.0, theme);
+    let far_above_usual = tape_deviation_style(50.0, theme);
+    let below_usual = tape_deviation_style(-25.0, theme);
+    let now_style = Style::default()
+        .fg(theme.accent_primary)
+        .add_modifier(Modifier::BOLD);
+    let bar_filled = Style::default().fg(theme.accent_primary);
+    let bar_empty = Style::default().fg(theme.dim);
+    // The same colour [`tape_deviation_style`] gives a figure above
+    // usual, without its own bold -- the `t` view's own tick
+    // (`tape_usual_deviation_bar`) draws this fill with colour alone
+    // (issue #738).
+    let tick_fill = Style::default().fg(above_usual.fg.unwrap_or(theme.text));
+    vec![
+        help_row(
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("✗".into(), failed),
+            ],
+            help_cell("done · failed", default),
+            vec![
+                ("●".into(), running),
+                (" ".into(), default),
+                ("·".into(), ahead),
+            ],
+            help_cell("running · ahead, queued", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("◆".into(), decision),
+                (" ".into(), default),
+                ("⟳".into(), loop_style),
+            ],
+            help_cell("decision · loop", default),
+            vec![
+                ("■".into(), muted),
+                (" ".into(), default),
+                ("◌".into(), muted),
+            ],
+            help_cell("run start/end · starting", default),
+            width,
+        ),
+        help_row(
+            help_cell("✗", handled),
+            help_cell("a handled failure", default),
+            help_cell("-25%", below_usual),
+            help_cell("below usual", default),
+            width,
+        ),
+        help_row(
+            help_cell("›", muted),
+            help_cell("path separator, dim parents", default),
+            help_cell("› preview", muted),
+            help_cell("shown under a finished step, toggled with p", default),
+            width,
+        ),
+        help_row(
+            help_cell("━━ Now", now_style),
+            help_cell("now band: clock · elapsed", default),
+            vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
+            help_cell(&format!("= {unit} t token bar, fixed"), default),
+            width,
+        ),
+        help_row(
+            help_cell("slots", muted),
+            help_cell("N of N Slots Busy at once", default),
+            help_cell("queued", muted),
+            help_cell("passes waiting to run", default),
+            width,
+        ),
+        help_row(
+            help_cell("usual", muted),
+            help_cell(&tape_usual_runs_text(history_runs), default),
+            vec![
+                ("+25%".into(), above_usual),
+                (" ".into(), default),
+                ("+50%".into(), far_above_usual),
+            ],
+            help_cell("above usual: amber · red", default),
+            width,
+        ),
+        help_row(
+            help_cell("↑ ↓", default),
+            help_cell("Totals: sent · received", default),
+            vec![
+                ("┼".into(), muted),
+                (" ".into(), default),
+                ("▓".into(), tick_fill),
+            ],
+            help_cell("the t view's tick", default),
+            width,
+        ),
+        help_row(
+            help_cell("▁▂▃▄▅▆▇█", bar_filled),
+            help_cell("a loop's pass sparkline", default),
+            help_cell("", default),
+            help_cell("", default),
+            width,
+        ),
+    ]
+}
 
 /// §4's own Signal keys, plus the globals every screen's key bar
 /// shares -- the only keys Signal's own key bar advertises, so the
@@ -10317,7 +10841,17 @@ const HELP_OVERLAY_HEIGHT: u16 = 18;
 /// `q`/`c` behave differently on a watch, which owns no process of
 /// its own to confirm quitting or ever cancel) swaps the two rows
 /// that otherwise describe a run `osi` launched itself.
-fn signal_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
+/// The Signal's own loop-station style (issue #738): the same
+/// `accent.primary` bold the Signal's own trace draws a loop
+/// station's glyph and label in, not [`tape_glyph_style`]'s own
+/// `accent.secondary`, which is the Tape's and Flow's.
+fn signal_loop_style(theme: &Theme) -> Style {
+    Style::default()
+        .fg(theme.accent_primary)
+        .add_modifier(Modifier::BOLD)
+}
+
+fn signal_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         (
             "← →",
@@ -10335,34 +10869,122 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
     ];
     const QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
         ("esc", "close · back", "q", "quit · confirms if running"),
-        ("c", "cancel · confirms", "", ""),
+        ("c", "cancel · confirms", "T", "colour theme"),
     ];
     const WATCH_QUIT_ROWS: &[(&str, &str, &str, &str)] = &[
         ("esc", "close · back", "q", "quit at once"),
-        ("c", "inert · launched only", "", ""),
+        ("c", "inert · launched only", "T", "colour theme"),
     ];
     let quit_rows: &[(&str, &str, &str, &str)] = if is_watch { WATCH_QUIT_ROWS } else { QUIT_ROWS };
-    let mut lines: Vec<Line<'static>> = ROWS
-        .iter()
+    ROWS.iter()
         .chain(quit_rows.iter())
-        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
-        .collect();
-    // Issue #714: `T` cycles the theme here too.
-    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
-    for _ in 0..6 {
-        lines.push(Line::from(""));
-    }
-    let key_style = Style::default()
-        .fg(ctx.theme.keyhint_key)
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .collect()
+}
+
+/// §3.7's shared glyphs plus the Signal's own additions, each in
+/// the real style [`tape_glyph_style`]/[`tape_deviation_style`]/
+/// [`signal_loop_style`] draws it in (issue #738): the Now sweep
+/// and its dashed axis ahead, a step's own done/failed/running/
+/// ahead marks and a loop station, sent above the axis and received
+/// below it, a tool's duration bar, the second marks, the released
+/// tokens' deviation colours and the axis's fixed scale.
+fn signal_help_key_rows(ctx: &DrawCtx, width: u16) -> Vec<Vec<Line<'static>>> {
+    use oscilloscope_core::render::RowKind;
+    let theme = ctx.theme;
+    let default = Style::default().fg(theme.text);
+    let muted = Style::default().fg(theme.fg_muted);
+    let dim = Style::default().fg(theme.dim);
+    let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
+    let failed = tape_glyph_style(RowKind::Prompt, StatusKind::Failed, theme);
+    let running = tape_glyph_style(RowKind::Prompt, StatusKind::Running, theme);
+    let ahead = tape_glyph_style(RowKind::Prompt, StatusKind::Pending, theme);
+    let decision = tape_glyph_style(RowKind::If, StatusKind::Done, theme);
+    let loop_style = signal_loop_style(theme);
+    let now_style = Style::default()
+        .fg(theme.accent_primary)
         .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
-    lines.push(Line::from(vec![
-        Span::styled("esc ", key_style),
-        Span::styled(format!("{:<7}", "Close"), desc_style),
-        Span::styled("? ", key_style),
-        Span::styled(format!("{:<56}", "Close"), desc_style),
-    ]));
-    lines
+    let sent_style = Style::default().fg(theme.accent_primary);
+    let received_style = Style::default().fg(theme.status_done);
+    let above_usual = tape_deviation_style(25.0, theme);
+    let far_above_usual = tape_deviation_style(50.0, theme);
+    let below_usual = tape_deviation_style(-25.0, theme);
+    vec![
+        help_row(
+            help_cell("┃", now_style),
+            help_cell("Now · axis ╌ ahead", default),
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("◆".into(), decision),
+            ],
+            help_cell("finished prompt · decision", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("✗".into(), failed),
+                (" ".into(), default),
+                ("●".into(), running),
+                (" ".into(), default),
+                ("·".into(), ahead),
+            ],
+            help_cell("failed · running · ahead", default),
+            help_cell("⟳", loop_style),
+            help_cell("a loop station", default),
+            width,
+        ),
+        help_row(
+            help_cell("above", sent_style),
+            help_cell("sent, above the axis", default),
+            help_cell("below", received_style),
+            help_cell("received, below the axis", default),
+            width,
+        ),
+        help_row(
+            help_cell("━", running),
+            help_cell("a tool's duration bar", default),
+            help_cell("seconds", dim),
+            help_cell("marks along the axis", default),
+            width,
+        ),
+        help_row(
+            help_cell("-%", below_usual),
+            help_cell("below usual: accent colour", default),
+            vec![
+                ("+25%".into(), above_usual),
+                (" ".into(), default),
+                ("+50%".into(), far_above_usual),
+            ],
+            help_cell("amber · red, above usual", default),
+            width,
+        ),
+        help_row(
+            help_cell("scale", muted),
+            help_cell("fixed for the whole run", default),
+            vec![
+                ("▁▂▃▄▅▆▇█".into(), sent_style),
+                (" ".into(), default),
+                ("▀▔".into(), received_style),
+            ],
+            help_cell("a column's partial row", default),
+            width,
+        ),
+        help_row(
+            help_cell("↑ ↓", default),
+            help_cell("Totals: tokens sent · received", default),
+            help_cell("■", dim),
+            help_cell("the run's end, in the list of steps ahead", default),
+            width,
+        ),
+        help_row(
+            help_cell("›", dim),
+            help_cell("path separator, in a step's name", default),
+            help_cell("", default),
+            help_cell("", default),
+            width,
+        ),
+    ]
 }
 
 /// The Flow's own Help (issue #691, design v1 part 3), the same
@@ -10370,7 +10992,7 @@ fn signal_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
 /// §4's own Flow keys and the globals every key bar shares -- never
 /// the movement aliases, `/`, `e`, `T`, `v`, `z`, `s`, `l`, `Tab`
 /// §4 already says are gone from the Flow.
-fn flow_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
+fn flow_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     const ROWS: &[(&str, &str, &str, &str)] = &[
         ("← →", "select a station", "+ -", "open / fold loop lanes"),
         (
@@ -10387,27 +11009,98 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
     } else {
         ("q", "quit · confirms if running", "c", "cancel · confirms")
     };
-    let mut lines: Vec<Line<'static>> = ROWS
+    let mut blocks: Vec<Vec<Line<'static>>> = ROWS
         .iter()
         .chain(std::iter::once(&quit_row))
-        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
         .collect();
     // Issue #714: `T` cycles the theme here too.
-    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
-    for _ in 0..6 {
-        lines.push(Line::from(""));
-    }
-    let key_style = Style::default()
-        .fg(ctx.theme.keyhint_key)
-        .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
-    lines.push(Line::from(vec![
-        Span::styled("esc ", key_style),
-        Span::styled(format!("{:<7}", "Close"), desc_style),
-        Span::styled("? ", key_style),
-        Span::styled(format!("{:<56}", "Close"), desc_style),
-    ]));
-    lines
+    blocks.push(tape_help_row("T", "colour theme", "", "", ctx, width));
+    blocks
+}
+
+/// Issue #738, each in the real style [`tape_glyph_style`] draws it
+/// in: a station's done/failed/running/ahead marks, a decision/loop
+/// station and the run's start/end, folded lanes, the token bar at
+/// its real (history-derived) unit, a lane not taken once its fork
+/// decided, and the Now marker.
+fn flow_help_key_rows(ctx: &DrawCtx, unit: u64, width: u16) -> Vec<Vec<Line<'static>>> {
+    use oscilloscope_core::render::RowKind;
+    let theme = ctx.theme;
+    let default = Style::default().fg(theme.text);
+    let muted = Style::default().fg(theme.fg_muted);
+    let dim = Style::default().fg(theme.dim);
+    let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
+    let failed = tape_glyph_style(RowKind::Prompt, StatusKind::Failed, theme);
+    let running = tape_glyph_style(RowKind::Prompt, StatusKind::Running, theme);
+    let ahead = tape_glyph_style(RowKind::Prompt, StatusKind::Pending, theme);
+    let decision = tape_glyph_style(RowKind::If, StatusKind::Done, theme);
+    let loop_style = tape_glyph_style(RowKind::Loop, StatusKind::Done, theme);
+    let bar_filled = Style::default().fg(theme.accent_primary);
+    let bar_empty = Style::default().fg(theme.dim);
+    vec![
+        help_row(
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("✗".into(), failed),
+            ],
+            help_cell("a station: done · failed", default),
+            vec![
+                ("●".into(), running),
+                (" ".into(), default),
+                ("·".into(), ahead),
+            ],
+            help_cell("running · ahead", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("◆".into(), decision),
+                (" ".into(), default),
+                ("⟳".into(), loop_style),
+            ],
+            help_cell("decision · loop station", default),
+            help_cell("■", muted),
+            help_cell("run start / end", default),
+            width,
+        ),
+        help_row(
+            help_cell("+N", dim),
+            help_cell("folded lanes, N more", default),
+            vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
+            help_cell(&format!("= {unit} t · token bar, fixed"), default),
+            width,
+        ),
+        help_row(
+            help_cell("lane", default),
+            help_cell("one lane per pass or branch", default),
+            help_cell("fork/join", default),
+            help_cell("paths split · rejoin", default),
+            width,
+        ),
+        help_row(
+            help_cell("·", dim),
+            help_cell("not taken, once decided", default),
+            help_cell("▾", running),
+            help_cell("Now: clock · elapsed", default),
+            width,
+        ),
+        help_row(
+            help_cell("◂ ▸", muted),
+            help_cell("stations scrolled past the edge", default),
+            help_cell("↑ ↓", default),
+            help_cell("sent · received", default),
+            width,
+        ),
+        help_row(
+            help_cell("━", Style::default().fg(theme.accent_primary)),
+            help_cell("the rail's visible window", default),
+            help_cell("›", dim),
+            help_cell("path separator, in the status line", default),
+            width,
+        ),
+    ]
 }
 
 /// The Store's own Help (issue #695, design v1 part 4), the same
@@ -10415,48 +11108,102 @@ fn flow_help_lines(ctx: &DrawCtx, is_watch: bool) -> Vec<Line<'static>> {
 /// exactly §4's own Store keys (`↑↓`/its aliases, `enter`) and the
 /// globals every key bar shares -- never `i`/`o`/`$` (Cost's own
 /// measures, gone), `Tab`, `s`/`l`/`z`/`v`, `e` or `/`.
-fn store_help_lines(ctx: &DrawCtx, unit: u64, is_watch: bool) -> Vec<Line<'static>> {
+fn store_help_keys_rows(ctx: &DrawCtx, is_watch: bool, width: u16) -> Vec<Vec<Line<'static>>> {
     let mut rows: Vec<(&str, &str, &str, &str)> = vec![
         ("↑ ↓", "select a row", "enter", "open the selected store"),
         ("j k", "same as ↑ ↓", "PgUp PgDn", "move a page"),
         ("Home End", "first / last row", "g G", "same as Home/End"),
         ("0 1 2 3", "Tape Signal Flow Store", "?", "this help"),
     ];
+    // Issue #738: `T` sits with the other keys, not off on its own
+    // between them and the Key.
     if is_watch {
         rows.push(("esc", "close · back", "q", "quit at once"));
-        rows.push(("c", "inert · launched only", "", ""));
+        rows.push(("c", "inert · launched only", "T", "colour theme"));
     } else {
         rows.push(("esc", "close · back", "q", "quit · confirms if running"));
-        rows.push(("c", "cancel · confirms", "", ""));
+        rows.push(("c", "cancel · confirms", "T", "colour theme"));
     }
-    let mut lines: Vec<Line<'static>> = rows
-        .iter()
-        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx))
-        .collect();
-    lines.push(Line::from(""));
-    lines.push(tape_help_row(
-        "▰",
-        &format!("= {unit} t · fixed scale"),
-        "",
-        "",
-        ctx,
-    ));
-    // Issue #714: `T` cycles the theme here too.
-    lines.push(tape_help_row("T", "colour theme", "", "", ctx));
-    for _ in 0..3 {
-        lines.push(Line::from(""));
+    rows.iter()
+        .map(|(k1, d1, k2, d2)| tape_help_row(k1, d1, k2, d2, ctx, width))
+        .collect()
+}
+
+/// The live-leaf style issue #738 wants the Store's own `dim` Key
+/// line to match exactly: [`Modifier::DIM`], or [`Modifier::ITALIC`]
+/// under a theme that paints no background for dim text to read
+/// against (the `terminal` theme) -- [`store_leaf_lines`]'s own
+/// rule, shared rather than rebuilt a second time.
+fn store_live_leaf_modifier(theme: &Theme) -> Modifier {
+    if theme.background.is_none() {
+        Modifier::ITALIC
+    } else {
+        Modifier::DIM
     }
-    let key_style = Style::default()
-        .fg(ctx.theme.keyhint_key)
+}
+
+/// Issue #738: a tile's area is its share of tokens, the `check`
+/// tile is a container's tokens, `… N more` folds the smaller
+/// stores together, a running container reads its accent `●`, a
+/// live leaf reads the same style [`store_leaf_lines`] really draws
+/// it in, and the token bar (moved here from its own row between
+/// the keys and the Key) shares the fixed scale every tile uses.
+fn store_help_key_rows(ctx: &DrawCtx, unit: u64, width: u16) -> Vec<Vec<Line<'static>>> {
+    use oscilloscope_core::render::RowKind;
+    let theme = ctx.theme;
+    let default = Style::default().fg(theme.text);
+    let dim = Style::default().fg(theme.dim);
+    let live_leaf = Style::default()
+        .fg(theme.text)
+        .add_modifier(store_live_leaf_modifier(theme));
+    let running = Style::default()
+        .fg(theme.accent_primary)
         .add_modifier(Modifier::BOLD);
-    let desc_style = Style::default().fg(ctx.theme.keyhint_desc);
-    lines.push(Line::from(vec![
-        Span::styled("esc ", key_style),
-        Span::styled(format!("{:<7}", "Close"), desc_style),
-        Span::styled("? ", key_style),
-        Span::styled(format!("{:<56}", "Close"), desc_style),
-    ]));
-    lines
+    let bar_filled = Style::default().fg(theme.accent_primary);
+    let bar_empty = Style::default().fg(theme.dim);
+    let done = tape_glyph_style(RowKind::Prompt, StatusKind::Done, theme);
+    let failed = tape_glyph_style(RowKind::Prompt, StatusKind::Failed, theme);
+    vec![
+        help_row(
+            help_cell("tile", default),
+            help_cell("area is its share of tokens", default),
+            help_cell("check", default),
+            help_cell("a container's tokens", default),
+            width,
+        ),
+        help_row(
+            help_cell("… N more", dim),
+            help_cell("the smaller stores, folded", default),
+            help_cell("●", running),
+            help_cell("a running container", default),
+            width,
+        ),
+        help_row(
+            help_cell("dim", live_leaf),
+            help_cell("a live leaf, dim (italic under terminal)", default),
+            help_cell("❯", running),
+            help_cell("the Largest table's cursor", default),
+            width,
+        ),
+        help_row(
+            vec![
+                ("✓".into(), done),
+                (" ".into(), default),
+                ("✗".into(), failed),
+            ],
+            help_cell("a finished/failed step, in the status line", default),
+            help_cell("›", dim),
+            help_cell("path separator, in that step's name", default),
+            width,
+        ),
+        help_row(
+            help_cell("↑ ↓", default),
+            help_cell("sent · received, per store", default),
+            vec![("▰".into(), bar_filled), ("▱".into(), bar_empty)],
+            help_cell(&format!("= {unit} t · fixed scale"), default),
+            width,
+        ),
+    ]
 }
 
 fn store_key_bar_items(wide: bool) -> Vec<(&'static str, &'static str)> {
@@ -10619,10 +11366,8 @@ fn store_leaf_lines(
     // there instead.
     let faint = if !leaf.live {
         Modifier::empty()
-    } else if theme.background.is_none() {
-        Modifier::ITALIC
     } else {
-        Modifier::DIM
+        store_live_leaf_modifier(theme)
     };
     let name_style = Style::default()
         .fg(theme.text)
@@ -11650,138 +12395,65 @@ fn draw_dialog_overlay(
                 width: inner.width.saturating_sub(1),
                 height: inner.height,
             };
-            let paragraph = Paragraph::new(fullscreen_help_lines(ctx))
+            let paragraph = Paragraph::new(fullscreen_help_lines(ctx, content_area.width))
                 .style(Style::default().bg(ctx.theme.bg_surface));
             frame.render_widget(paragraph, content_area);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Tape => {
-            // §4/§5's own fixed `2,5,72,18` (`design/frames/tape--
-            // help`), not centred like every other dialog's own, and
-            // its own `bg.overlay`/`border.focus` colours and bold
-            // title (`tape_block_title`'s own convention), not the
-            // shared overlay's plain theme background and title.
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            // §4/§5's own fixed-width overlay, not centred like
+            // every other dialog's own, and its own `bg.overlay`/
+            // `border.focus` colours and bold title (`tape_block_
+            // title`'s own convention), not the shared overlay's
+            // plain theme background and title. Sized to its own
+            // content, capped at the screen, and paged with `←→`
+            // when the Keys and Key don't both fit one page together
+            // (issue #738).
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                tape_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                tape_help_key_rows(ctx, tape_unit, tape_history_runs, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Tape", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(tape_help_lines(ctx, tape_unit, tape_history_runs))
-                .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Tape", pages, app.help_page);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Signal => {
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                signal_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                signal_help_key_rows(ctx, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Signal", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(signal_help_lines(ctx, app.is_watch))
-                .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Signal", pages, app.help_page);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Flow => {
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                flow_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                flow_help_key_rows(ctx, tape_unit, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Flow", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(flow_help_lines(ctx, app.is_watch))
-                .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Flow", pages, app.help_page);
         }
         Dialog::Help if app.screen == oscilloscope_core::screens::Screen::Store => {
-            let popup = Rect {
-                x: area.x + 2,
-                y: area.y + 5,
-                width: HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2)),
-                height: HELP_OVERLAY_HEIGHT.min(area.height.saturating_sub(5)),
-            };
-            frame.render_widget(Clear, popup);
-            let border = ctx.theme.border_focused;
-            frame.render_widget(
-                Block::default().style(Style::default().bg(ctx.theme.bg_surface)),
-                popup,
+            let popup_width = HELP_OVERLAY_WIDTH.min(area.width.saturating_sub(2));
+            let content_width = popup_width.saturating_sub(3);
+            let capacity = help_available_rows(area.height, 5);
+            let pages = help_pages(
+                store_help_keys_rows(ctx, app.is_watch, content_width),
+                help_key_header(ctx),
+                store_help_key_rows(ctx, tape_unit, content_width),
+                capacity,
             );
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .border_set(ratatui::symbols::border::ROUNDED)
-                .title(tape_block_title("Help · Store", border, ctx))
-                .border_style(Style::default().fg(border).bg(ctx.theme.bg_surface));
-            let inner = block.inner(popup);
-            frame.render_widget(block, popup);
-            fill_border_rows(frame, inner, border);
-            let content_area = Rect {
-                x: inner.x + 1,
-                y: inner.y,
-                width: inner.width.saturating_sub(1),
-                height: inner.height,
-            };
-            let paragraph = Paragraph::new(store_help_lines(ctx, tape_unit, app.is_watch))
-                .style(Style::default().bg(ctx.theme.bg_surface));
-            frame.render_widget(paragraph, content_area);
+            draw_paged_help(frame, area, ctx, "Help · Store", pages, app.help_page);
         }
         // Every screen has its own guarded `Dialog::Help` arm above;
         // this never actually draws.
@@ -14802,6 +15474,7 @@ mod golden_tests {
                 prompt_file: None,
                 limited: false,
                 secret_headers: indexmap::IndexMap::new(),
+                confine_to: None,
             }))),
             on_error,
             labels: None,
@@ -16778,7 +17451,8 @@ mod golden_tests {
             })
             .unwrap();
         let text = terminal.backend().to_string();
-        assert!(text.contains("esc") && text.contains("close"), "{text}");
+        let lower = text.to_lowercase();
+        assert!(lower.contains("esc") && lower.contains("close"), "{text}");
     }
 
     #[test]
@@ -21621,6 +22295,7 @@ mod tape_frame_goldens {
             .unwrap();
         assert_matches_mock(terminal.backend().buffer(), &mock, name, allowed_cells);
     }
+
     #[test]
     fn tape_starting_120x30_matches_the_frame() {
         let plan = demo_plan();
@@ -23483,6 +24158,692 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #738: Select's, All's and the Combined Signal's own Help
+    /// overlays each gained a Key (§3.7's shared `●` running glyph,
+    /// `—`/`gone`, run colours, the shared scale and a run's own
+    /// name) alongside their own keys.
+    #[test]
+    fn select_all_and_combined_signal_help_overlays_each_list_a_key() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let render = |f: fn(&mut Frame, &DrawCtx)| {
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal.draw(|frame| f(frame, &ctx)).unwrap();
+            terminal.backend().to_string()
+        };
+        let select = render(draw_select_help);
+        assert!(select.contains("Key"), "expected a Key section:\n{select}");
+        assert!(
+            select.contains("a running orchestration")
+                && select.contains("no config, or no run directory"),
+            "expected Select's own Key lines:\n{select}"
+        );
+        assert!(
+            select.contains("its run directory is gone")
+                && select.contains("a short name from the run's id"),
+            "expected Select's own gone/name Key lines:\n{select}"
+        );
+
+        let all = render(draw_all_help);
+        assert!(all.contains("Key"), "expected a Key section:\n{all}");
+        assert!(
+            all.contains("a running orchestration") && all.contains("colour per run"),
+            "expected All's own Key lines:\n{all}"
+        );
+        assert!(
+            all.contains("no config or run directory") && all.contains("directory gone"),
+            "expected All's own dash/gone Key line:\n{all}"
+        );
+
+        let combined = render(draw_combined_signal_help);
+        assert!(
+            combined.contains("Key"),
+            "expected a Key section:\n{combined}"
+        );
+        assert!(
+            combined.contains("one colour per run") && combined.contains("one round top shared"),
+            "expected the Combined Signal's own colour/scale Key lines:\n{combined}"
+        );
+    }
+
+    fn lines_text(lines: &[Line<'static>]) -> String {
+        lines
+            .iter()
+            .map(|l| {
+                l.spans
+                    .iter()
+                    .map(|s| s.content.as_ref())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    /// A screen's own Key rows, flattened for `lines_text` -- issue
+    /// #738's own derived golden-symbol tests check against these
+    /// (the §3.7 glyph legend) alone, never a screen's own keyboard
+    /// shortcuts too, which can share a symbol (`↑ ↓`, say) with no
+    /// bearing on whether the legend itself explains it.
+    fn flatten_help_blocks(blocks: &[Vec<Line<'static>>]) -> Vec<Line<'static>> {
+        blocks.iter().flatten().cloned().collect()
+    }
+
+    /// Every glyph [`tape_glyph`] can draw, across every `RowKind`
+    /// and `StatusKind` it actually switches on -- issue #738's own
+    /// derived test: a new symbol `tape_glyph` starts drawing with
+    /// no Key line of its own fails this, rather than needing a
+    /// human to notice.
+    fn derived_tape_glyphs() -> std::collections::HashSet<char> {
+        use oscilloscope_core::render::RowKind;
+        const ROW_KINDS: &[RowKind] = &[
+            RowKind::Tool,
+            RowKind::Prompt,
+            RowKind::Use,
+            RowKind::Yield,
+            RowKind::Reflector,
+            RowKind::If,
+            RowKind::Loop,
+            RowKind::Dynamic,
+            RowKind::TryFinally,
+            RowKind::Pass,
+            RowKind::Root,
+            RowKind::Unknown,
+            RowKind::QuickSteps,
+            RowKind::Report,
+        ];
+        const STATUS_KINDS: &[StatusKind] = &[
+            StatusKind::Pending,
+            StatusKind::Running,
+            StatusKind::LikelyRunning,
+            StatusKind::RunningOrQueued,
+            StatusKind::Done,
+            StatusKind::Failed,
+            StatusKind::FailedHandled,
+            StatusKind::Skipped,
+            StatusKind::Cancelled,
+            StatusKind::Aborted,
+        ];
+        let mut set = std::collections::HashSet::new();
+        for &kind in ROW_KINDS {
+            for &status in STATUS_KINDS {
+                set.insert(tape_glyph(kind, status));
+            }
+        }
+        set
+    }
+
+    #[test]
+    fn every_glyph_tape_glyph_can_draw_has_a_tape_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let key_text = lines_text(&flatten_help_blocks(&tape_help_key_rows(
+            &ctx,
+            50,
+            Some(3),
+            72,
+        )));
+        for ch in derived_tape_glyphs() {
+            assert!(
+                key_text.contains(ch),
+                "tape_glyph can draw {ch:?} but the Tape's own Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_glyph_tape_glyph_can_draw_has_a_signal_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let key_text = lines_text(&flatten_help_blocks(&signal_help_key_rows(&ctx, 72)));
+        for ch in derived_tape_glyphs() {
+            assert!(
+                key_text.contains(ch),
+                "tape_glyph can draw {ch:?} but the Signal's own Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_glyph_tape_glyph_can_draw_has_a_flow_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let key_text = lines_text(&flatten_help_blocks(&flow_help_key_rows(&ctx, 50, 72)));
+        for ch in derived_tape_glyphs() {
+            assert!(
+                key_text.contains(ch),
+                "tape_glyph can draw {ch:?} but the Flow's own Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    /// Box-drawing chrome -- a screen's own border/rule drawing,
+    /// never a symbol issue #738's Key owes a line of its own.
+    const CHROME_GLYPHS: &[char] = &[
+        '─', '│', '╭', '╮', '╰', '╯', '┬', '┴', '├', '┤', '═', '║', '⋯', '…', '└', '┘',
+    ];
+
+    /// Prose punctuation every screen's own text uses constantly --
+    /// never, on its own, a symbol issue #738's Key owes a line to.
+    const PROSE_PUNCTUATION: &[char] = &[
+        '.', ',', ':', ';', '\'', '"', '`', '-', '+', '=', '(', ')', '[', ']', '{', '}', '/', '\\',
+        '*', '#', '&', '$', '@', '!', '?', '<', '>', '|', '~', '_', '%', '—', '×', '←', '→',
+    ];
+
+    /// Every non-alphanumeric glyph an already-committed `.mock`
+    /// frame draws, minus pure chrome and prose punctuation -- issue
+    /// #738's own second derived check: a real frame's own symbol
+    /// with no Key line of its own fails whichever screen's test
+    /// below includes that frame, rather than needing a human to
+    /// notice.
+    fn symbols_in_mock(name: &str, theme: &Theme) -> std::collections::HashSet<char> {
+        let mock = parse_mock(name, theme);
+        let mut set = std::collections::HashSet::new();
+        for row in &mock.cells {
+            for &(ch, _) in row {
+                if ch.is_ascii_alphanumeric() || ch == ' ' {
+                    continue;
+                }
+                if CHROME_GLYPHS.contains(&ch) || PROSE_PUNCTUATION.contains(&ch) {
+                    continue;
+                }
+                set.insert(ch);
+            }
+        }
+        set
+    }
+
+    #[test]
+    fn every_symbol_in_the_tapes_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in [
+            "tape--normal--120x30",
+            "tape--usual--120x30",
+            "tape--failed--120x30",
+            "tape--starting--120x30",
+            "tape--ended--120x30",
+        ] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let key_text = lines_text(&flatten_help_blocks(&tape_help_key_rows(
+            &ctx,
+            50,
+            Some(3),
+            72,
+        )));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Tape's own frames but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_signals_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let symbols = symbols_in_mock("signal--normal--120x30", &theme);
+        let key_text = lines_text(&flatten_help_blocks(&signal_help_key_rows(&ctx, 72)));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Signal's own frame but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_flows_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in ["flow--normal--120x30", "flow--folded--120x30"] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let key_text = lines_text(&flatten_help_blocks(&flow_help_key_rows(&ctx, 50, 72)));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Flow's own frames but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_stores_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let symbols = symbols_in_mock("store--normal--120x30", &theme);
+        let key_text = lines_text(&flatten_help_blocks(&store_help_key_rows(&ctx, 50, 72)));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Store's own frame but the Key never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_selects_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in ["select--normal--120x30", "select--empty--80x24"] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| draw_select_help(f, &ctx)).unwrap();
+        let key_text = terminal.backend().to_string();
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in Select's own frames but its Help never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_alls_own_frames_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut symbols = std::collections::HashSet::new();
+        for name in ["all--tape--180x48", "all--signal--180x48"] {
+            symbols.extend(symbols_in_mock(name, &theme));
+        }
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| draw_all_help(f, &ctx)).unwrap();
+        // Every tile on this screen is that same screen's own
+        // single-run rendering (issue #698), so a symbol inside one
+        // -- the Tape's own `━`, say -- is already explained by
+        // that screen's own Key, reachable with `?` there; All's own
+        // Key only owes a line for what it adds itself (the grid's
+        // own `●`/`—`/`gone` and the run's own name).
+        let mut key_text = terminal.backend().to_string();
+        key_text.push_str(&lines_text(&flatten_help_blocks(&tape_help_key_rows(
+            &ctx,
+            50,
+            Some(3),
+            72,
+        ))));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&signal_help_key_rows(
+            &ctx, 72,
+        ))));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&flow_help_key_rows(
+            &ctx, 50, 72,
+        ))));
+        key_text.push_str(&lines_text(&flatten_help_blocks(&store_help_key_rows(
+            &ctx, 50, 72,
+        ))));
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in All's own frames but no screen's own Key mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_symbol_in_the_combined_signals_own_frame_has_a_key_line() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let symbols = symbols_in_mock("all--combined-signal--180x48", &theme);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal
+            .draw(|f| draw_combined_signal_help(f, &ctx))
+            .unwrap();
+        let key_text = terminal.backend().to_string();
+        for ch in symbols {
+            assert!(
+                key_text.contains(ch),
+                "{ch:?} is drawn in the Combined Signal's own frame but its Help never mentions it:\n{key_text}"
+            );
+        }
+    }
+
+    /// Issue #738: at 120x30 the Tape's own Help has the room to
+    /// show every key and the Key together, on one page -- `←→`
+    /// (`crate::keys::HelpPage`) draws the same merged content
+    /// either way, since there is nothing else to switch to.
+    #[test]
+    fn the_tapes_help_overlay_merges_keys_and_key_at_120x30() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let draw_at = |page: crate::keys::HelpPage| {
+            let mut app = crate::keys::App::new(false);
+            app.selected_path = Some("prime.gate.reply".to_string());
+            app.dialog = Dialog::Help;
+            app.help_page = page;
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        Some(&tape_screen),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        for page in [0, 1] {
+            let merged = draw_at(page);
+            assert!(
+                merged.contains("Help · Tape")
+                    && !merged.contains("Help · Tape · Key")
+                    && !merged.contains("Help · Tape · Keys"),
+                "expected the merged page's own title, with no page suffix:\n{merged}"
+            );
+            assert!(
+                merged.contains("select a row") && merged.contains("tokens: units or vs usual"),
+                "expected §4's own Tape keys:\n{merged}"
+            );
+            assert!(
+                merged.contains("same as ↑ ↓")
+                    && merged.contains("filter rows")
+                    && merged.contains("errors only"),
+                "expected the movement aliases and /-e, settling issue #684's own frame-locked blank rows:\n{merged}"
+            );
+            assert!(
+                merged.contains("follow Now") && merged.contains("unfold meta"),
+                "expected the global f/m keys:\n{merged}"
+            );
+            assert!(
+                merged.contains("done · failed") && merged.contains("running · ahead"),
+                "expected §3.7's shared glyph legend:\n{merged}"
+            );
+            assert!(
+                merged.contains("now band: clock · elapsed"),
+                "expected the Now band's own Key line:\n{merged}"
+            );
+            assert!(
+                merged.contains("passes waiting to run") && merged.contains("path separator"),
+                "expected the loop-line/breadcrumb Key lines:\n{merged}"
+            );
+        }
+    }
+
+    /// Below the merged page's own room (issue #738), the Tape's
+    /// Help falls back to its fixed-height overlay, paged between
+    /// its own keys (§4's key bar keys plus the movement aliases,
+    /// `/` and `e` the key bar itself does not show) and its Key
+    /// (§3.7's glyph legend plus the Tape's own additions --
+    /// breadcrumbs, previews, the Now band and a loop's slots/queue)
+    /// with `←→`.
+    #[test]
+    fn the_tapes_help_overlay_pages_between_key_and_keys_at_80x24() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let draw_at = |page: crate::keys::HelpPage| {
+            let mut app = crate::keys::App::new(false);
+            app.selected_path = Some("prime.gate.reply".to_string());
+            app.dialog = Dialog::Help;
+            app.help_page = page;
+            let mut terminal = Terminal::new(TestBackend::new(80, 24)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        Some(&tape_screen),
+                        None,
+                        None,
+                        None,
+                        None,
+                    )
+                })
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        let key_page = draw_at(1);
+        assert!(
+            key_page.contains("Help · Tape · Key") && !key_page.contains("Help · Tape · Keys"),
+            "expected the Key page's own title:\n{key_page}"
+        );
+        assert!(
+            key_page.contains("done · failed") && key_page.contains("running · ahead"),
+            "expected §3.7's shared glyph legend:\n{key_page}"
+        );
+        assert!(
+            key_page.contains("now band: clock · elapsed"),
+            "expected the Now band's own Key line:\n{key_page}"
+        );
+        assert!(
+            key_page.contains("passes waiting to run") && key_page.contains("path separator"),
+            "expected the loop-line/breadcrumb Key lines:\n{key_page}"
+        );
+        assert!(
+            !key_page.contains("select a row"),
+            "the Key page must not show the Keys page's own rows:\n{key_page}"
+        );
+
+        let keys_page = draw_at(0);
+        assert!(
+            keys_page.contains("Help · Tape · Keys"),
+            "expected the Keys page's own title:\n{keys_page}"
+        );
+        assert!(
+            keys_page.contains("select a row") && keys_page.contains("tokens: units or vs usual"),
+            "expected §4's own Tape keys:\n{keys_page}"
+        );
+        assert!(
+            keys_page.contains("same as ↑ ↓")
+                && keys_page.contains("filter rows")
+                && keys_page.contains("errors only"),
+            "expected the movement aliases and /-e, settling issue #684's own frame-locked blank rows:\n{keys_page}"
+        );
+        assert!(
+            !keys_page.contains("done · failed"),
+            "the Keys page must not show the Key page's own glyph legend:\n{keys_page}"
+        );
+    }
+
+    /// Issue #738: below 74 columns a fixed 18-row overlay would cut
+    /// the close row -- the only hint a second page exists -- and the
+    /// Key's last line (the sparkline). At 60x24 every page the
+    /// Tape's Help splits onto keeps its close row, and the last row
+    /// of both the Keys and the Key reads in full on some page.
+    #[test]
+    fn the_tapes_help_overlay_keeps_its_close_row_at_60x24() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let (rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let pages = render_help_pages(
+            |app, terminal| {
+                app.selected_path = Some("prime.gate.reply".to_string());
+                terminal
+                    .draw(|f| {
+                        draw(
+                            f,
+                            &rendered,
+                            None,
+                            &[],
+                            app,
+                            None,
+                            &ctx,
+                            0,
+                            now,
+                            Some(&tape_screen),
+                            None,
+                            None,
+                            None,
+                            None,
+                        )
+                    })
+                    .unwrap();
+            },
+            60,
+        );
+        assert!(
+            pages.len() > 1,
+            "expected more than one page at 60x24: {} page(s)",
+            pages.len()
+        );
+        for (i, page) in pages.iter().enumerate() {
+            assert!(
+                page.contains("Close"),
+                "page {i} of {} has no close row:\n{page}",
+                pages.len()
+            );
+        }
+        let all_pages = pages.join("\n");
+        assert!(
+            all_pages.contains("a loop's pass sparkline"),
+            "the Key page's own last line is missing from every page:\n{all_pages}"
+        );
+        assert!(
+            all_pages.contains("cancel · confirms"),
+            "the Keys page's own last line is missing from every page:\n{all_pages}"
+        );
+    }
+
     /// The Help overlay on Signal lists its own keys (§4), not an
     /// older generic list that has none of them.
     #[test]
@@ -23512,28 +24873,34 @@ mod tape_frame_goldens {
             zone: &zone,
             no_animation: true,
         };
-        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
-        terminal
-            .draw(|f| {
-                draw(
-                    f,
-                    &rendered,
-                    None,
-                    &[],
-                    &mut app,
-                    None,
-                    &ctx,
-                    0,
-                    now,
-                    None,
-                    None,
-                    None,
-                    Some(&signal_screen),
-                    None,
-                )
-            })
-            .unwrap();
-        let text = terminal.backend().to_string();
+        let mut draw_page = |page: i64| {
+            app.help_page = page;
+            let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw(
+                        f,
+                        &rendered,
+                        None,
+                        &[],
+                        &mut app,
+                        None,
+                        &ctx,
+                        0,
+                        now,
+                        None,
+                        None,
+                        None,
+                        Some(&signal_screen),
+                        None,
+                    )
+                })
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        // At 120x30 the Signal's Keys and Key don't fit one page together:
+        // `?` opens on Keys (page 0), the same order the merged page reads in.
+        let text = draw_page(0);
         assert!(text.contains("Help") && text.contains("Signal"), "{text}");
         assert!(text.contains("Scrub"), "{text}");
         assert!(text.contains("Zoom"), "{text}");
@@ -23545,6 +24912,20 @@ mod tape_frame_goldens {
         assert!(
             !text.contains("errors only"),
             "not the generic list:\n{text}"
+        );
+        // Issue #738: the Key's own glyph/line/colour legend --
+        // the Now sweep, a finished prompt and a decision on the
+        // axis, sent above/received below, a tool's own bar and
+        // the axis's fixed scale.
+        let text = draw_page(1);
+        assert!(text.contains("Key"), "expected a Key section:\n{text}");
+        assert!(
+            text.contains("axis ╌ ahead") && text.contains("finished prompt"),
+            "expected the Now sweep's own Key line:\n{text}"
+        );
+        assert!(
+            text.contains("sent, above the axis") && text.contains("received, below the axis"),
+            "expected the sent/received Key lines:\n{text}"
         );
     }
 
@@ -23574,18 +24955,20 @@ mod tape_frame_goldens {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        let to_blocks_text =
+            |blocks: Vec<Vec<Line<'static>>>| to_text(flatten_help_blocks(&blocks));
         for (launched, watch) in [
             (
-                to_text(signal_help_lines(&ctx, false)),
-                to_text(signal_help_lines(&ctx, true)),
+                to_blocks_text(signal_help_keys_rows(&ctx, false, 72)),
+                to_blocks_text(signal_help_keys_rows(&ctx, true, 72)),
             ),
             (
-                to_text(flow_help_lines(&ctx, false)),
-                to_text(flow_help_lines(&ctx, true)),
+                to_blocks_text(flow_help_keys_rows(&ctx, false, 72)),
+                to_blocks_text(flow_help_keys_rows(&ctx, true, 72)),
             ),
             (
-                to_text(store_help_lines(&ctx, 50, false)),
-                to_text(store_help_lines(&ctx, 50, true)),
+                to_blocks_text(store_help_keys_rows(&ctx, false, 72)),
+                to_blocks_text(store_help_keys_rows(&ctx, true, 72)),
             ),
         ] {
             assert!(launched.contains("confirms if running"), "{launched}");
@@ -23660,6 +25043,17 @@ mod tape_frame_goldens {
         assert!(
             !text.contains("collapse / expand a row"),
             "not the old tree-era list:\n{text}"
+        );
+        // Issue #738: stations, folded lanes, the token bar and
+        // Following.
+        assert!(text.contains("Key"), "expected a Key section:\n{text}");
+        assert!(
+            text.contains("decision · loop station") && text.contains("folded lanes, N more"),
+            "expected the station/folded-lane Key lines:\n{text}"
+        );
+        assert!(
+            text.contains("token bar, fixed") && text.contains("Now: clock · elapsed"),
+            "expected the token bar/Now Key lines:\n{text}"
         );
     }
 
@@ -23739,6 +25133,507 @@ mod tape_frame_goldens {
             !text.contains("full value overlay"),
             "not the generic list:\n{text}"
         );
+        // Issue #738: a tile's own share of tokens, the `check`
+        // tile, `… N more`, a running container's own accent `●`
+        // and a live leaf's own dim (italic in `terminal`) style.
+        assert!(text.contains("Key"), "expected a Key section:\n{text}");
+        assert!(
+            text.contains("area is its share of tokens") && text.contains("a container's tokens"),
+            "expected the tile/check Key lines:\n{text}"
+        );
+        assert!(
+            text.contains("the smaller stores, folded") && text.contains("a running container"),
+            "expected the more/running Key lines:\n{text}"
+        );
+        assert!(
+            text.contains("a live leaf"),
+            "expected the live-leaf Key line:\n{text}"
+        );
+    }
+
+    /// Renders `screen`'s own Help, every page `←`/`→` reaches
+    /// (`App::help_page` wraps once it cycles back to the page it
+    /// started on), at `width`x24 -- real backend, real pagination,
+    /// so a cut or a missing page shows the same way it would in a
+    /// real terminal.
+    fn render_help_pages(
+        draw_at: impl Fn(&mut App, &mut Terminal<TestBackend>),
+        width: u16,
+    ) -> Vec<String> {
+        let mut app = App::new(false);
+        app.dialog = Dialog::Help;
+        let mut pages = Vec::new();
+        let mut terminal = Terminal::new(TestBackend::new(width, 24)).unwrap();
+        for page in 0..8 {
+            app.help_page = page;
+            draw_at(&mut app, &mut terminal);
+            let text = terminal.backend().to_string();
+            if pages.contains(&text) {
+                break;
+            }
+            pages.push(text);
+        }
+        pages
+    }
+
+    /// Every row of every page, at every width this fails against
+    /// `ccac5c9` (#748's fix pass): a pair that overflowed its own
+    /// column shifted the row's right pair instead of getting a
+    /// line of its own (`help_row` there only ever checked the
+    /// overlay's own width, never the pair's own fit), so e.g. the
+    /// Store's `Home End`/`first / last row` row pushed `g G` two
+    /// columns right of every other row's own second pair, and
+    /// `path separator, in that step's name` ran past the border
+    /// outright. Checks the right pair's own column (never shifted)
+    /// and that no row is wider than the overlay's own content --
+    /// `help_overlays_keep_every_phrase_at_every_width` below checks
+    /// nothing is actually cut, the same way, through the real
+    /// backend.
+    fn assert_help_rows_fit(
+        blocks: &[Vec<Line<'static>>],
+        content_width: u16,
+        screen: &str,
+        width: u16,
+    ) {
+        let content_width = content_width as usize;
+        for block in blocks {
+            for line in block {
+                let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                let len = text.chars().count();
+                assert!(
+                    len <= content_width,
+                    "{screen} at {width} cols: a row is {len} cells wide, past the overlay's own {content_width}-cell content width: {text:?}"
+                );
+            }
+            if block.len() == 1 {
+                let text: String = block[0].spans.iter().map(|s| s.content.as_ref()).collect();
+                let chars: Vec<char> = text.chars().collect();
+                if chars.len() > 35 {
+                    assert_ne!(
+                        chars.get(35),
+                        Some(&' '),
+                        "{screen} at {width} cols: the right-hand pair doesn't start at column 35, same as every other row's own: {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `help_page` (a free-running counter, keys.rs) always wraps
+    /// into `0..page_count`, however far `←`/`→` have moved it --
+    /// negative, past the last page, or (since nothing bounds it)
+    /// several multiples around either way.
+    #[test]
+    fn help_page_index_wraps_a_free_running_counter_into_range() {
+        assert_eq!(help_page_index(0, 3), 0);
+        assert_eq!(help_page_index(1, 3), 1);
+        assert_eq!(help_page_index(2, 3), 2);
+        assert_eq!(help_page_index(3, 3), 0);
+        assert_eq!(help_page_index(-1, 3), 2);
+        assert_eq!(help_page_index(-3, 3), 0);
+        assert_eq!(help_page_index(-4, 3), 2);
+        assert_eq!(help_page_index(7, 3), 1);
+        assert_eq!(help_page_index(0, 1), 0);
+        assert_eq!(help_page_index(5, 1), 0);
+        assert_eq!(help_page_index(5, 0), 0);
+    }
+
+    /// Issue #738's layout rule (like
+    /// `the_tapes_help_overlay_pages_between_key_and_keys_at_80x24`,
+    /// but for every screen's own rows, not just whether the pages
+    /// split): at 60 (the Tape only -- #738's own floor), 72, 73,
+    /// 74, 80, 120 and 187 columns, no key:meaning pair ever gets
+    /// cut or shifts the row's own right-hand column.
+    #[test]
+    fn help_rows_never_cut_or_shift_at_every_required_width() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let content_width_at = |width: u16| -> u16 {
+            HELP_OVERLAY_WIDTH
+                .min(width.saturating_sub(2))
+                .saturating_sub(3)
+        };
+        for width in [60u16, 72, 73, 74, 80, 120, 187] {
+            let content_width = content_width_at(width);
+            assert_help_rows_fit(
+                &tape_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Tape Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &tape_help_key_rows(&ctx, 50, Some(3), content_width),
+                content_width,
+                "Tape Key",
+                width,
+            );
+        }
+        for width in [72u16, 73, 74, 80, 120, 187] {
+            let content_width = content_width_at(width);
+            assert_help_rows_fit(
+                &signal_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Signal Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &signal_help_key_rows(&ctx, content_width),
+                content_width,
+                "Signal Key",
+                width,
+            );
+            assert_help_rows_fit(
+                &flow_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Flow Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &flow_help_key_rows(&ctx, 50, content_width),
+                content_width,
+                "Flow Key",
+                width,
+            );
+            assert_help_rows_fit(
+                &store_help_keys_rows(&ctx, false, content_width),
+                content_width,
+                "Store Keys",
+                width,
+            );
+            assert_help_rows_fit(
+                &store_help_key_rows(&ctx, 50, content_width),
+                content_width,
+                "Store Key",
+                width,
+            );
+        }
+    }
+
+    /// The same widths, through the real backend this time: every
+    /// key and meaning in a screen's own list (every literal below,
+    /// copied from its own row-building functions) reads in full on
+    /// some page -- a cut would break one of these apart, same as a
+    /// page `←→` never reaches would drop one outright.
+    #[test]
+    fn help_overlays_keep_every_phrase_at_every_width() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+
+        let (tape_rendered, tape_screen) = build_tape_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+            true,
+        );
+        const TAPE_PHRASES: &[&str] = &[
+            "select a row",
+            "same as ↑ ↓",
+            "move a page",
+            "first · last row",
+            "same as Home · End",
+            "Tape Signal Flow Store",
+            "open the step",
+            "focus the detail pane",
+            "previews on or off",
+            "tokens: units or vs usual",
+            "filter rows",
+            "errors only",
+            "colour theme",
+            "follow Now · unfold meta",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "done · failed",
+            "running · ahead, queued",
+            "decision · loop",
+            "run start/end · starting",
+            "a handled failure",
+            "below usual",
+            "path separator, dim parents",
+            "shown under a finished step, toggled with p",
+            "now band: clock · elapsed",
+            "token bar, fixed",
+            "N of N Slots Busy at once",
+            "passes waiting to run",
+            "past runs",
+            "above usual: amber · red",
+            "Totals: sent · received",
+            "the t view's tick",
+            "a loop's pass sparkline",
+        ];
+        for width in [60u16, 72, 73, 74, 80, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &tape_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                Some(&tape_screen),
+                                None,
+                                None,
+                                None,
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in TAPE_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Tape at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
+
+        let (signal_rendered, signal_screen) = build_signal_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            100,
+        );
+        const SIGNAL_PHRASES: &[&str] = &[
+            "scrub the cursor along the axis",
+            "zoom: 50 ms to 1 s a column",
+            "cursor back to Now",
+            "open the step under the cursor",
+            "Tape Signal Flow Store",
+            "this help",
+            "close · back",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "colour theme",
+            "Now · axis ╌ ahead",
+            "finished prompt · decision",
+            "failed · running · ahead",
+            "a loop station",
+            "sent, above the axis",
+            "received, below the axis",
+            "a tool's duration bar",
+            "marks along the axis",
+            "below usual: accent colour",
+            "amber · red, above usual",
+            "fixed for the whole run",
+            "a column's partial row",
+            "Totals: tokens sent · received",
+            "the run's end, in the list of steps ahead",
+            "path separator, in a step's name",
+        ];
+        for width in [80u16, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    app.screen = oscilloscope_core::screens::Screen::Signal;
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &signal_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                None,
+                                None,
+                                None,
+                                Some(&signal_screen),
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in SIGNAL_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Signal at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
+
+        let (flow_rendered, flow_screen) = build_flow_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+        );
+        const FLOW_PHRASES: &[&str] = &[
+            "select a station",
+            "open / fold loop lanes",
+            "select a pass",
+            "open the selection full-screen",
+            "follow Now",
+            "Tape Signal Flow Store",
+            "this help",
+            "close · back",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "colour theme",
+            "a station: done · failed",
+            "running · ahead",
+            "decision · loop station",
+            "run start / end",
+            "folded lanes, N more",
+            "token bar, fixed",
+            "one lane per pass or branch",
+            "paths split · rejoin",
+            "not taken, once decided",
+            "Now: clock · elapsed",
+            "stations scrolled past the edge",
+            "sent · received",
+            "the rail's visible window",
+            "path separator, in the status line",
+        ];
+        for width in [80u16, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    app.screen = oscilloscope_core::screens::Screen::Flow;
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &flow_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                None,
+                                None,
+                                Some(&flow_screen),
+                                None,
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in FLOW_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Flow at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
+
+        let (store_rendered, store_screen) = build_store_screen(
+            &plan,
+            &history,
+            &state,
+            &events,
+            oscilloscope_core::model::ProcessState::Running,
+            now,
+            "cof 0.1.0",
+            Some("prime.gate.reply"),
+        );
+        const STORE_PHRASES: &[&str] = &[
+            "select a row",
+            "open the selected store",
+            "same as ↑ ↓",
+            "move a page",
+            "first / last row",
+            "same as Home/End",
+            "Tape Signal Flow Store",
+            "this help",
+            "close · back",
+            "quit · confirms if running",
+            "cancel · confirms",
+            "colour theme",
+            "area is its share of tokens",
+            "a container's tokens",
+            "the smaller stores, folded",
+            "a running container",
+            "a live leaf, dim (italic under terminal)",
+            "the Largest table's cursor",
+            "a finished/failed step, in the status line",
+            "path separator, in that step's name",
+            "sent · received, per store",
+            "fixed scale",
+        ];
+        for width in [80u16, 120, 187] {
+            let pages = render_help_pages(
+                |app, terminal| {
+                    app.screen = oscilloscope_core::screens::Screen::Store;
+                    terminal
+                        .draw(|f| {
+                            draw(
+                                f,
+                                &store_rendered,
+                                None,
+                                &[],
+                                app,
+                                None,
+                                &ctx,
+                                0,
+                                now,
+                                None,
+                                Some(&store_screen),
+                                None,
+                                None,
+                                None,
+                            )
+                        })
+                        .unwrap();
+                },
+                width,
+            );
+            let all_pages = pages.join("\n");
+            for phrase in STORE_PHRASES {
+                assert!(
+                    all_pages.contains(phrase),
+                    "Store at {width} cols: {phrase:?} is missing from every page ({} pages):\n{all_pages}",
+                    pages.len()
+                );
+            }
+        }
     }
 
     /// Issue #704 rule 5: the full-screen step's own key bar, shared

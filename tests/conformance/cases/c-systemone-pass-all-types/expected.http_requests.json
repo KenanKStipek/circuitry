@@ -1,0 +1,34 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "application/json"
+      ],
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "content-length",
+        "433"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\":\"typesafe-1\",\"state\":{\"report\":\"looks fine, no concerns\"},\"questions\":{\"risky\":{\"type\":\"noul\",\"instructions\":\"Does this change risk data loss?\"},\"verdict\":{\"type\":\"choice\",\"instructions\":\"What should the reviewer do?\",\"criteria\":{\"approve\":\"Nothing blocks the change.\",\"reject\":\"The change should not land.\"}},\"confidence_score\":{\"type\":\"score\",\"instructions\":\"Rate overall confidence.\",\"criteria\":[\"low\",\"medium\",\"high\"]}}}"
+  }
+]

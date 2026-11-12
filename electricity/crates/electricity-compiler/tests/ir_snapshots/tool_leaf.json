@@ -18,6 +18,7 @@
               "kind": {
                 "Leaf": {
                   "Tool": {
+                    "confine_to": null,
                     "description": null,
                     "expect": null,
                     "group": null,

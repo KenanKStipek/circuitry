@@ -286,6 +286,8 @@ mod tests {
             armed: false,
             secret_headers: &[],
             scrub: None,
+            limited: false,
+            confine_to: None,
         };
         tool.execute(params, &call).await
     }

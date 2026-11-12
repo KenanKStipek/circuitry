@@ -69,6 +69,7 @@ fn stringify_item(path: EffectPath, name: &str) -> Op {
             secret_headers: IndexMap::new(),
             prompt_file: None,
             limited: false,
+            confine_to: None,
         }))),
         on_error: OnError::Fail,
         labels: None,

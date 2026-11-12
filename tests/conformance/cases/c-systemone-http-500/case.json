@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "The mock server answers with a bare HTTP 500; with no retries configured, the effect fails on its first attempt with meta.raw.error_kind server_error.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml"
+}

@@ -1,11 +1,11 @@
 //! `secrets.py`'s own data-shape half, ported: whether a `Value` reads
 //! as a `{secret: <name>, prefix?: <text>}` reference, and why one
 //! doesn't (issue #598). The resolution half (the Keychain, a command,
-//! an environment variable) is not this crate's concern -- a later
-//! lane's own crate resolves a well-formed [`SecretRef`] into a value;
-//! this module only recognizes the shape, the same way this crate's
-//! own `ParamNode::From` recognizes a `{from: ...}` leaf's shape
-//! without resolving it either.
+//! an environment variable) is not this crate's concern --
+//! `electricity-tools`' own `secrets` module resolves a well-formed
+//! [`SecretRef`] into a value; this module only recognizes the shape,
+//! the same way this crate's own `ParamNode::From` recognizes a
+//! `{from: ...}` leaf's shape without resolving it either.
 
 use electricity_value::Value;
 

@@ -177,6 +177,7 @@ mod python_type_name_tests {
                 secret_headers: IndexMap::new(),
                 prompt_file: None,
                 limited: false,
+                confine_to: None,
             }))))
             .python_type_name(),
             "ToolDefinition"

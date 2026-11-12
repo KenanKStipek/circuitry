@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "The mock server answers with an HTTP 302 -- never followed; the effect fails with meta.raw.error_kind redirect.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml"
+}

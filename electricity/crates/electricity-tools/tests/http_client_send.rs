@@ -542,6 +542,44 @@ async fn dropping_the_send_future_aborts_the_connection() {
     );
 }
 
+#[tokio::test]
+async fn send_capped_truncates_a_body_longer_than_the_cap_without_an_incomplete_read() {
+    let addr = spawn_raw_server(
+        "HTTP/1.1 200 OK\r\nContent-Length: 10\r\nConnection: close\r\n\r\n0123456789",
+    );
+    let client = http_client::build_client().unwrap();
+    let response = http_client::send_capped(
+        &client,
+        &target(addr),
+        &get_request(),
+        TimeoutModel::PerOperation(Duration::from_secs(5)),
+        4,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status, 200);
+    assert_eq!(response.body, b"0123");
+    assert!(response.body_error.is_none());
+}
+
+#[tokio::test]
+async fn send_capped_leaves_a_shorter_body_untouched() {
+    let addr =
+        spawn_raw_server("HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok");
+    let client = http_client::build_client().unwrap();
+    let response = http_client::send_capped(
+        &client,
+        &target(addr),
+        &get_request(),
+        TimeoutModel::PerOperation(Duration::from_secs(5)),
+        4096,
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.body, b"ok");
+    assert!(response.body_error.is_none());
+}
+
 /// A loopback address nothing answers: port 1, which nothing listens on in
 /// CI or on a developer machine, and which is below the ephemeral range,
 /// so a parallel test binding `127.0.0.1:0` is never handed it. Binding

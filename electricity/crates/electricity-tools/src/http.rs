@@ -1792,6 +1792,8 @@ fn finalize_streamed_save(
         exit_code: None,
         ok,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
     })
 }
 
@@ -1882,6 +1884,8 @@ fn finalize_response_save(
         exit_code: None,
         ok,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
     })
 }
 
@@ -1969,6 +1973,8 @@ fn finalize_response(
         exit_code: None,
         ok,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
     })
 }
 
@@ -1987,7 +1993,7 @@ fn to_string_pairs(pairs: &[(Value, Value)]) -> Vec<(String, String)> {
 /// always appended, as this function used to, makes a `no_proxy`
 /// entry with no port of its own -- the common case -- never match a
 /// request whose URL also never wrote one).
-fn netloc_host_as_written(netloc: &str) -> &str {
+pub(crate) fn netloc_host_as_written(netloc: &str) -> &str {
     match netloc.rfind('@') {
         Some(idx) => &netloc[idx + 1..],
         None => netloc,

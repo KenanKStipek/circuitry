@@ -448,6 +448,8 @@ pub(crate) async fn run_binary(
         exit_code: Some(completed.exit_code),
         ok: true,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
     })
 }
 
@@ -666,6 +668,8 @@ mod tests {
             exit_code: Some(exit_code),
             ok: true,
             stdout_parsed: false,
+            tokens_sent: None,
+            tokens_received: None,
         }
     }
 
