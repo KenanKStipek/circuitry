@@ -3117,17 +3117,29 @@ fn tail_20_lines(text: &str) -> (&str, Option<usize>) {
 /// ([`tool_detail_fields`]). `full`: the full-screen step keeps the
 /// whole stdout and stderr, nothing cut (issue #704's own rule); any
 /// other pane reads only the last 20 lines of each, with a `… n
-/// earlier lines` row above them once there were more -- a running
-/// tool has neither yet, since neither engine publishes one before
-/// the tool finishes.
+/// earlier lines` row above them once there were more. A still-
+/// running subprocess tool has neither yet (`stdout`/`stderr` are
+/// only ever set on the finished node) -- issue #741's own `── Output
+/// (live) ───`/`── Errors (live) ───` sections, from `meta.live`'s
+/// own bounded tail, stand in for them instead, with a muted
+/// `updated {n} ago` line under the rule once the tail itself has
+/// gone stale (more than 5 seconds since its own last write,
+/// [`ToolLive::is_recent`]).
 fn tool_output_sections(
     step: &oscilloscope_core::screens::FocusedStep,
     width: usize,
     ctx: &DrawCtx,
     full: bool,
+    now: &str,
 ) -> Vec<Line<'static>> {
     use oscilloscope_core::screens::FocusDetail;
-    let FocusDetail::Tool { stdout, stderr, .. } = &step.detail else {
+    let FocusDetail::Tool {
+        stdout,
+        stderr,
+        live,
+        ..
+    } = &step.detail
+    else {
         return Vec::new();
     };
     let muted = Style::default().fg(ctx.theme.fg_muted);
@@ -3136,9 +3148,15 @@ fn tool_output_sections(
         .fg(ctx.theme.text)
         .add_modifier(Modifier::BOLD);
     let mut lines = Vec::new();
-    let section = |lines: &mut Vec<Line<'static>>, title: &str, text: &str| {
+    let section = |lines: &mut Vec<Line<'static>>, title: &str, age: Option<&str>, text: &str| {
         lines.push(Line::from(""));
         lines.push(detail_section_rule(title, width, title_bold));
+        if let Some(age) = age {
+            lines.push(tape_detail_line(
+                vec![Span::styled(format!("updated {age} ago"), muted)],
+                width,
+            ));
+        }
         let (text, earlier) = if full {
             (text, None)
         } else {
@@ -3155,10 +3173,36 @@ fn tool_output_sections(
         }
     };
     if let Some(stdout) = stdout {
-        section(&mut lines, "Output", stdout);
+        section(&mut lines, "Output", None, stdout);
     }
     if let Some(stderr) = stderr {
-        section(&mut lines, "Errors", stderr);
+        section(&mut lines, "Errors", None, stderr);
+    }
+    if let Some(live) = live {
+        let age = if live.is_recent(now) {
+            None
+        } else {
+            live.updated_at
+                .as_deref()
+                .and_then(|t| oscilloscope_core::observe::duration_seconds(t, now))
+                .map(oscilloscope_core::format::format_duration)
+        };
+        if !live.stdout_tail.is_empty() {
+            section(
+                &mut lines,
+                "Output (live)",
+                age.as_deref(),
+                &live.stdout_tail,
+            );
+        }
+        if !live.stderr_tail.is_empty() {
+            section(
+                &mut lines,
+                "Errors (live)",
+                age.as_deref(),
+                &live.stderr_tail,
+            );
+        }
     }
     lines
 }
@@ -3726,6 +3770,7 @@ mod detail_renderer_tests {
             exit_code: None,
             stdout: None,
             stderr: None,
+            live: None,
         };
         assert_eq!(detail_key_width_for_step(step), "Command".len());
         step.detail = FocusDetail::Plain;
@@ -4248,7 +4293,7 @@ fn tape_normal_detail_lines(
         }
     }
     lines.extend(focused_attempts_lines(step, width, ctx));
-    lines.extend(tool_output_sections(step, width, ctx, false));
+    lines.extend(tool_output_sections(step, width, ctx, false, now));
     lines.extend(focused_decision_lines(step, width, ctx));
     lines.extend(focused_loop_lines(step, width, ctx));
     lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
@@ -9871,7 +9916,7 @@ fn focused_step_full_lines(
     }
 
     lines.extend(focused_attempts_lines(step, width, ctx));
-    lines.extend(tool_output_sections(step, width, ctx, true));
+    lines.extend(tool_output_sections(step, width, ctx, true, now));
     lines.extend(focused_decision_lines(step, width, ctx));
     lines.extend(focused_loop_lines(step, width, ctx));
     lines.extend(focused_meta_lines(step, width, ctx, meta_unfolded));
@@ -12873,7 +12918,7 @@ fn flow_selected_step_lines(
     // tool's own command and value, so only the data they don't
     // reach is new here.
     lines.extend(focused_attempts_lines(step, content_width, ctx));
-    lines.extend(tool_output_sections(step, content_width, ctx, false));
+    lines.extend(tool_output_sections(step, content_width, ctx, false, now));
     lines.extend(focused_decision_lines(step, content_width, ctx));
     lines.extend(focused_loop_lines(step, content_width, ctx));
     lines.extend(focused_meta_lines(step, content_width, ctx, meta_unfolded));
@@ -15707,6 +15752,7 @@ mod golden_tests {
                 exit_code: (!running).then_some(0),
                 stdout: (!running).then(|| "compiling\nlinking\ndone".to_string()),
                 stderr: None,
+                live: None,
             },
             status: RowStatus {
                 kind: if running {
@@ -15764,8 +15810,9 @@ mod golden_tests {
 
     /// Issue #716: a running shell step's own detail pane shows its
     /// full command and its elapsed time against its usual busy
-    /// time, but nothing of its output yet -- neither engine
-    /// publishes one before the tool finishes.
+    /// time, but nothing of its output yet -- with no `meta.live`
+    /// (issue #741) at all here, there is nothing to show of its
+    /// output until it finishes.
     #[test]
     fn tool_detail_pane_shows_the_command_and_usual_busy_time_while_running() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
@@ -15824,6 +15871,100 @@ mod golden_tests {
         assert!(text.contains("compiling"), "{text}");
         assert!(text.contains("linking"), "{text}");
         assert!(!text.contains("usual"), "{text}");
+    }
+
+    /// Issue #741: a running tool step's own detail pane shows its
+    /// `meta.live` tails as `── Output (live) ───`/`── Errors (live)
+    /// ───` sections instead of the finished `── Output ───`/`──
+    /// Errors ───` ones -- fresh (`updated_at` within 5 seconds of
+    /// `now`), no `ago` suffix on the title.
+    #[test]
+    fn tool_detail_pane_shows_live_output_and_errors_sections_while_fresh() {
+        use oscilloscope_core::model::ToolLive;
+        use oscilloscope_core::screens::FocusDetail;
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut step = tool_focused_step(true);
+        let FocusDetail::Tool { live, .. } = &mut step.detail else {
+            unreachable!()
+        };
+        *live = Some(Box::new(ToolLive {
+            started_at: Some("2026-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2026-01-01T00:01:54Z".to_string()),
+            stdout_tail: "compiling\nlinking".to_string(),
+            stderr_tail: "a warning".to_string(),
+            stdout_bytes: Some(1234),
+            stderr_bytes: Some(12),
+        }));
+        let screen = tool_tape_screen(step);
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("── Output (live) "), "{text}");
+        assert!(text.contains("── Errors (live) "), "{text}");
+        assert!(text.contains("compiling"), "{text}");
+        assert!(text.contains("linking"), "{text}");
+        assert!(text.contains("a warning"), "{text}");
+        assert!(!text.contains("ago"), "{text}");
+        assert!(!text.contains("── Output ─"), "{text}");
+    }
+
+    /// Issue #741: once a live tail's own `updated_at` is more than 5
+    /// seconds old, a muted `updated {n} ago` line appears right under
+    /// the section's own rule -- the same heartbeat rule
+    /// `AgentLive::is_recent` already uses, applied to a subprocess
+    /// tool's tail instead. An empty `stderr_tail` gets no
+    /// `── Errors (live) ───` section at all.
+    #[test]
+    fn tool_detail_pane_marks_a_stale_live_tail_with_an_updated_ago_line() {
+        use oscilloscope_core::model::ToolLive;
+        use oscilloscope_core::screens::FocusDetail;
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut step = tool_focused_step(true);
+        let FocusDetail::Tool { live, .. } = &mut step.detail else {
+            unreachable!()
+        };
+        *live = Some(Box::new(ToolLive {
+            started_at: Some("2026-01-01T00:00:00Z".to_string()),
+            updated_at: Some("2026-01-01T00:01:00Z".to_string()),
+            stdout_tail: "compiling".to_string(),
+            stderr_tail: String::new(),
+            stdout_bytes: Some(1234),
+            stderr_bytes: Some(0),
+        }));
+        let screen = tool_tape_screen(step);
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("── Output (live) ─"), "{text}");
+        assert!(text.contains("updated 54.0s ago"), "{text}");
+        assert!(!text.contains("· 54.0s ago"), "{text}");
+        assert!(!text.contains("Errors"), "{text}");
     }
 
     /// Issue #716: the selected effect's own `description:` comes

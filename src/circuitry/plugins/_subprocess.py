@@ -18,7 +18,7 @@ import json
 import os
 import shutil
 import subprocess
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -26,6 +26,7 @@ from typing import Any
 from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
 from ..secrets import has_secret_key
+from ..subprocess_live import SubprocessLiveTracker
 from .base import ToolResult, _as_bool
 
 #: How much of an unparseable stdout ``parse: json`` quotes in its error.
@@ -217,6 +218,7 @@ def run_binary(
     allow_nonzero: bool = False,
     parse_json: bool = False,
     not_found_hint: str | None = None,
+    on_live: Callable[[dict[str, Any] | None], None] | None = None,
 ) -> ToolResult:
     """Execute *binary* with *args* and return the result as a ToolResult.
 
@@ -229,20 +231,42 @@ def run_binary(
     raises ``ValueError``, with a nonzero exit's stdout parsed the same way
     under ``allow_nonzero``. ``not_found_hint``, when given, replaces the generic
     "override the plugin's binary path" suggestion with wording that
-    names the caller's actual configuration setting.
+    names the caller's actual configuration setting. ``on_live``, when given,
+    is published with the process's running output -- its bounded tail and
+    byte count on each of stdout/stderr -- at most once a second while the
+    process runs, through a :class:`~circuitry.subprocess_live.SubprocessLiveTracker`
+    (#741); unset, there is no tracker and no reader thread beyond
+    ``run_tracked``'s own. Called once more with ``None`` right after the
+    process ends, on every path including a cancellation's ``BaseException``
+    unwind -- a caller that writes it to state (``core.tool``) removes it
+    then, since nothing above this call is ever still running to need it.
     """
     cmd = [binary, *_validate_args(args)]
+    live = SubprocessLiveTracker(on_live) if on_live is not None else None
     try:
-        proc = run_tracked(cmd, input=stdin, timeout=int(timeout_seconds), cwd=cwd, env=env)
-    except FileNotFoundError as exc:
-        hint = not_found_hint or "override the plugin's binary path"
-        raise RuntimeError(
-            f"binary not found: {binary!r} (install it or {hint})."
-        ) from exc
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"{binary!r} exceeded timeout of {timeout_seconds}s"
-        ) from exc
+        try:
+            proc = run_tracked(
+                cmd,
+                input=stdin,
+                timeout=int(timeout_seconds),
+                cwd=cwd,
+                env=env,
+                on_live_chunk=live.record if live is not None else None,
+            )
+        except FileNotFoundError as exc:
+            hint = not_found_hint or "override the plugin's binary path"
+            raise RuntimeError(
+                f"binary not found: {binary!r} (install it or {hint})."
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"{binary!r} exceeded timeout of {timeout_seconds}s"
+            ) from exc
+    finally:
+        if live is not None:
+            live.close()
+            assert on_live is not None
+            on_live(None)
 
     stdout, stderr = proc.stdout, proc.stderr
     returncode = proc.returncode
@@ -297,6 +321,7 @@ class GenericSubprocessTool:
         *,
         params: dict[str, Any],
         timeout_seconds: int = 300,
+        on_live: Callable[[dict[str, Any] | None], None] | None = None,
     ) -> ToolResult:
         args = params.get("args")
         if not isinstance(args, list):
@@ -316,6 +341,7 @@ class GenericSubprocessTool:
             stdin=params.get("stdin"),
             env=merged_env(self.env),
             timeout_seconds=timeout_seconds,
+            on_live=on_live,
             allow_nonzero=_as_bool(params.get("allow_nonzero")),
             parse_json=parse_json,
             not_found_hint=f"set runtime.plugins.{self.name}.binary",
