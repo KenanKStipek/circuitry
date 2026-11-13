@@ -858,6 +858,64 @@ class TestDivisionAndModulusByZero:
         assert evaluate_cel("1.0 / 0.0 > 0.0", {}) is True
 
 
+class TestOtherOverloadErrorsNeverEmbedAValue:
+    """Type-mismatch errors cel-python's own base ``Evaluator`` methods
+    raise (relational/arithmetic operators ``_StateEvaluator`` leaves
+    alone) -- some of these otherwise carry a whole operand's repr
+    (``celtypes.celtypes.py``'s own ``no such overload: <repr> != <repr>``
+    for ``<``/``<=``/``>``/``>=``), never just surfaced here."""
+
+    CTX: ClassVar[dict] = {"input": {"m": {"a": 1, "b": [1, 2]}, "l": [1, 2, 3], "n": 5}}
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX)
+        return str(excinfo.value)
+
+    def test_relational_type_mismatch_names_the_types_not_the_values(self):
+        # Matches `electricity-cel`'s own wording for the same failure
+        # (`cel::ExecutionError::ValuesNotComparable`) exactly.
+        text = self._error_text("state.input.n < state.input.m")
+        assert text.endswith("cannot compare an int to a map")
+
+    def test_in_type_mismatch(self):
+        text = self._error_text("5 in state.input.n")
+        assert text.endswith("cannot apply 'in' to an int and an int")
+
+    def test_addition_type_mismatch(self):
+        text = self._error_text("state.input.l + state.input.m")
+        assert text.endswith("cannot apply '+' to a list and a map")
+
+    def test_logical_and_type_mismatch(self):
+        text = self._error_text("1 && true")
+        assert text.endswith("cannot apply '&&' to an int and a bool")
+
+    def test_logical_or_type_mismatch(self):
+        text = self._error_text("1 || false")
+        assert text.endswith("cannot apply '||' to an int and a bool")
+
+    def test_ternary_non_bool_condition(self):
+        text = self._error_text("(1 ? 2 : 3) == 2")
+        assert text.endswith("cannot apply '?:' to an int, an int and a bool")
+
+    def test_no_error_text_contains_a_python_class_repr_or_tuple(self):
+        for expr in (
+            "state.input.n < state.input.m",
+            "5 in state.input.n",
+            "state.input.l + state.input.m",
+            "1 && true",
+            "1 || false",
+            "(1 ? 2 : 3) == 2",
+        ):
+            text = self._error_text(expr)
+            assert "<class" not in text
+            assert "Token(" not in text
+            assert "MapType(" not in text
+            assert "ListType(" not in text
+            assert "StringType(" not in text
+            assert "IntType(" not in text
+
+
 # ---------------------------------------------------------------------------
 # Nested too deeply: a check error, named at its own location (#629)
 # ---------------------------------------------------------------------------

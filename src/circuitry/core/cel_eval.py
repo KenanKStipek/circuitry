@@ -63,6 +63,7 @@ import datetime
 import logging
 import math
 import operator
+import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -146,7 +147,27 @@ class _UnsetRead(CELEvalError):
 
 
 def _error_text(exc: CELEvalError) -> str:
-    """*exc* in Circuitry's own words, never cel-python's activation repr.
+    """*exc* in Circuitry's own words, never cel-python's activation repr,
+    a Python exception's args tuple, or a bare Python type repr.
+
+    cel-python's own ``CELEvalError`` carries its message as ``args[0]``
+    and, for most of its own raise sites, appends the Python exception
+    class and *its* ``args`` as two more positional arguments — harmless
+    until something ``str()``s the exception, which for a multi-arg
+    ``Exception`` is ``repr(args)``, not ``args[0]``. That is where every
+    one of this function's cases actually originates: an index/key
+    lookup's or an arithmetic operator's own ``args[0]`` is already the
+    final text (``_StateEvaluator`` builds those directly, elsewhere in
+    this module); every other binary or unary operator type mismatch
+    (``<``, ``in``, ``+``, unary ``!``/``-``, ...) is left to cel-python's
+    base ``Evaluator``, whose ``args[0]`` names the operator and the
+    *types* involved as Python class reprs (never a value), while the
+    *trailing* positional arguments are the wrapped Python exception's own
+    ``args`` — which, for a relational comparison, is cel-python's own
+    ``no such overload: <left repr> <type> != <right repr> <type>``,
+    carrying the operands themselves. Taking only ``args[0]`` drops that
+    unconditionally; the regex below then turns its Python class reprs
+    into CEL type names.
 
     cel-python words an undeclared identifier, function or method as
     ``"undeclared reference to '<name>' (in activation '<repr>')"``, with
@@ -154,20 +175,97 @@ def _error_text(exc: CELEvalError) -> str:
     the three raised it. The activation repr holds the whole
     ``google.protobuf`` annotation tree, every registered function, and —
     for :func:`evaluate_cel_expect` — the converted run state, so it is
-    never included. Every other evaluation failure keeps cel-python's own
-    message.
+    never included.
     """
     args = exc.args
+    message = args[0] if args and isinstance(args[0], str) else str(exc)
     if (
-        args
-        and isinstance(args[0], str)
-        and args[0].startswith("undeclared reference to ")
+        message.startswith("undeclared reference to ")
         and len(args) > 2
         and isinstance(args[2], tuple)
         and args[2]
     ):
         return f"undeclared reference to {args[2][0]!r}"
-    return str(exc)
+    overload = _OVERLOAD_RE.fullmatch(message)
+    if overload:
+        symbol = _overload_symbol(overload["op"])
+        phrases = [
+            _class_repr_to_phrase(m) for m in _CLASS_REPR_RE.finditer(overload["types"])
+        ]
+        if symbol in _COMPARISON_SYMBOLS and len(phrases) == 2:
+            # Matches `electricity-cel`'s own wording for the same
+            # failure (its `cel::ExecutionError::ValuesNotComparable`,
+            # raised by the same four operators) exactly.
+            return f"cannot compare {phrases[0]} to {phrases[1]}"
+        return f"cannot apply {symbol!r} to {_join_phrases(phrases)}"
+    return message
+
+
+#: The four operators whose type mismatch is a comparison, not a
+#: generic overload failure -- worded like one ("cannot compare a map
+#: to an int"), matching `electricity-cel`'s own wording for the same
+#: `cel` crate failure (`ExecutionError::ValuesNotComparable`) exactly,
+#: never the generic "cannot apply '<' to ..." template every other
+#: operator here gets.
+_COMPARISON_SYMBOLS = frozenset({"<", "<=", ">", ">="})
+
+
+def _join_phrases(phrases: list[str]) -> str:
+    """*phrases* as an English list: ``"a, b and c"``, never an
+    ``(a, b, c)`` tuple."""
+    if len(phrases) <= 1:
+        return ", ".join(phrases)
+    return f"{', '.join(phrases[:-1])} and {phrases[-1]}"
+
+
+#: cel-python's own grammar-rule names (a binary or unary operator
+#: node's ``tree.data``, which its base ``Evaluator`` methods -- never
+#: overridden here, since they raise only on a type mismatch rather than
+#: a container/key error -- report via ``!r}`` on the parsed lark Token,
+#: printing as ``Token('RULE', '<name>')``) to the CEL operator text.
+_CEL_RULE_SYMBOLS: dict[str, str] = {
+    "relation_lt": "<",
+    "relation_le": "<=",
+    "relation_gt": ">",
+    "relation_ge": ">=",
+    "relation_eq": "==",
+    "relation_ne": "!=",
+    "relation_in": "in",
+    "addition_add": "+",
+    "addition_sub": "-",
+    "multiplication_mul": "*",
+    "multiplication_div": "/",
+    "multiplication_mod": "%",
+    "unary_not": "!",
+    "unary_neg": "-",
+}
+
+#: ``_StateEvaluator``'s own overload failures (``&&``/``||``/``?:``)
+#: spell cel-python's function name literally rather than via a Token's
+#: repr, so they need no un-reproing -- just the CEL spelling.
+_CEL_FUNCTION_SYMBOLS: dict[str, str] = {
+    "_||_": "||",
+    "_&&_": "&&",
+    "_?_:_": "?:",
+}
+
+_OVERLOAD_RE = re.compile(
+    r"found no matching overload for (?P<op>.+?) applied to '\((?P<types>.*)\)'"
+)
+_RULE_TOKEN_RE = re.compile(r"Token\('RULE', '(\w+)'\)")
+_CLASS_REPR_RE = re.compile(r"<class '(?:celpy\.celtypes\.)?(\w+)'>")
+
+
+def _overload_symbol(op: str) -> str:
+    """*op*, cel-python's own spelling of a failed overload's operator,
+    as the CEL operator text (never a lark Token repr or a bare function
+    name)."""
+    if op in _CEL_FUNCTION_SYMBOLS:
+        return _CEL_FUNCTION_SYMBOLS[op]
+    rule = _RULE_TOKEN_RE.fullmatch(op)
+    if rule:
+        return _CEL_RULE_SYMBOLS.get(rule[1], rule[1])
+    return op
 
 
 #: CEL's own type names (the ``type()``/conversion-function vocabulary
@@ -211,6 +309,22 @@ def _cel_type_name(value: Any) -> str:
 def _cel_type_phrase(value: Any) -> str:
     """*value*'s CEL type name with its indefinite article, e.g. ``"an int"``."""
     name = _cel_type_name(value)
+    return f"{_CEL_TYPE_ARTICLES.get(name, 'a')} {name}"
+
+
+#: ``_CEL_TYPE_NAMES`` keyed by the ``celtypes`` class's own name instead
+#: of the class itself -- what a Python class repr (``<class
+#: 'celpy.celtypes.IntType'>``) spells it as, for :func:`_class_repr_to_phrase`.
+_CEL_CLASS_NAME_TO_CEL: dict[str, str] = {
+    cls.__name__: name for cls, name in _CEL_TYPE_NAMES.items() if cls is not type(None)
+}
+
+
+def _class_repr_to_phrase(match: re.Match[str]) -> str:
+    """A ``<class 'celpy.celtypes.XxxType'>`` regex match as its CEL type
+    phrase, e.g. ``"an int"`` -- never the class repr itself, which names
+    cel-python's own implementation, not CEL's vocabulary."""
+    name = _CEL_CLASS_NAME_TO_CEL.get(match[1], match[1].lower())
     return f"{_CEL_TYPE_ARTICLES.get(name, 'a')} {name}"
 
 
