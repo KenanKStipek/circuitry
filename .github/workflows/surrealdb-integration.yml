@@ -9,6 +9,7 @@ on:
       - "src/circuitry/runtime_plugins/surrealdb.py"
       - "src/circuitry/surrealdb_sdk.py"
       - "tests/integration/**"
+      - "pyproject.toml"
       - ".github/workflows/surrealdb-integration.yml"
 
 jobs:
