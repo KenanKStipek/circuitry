@@ -857,7 +857,7 @@ pub(crate) fn compile_use(
     loop_names: &BTreeSet<String>,
     origin: &DocumentOrigin,
 ) -> Result<Op, CompileError> {
-    check_resume_mode(effect, "Use", effect_path)?;
+    let resume_mode = check_resume_mode(effect, "Use", effect_path)?;
     let field_str = |key: &str| -> Option<String> {
         effect
             .get(&Value::Str(key.to_string()))
@@ -957,6 +957,7 @@ pub(crate) fn compile_use(
 
     let op = UseOp {
         parent_trusted: matches!(origin, DocumentOrigin::File { .. }),
+        resume_mode,
         source,
         inputs,
         outputs,

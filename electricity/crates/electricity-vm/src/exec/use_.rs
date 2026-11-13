@@ -1858,6 +1858,7 @@ mod tests {
         let inline_yaml = "\
 effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: parse, input: \"not json\"}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -1987,6 +1988,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert("result".to_string(), "prime.inner.value".to_string());
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2180,6 +2182,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     async fn a_uses_model_expect_template_error_is_not_retried_by_the_outer_loop() {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2287,6 +2290,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     async fn a_uses_model_expect_dispatches_with_the_run_adapter_budget() {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2453,6 +2457,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     ) -> Result<(), AttemptProblem> {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2690,6 +2695,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             )),
         );
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 "effects: []\n".to_string(),
@@ -2784,6 +2790,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             )),
         );
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 "effects: []\n".to_string(),

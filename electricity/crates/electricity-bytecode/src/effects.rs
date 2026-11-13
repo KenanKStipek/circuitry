@@ -252,6 +252,22 @@ pub enum UseSource {
     Inline(TemplateText),
 }
 
+/// `core/resume.py::ResumeMode` -- a `use`'s own `resume:` (#590),
+/// carried into the compiled IR (issue #727) so `--resume` can tell a
+/// `use` whose saved node did not finish without error apart: `Continue`
+/// (the default) reuses its finished child record when one is saved
+/// (`runtime.state.record_children`); `Restart` drops it and runs the
+/// child fresh, like a first run. A plain `dynamic`'s own `resume:`
+/// field is validated the same way at compile time but not yet carried
+/// into its own `Op` (DESIGN.md §13) -- this type exists for `UseOp`
+/// alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub enum ResumeMode {
+    #[default]
+    Continue,
+    Restart,
+}
+
 /// `UseDefinition`, minus `name`/`on_error`/`enabled`.
 #[derive(Debug, Clone, Serialize)]
 pub struct UseOp {
@@ -260,6 +276,8 @@ pub struct UseOp {
     /// by `path:` gets this trust; electricity has no library, so no child is
     /// ever limited by being resolved through one.
     pub parent_trusted: bool,
+    /// `UseDefinition.resume` (#590/#727): `continue` or `restart`.
+    pub resume_mode: ResumeMode,
     pub source: UseSource,
     pub inputs: Option<ParamNode>,
     /// `outputs`, already normalized (DESIGN.md §4 step 3) to a name ->

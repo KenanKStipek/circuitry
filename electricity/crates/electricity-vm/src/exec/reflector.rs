@@ -338,6 +338,7 @@ async fn run_iteration(
         .map_err(store_err)?;
     let iter_name = format!("iter_{i}");
     let use_op = UseOp {
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
         parent_trusted: false,
         source: UseSource::Inline(TemplateText::new(plan_yaml, true, Escape::Html)),
         inputs: None,

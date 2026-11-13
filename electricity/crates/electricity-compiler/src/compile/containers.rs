@@ -390,17 +390,21 @@ fn compile_effect(
 }
 
 /// `core/compiler.py::_resume_mode` (#590): a `dynamic`'s or `use`'s
-/// `resume:`, when present, is `continue` or `restart`. Checked only, so
-/// a document validates the same on both engines: electricity has no
-/// `--resume`, and the IR does not carry the value.
+/// `resume:`, when present, is `continue` or `restart` -- returned as
+/// an [`electricity_bytecode::ResumeMode`] (issue #727), absent meaning
+/// its default, `Continue`. `UseOp` carries the result; a `dynamic`'s
+/// own `Op` does not yet (DESIGN.md §13) -- this function still
+/// validates one for a `dynamic` the same way (so a document checks the
+/// same on both engines), its caller there just discards the value.
 pub(crate) fn check_resume_mode(
     effect: &Dict,
     label: &str,
     effect_path: &str,
-) -> Result<(), CompileError> {
+) -> Result<electricity_bytecode::ResumeMode, CompileError> {
     match effect.get(&Value::Str("resume".to_string())) {
-        None => Ok(()),
-        Some(Value::Str(mode)) if mode == "continue" || mode == "restart" => Ok(()),
+        None => Ok(electricity_bytecode::ResumeMode::Continue),
+        Some(Value::Str(mode)) if mode == "continue" => Ok(electricity_bytecode::ResumeMode::Continue),
+        Some(Value::Str(mode)) if mode == "restart" => Ok(electricity_bytecode::ResumeMode::Restart),
         Some(other) => Err(CompileError(format!(
             "{label} effect at '{effect_path}': 'resume' must be 'continue' or \
              'restart', got {}.",
@@ -418,6 +422,9 @@ fn compile_dynamic(
     valid_name: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
+    // DESIGN.md §13: a `dynamic`'s own `resume:` validates the same as
+    // cof's, but (unlike `use`'s own `UseOp::resume_mode`) is not yet
+    // carried into this `Op` -- every `dynamic` resumes as `continue`.
     check_resume_mode(effect, "Dynamic", effect_path)?;
     let flow = normalize_flow(
         first_truthy(&[get_truthy(effect, "flow"), get_truthy(effect, "strategy")])

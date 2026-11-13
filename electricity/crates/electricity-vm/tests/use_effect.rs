@@ -96,6 +96,7 @@ async fn run_use_with_supported(
 
 fn base_use_op(source: UseSource) -> electricity_bytecode::UseOp {
     electricity_bytecode::UseOp {
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
         parent_trusted: false,
         source,
         inputs: None,

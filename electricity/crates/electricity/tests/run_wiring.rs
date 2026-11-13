@@ -1260,6 +1260,7 @@ async fn a_secret_echoed_by_the_server_is_masked_everywhere_a_run_writes() {
         allow_capabilities: Vec::new(),
         config_warnings: Vec::new(),
         adapter_override: None,
+        label_override: None,
         armed: true,
     };
 
@@ -1359,6 +1360,7 @@ async fn a_secret_straddling_the_error_excerpts_cut_leaves_no_fragment_in_any_ru
         allow_capabilities: Vec::new(),
         config_warnings: Vec::new(),
         adapter_override: None,
+        label_override: None,
         armed: true,
     };
 

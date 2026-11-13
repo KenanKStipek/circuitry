@@ -457,6 +457,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
     let ctx = Value::Dict(Dict::new());
     let use_op = match name {
         "path_full_passthrough" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("child_basic.yml".to_string()),
             inputs: None,
@@ -470,6 +471,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut outputs = IndexMap::new();
             outputs.insert("greeting".to_string(), "prime.step.value".to_string());
             UseOp {
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
                 parent_trusted: false,
                 source: UseSource::Path("child_basic.yml".to_string()),
                 inputs: None,
@@ -484,6 +486,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut inputs = IndexMap::new();
             inputs.insert(Value::Str("name".to_string()), template("Ada"));
             UseOp {
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
                 parent_trusted: false,
                 source: UseSource::Path("child_with_interface.yml".to_string()),
                 inputs: Some(ParamNode::Map(inputs)),
@@ -495,6 +498,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             }
         }
         "path_interface_error_not_retried" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("child_with_interface.yml".to_string()),
             inputs: None,
@@ -508,6 +512,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "path_cycle" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("cycle_a.yml".to_string()),
             inputs: None,
@@ -518,6 +523,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "retried_failing_expect_then_fails" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("child_always_fails_expect.yml".to_string()),
             inputs: None,
@@ -533,6 +539,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "on_error_skip_absorbs_failure" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("child_always_fails_expect.yml".to_string()),
             inputs: None,
@@ -558,6 +565,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             ctx_dict.insert(Value::Str("input".to_string()), Value::Dict(ctx_input));
             return (
                 UseOp {
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                     parent_trusted: false,
                     source: UseSource::Inline(TemplateText::new(
                         inline.to_string(),
@@ -578,6 +586,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut outputs = IndexMap::new();
             outputs.insert("greeting".to_string(), "prime.step.value".to_string());
             UseOp {
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
                 parent_trusted: false,
                 source: UseSource::Path("child_basic.yml".to_string()),
                 inputs: None,
@@ -591,6 +600,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             }
         }
         "inline_validation_failure_wrapped" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(TemplateText::new(
                 "- just-a-list\n".to_string(),
@@ -605,6 +615,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             description: None,
         },
         "inline_validation_failure_unwrapped" => UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(TemplateText::new(
                 "- just-a-list\n".to_string(),
@@ -631,6 +642,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             let mut outputs = IndexMap::new();
             outputs.insert("tally".to_string(), "prime.tally.value".to_string());
             UseOp {
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
                 parent_trusted: false,
                 source: UseSource::Path("child_attempts_clean_node.yml".to_string()),
                 inputs: Some(ParamNode::Map(inputs)),
@@ -657,6 +669,7 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                 ),
             );
             UseOp {
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
                 parent_trusted: false,
                 source: UseSource::Path("child_attempts_clean_node.yml".to_string()),
                 inputs: Some(ParamNode::Map(inputs)),
