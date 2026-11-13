@@ -1399,6 +1399,7 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
                 error: Some(message),
                 warnings: config_warnings.clone(),
                 signal: None,
+                resume_refused: true,
             };
             if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
                 print_stderr_contract(&result);
@@ -1473,9 +1474,14 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
     // only when this run itself replayed one via `--last` (`cli/app.py`'s
     // own `if not last:` guard) -- a replay must never overwrite the
     // stash it just read, confirmed directly against a real `cof run
-    // --last`. Best-effort: `electricity_config::write_last_run` already
-    // swallows a write failure silently, exactly as the reference does.
-    if !run_args.last {
+    // --last` -- or when `result.resume_refused`: `cli/app.py::
+    // _resolve_resume_state`'s own document-hash refusal raises entirely
+    // in the CLI layer, before `cof run`'s own `run()` (and so
+    // `_save_last_run`) is ever reached, so a refused resume must leave
+    // the stash exactly as it found it too. Best-effort:
+    // `electricity_config::write_last_run` already swallows a write
+    // failure silently, exactly as the reference does.
+    if !run_args.last && !result.resume_refused {
         let home = std::env::home_dir();
         if let Some(path) = home.as_deref().map(electricity_config::last_run_path) {
             electricity_config::write_last_run(

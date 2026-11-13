@@ -1079,3 +1079,60 @@ def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
     # `-e` on this invocation at all for it to come from.
     assert resumed_state["input"]["unused"] == "original"
 
+
+
+def _stash_path(home_dir: Path) -> Path:
+    return home_dir / ".config" / "circuitry" / "last-run.json"
+
+
+#: A document with a declared input and one step whose own `uuid` output
+#: changes on every run -- used to tell "resumed" (the skipped step's old
+#: uuid survives) apart from "re-run from scratch" (a fresh one) the same
+#: way `LAST_STASH_RESUME_ORCHESTRATION` does, but here it's the
+#: *document* that changes between the two runs, not its content staying
+#: fixed while `--resume` itself is refused.
+RESUME_HASH_ORCHESTRATION = (
+    "effects:\n"
+    "  - name: step1\n    type: tool\n    provider: uuid\n"
+    "  - name: step2\n    type: tool\n    provider: json\n"
+    "    params: {mode: parse, input: 'not valid json'}\n"
+)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_a_refused_resume_never_overwrites_the_stash_it_read(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """`cli/app.py::_resolve_resume_state`'s own document-hash refusal
+    raises entirely in the CLI layer, before `cof run`'s own `run()` --
+    and so `_save_last_run` -- is ever reached, so a resume it refuses
+    must leave the stash exactly as the first run left it."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, RESUME_HASH_ORCHESTRATION)
+
+    first = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "-e", "marker=first", "--out", "out.json"],
+    )
+    assert first.returncode == 1, (engine, first.stdout, first.stderr)
+    stash_path = _stash_path(home_dir)
+    stash_before = stash_path.read_bytes()
+
+    # Changing the document's own bytes invalidates the hash `out.json`
+    # recorded -- `--force` is not passed, so this must be refused.
+    (case_dir / "orchestration.yml").write_text(
+        RESUME_HASH_ORCHESTRATION + "  # changed\n", encoding="utf-8",
+    )
+
+    refused = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert refused.returncode == 1, (engine, refused.stdout, refused.stderr)
+    assert "changed since the run being resumed" in _last_refusal_error(refused)
+
+    assert stash_path.read_bytes() == stash_before, (
+        "the refused --resume last overwrote the stash the first run wrote"
+    )
