@@ -1463,10 +1463,15 @@ fn build_header(
     // Issue #752: a run's own label, the same fallback order as
     // `run_id` just above -- `run_start`'s own `label` field, else
     // `osi watch`'s own `runtime.last_run.label` with no `--events`
-    // stream at all. Cleaned here, the one point this header's own
-    // `label` field is ever set, since a state or events file can
-    // be written by anything, not only an engine that already
-    // cleaned it once.
+    // stream at all, else `osi <doc> --label TEXT`'s own hint (set
+    // once by whoever launched this run, `RunModel::set_label_hint`)
+    // so a labelled run shows its label from its very first frame,
+    // before either `run_start` or a live-state write has landed.
+    // Cleaned here, the one point this header's own `label` field is
+    // ever set from `run_start`/state, since either file can be
+    // written by anything, not only an engine that already cleaned
+    // it once -- `label_hint` is already clean, cleaned by its own
+    // caller before it's ever handed to `RunModel`.
     let label = model
         .run_start_label()
         .map(str::to_string)
@@ -1476,7 +1481,8 @@ fn build_header(
                 .and_then(Value::as_str)
                 .map(str::to_string)
         })
-        .and_then(|raw| crate::names::clean_label(&raw));
+        .and_then(|raw| crate::names::clean_label(&raw))
+        .or_else(|| model.label_hint().map(str::to_string));
 
     // Issue #613's "one clock": the run's own start, from the first
     // `--events` `run_start` when one arrived, else the earliest
@@ -3267,6 +3273,52 @@ mod tests {
             &[],
         );
         assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_falls_back_to_the_label_hint_with_no_run_start_or_state_label() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.set_label_hint(Some("ticket 42".to_string()));
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_prefers_run_start_label_over_the_hint() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.set_label_hint(Some("hint".to_string()));
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("from run_start".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("from run_start"));
     }
 
     /// An aborted run (the engine was killed, so no `run_end` event

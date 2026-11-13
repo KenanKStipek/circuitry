@@ -56,7 +56,7 @@ const ABOUT: &str = "\
 osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
-  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
+  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log] [--label TEXT]
   osi watch <dir | state.live.json> [--plan doc.yml]
 
 With no orchestration, on a TTY with no --log: finds the orchestrations already running on this machine (the run
@@ -658,6 +658,9 @@ fn run_glance(
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    let label_hint = spec.label.as_deref().and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
     let mut current_state: Option<serde_json::Value> = None;
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
@@ -1249,6 +1252,9 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    let label_hint = spec.label.as_deref().and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
 
     let exit_status = supervise_plain(
         &mut out,
@@ -2131,6 +2137,13 @@ fn run_tui(
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    // Issue #752: `--label`'s own cleaned value shows from this
+    // run's very first frame, as a fallback below `run_start` and
+    // the state file's own label, in both the header and the exit
+    // summary.
+    let label_hint = spec.label.as_deref().and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
     // Finding 4: a plain running count of every line ever pushed,

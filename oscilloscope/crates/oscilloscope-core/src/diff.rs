@@ -487,6 +487,15 @@ pub struct Differ {
     /// `names::display_name` already falls back to the generated
     /// name with `None` here.
     run_label: Option<String>,
+    /// `osi <doc> --label TEXT`'s own cleaned value (issue #752), set
+    /// once by whichever caller actually launched this run, right
+    /// after [`Differ::new`] -- [`Differ::finish`]'s own fallback
+    /// below `run_label` and the state file's `runtime.last_run.
+    /// label`, so the exit summary still shows a labelled run's
+    /// label even when the engine failed before ever writing a
+    /// `run_start` event. `None` for every caller with nothing of
+    /// its own to fall back to.
+    label_hint: Option<String>,
 }
 
 impl Differ {
@@ -504,7 +513,16 @@ impl Differ {
             held_once: BTreeSet::new(),
             run_id: None,
             run_label: None,
+            label_hint: None,
         }
+    }
+
+    /// Sets [`Differ::label_hint`] (issue #752) -- called once, by
+    /// whichever caller actually launched this run, from `osi <doc>
+    /// --label TEXT`'s own already-[`crate::names::clean_label`]'d
+    /// value. A no-op with `None` (no `--label` given).
+    pub fn set_label_hint(&mut self, hint: Option<String>) {
+        self.label_hint = hint;
     }
 
     /// Records the latest polled state for [`Differ::diff_event`]'s
@@ -882,16 +900,23 @@ impl Differ {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
-        // The same fallback order as `run_id` just above: a label
-        // from this run's own `run_start` event, else `osi watch`'s
-        // own `runtime.last_run.label` with no `--events` stream at
-        // all.
-        let label = self.run_label.clone().or_else(|| {
-            state
-                .pointer("/runtime/last_run/label")
-                .and_then(Value::as_str)
-                .and_then(crate::names::clean_label)
-        });
+        // The same fallback order as `run_id` just above, plus one
+        // more step `run_id` has no equivalent of: a label from this
+        // run's own `run_start` event, else `osi watch`'s own
+        // `runtime.last_run.label` with no `--events` stream at all,
+        // else `osi <doc> --label TEXT`'s own hint, so a run whose
+        // engine failed before ever writing a `run_start` still
+        // reports its own label in the exit summary.
+        let label = self
+            .run_label
+            .clone()
+            .or_else(|| {
+                state
+                    .pointer("/runtime/last_run/label")
+                    .and_then(Value::as_str)
+                    .and_then(crate::names::clean_label)
+            })
+            .or_else(|| self.label_hint.clone());
         let name_prefix = crate::names::display_name(label.as_deref(), run_id.as_deref())
             .map(|name| format!("{name}  "))
             .unwrap_or_default();
@@ -2209,6 +2234,43 @@ mod tests {
         let line = differ.finish(&ended, None).expect("a summary line");
         let name = crate::names::run_name("936ff268-5f52-479a-887f-fda1a47dae63");
         assert_eq!(line.text, format!("■ run {name}  ok"), "{line:?}");
+    }
+
+    #[test]
+    fn finish_names_the_run_from_the_label_hint_with_no_run_start_or_state_label() {
+        // The engine failed before ever writing a `run_start` event
+        // (no `run_id` here either) -- `osi <doc> --label TEXT`'s own
+        // hint still names the run in the exit summary.
+        let mut differ = Differ::new();
+        differ.set_label_hint(Some("ticket 42".to_string()));
+        let ended = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run ticket 42  ok", "{line:?}");
+    }
+
+    #[test]
+    fn finish_prefers_run_start_label_over_the_hint() {
+        let mut differ = Differ::new();
+        differ.set_label_hint(Some("hint".to_string()));
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+            engine: None,
+            config: None,
+            label: Some("from run_start".to_string()),
+        };
+        let model = RunModel::new();
+        differ.diff_event(&event, &PlanTree::empty(), &model);
+        let ended = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run from run_start  ok", "{line:?}");
     }
 
     #[test]
