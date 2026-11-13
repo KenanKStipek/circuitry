@@ -1,0 +1,6 @@
+name: c669-api-key-env-invalid-name
+model: m
+effects:
+  - type: prompt
+    name: e
+    template: "x"

@@ -1,0 +1,13 @@
+{
+  "spec_case": "issue #669: config-only api_key_env",
+  "description": "config.json names a host-chosen variable for the local alias; the document's own attempt to rename it to an attacker-chosen variable is ignored with a warning, and the request still carries the host's own variable's value.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "compare_run_warnings": true,
+  "fake_credentials": {
+    "HOST_CHOSEN_KEY": "circuitry-test-fake-host-key",
+    "ATTACKER_CHOSEN_KEY": "circuitry-test-fake-attacker-key"
+  }
+}
