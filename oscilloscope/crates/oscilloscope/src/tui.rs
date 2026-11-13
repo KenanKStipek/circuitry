@@ -6573,11 +6573,18 @@ fn draw_all_tape_tile(
                     // for the same reason it is at any single-run
                     // width that narrow, so a loop row's own
                     // redundant ` · N done` gives way the same way.
+                    // The deviation view (issue #712) replaces a
+                    // row's own bar exactly when that row has a
+                    // `usual` figure to read it against -- the same
+                    // gate a single-run Tape's own `t` toggle checks
+                    // before it shows anything there either, so a
+                    // tile with too little history for this row
+                    // keeps its plain bar, never a bare `—`.
                     Paragraph::new(tape_row_line(
                         row,
                         selected,
                         screen.unit,
-                        false,
+                        row.tokens.usual.is_some(),
                         true,
                         false,
                         name_width,
@@ -6615,13 +6622,48 @@ fn draw_all_tape_tile(
                     frame.render_widget(Paragraph::new(Line::from(spans)), content_row);
                 }
             }
-            TapeTileLine::Item(TapeItem::RunEnd { eta_ts, .. }) => {
+            TapeTileLine::Item(TapeItem::RunEnd {
+                usual_total_tokens,
+                usual_wall_s,
+                eta_ts,
+            }) => {
                 let eta_text = eta_ts
                     .as_deref()
                     .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
                 let mut text = format!("{:<name_width$}", "Run End");
-                match eta_text {
-                    Some(eta) => text.push_str(&format!("ETA {eta}")),
+                // §3.5/§5's own 80-119-column Run End row, scoped to
+                // a tile's own narrower width (issue #712): `usually
+                // <tokens> · ETA <clock>` always, with ` · <duration>`
+                // folded in only once it still fits -- a tile has no
+                // clock-column gap of its own to spare the way the
+                // single-run row's 120-column layout does.
+                match usual_total_tokens {
+                    Some(usual) => {
+                        let budget = (content.width as usize).saturating_sub(2 + name_width);
+                        let tokens_part = format!(
+                            "usually {}",
+                            oscilloscope_core::format::format_tokens(*usual)
+                        );
+                        let eta_part = eta_text
+                            .as_deref()
+                            .map(|eta| format!(" · ETA {eta}"))
+                            .unwrap_or_default();
+                        let with_duration = usual_wall_s.map(|d| {
+                            format!(
+                                "{tokens_part} · {}{eta_part}",
+                                oscilloscope_core::format::format_duration(d)
+                            )
+                        });
+                        match with_duration {
+                            Some(full) if full.chars().count() <= budget => {
+                                text.push_str(&full);
+                            }
+                            _ => {
+                                text.push_str(&tokens_part);
+                                text.push_str(&eta_part);
+                            }
+                        }
+                    }
                     None => text.push_str("ETA — · no history yet"),
                 }
                 let width = (content.width as usize).saturating_sub(2);
@@ -20679,6 +20721,76 @@ mod tape_frame_goldens {
             &mock,
             "all--tape--180x48",
             &allowed,
+        );
+    }
+
+    /// Issue #712: a tile reads its own document's history exactly
+    /// as the single-run Tape does -- the same plan, state, model
+    /// and history fixture `tape_usual_120x30_matches_the_frame`
+    /// pins against the single-run frame (whose own `gate › reply`
+    /// row reads a `+47%` deviation once `t` is toggled) drives a
+    /// tile here too, proving both Run End's own figures and a
+    /// finished row's own deviation reach the tile's drawing, not
+    /// only its data.
+    #[test]
+    fn all_tape_tile_draws_run_end_figures_and_a_finished_rows_deviation() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, &events);
+        let history_stats = history.eta_with_stats(Some(&state), &plan, None, now);
+        assert!(
+            history_stats.is_some(),
+            "demo_history's own three fixture runs must resolve a real ETA"
+        );
+        let zone = frame_zone();
+        let render = oscilloscope_core::multi::build_tile(
+            "demo.yml",
+            "cof 0.1.0",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::screens::Screen::Tape,
+            &zone,
+            now,
+            history_stats.as_ref().map(|(eta, stats)| (eta, stats)),
+        );
+        let oscilloscope_core::multi::TileScreen::Tape(tape) = &render.screen else {
+            panic!("expected a Tape tile");
+        };
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(60, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_all_tape_tile(f, f.area(), tape, &render.header, true, &ctx))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            !text.contains("no history yet"),
+            "expected a real Run End reading, not the no-history fallback:\n{text}"
+        );
+        assert!(
+            text.contains("usually") && text.contains("ETA "),
+            "expected Run End's own usual total and ETA on the tile:\n{text}"
+        );
+        assert!(
+            text.contains("+47%"),
+            "expected gate › reply's own +47% deviation next to its finished row, the same \
+             figure the single-run Tape's `t` view reads for it:\n{text}"
         );
     }
 

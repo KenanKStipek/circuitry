@@ -801,9 +801,14 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
         run_end_chars[split..].iter().collect()
     };
     assert!(
-        !my_half.contains("no history yet"),
+        !my_half.contains("no history yet") && !my_half.contains("ETA —"),
         "expected do.yml's own tile Run End to show a real ETA once history holds three finished \
          runs of this document, not \"no history yet\" (its own half: {my_half:?}):\n{screen}"
+    );
+    assert!(
+        my_half.contains("Run End") && my_half.contains("ETA "),
+        "expected do.yml's own tile Run End row to carry both its own label and a real ETA \
+         (its own half: {my_half:?}):\n{screen}"
     );
 
     send_bytes(&mut master, b"q");

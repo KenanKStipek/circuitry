@@ -5181,17 +5181,25 @@ impl AllRunSlot {
     }
 
     /// This run's own [`history_io::HistoryHandle`] (issue #712),
-    /// keyed the same way a single-run attach's own is -- `None`
-    /// until the document is known, same timing [`Self::resolve_
+    /// keyed the same way a single-run attach's own is -- `for_
+    /// watch`, which prefers the state's own absolute `runtime.
+    /// last_run.orchestration_path` over the discovered
+    /// orchestration path (`attach_discovered_run` builds its own
+    /// the same way). A process-scanned run's own `orchestration`
+    /// is whatever its own argv named, resolved against *that*
+    /// process's cwd, not osi's -- `for_run`'s plain `resolve_run_
+    /// document_path` would key such a run to the wrong file, or to
+    /// a same-named document in osi's own directory. `None` until
+    /// the document is known at all, same timing [`Self::resolve_
     /// document_config_plan`]'s own plan already follows.
     fn build_history_handle(
         run: &oscilloscope_core::discovery::DiscoveredRun,
         history_dir: Option<PathBuf>,
     ) -> Option<history_io::HistoryHandle> {
         let orchestration = run.orchestration.as_deref()?;
-        Some(history_io::HistoryHandle::for_run(
+        Some(history_io::HistoryHandle::for_watch(
             history_dir,
-            history_io::resolve_run_document_path(Path::new(orchestration)),
+            Some(PathBuf::from(orchestration)),
             run.config.clone(),
             run.run_dir
                 .as_deref()
@@ -5251,7 +5259,12 @@ impl AllRunSlot {
         // or whenever `eta_with_stats` itself has nothing (history
         // off, or not enough runs).
         let history_stats = self.history.as_ref().and_then(|history| {
-            history.eta_with_stats(self.last_state.as_ref(), &self.plan, None, now)
+            history.eta_with_stats(
+                self.last_state.as_ref(),
+                &self.plan,
+                self.model.run_start_ts(),
+                now,
+            )
         });
         let render = oscilloscope_core::multi::build_tile(
             &self.document_label,
