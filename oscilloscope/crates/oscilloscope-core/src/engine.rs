@@ -121,19 +121,54 @@ pub(crate) fn strip_ansi_escapes(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?') {
-                chars.next();
-            }
-            while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
-                chars.next();
-            }
-            if matches!(chars.peek(), Some(c) if ('@'..='~').contains(c)) {
-                chars.next();
-            }
-        } else {
+        if c != '\u{1b}' {
             out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?') {
+                    chars.next();
+                }
+                while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some(c) if ('@'..='~').contains(c)) {
+                    chars.next();
+                }
+            }
+            // OSC (`]`) and the three string-shaped controls (DCS
+            // `P`, PM `^`, APC `_`) all carry a body of their own
+            // (issue #752's "escape sequences are dropped": a
+            // terminal title set with `\x1b]0;title\x07` must drop
+            // `title` too, not just the two control bytes around
+            // it) -- swallowed up to its own terminator, either a
+            // bare BEL or the two-byte ST (`ESC \`), whichever comes
+            // first; a stream missing its own terminator altogether
+            // runs to the end of `text` with nothing surviving
+            // either.
+            Some(']') | Some('P') | Some('^') | Some('_') => {
+                chars.next();
+                loop {
+                    match chars.next() {
+                        None => break,
+                        Some('\u{7}') => break,
+                        Some('\u{1b}') if chars.peek() == Some(&'\\') => {
+                            chars.next();
+                            break;
+                        }
+                        Some(_) => continue,
+                    }
+                }
+            }
+            // Every other two-byte escape (cursor save/restore,
+            // charset selection, ...) -- just the one byte after
+            // `ESC` itself, dropped along with it.
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
         }
     }
     out

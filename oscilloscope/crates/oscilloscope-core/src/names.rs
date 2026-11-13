@@ -547,6 +547,33 @@ mod tests {
     }
 
     #[test]
+    fn clean_label_drops_an_osc_sequences_own_body_terminated_by_bel() {
+        // A terminal title set (`ESC ] 0 ; title BEL`) drops the
+        // title text itself, not only the two control bytes around
+        // it (issue #752's own cleaning rule: "escape sequences are
+        // dropped", not just their control bytes).
+        assert_eq!(
+            clean_label("ticket 42\x1b]0;evil title\x07done"),
+            Some("ticket 42done".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_label_drops_an_osc_sequences_own_body_terminated_by_st() {
+        assert_eq!(
+            clean_label("ticket 42\x1b]0;evil title\x1b\\done"),
+            Some("ticket 42done".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_label_drops_a_two_byte_escape_sequence() {
+        // `ESC c` (a full terminal reset) is neither CSI nor OSC --
+        // just the one byte after `ESC` itself, dropped the same way.
+        assert_eq!(clean_label("ticket\x1bc 42"), Some("ticket 42".to_string()));
+    }
+
+    #[test]
     fn clean_label_trims_and_cuts_at_64_characters() {
         let raw = format!("  {}  ", "a".repeat(100));
         assert_eq!(clean_label(&raw), Some("a".repeat(64)));
