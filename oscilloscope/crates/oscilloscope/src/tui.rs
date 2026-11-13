@@ -6301,6 +6301,7 @@ mod draw_all_tile_band_label_tests {
             oscilloscope_core::screens::Screen::Tape,
             &test_zone(),
             "2026-01-01T00:01:02Z",
+            None,
         );
         AllTile {
             document_label: document.to_string(),
@@ -6622,11 +6623,18 @@ fn draw_all_tape_tile(
                     // for the same reason it is at any single-run
                     // width that narrow, so a loop row's own
                     // redundant ` · N done` gives way the same way.
+                    // The deviation view (issue #712) replaces a
+                    // row's own bar exactly when that row has a
+                    // `usual` figure to read it against -- the same
+                    // gate a single-run Tape's own `t` toggle checks
+                    // before it shows anything there either, so a
+                    // tile with too little history for this row
+                    // keeps its plain bar, never a bare `—`.
                     Paragraph::new(tape_row_line(
                         row,
                         selected,
                         screen.unit,
-                        false,
+                        row.tokens.usual.is_some(),
                         true,
                         false,
                         name_width,
@@ -6664,13 +6672,48 @@ fn draw_all_tape_tile(
                     frame.render_widget(Paragraph::new(Line::from(spans)), content_row);
                 }
             }
-            TapeTileLine::Item(TapeItem::RunEnd { eta_ts, .. }) => {
+            TapeTileLine::Item(TapeItem::RunEnd {
+                usual_total_tokens,
+                usual_wall_s,
+                eta_ts,
+            }) => {
                 let eta_text = eta_ts
                     .as_deref()
                     .and_then(|t| oscilloscope_core::format::format_clock_time(t, ctx.zone));
                 let mut text = format!("{:<name_width$}", "Run End");
-                match eta_text {
-                    Some(eta) => text.push_str(&format!("ETA {eta}")),
+                // §3.5/§5's own 80-119-column Run End row, scoped to
+                // a tile's own narrower width (issue #712): `usually
+                // <tokens> · ETA <clock>` always, with ` · <duration>`
+                // folded in only once it still fits -- a tile has no
+                // clock-column gap of its own to spare the way the
+                // single-run row's 120-column layout does.
+                match usual_total_tokens {
+                    Some(usual) => {
+                        let budget = (content.width as usize).saturating_sub(2 + name_width);
+                        let tokens_part = format!(
+                            "usually {}",
+                            oscilloscope_core::format::format_tokens(*usual)
+                        );
+                        let eta_part = eta_text
+                            .as_deref()
+                            .map(|eta| format!(" · ETA {eta}"))
+                            .unwrap_or_default();
+                        let with_duration = usual_wall_s.map(|d| {
+                            format!(
+                                "{tokens_part} · {}{eta_part}",
+                                oscilloscope_core::format::format_duration(d)
+                            )
+                        });
+                        match with_duration {
+                            Some(full) if full.chars().count() <= budget => {
+                                text.push_str(&full);
+                            }
+                            _ => {
+                                text.push_str(&tokens_part);
+                                text.push_str(&eta_part);
+                            }
+                        }
+                    }
                     None => text.push_str("ETA — · no history yet"),
                 }
                 let width = (content.width as usize).saturating_sub(2);
@@ -13503,15 +13546,27 @@ fn flow_item_width(item: &RailItem, app: &App, area_width: u16) -> usize {
     }
 }
 
+/// A lane's own painted width: every item's own width, plus the
+/// `── ` connector `flow_paint_sequence` actually paints between two
+/// adjacent plain stations -- never between a station and a fork or
+/// between two forks, where the fork's own `─┬─ ` lead-in or `─┴── `
+/// tail already bridges the gap, so adding one here would count a
+/// connector nothing ever paints and leave a stray blank gap before
+/// whatever follows this lane (its own fork's join, say).
 fn flow_lane_width(items: &[RailItem], app: &App, area_width: u16) -> usize {
     if items.is_empty() {
         return rail::STATION_WIDTH;
     }
-    items
-        .iter()
-        .map(|it| flow_item_width(it, app, area_width))
-        .sum::<usize>()
-        + rail::NORMAL_CONNECTOR * (items.len() - 1)
+    let mut total = 0usize;
+    for (i, item) in items.iter().enumerate() {
+        total += flow_item_width(item, app, area_width);
+        let both_stations = matches!(item, RailItem::Station(_))
+            && matches!(items.get(i + 1), Some(RailItem::Station(_)));
+        if both_stations {
+            total += rail::NORMAL_CONNECTOR;
+        }
+    }
+    total
 }
 
 fn flow_fork_width(fork: &Fork, app: &App, area_width: u16) -> usize {
@@ -14950,6 +15005,58 @@ mod flow_layout_tests {
         };
         let app = App::new(false);
         assert_eq!(flow_fork_height(&fork, &app, 200), 6);
+    }
+
+    /// A lane that ends in a nested fork's own join (a station,
+    /// then an unnamed `if`, the pass's own last step) must report
+    /// exactly what `flow_paint_sequence` actually paints -- never
+    /// three cells more for a `── ` connector into the fork that
+    /// nothing paints, since the fork's own `─┬─ ` lead-in already
+    /// bridges the gap (issue #693 item 2: the padding `flow_paint_
+    /// fork` adds up to this width, right before the outer join,
+    /// must be zero when this lane is the one defining it).
+    #[test]
+    fn flow_lane_width_matches_what_a_lane_ending_in_a_nested_fork_actually_paints() {
+        let inner = Fork {
+            path: "prime.fan.iter_0.__if".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Done,
+            lanes: vec![
+                Lane {
+                    items: vec![station("yes_step", StatusKind::Done)],
+                    ghost: None,
+                    running: false,
+                    waiting: false,
+                    path: None,
+                },
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("no_step".to_string()),
+                    running: false,
+                    waiting: false,
+                    path: None,
+                },
+            ],
+        };
+        let items = vec![station("setup", StatusKind::Done), RailItem::Fork(inner)];
+        let app = App::new(false);
+        let computed = flow_lane_width(&items, &app, 200);
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let area = Rect::new(0, 0, 200, 10);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let (painted_end, _, _) =
+            flow_paint_sequence(&mut buf, area, 0, 200, &items, 0, 0, &app, 200, 1, &ctx);
+        assert_eq!(
+            computed, painted_end,
+            "a lane ending in a fork must never report a width wider than what actually paints"
+        );
     }
 
     /// A lane holding a nested fork (an unnamed `if` inside a loop's
@@ -20384,6 +20491,7 @@ mod tape_frame_goldens {
                     screen_kind,
                     &zone,
                     now,
+                    None,
                 );
                 AllTile {
                     run_index,
@@ -20611,6 +20719,76 @@ mod tape_frame_goldens {
             &mock,
             "all--tape--180x48",
             &allowed,
+        );
+    }
+
+    /// Issue #712: a tile reads its own document's history exactly
+    /// as the single-run Tape does -- the same plan, state, model
+    /// and history fixture `tape_usual_120x30_matches_the_frame`
+    /// pins against the single-run frame (whose own `gate › reply`
+    /// row reads a `+47%` deviation once `t` is toggled) drives a
+    /// tile here too, proving both Run End's own figures and a
+    /// finished row's own deviation reach the tile's drawing, not
+    /// only its data.
+    #[test]
+    fn all_tape_tile_draws_run_end_figures_and_a_finished_rows_deviation() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, &events);
+        let history_stats = history.eta_with_stats(Some(&state), &plan, None, now);
+        assert!(
+            history_stats.is_some(),
+            "demo_history's own three fixture runs must resolve a real ETA"
+        );
+        let zone = frame_zone();
+        let render = oscilloscope_core::multi::build_tile(
+            "demo.yml",
+            "cof 0.1.0",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::screens::Screen::Tape,
+            &zone,
+            now,
+            history_stats.as_ref().map(|(eta, stats)| (eta, stats)),
+        );
+        let oscilloscope_core::multi::TileScreen::Tape(tape) = &render.screen else {
+            panic!("expected a Tape tile");
+        };
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(60, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_all_tape_tile(f, f.area(), tape, &render.header, true, &ctx))
+            .unwrap();
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(
+            !text.contains("no history yet"),
+            "expected a real Run End reading, not the no-history fallback:\n{text}"
+        );
+        assert!(
+            text.contains("usually") && text.contains("ETA "),
+            "expected Run End's own usual total and ETA on the tile:\n{text}"
+        );
+        assert!(
+            text.contains("+47%"),
+            "expected gate › reply's own +47% deviation next to its finished row, the same \
+             figure the single-run Tape's `t` view reads for it:\n{text}"
         );
     }
 
