@@ -70,9 +70,11 @@ Decisions" instead of citing an external project file repeatedly:
 - Error-message parity is explicitly two-tier: text Circuitry's own code writes (the dynamic-wrapped
   `"<path>: <message>"` format, `expect failed: ...`, `use` cycle messages, loop-bounds errors, and
   every other message quoted verbatim in the specification this design implements) must match
-  **word for word**; text that originates in a third-party library (a CEL evaluation error, a YAML
-  parse error, a JSON Schema message) only has to **fail in the same place** — the conformance
-  suite normalizes that text rather than diffing it byte-for-byte.
+  **word for word**; text that originates in a third-party library (a YAML parse error, a JSON
+  Schema message) only has to **fail in the same place** — the conformance suite normalizes that
+  text rather than diffing it byte-for-byte. A CEL evaluation error used to be in this second tier
+  too, but issue #629 moved every case the table in §7.2 maps into the first one: Circuitry's own
+  wording now, in both engines, compared exactly.
 - v1 must ship: run records with `--resume`, observability (OTel, live state, progress, totals), an
   embeddable Rust library crate, and release builds (static Linux x86_64/arm64, macOS arm64, a
   container image).
@@ -924,10 +926,11 @@ interactive shell.
 **Error text.** `meta.error` is always `str(exception)`-equivalent text, never a structured
 object. Per the Decisions above: messages Circuitry itself writes (the dynamic-wrapped
 `"<path>: <message>"` format, `expect failed: ...`, answer-parse failures, `use` cycle messages,
-loop bounds errors — all cited verbatim in runtime-semantics §6.2) must match **word for word**;
-text that originates in a third-party library (a CEL evaluation error, a YAML parse error, a
-JSON Schema message) only needs to **fail in the same place**, with the conformance suite
-normalizing that text rather than diffing it byte-for-byte.
+loop bounds errors — all cited verbatim in runtime-semantics §6.2) must match **word for word**,
+and issue #629 moved every CEL evaluation error §7.2's own table maps into this tier too; text
+that still originates in a third-party library otherwise (a YAML parse error, a JSON Schema
+message) only needs to **fail in the same place**, with the conformance suite normalizing that
+text rather than diffing it byte-for-byte.
 
 `finally:` failure interaction (runtime-semantics §6.4): if the body failed and `finally:` also
 fails, the body's error is what's reported at `meta.error`; the `finally:` failure rides along
@@ -1129,10 +1132,7 @@ synchronous and unconditionally fatal in both engines (run-wiring step 16 above)
 reference's own retry-then-warn-twice behaviour for that specific case (it still attempts, and logs,
 one more write through `close()` in its own `finally:`, even though the run is already failing) would
 need restructuring `run_action`'s early-return paths for a case this preview cannot otherwise
-construct (no filesystem-mutating tool exists to fail a *later* write instead); `core/cel_eval.py`'s
-own `logger.error` for a genuine CEL evaluation exception (not a compile/path error — division by
-zero, say) embeds the underlying Python exception's own `repr`, which has no Rust equivalent to
-reproduce byte for byte, so that one `ERROR:` line is not ported; and a dynamic interrupted mid-body
+construct (no filesystem-mutating tool exists to fail a *later* write instead); and a dynamic interrupted mid-body
 whose `finally:` then also fails logs `meta.error`'s own "Interrupted (...)" wording on this warning line
 (`exec/dynamic.rs::error_text`), where the reference logs the interrupting exception's raw `str()`
 instead — `''` for a real signal caught in the main thread (`KeyboardInterrupt`/`SigTermInterrupt`),
@@ -1671,10 +1671,12 @@ regardless of which underlying crate is used:
   look at more than one element to decide so. That conversion is paid even when the error itself
   is thrown away immediately — inside `has()`, or the short-circuiting side of `||` — so
   `state.items.filter(i, has(state.index[i.id]))` still costs the whole `state.index` on every
-  iteration where the key is missing, not just the one lookup. Left as is here because the error
-  text itself is built from those same two `Value`s; changing what gets converted would change
-  what the error says. Issue #629 tracks changing that text (and, with it, removing this
-  conversion).
+  iteration where the key is missing, not just the one lookup. Still left as is: issue #629's own
+  fix (`electricity-cel::evaluation_error_text`) needs this `Value`, not just its type — a `map`
+  container's own keys decide whether a wrong-type index is a plain miss or a type mismatch (a
+  `uint`/`bool` probe that collides, by numeric value, with an existing `int` key, matching
+  cel-python's own `@type_matched` key equality) — so trimming this conversion down to a bare
+  type name, for the shapes that would allow it, stays a follow-up.
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — but only if that read decides the whole
   expression's result. Each unguarded `state.` occurrence is marked, against the state this
@@ -2770,10 +2772,11 @@ the ground truth; normalization only narrows what's compared):
 - durations (`elapsed_s`/`eta_s`/wall-clock totals) — compared for presence and plausibility
   bounds, not exact value;
 - run ids (`run_id`, UUID v4 fields) — compared for well-formedness, not exact value;
-- third-party-library error text (CEL evaluation errors, YAML/JSON parse errors, JSON Schema
-  messages) — compared for "failed in the same place, with a non-empty message," per the
-  Decisions above — never byte-for-byte; Circuitry's **own** error text (everything cited
-  verbatim in runtime-semantics §6.2) is compared byte-for-byte, with **no** normalization;
+- third-party-library error text (YAML/JSON parse errors, JSON Schema messages) — compared for
+  "failed in the same place, with a non-empty message," per the Decisions above — never
+  byte-for-byte; Circuitry's **own** error text (everything cited verbatim in runtime-semantics
+  §6.2, and, since issue #629, every CEL evaluation error §7.2's own table maps) is compared
+  byte-for-byte, with **no** normalization;
 - the `{path}` segment inside a profile's schema-failure message (§6.11) — compared
   structurally (both sides name a path to the same physical file), not byte-for-byte, since
   electricity's path is the operator-given one rather than the reference's own discovered name.

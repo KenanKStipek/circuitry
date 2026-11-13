@@ -2269,6 +2269,28 @@ CEL evaluation failed for '1 / 0 == 1': division by zero
 CEL evaluation failed for '1 % 0 == 1': modulus by zero
 ```
 
+The same holds for every other case where the underlying library would
+otherwise leak a Python/Rust implementation detail — an `int`/`uint`
+overflow, a map literal's duplicate or invalid key, selecting a field on
+something that has none, and `in` against a type it can't search:
+
+```
+CEL evaluation failed for '9223372036854775807 + 1 == 1': return error for overflow
+CEL evaluation failed for "{'a': 1, 'a': 2}.a == 1": duplicate key: 'a'
+CEL evaluation failed for '{[1]: 2} == {}': cannot use a list as a key
+CEL evaluation failed for '[1, 2].zz == 1': cannot select field 'zz' on a list
+CEL evaluation failed for '5 in 5': cannot apply 'in' to an int and an int
+```
+
+A map key of the wrong exact numeric type (an `int`-keyed map probed with a
+`uint` or a `bool` of the same value) is also one line naming the mismatch,
+not a silent miss — the two numeric types compare equal elsewhere in CEL,
+but a map's own key lookup does not cross between them:
+
+```
+CEL evaluation failed for 'state.input.m[1u] == 1': cannot index a map with a uint
+```
+
 An expression nested too deeply to parse — deep parenthesisation, a long
 accessor chain — is a compile-time rejection in both engines, named the same
 way as any other check error, never the parser's own dump or the whole
