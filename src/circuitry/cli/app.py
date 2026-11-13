@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+from ..core.label import clean_label
 from ..core.prompt_compose import document_content_digest
 from ..core.resume import _legacy_document_sha256
 from ..core.saved_state import dumps_saved_state
@@ -203,6 +204,20 @@ _LAST_RUN_PATH = LAST_RUN_PATH
 
 def _print_header(title: str) -> None:
     console.print(Panel.fit(title, border_style="cyan"))
+
+
+def _label_override_header_line(label: str) -> str | None:
+    """The run header's own ``--label`` line, or ``None`` to print nothing.
+
+    ``--label``'s text is never rendered as a template, but it is still
+    arbitrary user text reaching a Rich ``console.print`` call: cleaned the
+    same way the recorded label is, and escaped so a label like ``"[/x]"``
+    can't be read as closing markup (or any other tag Rich would act on).
+    """
+    cleaned = clean_label(label)
+    if not cleaned:
+        return None
+    return f"[bold]Label (override):[/bold] {escape(cleaned)}"
 
 
 def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
@@ -1311,7 +1326,9 @@ def run_cmd(
         if resume:
             console.print(f"[bold]Resume:[/bold] {resume}{' (--force)' if force else ''}")
         if label:
-            console.print(f"[bold]Label (override):[/bold] {label}")
+            header_line = _label_override_header_line(label)
+            if header_line:
+                console.print(header_line)
 
     # Build initial state from --state file + -e overrides, or (--resume)
     # from the resolved resume source + -e overrides (the stashed env_vars,

@@ -15,7 +15,7 @@ import pytest
 pytest.importorskip("typer")
 from typer.testing import CliRunner
 
-from circuitry.cli.app import app
+from circuitry.cli.app import _label_override_header_line, app
 
 runner = CliRunner()
 
@@ -48,6 +48,57 @@ def test_label_rendered_from_an_input(tmp_path: Path) -> None:
     result = runner.invoke(app, ["run", str(orch), "--out", str(out), "--quiet"])
     assert result.exit_code == 0, result.output
     assert _last_run(out)["label"] == "ticket 42"
+
+
+def test_labels_a_limited_document_run_by_library_name(tmp_path: Path) -> None:
+    folder = tmp_path / "lib"
+    _write(
+        folder / "scoped_doc.yml",
+        "label: 'ticket {{input.ticket}}'\n"
+        "interface:\n  inputs:\n    ticket: {type: string, default: '42'}\n"
+        "effects:\n" + _tool_step(),
+    )
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "default_adapter": "openai",
+                "default_model": "gpt-test",
+                "runtime": {
+                    "library": {
+                        "sources": [{"type": "folder", "name": "local", "path": str(folder)}]
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    out = tmp_path / "out.json"
+    result = runner.invoke(
+        app, ["run", "scoped_doc", "-c", str(config), "--out", str(out), "--quiet"]
+    )
+    assert result.exit_code == 0, result.output
+    assert _last_run(out)["label"] == "ticket 42"
+
+
+def test_label_override_header_line_escapes_rich_markup() -> None:
+    assert _label_override_header_line("[/x]") == "[bold]Label (override):[/bold] \\[/x]"
+
+
+def test_label_override_header_line_is_none_when_cleaning_empties_it() -> None:
+    assert _label_override_header_line("   ") is None
+
+
+def test_cli_label_markup_does_not_crash_the_run_header(tmp_path: Path) -> None:
+    """A `--label` value that looks like Rich markup must not raise
+    `MarkupError` when the run header prints it (not under `--quiet`/`--json`,
+    forced here with `--tail` since the test harness's own stdout isn't a
+    terminal).
+    """
+    orch = _write(tmp_path / "doc.yml", "effects:\n" + _tool_step())
+    result = runner.invoke(app, ["run", str(orch), "--label", "[/x]", "--tail"])
+    assert result.exit_code == 0, result.output
+    assert "Label (override): [/x]" in result.output
 
 
 def test_no_label_key_when_document_has_none(tmp_path: Path) -> None:
