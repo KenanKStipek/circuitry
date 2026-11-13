@@ -83,8 +83,8 @@ pub trait RunObserver {
     /// line is #442's own PR, built on top of this seam once it lands.
     fn warning(&self, _message: &str) {}
 
-    /// An isolated child run's own root, registered once -- `use`,
-    /// lane I; decomposition, lane L2. Unlike the per-write push this
+    /// An isolated child run's own root, registered once -- a `use`
+    /// child or a decomposition plan. Unlike the per-write push this
     /// hook used to be (issue #662), the child's own live [`crate::
     /// NodeRef`] is handed over exactly once, right before the child's
     /// own execution starts (before it could have written anything),
