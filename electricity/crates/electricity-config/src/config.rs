@@ -425,10 +425,8 @@ fn strerror(err: &io::Error) -> String {
     }
 }
 
-/// `cli/config.py::_apply_env_vars`, in the same order
-/// `CONFIG_ENV_VARS` lists them, except `CIRCUITRY_SYSTEMONE_URL`, which
-/// this crate skips on purpose: electricity does not run the `systemone`
-/// tool.
+/// `cli/config.py::_apply_env_vars`, in the same order `CONFIG_ENV_VARS`
+/// lists them.
 fn apply_env_vars(merged: Dict, env: &HashMap<String, String>) -> Dict {
     let mut result = merged;
 
@@ -457,6 +455,13 @@ fn apply_env_vars(merged: Dict, env: &HashMap<String, String>) -> Dict {
 
     if let Some(url) = non_empty(env, "CIRCUITRY_COMFYUI_URL") {
         set_nested_base_url(&mut result, "plugins", "comfyui", url);
+    }
+
+    // Only the server: `allow_remote` and `api_key_env` stay in config, so a
+    // remote URL from here is still refused unless config allows it (issue
+    // #724, matching #593's own `CIRCUITRY_COMFYUI_URL` pattern).
+    if let Some(url) = non_empty(env, "CIRCUITRY_SYSTEMONE_URL") {
+        set_nested_base_url(&mut result, "plugins", "systemone", url);
     }
 
     for (env_key, cfg_key) in [
@@ -871,6 +876,33 @@ mod tests {
             get(openai, "base_url"),
             Some(&Value::Str("https://example.test".to_string()))
         );
+    }
+
+    #[test]
+    fn circuitry_systemone_url_overlays_base_url_over_the_config_file() {
+        let scratch = ScratchDir::new("systemone-url");
+        let path = scratch.write_config(
+            r#"{"runtime": {"plugins": {"systemone": {"base_url": "http://127.0.0.1:9", "allow_remote": true}}}}"#,
+        );
+        let mut env = HashMap::new();
+        env.insert(
+            "CIRCUITRY_SYSTEMONE_URL".to_string(),
+            "https://example.test".to_string(),
+        );
+        let cfg = resolve_config(&path, &env).unwrap();
+        let runtime = cfg.runtime.unwrap();
+        let plugins = get(runtime.as_dict().unwrap(), "plugins")
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let systemone = get(plugins, "systemone").unwrap().as_dict().unwrap();
+        assert_eq!(
+            get(systemone, "base_url"),
+            Some(&Value::Str("https://example.test".to_string()))
+        );
+        // `allow_remote` stays whatever the config file already said --
+        // only `base_url` is overlaid.
+        assert_eq!(get(systemone, "allow_remote"), Some(&Value::Bool(true)));
     }
 
     #[test]

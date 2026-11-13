@@ -1,0 +1,23 @@
+name: c-systemone-pass-all-types
+effects:
+  - type: tool
+    name: decide
+    provider: systemone
+    params:
+      model: typesafe-1
+      state:
+        report: "looks fine, no concerns"
+      questions:
+        risky:
+          type: noul
+          instructions: "Does this change risk data loss?"
+        verdict:
+          type: choice
+          instructions: "What should the reviewer do?"
+          criteria:
+            approve: "Nothing blocks the change."
+            reject: "The change should not land."
+        confidence_score:
+          type: score
+          instructions: "Rate overall confidence."
+          criteria: ["low", "medium", "high"]

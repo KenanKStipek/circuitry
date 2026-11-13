@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #724",
+  "description": "A non-loopback base_url with no runtime.plugins.systemone.allow_remote is refused before any request is made -- no network call, no mock server needed.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "config": "config.json"
+}

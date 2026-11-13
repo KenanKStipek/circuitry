@@ -994,6 +994,51 @@ def test_run_tracked_decode_error_mid_stream_drains_to_eof_then_fails(
     )
 
 
+@pytest.mark.parametrize(
+    "write",
+    [
+        pytest.param(
+            "sys.stdout.write('line one\\r\\nline two\\r\\n')",
+            id="crlf",
+        ),
+        pytest.param(
+            "sys.stdout.write('a\\rb\\rc\\n')",
+            id="lone-cr",
+        ),
+        pytest.param(
+            "import time\n"
+            "sys.stdout.write('line one\\r'); sys.stdout.flush()\n"
+            "time.sleep(0.3)\n"
+            "sys.stdout.write('\\nline two\\r\\n')",
+            id="crlf-split-across-writes",
+        ),
+    ],
+)
+def test_run_tracked_on_live_chunk_matches_a_plain_text_run_including_crlf(
+    write: str,
+) -> None:
+    """``on_live_chunk`` (#741) must never change the final ``stdout`` a
+    plain ``subprocess.run(text=True)`` would have produced: CRLF and a
+    lone CR are both translated to LF by the pipe's own ``TextIOWrapper``
+    (``newline=None``, the default for ``text=True``) whether or not a
+    live tail is also reading it, and a ``\\r\\n`` split across two
+    separate writes (so across two separate reads on this end) is still
+    translated correctly either way. An earlier version of this read raw
+    bytes off the pipe's own underlying buffer instead of through its
+    ``TextIOWrapper``, which skipped that translation and left CRLF in
+    the final text a plain run never would have (caught by a conformance
+    case, ``c-shell-crlf``, going stale).
+    """
+    script = f"import sys\n{write}\n"
+    cmd = [sys.executable, "-c", script]
+    baseline = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    chunks: list[tuple[str, bytes]] = []
+    mine = run_tracked(cmd, on_live_chunk=lambda stream, data: chunks.append((stream, data)))
+    assert mine.stdout == baseline.stdout
+    assert chunks, "on_live_chunk was never called"
+    assert all(stream == "stdout" for stream, _ in chunks)
+
+
 def test_run_tracked_reader_thread_start_failure_does_not_leave_a_zombie(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1213,6 +1258,7 @@ def test_run_tracked_does_not_repeat_the_group_kill_when_communicate_promptly_al
         timeout: Any,
         pgid: int | None,
         pgid_seen_gone: list[bool] | None = None,
+        reader_done_events: Any = (),
     ) -> tuple[str, str]:
         if pgid_seen_gone is not None:
             pgid_seen_gone.append(True)

@@ -136,6 +136,8 @@ fn call<'a>(token: &'a CancellationToken, config: &'a Value) -> ToolCall<'a> {
         config,
         token,
         armed: false,
+        limited: false,
+        confine_to: None,
     }
 }
 

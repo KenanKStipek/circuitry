@@ -293,7 +293,7 @@ pub fn is_dispatch_file(value: &Value) -> bool {
 
 /// `within: {from: input.<name>}`'s path: one non-empty name under `input`,
 /// holding no `.`, whitespace, `{` or `}` -- `_WITHIN_INPUT_PATH`.
-fn is_within_input_path(path: &str) -> bool {
+pub(crate) fn is_within_input_path(path: &str) -> bool {
     let Some(name) = path.strip_prefix("input.") else {
         return false;
     };

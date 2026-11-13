@@ -36,15 +36,17 @@ pub(crate) const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"]
 
 /// A `{from: <path>}` leaf's path, `default:` and `as:` as written -- ports
 /// `core/tool.py::ParamReference`.
-struct ParamReference {
-    path: String,
-    default: Option<Value>,
-    as_value: Option<Value>,
+pub(crate) struct ParamReference {
+    pub(crate) path: String,
+    #[allow(dead_code)]
+    pub(crate) default: Option<Value>,
+    #[allow(dead_code)]
+    pub(crate) as_value: Option<Value>,
 }
 
 /// Ports `core/tool.py::param_reference`: `Some` only for a mapping whose
 /// keys are `from` (a string) plus any of `default` and `as`.
-fn param_reference(value: &Value) -> Option<ParamReference> {
+pub(crate) fn param_reference(value: &Value) -> Option<ParamReference> {
     let Value::Dict(dict) = value else {
         return None;
     };

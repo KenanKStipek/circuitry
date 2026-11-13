@@ -145,6 +145,8 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            limited: false,
+            confine_to: None,
         };
         EnvVarsPlugin.execute(params, &call).await
     }
