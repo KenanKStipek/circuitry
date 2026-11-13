@@ -272,6 +272,12 @@ pub enum Event {
         /// `None` today; read as optional so osi already picks it up
         /// the moment either one starts to.
         config: Option<String>,
+        /// The run's own label (issue #752), when the line carries
+        /// one -- rendered and cleaned by the engine already, but
+        /// kept raw here (uncleaned) all the same: osi cleans every
+        /// label again on its own read, since a file can be written
+        /// by anything, not only an engine that cleaned it first.
+        label: Option<String>,
     },
     /// Sent once by a tree loop or tree dynamic before its branches
     /// start. `branches` is the true total (an `each` loop's item
@@ -370,6 +376,10 @@ pub fn parse_event(value: &Value) -> Option<Event> {
                 .map(str::to_string),
             config: value
                 .get("config")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            label: value
+                .get("label")
                 .and_then(Value::as_str)
                 .map(str::to_string),
         }),

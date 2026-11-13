@@ -75,6 +75,7 @@ impl ToolPlugin for GenericSubprocessTool {
             &hint,
             call.armed,
             call.token,
+            call.on_live,
         )
         .await?;
         if parse_json {
@@ -361,6 +362,7 @@ pub(crate) async fn run_binary(
     not_found_hint: &str,
     armed: bool,
     token: &CancellationToken,
+    on_live: Option<&dyn Fn(process::LiveTail)>,
 ) -> Result<ToolResult, ToolError> {
     let validated_args = validate_args(args)?;
     let mut cmd = Vec::with_capacity(validated_args.len() + 1);
@@ -377,7 +379,7 @@ pub(crate) async fn run_binary(
         env_set: Vec::new(),
     };
 
-    let completed = match process::run_tracked(&cmd, &opts, token).await {
+    let completed = match process::run_tracked(&cmd, &opts, token, on_live).await {
         Ok(completed) => completed,
         Err(ProcError::NotFound(_)) => {
             return Err(ToolError {
@@ -873,6 +875,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -915,6 +918,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -942,6 +946,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -962,6 +967,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -1011,6 +1017,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap();
@@ -1042,6 +1049,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -1074,6 +1082,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -1102,6 +1111,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap();

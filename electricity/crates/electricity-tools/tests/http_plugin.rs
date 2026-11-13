@@ -31,6 +31,7 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         armed: false,
         secret_headers: &[],
         scrub: None,
+        on_live: None,
         limited: false,
         confine_to: None,
     }
@@ -356,6 +357,7 @@ async fn a_secret_header_defaults_redirects_to_strip_auth_not_follow() {
             armed: false,
             secret_headers: &secret_headers,
             scrub: None,
+            on_live: None,
             limited: false,
             confine_to: None,
         },
@@ -518,6 +520,7 @@ async fn a_secret_straddling_the_error_excerpts_own_cut_leaves_no_fragment_on_ei
             armed: false,
             secret_headers: &[],
             scrub: Some(&scrub),
+            on_live: None,
             limited: false,
             confine_to: None,
         },

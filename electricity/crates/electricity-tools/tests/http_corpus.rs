@@ -98,6 +98,7 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         armed: false,
         secret_headers: &[],
         scrub: None,
+        on_live: None,
         limited: false,
         confine_to: None,
     }
@@ -570,6 +571,7 @@ async fn end_to_end_cases_match_cpython() {
             armed: false,
             secret_headers: &[],
             scrub: None,
+            on_live: None,
             limited: false,
             confine_to: None,
         };

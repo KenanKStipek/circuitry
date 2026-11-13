@@ -222,6 +222,13 @@ pub struct Header {
     pub document: String,
     pub engine: String,
     pub run_id: Option<String>,
+    /// This run's own label (issue #752), already [`crate::names::
+    /// clean_label`]'d -- `run_start`'s own `label` first, else
+    /// state's own `runtime.last_run.label`, the same fallback order
+    /// `run_id` already uses against `_run_id`. `names::display_name`
+    /// shows it in place of the generated name wherever one is
+    /// shown; `None` with no label at all.
+    pub label: Option<String>,
     pub status: RunStatus,
     pub elapsed_s: f64,
     /// The run's own start (issue #613's "one clock"/"run start and
@@ -1453,6 +1460,30 @@ fn build_header(
             .map(str::to_string)
     });
 
+    // Issue #752: a run's own label, the same fallback order as
+    // `run_id` just above -- `run_start`'s own `label` field, else
+    // `osi watch`'s own `runtime.last_run.label` with no `--events`
+    // stream at all, else `osi <doc> --label TEXT`'s own hint (set
+    // once by whoever launched this run, `RunModel::set_label_hint`)
+    // so a labelled run shows its label from its very first frame,
+    // before either `run_start` or a live-state write has landed.
+    // Cleaned here, the one point this header's own `label` field is
+    // ever set from `run_start`/state, since either file can be
+    // written by anything, not only an engine that already cleaned
+    // it once -- `label_hint` is already clean, cleaned by its own
+    // caller before it's ever handed to `RunModel`.
+    let label = model
+        .run_start_label()
+        .map(str::to_string)
+        .or_else(|| {
+            state
+                .and_then(|s| s.pointer("/runtime/last_run/label"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .and_then(|raw| crate::names::clean_label(&raw))
+        .or_else(|| model.label_hint().map(str::to_string));
+
     // Issue #613's "one clock": the run's own start, from the first
     // `--events` `run_start` when one arrived, else the earliest
     // `created_at` anywhere in state -- real instants compared, never
@@ -1749,6 +1780,7 @@ fn build_header(
         document: document_file_name(document),
         engine: engine.to_string(),
         run_id,
+        label,
         status,
         elapsed_s,
         run_start_ts,
@@ -3131,6 +3163,7 @@ mod tests {
             pid: Some(1234),
             engine: None,
             config: None,
+            label: None,
         });
         model.observe_event(&Event::RunEnd {
             ts: "2026-01-01T11:31:10Z".to_string(),
@@ -3171,6 +3204,126 @@ mod tests {
         assert_eq!(rendered.header.elapsed_s, 1572.0);
     }
 
+    #[test]
+    fn build_header_reads_the_label_from_run_start() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_falls_back_to_the_states_own_label_with_no_run_start_event() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({
+            "_run_id": "r1",
+            "runtime": {"last_run": {"label": "ticket 42"}}
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_cleans_a_label_holding_ansi_codes_and_a_newline() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("\u{1b}[1mticket\n42\u{1b}[0m".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_falls_back_to_the_label_hint_with_no_run_start_or_state_label() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.set_label_hint(Some("ticket 42".to_string()));
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_prefers_run_start_label_over_the_hint() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.set_label_hint(Some("hint".to_string()));
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("from run_start".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("from run_start"));
+    }
+
     /// An aborted run (the engine was killed, so no `run_end` event
     /// and `prime` never got its own `completed_at`) must stop
     /// ticking `elapsed` at the latest real completion anywhere in
@@ -3185,6 +3338,7 @@ mod tests {
             pid: Some(1234),
             engine: None,
             config: None,
+            label: None,
         });
         let state_json = json!({
             "prime": {"value": null, "meta": {"created_at": "2026-01-01T11:04:58Z", "completed_at": null},
@@ -4565,6 +4719,7 @@ mod tests {
             pid: Some(1),
             engine: None,
             config: None,
+            label: None,
         });
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
         let details = details_for("prime", &plan, &model, Some(&state_json));

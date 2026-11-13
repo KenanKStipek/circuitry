@@ -185,7 +185,7 @@ async fn command_output(
         timeout: Some(Duration::from_secs(SECRET_COMMAND_TIMEOUT_SECONDS)),
         ..RunOpts::default()
     };
-    match process::run_tracked(argv, &opts, token).await {
+    match process::run_tracked(argv, &opts, token, None).await {
         Ok(completed) => {
             if completed.exit_code != 0 {
                 return Err(runtime_error(format!(
@@ -236,6 +236,10 @@ fn checked(name: &str, value: String) -> Result<String, ToolError> {
     }
     Ok(value)
 }
+
+/// `secrets.py::_MIN_TAIL_SECRET_LINE_CHARS`: the shortest line of a
+/// multi-line secret [`SecretValues::scrub_live_tail`] looks for.
+pub const MIN_TAIL_SECRET_LINE_CHARS: usize = 4;
 
 /// `secrets.py::SecretValues` -- the secrets one tool-effect dispatch
 /// resolved, by name, and the replacements [`SecretValues::scrub`]
@@ -316,6 +320,31 @@ impl SecretValues {
         text
     }
 
+    /// One of a running tool's live tails (#741) with every line that
+    /// contains a line of a resolved secret -- at least
+    /// [`MIN_TAIL_SECRET_LINE_CHARS`] characters of it -- dropped, on top
+    /// of [`Self::scrub_str`]'s exact-value replacement, which runs first
+    /// (`secrets.py::SecretValues.scrub_live_tail`). A tail is bounded in
+    /// lines and bytes, so a multi-line secret can reach it only in part,
+    /// with no whole value there for `scrub_str` to replace; and a tail
+    /// never keeps a fragment of a line cut by its byte cap, so the cap
+    /// can't expose part of a secret line either.
+    pub fn scrub_live_tail(&self, text: &str) -> String {
+        let secret_lines: Vec<&str> = self
+            .values
+            .values()
+            .flat_map(|value| value.split('\n'))
+            .filter(|line| line.chars().count() >= MIN_TAIL_SECRET_LINE_CHARS)
+            .collect();
+        if secret_lines.is_empty() || text.is_empty() {
+            return text.to_string();
+        }
+        text.split('\n')
+            .filter(|line| !secret_lines.iter().any(|secret| line.contains(secret)))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn scrub_inner(&self, value: &Value) -> Value {
         match value {
             Value::Str(s) => Value::Str(self.scrub_str(s)),
@@ -336,6 +365,43 @@ impl SecretValues {
 mod tests {
     use super::*;
     use electricity_value::Dict;
+
+    #[test]
+    fn a_live_tail_drops_a_line_holding_part_of_a_multi_line_secret() {
+        let mut secrets = SecretValues::new();
+        let value = "BEGIN-KEY\nabcd1234\nEND".to_string();
+        secrets.values.insert("key".to_string(), value.clone());
+        secrets.add(value, "[secret:key]".to_string());
+        // Only the first two lines of the secret reached the tail.
+        let tail = "start\nBEGIN-KEY\nabcd1234\nok";
+        assert_eq!(
+            secrets.scrub_live_tail(&secrets.scrub_str(tail)),
+            "start\nok"
+        );
+    }
+
+    #[test]
+    fn a_secret_line_under_four_characters_never_drops_a_tail_line() {
+        let mut secrets = SecretValues::new();
+        secrets
+            .values
+            .insert("key".to_string(), "abc\nlonger-line".to_string());
+        assert_eq!(secrets.scrub_live_tail("xabcx\nfine"), "xabcx\nfine");
+    }
+
+    #[test]
+    fn a_whole_single_line_secret_in_a_tail_is_replaced_not_dropped() {
+        let mut secrets = SecretValues::new();
+        secrets
+            .values
+            .insert("tok".to_string(), "s3cret-value".to_string());
+        secrets.add("s3cret-value".to_string(), "[secret:tok]".to_string());
+        let tail = "token=s3cret-value\nnext";
+        assert_eq!(
+            secrets.scrub_live_tail(&secrets.scrub_str(tail)),
+            "token=[secret:tok]\nnext"
+        );
+    }
 
     fn runtime_with_secret(name: &str, entry: Value) -> Value {
         let mut secrets = Dict::new();

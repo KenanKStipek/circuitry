@@ -37,7 +37,10 @@ preflight check run for real too -- `litellm` is the only Circuitry-known
 adapter name with no electricity builder, and stays refused permanently
 (it embeds the Python `litellm` package, which electricity neither embeds
 nor reimplements), as does a `reflector`'s own generated plan naming it.
-Model-mode `if`/`while` conditions and `expect:` run too. `--profile
+Model-mode `if`/`while` conditions and `expect:` run too. While a `shell`, `awk`, `imagemagick`, `ffmpeg` or `gh` step is running, its node carries a
+`meta.live` snapshot of its output so far (the last 20 lines of each of stdout/stderr, at most 4
+KiB each, published at most once a second) -- removed again once the step finishes, so the final
+state is unaffected. `--profile
 <path>` loads a profile (adapter/model/inputs/persistence overrides,
 routing pins and provider denials) from an explicit path -- no name
 discovery. `runtime.complexity` scoring, model routing and decomposition (splitting

@@ -221,27 +221,35 @@ fn draw_tape_header_band(
         .chain(left_after_name.iter())
         .map(|s| s.content.chars().count())
         .sum();
-    // Issue #717: a run's own short name, once its `run_id` is known
-    // -- never a suffix here, since this header is always exactly
-    // one run and has nothing on screen to collide with. The clock
-    // is never clipped for it: the name gives way first, cut with
-    // `⋯` once there isn't room for it whole, and dropped outright
-    // (with its own `· ` separator) once fewer than 4 cells remain.
+    // Issue #717/#752: a run's own display name -- its own label
+    // (at most 64 characters, shown in full here) once its
+    // `run_start` is known, else the generated name -- never a
+    // suffix here, since this header is always exactly one run and
+    // has nothing on screen to collide with. The clock is never
+    // clipped for it: the name gives way first, cut with `⋯` by
+    // display cell (never a byte or char count, so a label holding
+    // wide characters is cut exactly where it stops fitting) once
+    // there isn't room for it whole, and dropped outright (with its
+    // own `· ` separator) once fewer than 4 cells remain.
     let available_for_name = (area.width as usize).saturating_sub(fixed_width + right_width);
-    let name_block: Vec<Span<'static>> = match header
-        .run_id
-        .as_deref()
-        .map(oscilloscope_core::names::run_name)
-    {
-        Some(name) if available_for_name >= name.chars().count() + 3 => vec![
-            Span::styled(
-                format!("{name} "),
-                Style::default().fg(ctx.theme.text).bg(bg),
-            ),
-            Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
-        ],
+    let name_block: Vec<Span<'static>> = match oscilloscope_core::names::display_name(
+        header.label.as_deref(),
+        header.run_id.as_deref(),
+    ) {
+        Some(name) if available_for_name >= oscilloscope_core::names::display_width(&name) + 3 => {
+            vec![
+                Span::styled(
+                    format!("{name} "),
+                    Style::default().fg(ctx.theme.text).bg(bg),
+                ),
+                Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
+            ]
+        }
         Some(name) if available_for_name >= 4 => {
-            let cut = truncate_text(&name, available_for_name.saturating_sub(3));
+            let cut = oscilloscope_core::names::truncate_display_width(
+                &name,
+                available_for_name.saturating_sub(3),
+            );
             vec![
                 Span::styled(
                     format!("{cut} "),
@@ -901,6 +909,137 @@ mod shared_run_chrome_status_spans_tests {
         assert_eq!(
             shared_run_chrome_status_spans(&TapeHead::Normal, &header, &ctx),
             None
+        );
+    }
+}
+
+/// Issue #752: the header band shows a run's own label in place of
+/// its generated name, cut only once the band itself has no room
+/// for it whole -- never the clock, which this module's own three
+/// widths (80, 120 and 187 columns, issue #752's own required set)
+/// all keep intact regardless.
+#[cfg(test)]
+mod header_label_tests {
+    use super::*;
+    use oscilloscope_core::model::RunStatus;
+
+    fn header_with_label(label: Option<&str>) -> oscilloscope_core::render::Header {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "936ff268-5f52-479a-887f-fda1a47dae63".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: label.map(str::to_string),
+        });
+        let rendered = oscilloscope_core::render::build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            oscilloscope_core::model::ProcessState::Running,
+            5.0,
+            "2026-01-01T00:00:05Z",
+            &[],
+        );
+        let mut header = rendered.header;
+        header.status = RunStatus::Running;
+        header
+    }
+
+    fn header_band_text(header: &oscilloscope_core::render::Header, width: u16) -> String {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: true,
+        };
+        let backend = ratatui::backend::TestBackend::new(width, 1);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_tape_header_band(f, f.area(), header, "TAPE", "2026-01-01T00:00:05Z", 0, &ctx)
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn the_label_shows_in_full_at_every_required_width() {
+        let header = header_with_label(Some("ticket 42"));
+        for width in [80, 120, 187] {
+            let text = header_band_text(&header, width);
+            assert!(text.contains("ticket 42"), "{width}: {text:?}");
+            assert!(!text.contains('⋯'), "{width}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_maximum_length_label_shows_in_full_at_120_and_187() {
+        // Not 80: the fixed chrome around the name (the document,
+        // the status word, the elapsed time, the clock) already
+        // leaves less than 64 cells free at that width, so a label
+        // at its own 64-character cap is genuinely cut there -- the
+        // same "cut only once the header itself is too narrow" rule
+        // this module's other tests already check with a 60-
+        // character label at 80 columns. A short document here
+        // (rather than `header_with_label`'s own `do-thing.yml`)
+        // keeps that same fixed chrome from also eating into the
+        // one cell 120 columns has to spare for a label at its own
+        // 64-character cap.
+        let label = "x".repeat(64);
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "936ff268-5f52-479a-887f-fda1a47dae63".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: Some(label.clone()),
+        });
+        let rendered = oscilloscope_core::render::build(
+            "d.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            oscilloscope_core::model::ProcessState::Running,
+            5.0,
+            "2026-01-01T00:00:05Z",
+            &[],
+        );
+        let mut header = rendered.header;
+        header.status = RunStatus::Running;
+        for width in [120, 187] {
+            let text = header_band_text(&header, width);
+            assert!(text.contains(&label), "{width}: {text:?}");
+            assert!(!text.contains('⋯'), "{width}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn the_generated_name_still_shows_with_no_label_at_every_required_width() {
+        let header = header_with_label(None);
+        for width in [80, 120, 187] {
+            let text = header_band_text(&header, width);
+            assert!(text.contains("square-jay"), "{width}: {text:?}");
+        }
+    }
+
+    #[test]
+    fn a_too_long_label_is_cut_with_an_ellipsis_never_the_clock() {
+        let header = header_with_label(Some(&"x".repeat(60)));
+        let text = header_band_text(&header, 80);
+        assert!(text.contains('⋯'), "{text:?}");
+        assert!(
+            oscilloscope_core::format::format_clock_time("2026-01-01T00:00:05Z", &test_zone())
+                .is_some_and(|clock| text.contains(&clock)),
+            "{text:?}"
         );
     }
 }
@@ -5322,7 +5461,10 @@ fn select_row_spans(
             cw = config_width
         ),
     };
-    let rest = format!("{doc_text:<doc_width$}{name_text:<name_col$}{tail}");
+    let rest = format!(
+        "{doc_text:<doc_width$}{}{tail}",
+        oscilloscope_core::names::pad_display_width(&name_text, name_col)
+    );
     if selected {
         let sel_bg = ctx.theme.selection_bg;
         vec![
@@ -5359,7 +5501,7 @@ fn select_row_spans(
             ),
             Span::styled(format!("{doc_text:<doc_width$}"), doc_style),
             Span::styled(
-                format!("{name_text:<name_col$}"),
+                oscilloscope_core::names::pad_display_width(&name_text, name_col),
                 Style::default().fg(ctx.theme.text),
             ),
             Span::styled(tail, Style::default().fg(ctx.theme.fg_muted)),
@@ -5603,7 +5745,7 @@ fn recent_row_spans(
     let started =
         oscilloscope_core::format::format_clock_time(&row.started_at, zone).unwrap_or_default();
     let doc_field = format!("{:<9}", row.document_label);
-    let name_field = format!("{:<name_col$}", row.name);
+    let name_field = oscilloscope_core::names::pad_display_width(&row.name, name_col);
     let config_field = format!("{config_text:<15}");
     let started_field = format!("{started:<10}");
     let tokens_text = oscilloscope_core::format::format_tokens(row.tokens);
@@ -5987,6 +6129,7 @@ fn draw_all_status_line(
 /// colours, the same band style the main header uses but scoped to
 /// one run.
 fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawCtx) {
+    use oscilloscope_core::names::{display_width, truncate_display_width};
     let bg = ctx.theme.statusbar_bg;
     let base = Style::default().bg(bg).fg(ctx.theme.statusbar_fg);
     let header = &tile.render.header;
@@ -5995,11 +6138,6 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         oscilloscope_core::model::RunStatus::Ok => ('✓', ctx.theme.status_done),
         _ => ('✗', ctx.theme.status_failed),
     };
-    let name_text = tile
-        .name
-        .as_deref()
-        .map(|n| format!("{n} "))
-        .unwrap_or_default();
     let engine_word = header
         .engine
         .split_whitespace()
@@ -6009,8 +6147,11 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
     let right_text = format!("{engine_word} ");
     // Issue #717: the name follows the document directly, and is
     // never dropped; when the band is too narrow for everything, the
-    // config -- already optional -- gives way first.
-    let build = |show_config: bool| -> Vec<Span<'static>> {
+    // config -- already optional -- gives way first, then (issue
+    // #752, at the smallest tile widths) the name itself is cut with
+    // `⋯` to whatever's left, rather than pushing the elapsed time
+    // and engine off the band's own right edge.
+    let build = |show_config: bool, name: Option<&str>| -> Vec<Span<'static>> {
         let config_text = if show_config {
             tile.config_label
                 .as_deref()
@@ -6019,6 +6160,7 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         } else {
             String::new()
         };
+        let name_text = name.map(|n| format!("{n} ")).unwrap_or_default();
         vec![
             Span::styled(
                 format!(" {} ", tile.document_label),
@@ -6027,10 +6169,7 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
                     .bg(bg)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(
-                name_text.clone(),
-                Style::default().fg(ctx.theme.text).bg(bg),
-            ),
+            Span::styled(name_text, Style::default().fg(ctx.theme.text).bg(bg)),
             Span::styled(config_text, Style::default().fg(ctx.theme.fg_muted).bg(bg)),
             Span::styled("· ", Style::default().fg(ctx.theme.dim).bg(bg)),
             Span::styled(
@@ -6047,18 +6186,114 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
         ]
     };
     let fits = |spans: &[Span<'static>]| -> bool {
-        let width: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-        width + right_text.chars().count() <= area.width as usize
+        let width: usize = spans.iter().map(|s| display_width(&s.content)).sum();
+        width + display_width(&right_text) <= area.width as usize
     };
-    let mut left = build(true);
+    let mut left = build(true, tile.name.as_deref());
     if !fits(&left) {
-        left = build(false);
+        left = build(false, tile.name.as_deref());
     }
-    let left_width: usize = left.iter().map(|s| s.content.chars().count()).sum();
-    let pad = (area.width as usize).saturating_sub(left_width + right_text.chars().count());
+    if !fits(&left) {
+        let without_name = build(false, None);
+        let base_width: usize = without_name
+            .iter()
+            .map(|s| display_width(&s.content))
+            .sum::<usize>()
+            + display_width(&right_text);
+        let budget = (area.width as usize).saturating_sub(base_width);
+        let cut_name = tile.name.as_deref().and_then(|full| {
+            if budget < 2 {
+                None
+            } else {
+                Some(truncate_display_width(full, budget - 1))
+            }
+        });
+        left = build(false, cut_name.as_deref());
+    }
+    let left_width: usize = left.iter().map(|s| display_width(&s.content)).sum();
+    let pad = (area.width as usize).saturating_sub(left_width + display_width(&right_text));
     left.push(Span::styled(" ".repeat(pad), base));
     left.push(Span::styled(right_text, base));
     frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
+}
+
+#[cfg(test)]
+mod draw_all_tile_band_label_tests {
+    use super::*;
+    use crate::theme::{Theme, ThemeName};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// A labelled tile at [`oscilloscope_core::multi::TILE_MIN_WIDTH`]
+    /// (issue #752): even with the config already dropped, a label at
+    /// its own 32-cell column cap can still be wider than what's left
+    /// once the document, the glyph, the elapsed time and the engine
+    /// are all accounted for -- the name itself must give way too,
+    /// rather than pushing the elapsed time and engine off the band's
+    /// own right edge.
+    fn tile_with_label(document: &str, label: &str) -> AllTile {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "936ff268-5f52-479a-887f-fda1a47dae63".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: Some(label.to_string()),
+        });
+        let render = oscilloscope_core::multi::build_tile(
+            document,
+            "electricity",
+            &plan,
+            &mut model,
+            None,
+            oscilloscope_core::screens::Screen::Tape,
+            &test_zone(),
+            "2026-01-01T00:01:02Z",
+        );
+        AllTile {
+            document_label: document.to_string(),
+            config_label: Some("config-triage.json".to_string()),
+            name: Some(label.to_string()),
+            render,
+            run_index: 0,
+        }
+    }
+
+    fn band_row(tile: &AllTile, width: u16) -> String {
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_all_tile_band(f, f.area(), tile, &ctx))
+            .unwrap();
+        // Built cell by cell, never `TestBackend::to_string()` (which
+        // quotes and escapes its own output for display, throwing
+        // off a byte-for-byte width check): exactly `width` cells,
+        // whatever each one actually holds.
+        let buf = terminal.backend().buffer();
+        (0..buf.area.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_long_label_at_the_minimum_tile_width_never_pushes_out_the_elapsed_time_or_engine() {
+        let tile = tile_with_label("triage.yml", &"ticket ".repeat(10));
+        let row = band_row(&tile, oscilloscope_core::multi::TILE_MIN_WIDTH);
+        assert!(row.contains('⋯'), "the name itself must give way: {row:?}");
+        assert!(
+            row.trim_end().ends_with("electricity"),
+            "the elapsed time and engine must stay whole, at the row's own end: {row:?}"
+        );
+    }
 }
 
 /// A `… n more` tile (§9.6): the grid's own last slot once a page
@@ -7334,20 +7569,40 @@ fn combined_legend_label(run: &oscilloscope_core::combined::CombinedRun) -> Stri
 /// name (#717), cut with `⋯` to fit before the CONFIG column (#734).
 /// The document gives way first: the name is what tells two runs of
 /// one document apart, so it stays whole whenever it fits at all.
+/// [`store_cut_label`]'s own shape -- cut to strictly less than
+/// `width` display cells, never exactly `width` -- but by display
+/// width rather than by `char` count, so [`per_run_label`]'s own
+/// slack-for-the-next-field guarantee still holds for a label
+/// holding wide characters.
+fn cut_display_width_with_margin(text: &str, width: usize) -> String {
+    use oscilloscope_core::names::{display_width, truncate_display_width};
+    if display_width(text) < width {
+        return text.to_string();
+    }
+    if width < 2 {
+        return String::new();
+    }
+    truncate_display_width(text, width - 1)
+}
+
 fn per_run_label(document: &str, name: Option<&str>, width: usize) -> String {
+    use oscilloscope_core::names::display_width;
     let full = match name {
         Some(name) => format!("{document} {name}"),
         None => document.to_string(),
     };
-    if full.chars().count() < width {
+    if display_width(&full) < width {
         return full;
     }
     match name {
-        Some(name) if name.chars().count() + 3 < width => {
-            let doc_width = width - name.chars().count() - 1;
-            format!("{} {name}", store_cut_label(document, doc_width))
+        Some(name) if display_width(name) + 3 < width => {
+            let doc_width = width - display_width(name) - 1;
+            format!(
+                "{} {name}",
+                cut_display_width_with_margin(document, doc_width)
+            )
         }
-        _ => store_cut_label(&full, width),
+        _ => cut_display_width_with_margin(&full, width),
     }
 }
 
@@ -17723,6 +17978,7 @@ mod golden_tests {
             pid: Some(1),
             engine: None,
             config: None,
+            label: None,
         });
         model.observe_event(&Event::Report {
             ts: "2026-01-01T11:04:58Z".to_string(),
@@ -18391,6 +18647,7 @@ mod highlight_tests {
                 document: "do-thing.yml".to_string(),
                 engine: "cof".to_string(),
                 run_id: None,
+                label: None,
                 status: oscilloscope_core::model::RunStatus::Running,
                 elapsed_s: 1.0,
                 run_start_ts: None,
@@ -19097,6 +19354,7 @@ mod tape_live_tests {
             pid: None,
             engine: Some("cof".to_string()),
             config: None,
+            label: None,
         });
         model.observe_event(&oscilloscope_core::observe::Event::Start {
             ts: "2026-10-08T11:46:43Z".to_string(),
@@ -19924,6 +20182,7 @@ mod tape_frame_goldens {
                 document: "demo.yml".to_string(),
                 engine: "cof".to_string(),
                 run_id: None,
+                label: None,
                 status: oscilloscope_core::model::RunStatus::Running,
                 elapsed_s: 0.0,
                 run_start_ts: None,
@@ -20056,6 +20315,7 @@ mod tape_frame_goldens {
                 events: None,
                 live_state: None,
                 started_at: Some(format!("2026-11-08T23:51:5{}.000Z", 5 + i)),
+                label: None,
             })
             .collect()
     }
@@ -20085,8 +20345,9 @@ mod tape_frame_goldens {
             .iter()
             .map(|entry| snap6_run_id(entry["key"].as_str().unwrap()))
             .collect();
-        let run_id_refs: Vec<Option<&str>> = run_ids.iter().map(|id| Some(id.as_str())).collect();
-        let names = oscilloscope_core::names::disambiguated_names(&run_id_refs);
+        let labelled_ids: Vec<(Option<&str>, Option<&str>)> =
+            run_ids.iter().map(|id| (None, Some(id.as_str()))).collect();
+        let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
         manifest
             .iter()
             .enumerate()
@@ -22019,6 +22280,147 @@ mod tape_frame_goldens {
             &[],
         );
     }
+
+    /// Issue #752: the Select screen's own NAME column, with a label
+    /// collision (two runs sharing one label, each adding its own
+    /// generated name) and an overlong label (cut to 32 display
+    /// cells), at the three required widths.
+    fn labelled_select_run(
+        run_id: &str,
+        label: Option<&str>,
+    ) -> oscilloscope_core::discovery::DiscoveredRun {
+        oscilloscope_core::discovery::DiscoveredRun {
+            run_id: Some(run_id.to_string()),
+            orchestration: Some("do-thing.yml".to_string()),
+            config: None,
+            engine: Some("cof".to_string()),
+            pid: Some(1),
+            launcher: None,
+            run_dir: None,
+            events: None,
+            live_state: None,
+            started_at: None,
+            label: label.map(str::to_string),
+        }
+    }
+
+    fn select_label_text(rows: &[oscilloscope_core::select::Row], width: u16) -> String {
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Running(rows),
+                    1,
+                    "2026-01-01T00:00:05Z",
+                    true,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        terminal.backend().to_string()
+    }
+
+    #[test]
+    fn select_two_runs_sharing_a_label_each_add_their_own_generated_name() {
+        let runs = vec![
+            labelled_select_run("936ff268-5f52-479a-887f-fda1a47dae63", Some("ticket 42")),
+            labelled_select_run("d2c8267e-2864-4e04-89d6-4f174bc64516", Some("ticket 42")),
+        ];
+        let rows = oscilloscope_core::select::build_rows(&runs);
+        for width in [80, 120, 187] {
+            let text = select_label_text(&rows, width);
+            assert!(
+                text.contains("ticket 42 \u{b7} square-jay"),
+                "{width}: {text}"
+            );
+            assert!(
+                text.contains("ticket 42 \u{b7} ochre-desert"),
+                "{width}: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn select_an_overlong_label_is_cut_to_32_display_cells_in_the_name_column() {
+        let runs = vec![labelled_select_run(
+            "936ff268-5f52-479a-887f-fda1a47dae63",
+            Some(&"x".repeat(80)),
+        )];
+        let rows = oscilloscope_core::select::build_rows(&runs);
+        for width in [80, 120, 187] {
+            let text = select_label_text(&rows, width);
+            assert!(text.contains('\u{22ef}'), "{width}: {text}");
+            assert!(!text.contains(&"x".repeat(33)), "{width}: {text}");
+        }
+    }
+
+    /// A CJK label counts cells, not chars, for the NAME column's
+    /// own width (issue #752's own display-width rule) -- a char-
+    /// counting pad would widen or narrow this row's own NAME
+    /// column against the other row's (whose name is plain ASCII),
+    /// shifting ENGINE out from under the other row's own ENGINE.
+    #[test]
+    fn select_a_cjk_label_does_not_shift_the_engine_column() {
+        let runs = vec![
+            labelled_select_run("936ff268-5f52-479a-887f-fda1a47dae63", Some("注注注注")),
+            labelled_select_run("d2c8267e-2864-4e04-89d6-4f174bc64516", None),
+        ];
+        let rows = oscilloscope_core::select::build_rows(&runs);
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Running(&rows),
+                    1,
+                    "2026-01-01T00:00:05Z",
+                    true,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // Every row in the box (`All` included) starts with its own
+        // bullet `●`, and so does the header band above the box --
+        // this run's own two Run rows are the last two of the three
+        // bulleted rows inside the box, `All` always listed first.
+        let bulleted_ys: Vec<u16> = (1..buffer.area.height)
+            .filter(|&y| (0..buffer.area.width).any(|x| buffer[(x, y)].symbol() == "●"))
+            .collect();
+        assert_eq!(bulleted_ys.len(), 3, "{bulleted_ys:?}");
+        let run_row_ys = &bulleted_ys[1..3];
+        let engine_x: Vec<u16> = run_row_ys
+            .iter()
+            .map(|&y| {
+                (0..buffer.area.width.saturating_sub(2))
+                    .find(|&x| {
+                        buffer[(x, y)].symbol() == "c"
+                            && buffer[(x + 1, y)].symbol() == "o"
+                            && buffer[(x + 2, y)].symbol() == "f"
+                    })
+                    .unwrap_or_else(|| panic!("no 'cof' found on row {y}"))
+            })
+            .collect();
+        assert_eq!(engine_x[0], engine_x[1], "{engine_x:?}");
+    }
+
     #[test]
     fn select_empty_80x24_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
@@ -26452,6 +26854,20 @@ mod per_run_label_tests {
         let label = per_run_label("orchestrations/ticket-pipeline.v3.yml", None, 31);
         assert!(
             label.ends_with('\u{22ef}') && label.chars().count() < 31,
+            "{label}"
+        );
+    }
+
+    #[test]
+    fn a_cjk_label_is_measured_by_display_width_not_char_count() {
+        // 20 CJK characters is 40 display cells (two apiece) but
+        // only 20 chars -- a char-counting fit check would wrongly
+        // keep this whole at width 31.
+        let name = "注".repeat(20);
+        let label = per_run_label("a.yml", Some(&name), 31);
+        assert!(label.ends_with('\u{22ef}'), "{label}");
+        assert!(
+            oscilloscope_core::names::display_width(&label) < 31,
             "{label}"
         );
     }

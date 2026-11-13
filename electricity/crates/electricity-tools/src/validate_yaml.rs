@@ -205,6 +205,7 @@ mod tests {
             armed: false,
             secret_headers: &[],
             scrub: None,
+            on_live: None,
             limited: false,
             confine_to: None,
         }
