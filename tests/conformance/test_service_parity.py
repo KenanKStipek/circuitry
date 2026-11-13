@@ -471,16 +471,19 @@ def test_a_service_started_under_one_engine_is_stopped_under_the_other(
             f"{starter_name} start: {start_result.stderr}"
         )
         pgid = _svc_value(start_result)["pgid"]
-        assert _pgid_exists(pgid)
+        try:
+            assert _pgid_exists(pgid)
 
-        _write_orchestration(doc_path, {"action": "stop", "name": "web"})
-        stop_result = stopper(doc_path, config_path)
-        assert stop_result.returncode == 0, f"{stopper_name} stop: {stop_result.stderr}"
-        stop_value = _svc_value(stop_result)
-        assert stop_value["stopped"] is True
-        assert not _pgid_exists(pgid), (
-            f"{starter_name}-started pgid {pgid} still running after {stopper_name} stop"
-        )
+            _write_orchestration(doc_path, {"action": "stop", "name": "web"})
+            stop_result = stopper(doc_path, config_path)
+            assert stop_result.returncode == 0, f"{stopper_name} stop: {stop_result.stderr}"
+            stop_value = _svc_value(stop_result)
+            assert stop_value["stopped"] is True
+            assert not _pgid_exists(pgid), (
+                f"{starter_name}-started pgid {pgid} still running after {stopper_name} stop"
+            )
+        finally:
+            _stop_and_wait_free(pgid)
 
 
 def test_a_dead_leader_whose_group_still_has_members_is_still_ours_on_either_engine(
