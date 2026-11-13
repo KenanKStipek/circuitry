@@ -1633,25 +1633,60 @@ pub async fn run_orchestration_with_config(
     // wholesale with the coerced/defaulted namespace (PR #441: a
     // key the final namespace doesn't carry forward,
     // e.g. an optional input whose seed was `null`, must not survive
-    // from the step-5 reseed above).
+    // from the step-5 reseed above). `--state` (issue #727): never a
+    // rebuild from `-e` alone -- `core/interface_inputs.py::
+    // check_interface_inputs` mutates whatever `input_ns` it's handed
+    // in place (default-fill/require/coerce only; an undeclared key
+    // stays untouched), so a resumed run's own already-merged `input`
+    // (step 5's own merge above) is this step's starting point
+    // instead of a fresh `-e`-only namespace that would drop every
+    // resumed key `-e` didn't name again.
     let input_namespace_for_label: Value;
-    match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
-        Ok(namespace) => {
-            input_namespace_for_label = Value::Dict(namespace.clone());
-            state::replace_input_namespace(&store, namespace);
+    if req.state_path.is_some() {
+        let mut namespace: indexmap::IndexMap<Value, Value> = store
+            .child(&store.root, &Value::Str("input".to_string()))
+            .ok()
+            .flatten()
+            .map(|node| store.snapshot(&node))
+            .and_then(|mut v| v.as_dict_mut().map(std::mem::take))
+            .unwrap_or_default();
+        let (_, iface_inputs) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        let apply_result = match iface_inputs {
+            Some(iface_inputs) => {
+                electricity_compiler::apply_declared_inputs(&mut namespace, iface_inputs)
+            }
+            None => Ok(()),
+        };
+        match apply_result {
+            Ok(()) => {
+                input_namespace_for_label = Value::Dict(namespace.clone());
+                state::replace_input_namespace(&store, namespace);
+            }
+            Err(err) => {
+                state::replace_input_namespace(&store, namespace);
+                fail!(err)
+            }
         }
-        Err(err) => {
-            // Step 10 itself failed partway
-            // through -- mirror Python's own in-place mutation of
-            // `state["input"]` as far as it got before the first
-            // violation (`build_input_namespace_best_effort`'s own doc
-            // comment), replacing wholesale same as the success arm.
-            let partial = electricity_compiler::build_input_namespace_best_effort(
-                &loaded.document,
-                &check_options,
-            );
-            state::replace_input_namespace(&store, partial);
-            fail!(err)
+    } else {
+        match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
+            Ok(namespace) => {
+                input_namespace_for_label = Value::Dict(namespace.clone());
+                state::replace_input_namespace(&store, namespace);
+            }
+            Err(err) => {
+                // Step 10 itself failed partway
+                // through -- mirror Python's own in-place mutation of
+                // `state["input"]` as far as it got before the first
+                // violation (`build_input_namespace_best_effort`'s own doc
+                // comment), replacing wholesale same as the success arm.
+                let partial = electricity_compiler::build_input_namespace_best_effort(
+                    &loaded.document,
+                    &check_options,
+                );
+                state::replace_input_namespace(&store, partial);
+                fail!(err)
+            }
         }
     }
 

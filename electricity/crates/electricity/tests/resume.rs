@@ -1,0 +1,446 @@
+//! `electricity run`'s own `--state`/`--resume`/`--force` (issue #727)
+//! -- exercised directly against `electricity::run_orchestration`,
+//! each case building an "interrupted" state file by running a
+//! document once, then editing specific nodes of its own saved state
+//! the same way an interrupted process would have left them (an
+//! unset `meta.completed_at`, a loop's own `completed_passes` short of
+//! every pass), rather than actually racing a signal against a real
+//! subprocess.
+//!
+//! Every document here uses the `uuid` tool (`provider: uuid`, no
+//! subprocess, no capability gate) so a resumed effect's own `value`
+//! is trivially distinguishable from a skipped one: a fresh run always
+//! writes a new id, so an unchanged `value` after `--resume` proves
+//! the effect was actually skipped, not merely idempotent.
+
+use electricity::run::RunRequest;
+use electricity_value::Value;
+use electricity_vm::CancellationToken;
+use indexmap::IndexMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+fn temp_dir(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!(
+        "electricity-resume-test-{name}-{}",
+        std::process::id()
+    ));
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
+    let path = dir.join(name);
+    fs::write(&path, contents).unwrap();
+    path
+}
+
+fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
+    RunRequest {
+        config_path: Some(config_path),
+        orchestration_path,
+        inputs: IndexMap::new(),
+        out_path: None,
+        pretty: false,
+        live_state_path: None,
+        events_path: None,
+        profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
+        label_override: None,
+        armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
+    }
+}
+
+async fn run(req: &RunRequest) -> electricity::RunResult {
+    let token = CancellationToken::new();
+    electricity::run_orchestration(req, &token).await
+}
+
+fn key(s: &str) -> Value {
+    Value::Str(s.to_string())
+}
+
+/// Walks *path* (dotted, every segment a dict key) into *state*,
+/// mutably -- panics with the segment name if any hop isn't a dict.
+fn at_mut<'a>(state: &'a mut Value, path: &str) -> &'a mut Value {
+    let mut current = state;
+    for segment in path.split('.') {
+        let dict = current
+            .as_dict_mut()
+            .unwrap_or_else(|| panic!("{segment}: not a dict"));
+        current = dict
+            .get_mut(&key(segment))
+            .unwrap_or_else(|| panic!("{segment}: missing"));
+    }
+    current
+}
+
+fn set(state: &mut Value, path: &str, value: Value) {
+    *at_mut(state, path) = value;
+}
+
+fn remove(state: &mut Value, parent_path: &str, child_key: &str) {
+    let dict = at_mut(state, parent_path)
+        .as_dict_mut()
+        .expect("parent is a dict");
+    dict.shift_remove(&key(child_key));
+}
+
+fn write_state(dir: &Path, name: &str, state: &Value) -> PathBuf {
+    let path = dir.join(name);
+    electricity::out::write_out(&path, state, true).unwrap();
+    path
+}
+
+fn child(v: &Value, k: &str) -> Value {
+    v.as_dict()
+        .and_then(|d| d.get(&key(k)))
+        .cloned()
+        .unwrap_or(Value::None)
+}
+
+#[tokio::test]
+async fn a_named_loop_resumes_at_its_first_unfinished_pass() {
+    let dir = temp_dir("loop");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "interface:\n  inputs:\n    items: {default: [0, 1, 2]}\n\
+         effects:\n  - name: items\n    type: loop\n    each: {in: input.items, as: x}\n    \
+         body:\n      - name: step\n        type: tool\n        provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+
+    let saved_pass0 = child(at_mut(&mut state, "prime.items.iter_0"), "step");
+
+    // Simulate an interrupt right after pass 0 finished: the loop's own
+    // node never got to record its own completion, but its
+    // authoritative `completed_passes` record (written on every pass,
+    // not just at the end) still shows the one pass that did.
+    set(&mut state, "prime.items.meta.completed_at", Value::None);
+    set(
+        &mut state,
+        "prime.items.meta.completed_passes",
+        Value::List(vec![Value::from(0)]),
+    );
+    remove(&mut state, "prime.items", "iter_1");
+    remove(&mut state, "prime.items", "iter_2");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.items.iter_0"), "step"),
+        saved_pass0,
+        "pass 0 was skipped and reused as-is, never rerun"
+    );
+    for idx in [1, 2] {
+        let pass = at_mut(&mut resumed, &format!("prime.items.iter_{idx}"));
+        let step = child(pass, "step");
+        assert_ne!(
+            step, saved_pass0,
+            "pass {idx} ran fresh (absent from the saved state entirely)"
+        );
+        let meta = child(&step, "meta");
+        assert!(child(&meta, "completed_at") != Value::None);
+    }
+    let completed_passes = child(
+        &child(at_mut(&mut resumed, "prime.items"), "meta"),
+        "completed_passes",
+    );
+    assert_eq!(
+        completed_passes,
+        Value::List(vec![Value::from(0), Value::from(1), Value::from(2)])
+    );
+}
+
+#[tokio::test]
+async fn a_use_without_record_children_reruns_its_child_whole() {
+    let dir = temp_dir("use-no-record-children");
+    let config = write(&dir, "config.json", "{}");
+    let child_doc = write(
+        &dir,
+        "child.yml",
+        "effects:\n  - name: inner\n    type: tool\n    provider: uuid\n",
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "effects:\n  - name: step\n    type: use\n    path: {}\n",
+            child_doc.display()
+        ),
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_inner = child(at_mut(&mut state, "prime.step.inner"), "value");
+
+    // Interrupted mid-child: the `use` node's own meta never completed.
+    set(&mut state, "prime.step.meta.completed_at", Value::None);
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let resumed_inner = child(at_mut(&mut resumed, "prime.step.inner"), "value");
+    assert_ne!(
+        resumed_inner, saved_inner,
+        "a use with no record_children always reruns its child whole"
+    );
+}
+
+#[tokio::test]
+async fn a_finally_effect_always_reruns_even_if_its_saved_node_finished() {
+    let dir = temp_dir("finally");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: outer\n    type: dynamic\n    effects:\n      - name: body\n        \
+         type: tool\n        provider: uuid\n    finally:\n      - name: cleanup\n        \
+         type: tool\n        provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_cleanup = child(at_mut(&mut state, "prime.outer"), "cleanup");
+
+    // The outer dynamic itself never finished (the interrupt landed
+    // between the body completing and `finally:` ever starting), even
+    // though `cleanup`'s own saved node -- from *this* run, which did
+    // reach `finally:` -- looks completed.
+    set(&mut state, "prime.outer.meta.completed_at", Value::None);
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let resumed_cleanup = child(at_mut(&mut resumed, "prime.outer"), "cleanup");
+    assert_ne!(
+        resumed_cleanup, saved_cleanup,
+        "finally: never skips via --resume, even when its own saved node finished"
+    );
+}
+
+#[tokio::test]
+async fn a_changed_document_is_refused_without_force() {
+    let dir = temp_dir("hash-mismatch");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let state = first.state.unwrap();
+    let state_path = write_state(&dir, "state.json", &state);
+
+    // The document changes after the saved run.
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n  - name: b\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("changed since the run being resumed"),
+        "{:?}",
+        result.error
+    );
+}
+
+#[tokio::test]
+async fn force_resumes_a_changed_document_anyway() {
+    let dir = temp_dir("hash-mismatch-forced");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let state = first.state.unwrap();
+    let state_path = write_state(&dir, "state.json", &state);
+
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n  - name: b\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+    req.force = true;
+
+    let result = run(&req).await;
+    assert!(result.ok, "{:?}", result.error);
+}
+
+#[tokio::test]
+async fn a_state_file_with_no_document_hash_is_refused_without_force() {
+    let dir = temp_dir("no-hash");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    set(&mut state, "runtime.last_run.document_hash", Value::None);
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no way to tell whether this document changed"),
+        "{:?}",
+        result.error
+    );
+}
+
+#[tokio::test]
+async fn a_missing_state_file_fails_with_no_state_at_all() {
+    let dir = temp_dir("missing-state-file");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let mut req = request(config, doc);
+    req.state_path = Some(dir.join("does-not-exist.json"));
+    req.resume = true;
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(result.state.is_none());
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("state file not found"),
+        "{:?}",
+        result.error
+    );
+}
+
+#[tokio::test]
+async fn plain_state_with_no_resume_seeds_the_whole_tree_but_never_skips() {
+    let dir = temp_dir("plain-state-no-resume");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let state = first.state.unwrap();
+    let saved_a = child(&child(&state, "prime"), "a");
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = false; // plain --state, no --resume
+
+    let result = run(&req).await;
+    assert!(result.ok, "{:?}", result.error);
+    let resumed = result.state.unwrap();
+    let resumed_a = child(&child(&resumed, "prime"), "a");
+    assert_ne!(
+        resumed_a, saved_a,
+        "--state with no --resume still reruns everything -- only --resume skips"
+    );
+}
+
+#[tokio::test]
+async fn an_e_override_merges_onto_the_resumed_input_namespace() {
+    let dir = temp_dir("e-override-merge");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "interface:\n  inputs:\n    name: {type: string}\n    other: {type: string}\n\
+         effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let mut first_req = request(config.clone(), doc.clone());
+    first_req
+        .inputs
+        .insert("name".to_string(), "Ada".to_string());
+    first_req
+        .inputs
+        .insert("other".to_string(), "kept".to_string());
+    let first = run(&first_req).await;
+    assert!(first.ok, "{:?}", first.error);
+    let state = first.state.unwrap();
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+    req.inputs.insert("name".to_string(), "Grace".to_string());
+
+    let result = run(&req).await;
+    assert!(result.ok, "{:?}", result.error);
+    let mut resumed = result.state.unwrap();
+    let input = at_mut(&mut resumed, "input");
+    assert_eq!(child(input, "name"), Value::Str("Grace".to_string()));
+    assert_eq!(child(input, "other"), Value::Str("kept".to_string()));
+}
