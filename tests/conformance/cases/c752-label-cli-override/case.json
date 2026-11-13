@@ -1,0 +1,7 @@
+{
+  "spec_case": "#752",
+  "description": "`--label` is literal text, never rendered, and wins over the document's own top-level `label:` template.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["--label", "from the flag"]
+}

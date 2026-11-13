@@ -1,0 +1,12 @@
+name: c752-label-from-input
+label: "ticket {{input.ticket}}"
+interface:
+  inputs:
+    ticket:
+      type: string
+      default: "1"
+effects:
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {x: 1}}

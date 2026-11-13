@@ -1,0 +1,7 @@
+name: c752-label-template-error
+label: "{{#open"
+effects:
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {x: 1}}
