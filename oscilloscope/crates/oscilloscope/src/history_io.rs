@@ -273,7 +273,7 @@ impl HistoryHandle {
             .pointer("/runtime/last_run/document_hash")
             .and_then(serde_json::Value::as_str);
         let stats = self.stats_for(current_hash)?;
-        let anchor_now = eta_anchor_now(state, now);
+        let anchor_now = history::eta_anchor_now(state, now);
         let elapsed_s =
             oscilloscope_core::observe::duration_seconds(eta_start_ts, anchor_now).unwrap_or(0.0);
         let input = history::eta_input_from_state(state, plan, eta_start_ts, elapsed_s);
@@ -355,48 +355,7 @@ pub fn apply_history_eta(
     else {
         return;
     };
-    header.history_eta_past_usual = eta.past_usual;
-    let anchor_now = state.map(|s| eta_anchor_now(s, now)).unwrap_or(now);
-    header.history_eta_ts = eta.eta_ts(anchor_now);
-    header.history_eta_remaining_s = eta.remaining_s;
-    header.history_eta_low_ts = eta_ts_for(eta.low_s, anchor_now);
-    header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
-    header.history_vs_usual_s = eta.vs_usual_s;
-    header.history_usual_total_s = eta.usual_total_s;
-    header.history_usual_total_tokens = stats.whole_run.and_then(|r| r.tokens_p50);
-    // Issue #649's "history: N of 3 runs": `stats.same_hash_ok_count`
-    // is the real count at any count, including the very first ok
-    // run (`0`) -- `eta` itself only carries a whole-run ETA once
-    // that count reaches the threshold, so reading the count from it
-    // instead would stay zero below that threshold regardless of how
-    // many ok runs there actually are.
-    header.history_same_hash_count = Some(stats.same_hash_ok_count);
-    header.history_step_usual = stats.per_step;
-}
-
-/// Once a run has truly ended (issue #649), the ETA freezes at its
-/// own end rather than the wall clock: the TUI can stay open on a
-/// finished run's state for as long as the user likes, and measuring
-/// elapsed time against a live `now` would show an ETA that kept
-/// sliding forward, eventually past its own usual end.
-fn eta_anchor_now<'a>(state: &'a serde_json::Value, now: &'a str) -> &'a str {
-    if oscilloscope_core::model::run_ended(state) {
-        if let Some(ts) = state
-            .pointer("/runtime/last_run/completed_at")
-            .and_then(serde_json::Value::as_str)
-        {
-            return ts;
-        }
-    }
-    now
-}
-
-fn eta_ts_for(seconds: Option<f64>, now: &str) -> Option<String> {
-    seconds.and_then(|s| {
-        oscilloscope_core::diff::parse_instant(now).map(|now_dt| {
-            (now_dt + chrono::Duration::milliseconds((s * 1000.0).round() as i64)).to_rfc3339()
-        })
-    })
+    history::apply_eta_to_header(header, &eta, &stats, state, now);
 }
 
 #[cfg(test)]

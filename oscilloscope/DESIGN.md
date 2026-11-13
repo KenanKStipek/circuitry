@@ -3966,6 +3966,50 @@ equivalent, `tui::draw_all_tape_tile`) now pad their own name field to
 the same `name_width` every other row on screen already widens to,
 rather than the old fixed 19-cell floor.
 
+**Flow rail follow-ups** (issue #693, items 1, 2 and 4; item 3
+shipped in #707). An ahead pass's own preview of an unnamed `if`
+(`rail::ahead_template_item`) now carries the decision's own
+already-computed name over verbatim rather than recomputing one
+from its synthetic `__if` path's own last segment, so a pending
+decision inside a loop's own ahead lane reads `if <condition…>` the
+same way the live one does, never `· __if`. A lane that ends in a
+nested fork's own join no longer reports a width three cells wider
+than what actually paints (`tui::flow_lane_width` now adds its own
+`── ` connector's width only between two adjacent plain stations,
+matching `flow_paint_sequence`'s own rule that a fork's `─┬─ `/
+`─┴── ` already bridges the gap on either side of it) -- the outer
+join follows the inner one directly, with no blank station between
+them. Two unnamed `if`s sharing one host (`rail::build_level`) now
+take their own `.__if`/`.__if_1` suffix from their own position in
+`PlanTree::unnamed_if_decisions` (plan order) rather than a counter
+advanced in whichever order each one happens to get evidence first,
+so a selected `.__if` always shows its own decision, never the
+other's.
+
+**The All screen's tiles read run history** (issue #712).
+`multi::build_tile` takes an optional already-resolved
+`(history::EtaOutput, history::DocumentStats)` pair and applies it
+onto its own internal `Header` (`history::apply_eta_to_header`, a
+shared pure function `history_io::apply_history_eta` now calls for
+a single-run attach too) before building whichever screen the tile
+is on -- `oscilloscope-core` itself still never touches a file. The
+binary resolves this per slot (`AllRunSlot::history`, a
+`HistoryHandle` keyed the same way a single-run attach's own is,
+rebuilt whenever the slot's own document changes) and refreshes it
+every redraw, the same way a single-run attach already does. A tile
+reads `usually …` on its own ahead rows, the Totals row's own Usual,
+and Run End's own usual total, duration and ETA, from the same
+source and the same rules its own single-run Tape already does. A
+tile has no `t` key of its own to toggle the deviation view the
+single-run Tape's does, so a finished row's own token column reads
+the deviation in place of its bar whenever that row has a usual
+figure to read it against -- the same per-row gate the single-run
+view's own `t` toggle already checks before it shows anything there
+at all, just without a key to turn it off again. With fewer than
+three finished runs in history a tile reads exactly as before. The
+Signal tiles' own shared axis scale is unaffected, since it never
+reads history at all.
+
 ### 6.4 Tests
 
 - **Golden tests, with `insta`.** Each fixture is a recorded run: plan, snapshot sequence with times, events, stdout/stderr and exit code. The fixtures are the §1 probes, with paths scrubbed. Two outputs are checked against goldens:
