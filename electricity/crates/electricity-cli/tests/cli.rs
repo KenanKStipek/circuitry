@@ -1454,9 +1454,9 @@ fn run_subcommand_renders_the_document_label_from_an_input() {
     let run_start: serde_json::Value = serde_json::from_str(run_start_line).unwrap();
     assert_eq!(run_start["label"], "ticket 42");
     // Checked against the raw line text, not `serde_json::Value`'s own
-    // key iteration -- without the `preserve_order` feature (never
-    // enabled in this workspace, LANE-CONTRACT/CLAUDE.md), its `Value::
-    // Object` is a sorted map, not insertion order.
+    // key iteration -- without the `preserve_order` feature (not enabled
+    // in this crate's `Cargo.toml`), its `Value::Object` is a sorted
+    // map, not insertion order.
     let expected_fragment = "\"orchestration\":\"doc.yml\",\"label\":\"ticket 42\",\"config\":";
     assert!(
         run_start_line.contains(expected_fragment),
@@ -1672,8 +1672,7 @@ fn run_subcommand_use_childs_label_is_ignored() {
 }
 
 /// The legacy `electricity <config.json> <doc>` form has no `--label`
-/// of its own (#752's ruling: "the legacy positional form doesn't
-/// need it") -- an unrecognized option there, same as any other.
+/// of its own -- an unrecognized option there, same as any other.
 #[test]
 fn legacy_form_does_not_accept_label_flag() {
     let (mut cmd, home) = command("legacy-rejects-label-flag");

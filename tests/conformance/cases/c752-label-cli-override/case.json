@@ -1,6 +1,6 @@
 {
   "spec_case": "#752",
-  "description": "`--label` is literal text, never rendered, and wins over the document's own top-level `label:` template. Python-only: the conformance harness always invokes electricity through its legacy positional form, which has no `--label` of its own (the ruling's own exemption); `test_run_cli_parity.py` covers `--label` on both engines' own `run` subcommand instead.",
+  "description": "`--label` is literal text, never rendered, and wins over the document's own top-level `label:` template. Python-only: the conformance harness always invokes electricity through its legacy positional form, which has no `--label` of its own; `test_run_cli_parity.py` covers `--label` on both engines' own `run` subcommand instead.",
   "engines": ["python"],
   "expect": "success",
   "cli_args": ["--label", "from the flag"]
