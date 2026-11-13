@@ -1174,19 +1174,25 @@ def _compile(expr: str) -> _Compiled:
             tree = _ENV.compile(expr)
             found = _collect_state_paths(tree)
             runner = _ENV.program(tree, functions=_FUNCTIONS)
+            # Inside the same try as the two walks above, not after it:
+            # this is a third independent recursive pass over the same
+            # tree, with its own frame cost per level, so it can overflow
+            # even when they didn't (observed on Python 3.12, a deeply
+            # nested expression neither of the other two failed on).
+            reads_whole_state = _count_state_idents(tree) != len(found)
         except RecursionError:
-            # Walking the parse tree (``_collect_state_paths``) recurses
-            # per tree level the same way parsing itself does, so a
-            # pathologically nested expression (deep parenthesisation, a
-            # long accessor chain) can exhaust Python's recursion budget
-            # here rather than in ``_ENV.compile`` itself. Caught here,
-            # not left to escape: by the time Python raises
-            # ``RecursionError`` the call stack is already this deep, and
-            # the interpreter's own message for it varies by exactly
-            # which operation was mid-call when the limit hit (observed:
-            # "...while getting the str of an object") — never str()'d
-            # or otherwise touched, only its type, so nothing here risks
-            # a second recursion failure trying to format it.
+            # Walking the parse tree recurses per tree level the same way
+            # parsing itself does, so a pathologically nested expression
+            # (deep parenthesisation, a long accessor chain) can exhaust
+            # Python's recursion budget in any of the three walks above
+            # rather than in ``_ENV.compile`` itself. Caught here, not
+            # left to escape: by the time Python raises ``RecursionError``
+            # the call stack is already this deep, and the interpreter's
+            # own message for it varies by exactly which operation was
+            # mid-call when the limit hit (observed: "...while getting
+            # the str of an object") — never str()'d or otherwise
+            # touched, only its type, so nothing here risks a second
+            # recursion failure trying to format it.
             raise CelValidationError(
                 "expression is nested too deeply",
                 expression=expr,
@@ -1201,7 +1207,7 @@ def _compile(expr: str) -> _Compiled:
             occurrences=tuple(
                 (node, path) for node, path, guarded in found if not guarded
             ),
-            reads_whole_state=_count_state_idents(tree) != len(found),
+            reads_whole_state=reads_whole_state,
         )
         if len(_CACHE) >= _CACHE_MAX_ENTRIES:
             _CACHE.clear()
