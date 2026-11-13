@@ -664,6 +664,21 @@ Because both cases are ordinary compiles of ordinary YAML, there is no separate 
 generated plans" — the same `electricity-vm` frame machinery (§6) runs a runtime-compiled
 `Region` exactly as it runs the root document's.
 
+**The generated-document check (#772).** Before either case's compiled `Region` ever runs, the
+parsed-but-uncompiled YAML is checked against `electricity-vm::generated_doc`: a generated `shell`
+effect's own `params.allowed_commands` is never honoured (the effective allowlist stays whatever
+the host config and the document that generated it already allow), a generated `service` effect's
+`params.shell: true` is refused the same way, and every other `type: tool` provider it uses must
+either be one the document that generated it already uses itself, statically, or be named in the
+generating `use`/`reflector` effect's own literal `allow_tools:` (`UseOp`/`ReflectorOp`'s own
+field, never rendered). `Frame::document_tool_providers` carries the current document's own
+static providers, replaced (never accumulated) each time a fresh document starts executing —
+`Frame::push_use`'s own call-stack field is a history; this one is not. A `use: {inline: ...}`
+child is only held to this check when its own structure doesn't match its unrendered template
+(`generated_doc::is_generated_inline`); a reflector's plan has no unrendered template to compare
+against and is always checked. A decomposition plan is always checked too, but only against the
+shell-specific rule — it has no generating effect of its own to carry an `allow_tools:`.
+
 ---
 
 ## 6. The VM

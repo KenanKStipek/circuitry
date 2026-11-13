@@ -592,6 +592,79 @@ never independently trusted).
 
 ---
 
+### 11. Generated documents
+
+A document produced while a run executes — a reflector's plan, or a `use`
+whose `inline:` is rendered from state — can carry a tool effect that looks
+exactly like a document the author wrote by hand: the same
+`params.allowed_commands` on a `shell` effect, the same `provider:` tokens.
+Section 2's shell allowlist widens "only from a literal, unrendered list" —
+but in a generated document, every list is rendered content that merely
+*looks* literal once parsed. Tools that run commands without going through
+the `shell` plugin's allowlist at all are open to the same problem: `agent`,
+`service`, `python_eval`, `git`, `docker`, `kubectl`, `gh`, `yt_dlp`,
+`ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`,
+`exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`,
+`pdf_render` and `ffmpeg` each shell out to their own fixed binary with
+effect-supplied arguments, with no allowlist of their own to widen or
+narrow.
+
+**Telling a generated document from an author's own.** An author-written
+`inline:` whose *structure* is literal — the same keys, the same number of
+effects, the same list lengths as its own unrendered template — with only
+scalar values templated in, counts as the author's own content and keeps
+working exactly as before. The test: parse the `use` effect's own `inline:`
+text *before* Mustache rendering as YAML; if that parse succeeds and its
+shape (dict keys, list lengths, recursively) matches the rendered, parsed
+document exactly, every difference is a templated *value*, not generated
+structure. A parse failure (the common case — the whole `inline:` is one
+`{{{...}}}` tag) or a shape mismatch anywhere means some or all of the
+document only exists because it was rendered: generated. A reflector's plan
+has no author template of its own to compare against at all — it is always
+generated. Both engines apply exactly this test, so a document that is
+generated on one is generated on the other.
+
+**Mitigation.** A generated document's `shell` effects may run only what
+the host config and the document that generated it already allow — its own
+`params.allowed_commands` is never honoured, whatever it contains. A
+generated `service` effect's `params.shell: true` is refused the same way.
+A generated document may use only the tool providers the document that
+generated it uses itself, statically (every `type: tool` effect anywhere in
+that document's own text, including inside a literal `use: inline:` child),
+plus whatever the generating `use`/`reflector` effect's own literal
+`allow_tools:` field adds — never a rendered value, `params_json`, or a
+state reference; `cof check` rejects any of those, and validates each name
+against the known tool-plugin providers. A provider that isn't a real
+plugin at all is not refused here — it still fails the ordinary way (an
+"Unknown plugin" error) once the generated document actually tries to
+dispatch it, since adding an unknown name to `allow_tools` would itself be
+a `cof check` error. The refusal happens when the generated document is
+compiled, before any of its effects run, naming the generated effect, the
+provider or command, and — where one exists — the `allow_tools` fix; the
+failure belongs to the generating `use`/`reflector` effect, so its own
+`on_error` applies like any other failure. A decomposition plan
+(`runtime.complexity.decomposition`) is generated too and follows the
+shell-allowlist rule, but not the tool-provider allowance: it has no
+`use`/`reflector` effect of its own to carry an `allow_tools:`, and its own
+merge step commonly needs a tool (to combine chunk results) the document it
+serves doesn't otherwise use.
+
+Implementation: [`src/circuitry/generated_doc.py`](../src/circuitry/generated_doc.py),
+and the equivalent Rust module,
+[`electricity/crates/electricity-vm/src/generated_doc.rs`](../electricity/crates/electricity-vm/src/generated_doc.rs).
+See [the orchestration reference](./orchestration-reference.md#generated-documents-and-tools)
+for the author-facing `allow_tools:` field.
+
+**Residual risk.** The structural test is deliberately coarse (whole-document
+shape, not per-field): an author-written `inline:` that happens to add or
+drop a key between its unrendered template and the rendered result — a
+`{{#if}}`-style block helper producing a different-length list, say — counts
+as generated even though a human wrote every line of it, and then needs
+`allow_tools:` for anything beyond what the document already uses. That is
+the conservative direction to err in.
+
+---
+
 ## What Circuitry does NOT defend against
 
 These are deliberate non-goals. Reports about them will be acknowledged but

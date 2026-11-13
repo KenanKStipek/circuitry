@@ -106,6 +106,31 @@ Three limits, all worth setting explicitly:
 - `max_effects` — the plan's width.
 - `stop_on_done` — whether the planner's own `done: true` ends the loop. Turn it off only when you want exactly `max_iterations` cycles regardless.
 
+A fourth limit is not optional: a generated plan may only use the tool
+providers this document already uses itself, statically. A planning prompt
+that proposes a `tool: {provider: json}` effect, say, is refused up front —
+naming the generated effect, the provider, and that it needs `allow_tools`
+set on the reflector — unless this document uses `json` somewhere of its
+own, or the reflector lists it:
+
+```yaml
+- type: reflector
+  name: plan_fix
+  allow_tools: [json]
+  effects:
+    - type: prompt
+      name: propose_steps
+      template: "..."
+```
+
+`allow_tools` is a literal list of provider names — never a Mustache
+template, a `{from: ...}` reference, or a name the run doesn't recognize;
+`cof check` rejects any of those. It never widens the shell allowlist: a
+generated `shell` effect's own `allowed_commands` is never honoured,
+whatever it says, `allow_tools` included. See
+[the orchestration reference](../orchestration-reference.md#generated-documents-and-tools)
+for the full rule.
+
 And one switch outside the document: a [profile](04-configuration.md) with `effects.plan_fix.enabled: false` turns agentic planning off for a single run, writing a skip node in its place. It is the effect most worth switching off — for a cost-controlled rerun, a deterministic test, a demo where the plan should not vary.
 
 ```yaml
