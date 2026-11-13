@@ -23771,12 +23771,11 @@ mod tape_frame_goldens {
         let zone = frame_zone();
         let mut app = crate::keys::App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Signal;
-        // `screens::build_signal` was given `cursor_col: Some(24)`
-        // above, but the drawn chart reads its own scrub cursor from
-        // `app.signal_cursor_col` (issue #734), not from the screen
-        // model's own `cursor_col` -- without this, the frame draws
-        // the reconstructed past with no cursor mark at all, a
-        // combination the real TUI never shows.
+        // The chart draws the scrub cursor from the screen model's
+        // `cursor_col` (`Some(24)` above). The app's own
+        // `signal_cursor_col` is set too, because that is the state the
+        // TUI is in while scrubbing: the shared selection follows the
+        // step under the cursor.
         app.signal_cursor_col = Some(24);
         let ctx = DrawCtx {
             theme: &theme,
@@ -23806,6 +23805,18 @@ mod tape_frame_goldens {
                 )
             })
             .unwrap();
+        // The scrub cursor is a background tint down the chart, which
+        // the text snapshot below can't show, so its column is checked
+        // here: cutoff 2.5s is 12 columns (100 ms each) left of Now's
+        // sweep at 3.62s, on the chart's first row (row 2).
+        let buf = terminal.backend().buffer();
+        let sweep_x = (0..buf.area.width)
+            .find(|&x| buf[(x, 2)].symbol() == "┃")
+            .expect("Now's sweep is drawn on the chart's first row");
+        let tinted: Vec<u16> = (0..buf.area.width)
+            .filter(|&x| buf[(x, 2)].bg == theme.selection_bg)
+            .collect();
+        assert_eq!(tinted, vec![sweep_x - 12], "the scrub cursor's column");
         insta::assert_snapshot!(terminal.backend().to_string());
     }
 
