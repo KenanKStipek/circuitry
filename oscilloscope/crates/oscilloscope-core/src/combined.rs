@@ -633,8 +633,11 @@ pub fn build_combined_signal(
     // stops reading its own Readings at once scrubbed away from Now.
     let view_col = cursor_col.unwrap_or(now_col);
 
-    let run_ids: Vec<Option<&str>> = inputs.iter().map(|i| i.header.run_id.as_deref()).collect();
-    let names = crate::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = inputs
+        .iter()
+        .map(|i| (i.header.label.as_deref(), i.header.run_id.as_deref()))
+        .collect();
+    let names = crate::names::disambiguated_names(&labelled_ids);
     let mut runs: Vec<CombinedRun> = Vec::with_capacity(inputs.len());
     let mut engines: BTreeSet<String> = BTreeSet::new();
     let mut steps_running = 0usize;

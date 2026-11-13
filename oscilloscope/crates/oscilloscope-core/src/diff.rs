@@ -481,6 +481,12 @@ pub struct Differ {
     /// does -- `diff_event`'s own `Event::RunStart` arm is the only
     /// thing that ever sets it.
     run_id: Option<String>,
+    /// The run's own label (issue #752), kept the same way `run_id`
+    /// is (`diff_event`'s own `Event::RunStart` arm, cleaned there)
+    /// so [`Differ::finish`] can show it in the exit summary --
+    /// `names::display_name` already falls back to the generated
+    /// name with `None` here.
+    run_label: Option<String>,
 }
 
 impl Differ {
@@ -497,6 +503,7 @@ impl Differ {
             report_paths: BTreeSet::new(),
             held_once: BTreeSet::new(),
             run_id: None,
+            run_label: None,
         }
     }
 
@@ -777,13 +784,17 @@ impl Differ {
                     path: Some(path.clone()),
                 }]
             }
-            Event::RunStart { ts, run_id, .. } => {
+            Event::RunStart {
+                ts, run_id, label, ..
+            } => {
                 self.run_id = Some(run_id.clone());
+                self.run_label = label.as_deref().and_then(crate::names::clean_label);
                 vec![LogLine {
                     ts: Some(ts.clone()),
                     text: format!(
                         "■ run started  {}  {run_id}",
-                        crate::names::run_name(run_id)
+                        crate::names::display_name(self.run_label.as_deref(), Some(run_id))
+                            .expect("a run id implies a name")
                     ),
                     kind: LogKind::RunStart,
                     path: None,
@@ -871,9 +882,18 @@ impl Differ {
                 .and_then(Value::as_str)
                 .map(str::to_string)
         });
-        let name_prefix = run_id
-            .as_deref()
-            .map(|id| format!("{}  ", crate::names::run_name(id)))
+        // The same fallback order as `run_id` just above: a label
+        // from this run's own `run_start` event, else `osi watch`'s
+        // own `runtime.last_run.label` with no `--events` stream at
+        // all.
+        let label = self.run_label.clone().or_else(|| {
+            state
+                .pointer("/runtime/last_run/label")
+                .and_then(Value::as_str)
+                .and_then(crate::names::clean_label)
+        });
+        let name_prefix = crate::names::display_name(label.as_deref(), run_id.as_deref())
+            .map(|name| format!("{name}  "))
             .unwrap_or_default();
         Some(LogLine {
             ts: run_ts,
@@ -1303,6 +1323,7 @@ mod tests {
             pid: Some(1),
             engine: None,
             config: None,
+            label: None,
         };
         let model = RunModel::new();
         let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
@@ -2107,6 +2128,66 @@ mod tests {
         });
         let line = differ.finish(&ended, None).expect("a summary line");
         assert!(line.text.starts_with("■ run ok"), "{line:?}");
+    }
+
+    #[test]
+    fn diff_event_shows_a_run_starts_own_label_instead_of_the_generated_name() {
+        let mut differ = Differ::new();
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        };
+        let model = RunModel::new();
+        let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
+        assert_eq!(
+            lines,
+            vec![LogLine {
+                ts: Some("t".to_string()),
+                text: "■ run started  ticket 42  abc123".to_string(),
+                kind: LogKind::RunStart,
+                path: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn finish_names_the_run_from_its_own_run_start_label() {
+        let mut differ = Differ::new();
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        };
+        let model = RunModel::new();
+        differ.diff_event(&event, &PlanTree::empty(), &model);
+        let ended = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run ticket 42  ok", "{line:?}");
+    }
+
+    #[test]
+    fn finish_names_the_run_from_state_label_with_no_events_at_all() {
+        // The same `osi watch`-with-no-`--events` fallback as
+        // `finish_names_the_run_from_state_run_id_with_no_events_at_all`,
+        // for a label instead of a run id.
+        let mut differ = Differ::new();
+        let ended = json!({
+            "_run_id": "936ff268-5f52-479a-887f-fda1a47dae63",
+            "runtime": {"last_run": {"completed_at": "t9", "label": "ticket 42"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run ticket 42  ok", "{line:?}");
     }
 
     #[test]
