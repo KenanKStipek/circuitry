@@ -1088,7 +1088,7 @@ def _stash_path(home_dir: Path) -> Path:
 def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
     tmp_path: Path, electricity_binary: Path, engine: str,
 ) -> None:
-    """issue #760's own ruling: `--resume last` resumes from the loaded
+    """Issue #760: `--resume last` resumes from the loaded
     `--out` file's own `input.*`, never replaying the stash's `-e`
     values on top of it -- unlike plain `--last`, which replays the
     whole prior invocation. The stash's own `env_vars` is rewritten

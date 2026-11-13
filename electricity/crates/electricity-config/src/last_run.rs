@@ -174,8 +174,8 @@ impl LastRun {
 
     /// `cli/app.py::run_cmd`'s own `skip_preflight` stash field --
     /// distinct from [`LastRun::has_redacted_secrets`], electricity's
-    /// own CLI has no `--skip-preflight` flag at all (settled ruling 1:
-    /// preflight always runs).
+    /// own CLI has no `--skip-preflight` flag at all (electricity
+    /// always runs preflight).
     pub fn skip_preflight(&self) -> bool {
         self.bool_field("skip_preflight")
     }
