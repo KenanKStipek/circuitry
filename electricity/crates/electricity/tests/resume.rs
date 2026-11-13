@@ -369,6 +369,52 @@ async fn a_finally_effect_always_reruns_even_if_its_saved_node_finished() {
 }
 
 #[tokio::test]
+async fn a_dynamic_with_resume_restart_reruns_its_whole_scope_even_when_both_steps_finished() {
+    let dir = temp_dir("dynamic-resume-restart");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: outer\n    type: dynamic\n    resume: restart\n    effects:\n      \
+         - name: step1\n        type: tool\n        provider: uuid\n      - name: step2\n        \
+         type: tool\n        provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_step1 = child(at_mut(&mut state, "prime.outer"), "step1");
+    let saved_step2 = child(at_mut(&mut state, "prime.outer"), "step2");
+
+    // Both steps finished, but the outer dynamic's own meta never did
+    // (the interrupt landed between step2 completing and the dynamic
+    // marking itself done) -- the same shape `a_use_without_record_
+    // children_reruns_its_child_whole` uses for a `use`.
+    set(&mut state, "prime.outer.meta.completed_at", Value::None);
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    assert_ne!(
+        child(at_mut(&mut resumed, "prime.outer"), "step1"),
+        saved_step1,
+        "resume: restart drops the dynamic's whole saved scope -- step1 reruns fresh even \
+         though it already looked finished (the positional continue rule alone would have \
+         reused it)"
+    );
+    assert_ne!(
+        child(at_mut(&mut resumed, "prime.outer"), "step2"),
+        saved_step2,
+        "step2 likewise"
+    );
+}
+
+#[tokio::test]
 async fn a_changed_document_is_refused_without_force() {
     let dir = temp_dir("hash-mismatch");
     let config = write(&dir, "config.json", "{}");

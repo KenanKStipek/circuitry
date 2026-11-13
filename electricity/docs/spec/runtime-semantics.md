@@ -1922,8 +1922,8 @@ unfinished **named `if`** (`core/conditional.py`, `resume`) reads its saved
 `meta.branch` before anything else, evaluates its condition again (a model
 condition asks again), and, when the condition selects that branch again,
 runs the branch by the same positional rule; the other branch runs from its
-start. An unnamed `if` and a `reflector` rerun whole. electricity has no
-`--resume` yet (M2-G), so this is reference behaviour only.
+start. An unnamed `if` and a `reflector` rerun whole. electricity run
+accepts --state/--resume/--force too (issue #727), with the same rules.
 
 An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
 `_SavedChildRun`) reruns its child from the start in a fresh state, unless

@@ -80,9 +80,7 @@ pub(crate) fn execute_dynamic<'a>(
     // `cof run --resume` (issue #727): whether this dynamic's own body
     // may skip a child whose saved node already finished without error
     // -- `core/dynamic.py::DynamicRuntime.resume`, decided by the
-    // caller (never read off *op* itself: a plain `dynamic`'s own
-    // `resume: restart` validates but isn't carried into this `Op`,
-    // DESIGN.md §13, so every `dynamic` here behaves as `continue`).
+    // caller.
     resume_active: bool,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
@@ -90,6 +88,24 @@ pub(crate) fn execute_dynamic<'a>(
             .name
             .as_deref()
             .expect("a dynamic (root or nested) always has a name");
+        // `core/dynamic.py::DynamicRuntime.execute`'s own `if self.resume
+        // and self.defn.resume == "restart": self.resume = False;
+        // store.state.pop(self.defn.name, None)` -- a finished node was
+        // already skipped by the parent, so reaching this `execute_
+        // dynamic` call at all means it's unfinished; `resume: restart`
+        // drops whatever it saved (the whole node, not just a stale
+        // `meta`) and runs it from its first effect, like a fresh run.
+        // `parent` is always a real `Store`-created node here (never a
+        // loop/`if`-branch overlay -- the same invariant `ensure_dict`'s
+        // own `debug_assert!` already requires of it, just below), so
+        // removing a key from it directly is safe.
+        let mut resume_active = resume_active;
+        if resume_active && op.resume_mode == electricity_bytecode::ResumeMode::Restart {
+            resume_active = false;
+            parent
+                .borrow_mut()
+                .shift_remove(&Value::Str(name.to_string()));
+        }
         let dyn_node = store.ensure_dict(parent, key(name)).map_err(store_err)?;
 
         let (body, finally): (&Region, Option<&Region>) = match &op.kind {

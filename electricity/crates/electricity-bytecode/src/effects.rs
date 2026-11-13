@@ -252,15 +252,16 @@ pub enum UseSource {
     Inline(TemplateText),
 }
 
-/// `core/resume.py::ResumeMode` -- a `use`'s own `resume:` (#590),
-/// carried into the compiled IR (issue #727) so `--resume` can tell a
-/// `use` whose saved node did not finish without error apart: `Continue`
-/// (the default) reuses its finished child record when one is saved
-/// (`runtime.state.record_children`); `Restart` drops it and runs the
-/// child fresh, like a first run. A plain `dynamic`'s own `resume:`
-/// field is validated the same way at compile time but not yet carried
-/// into its own `Op` (DESIGN.md §13) -- this type exists for `UseOp`
-/// alone.
+/// `core/resume.py::ResumeMode` -- a `use`'s or a `dynamic`'s own
+/// `resume:` (#590), carried into the compiled IR (issue #727) so
+/// `--resume` can tell a saved node that did not finish without error
+/// apart: `Continue` (the default) reuses it -- a `use`'s own finished
+/// child record, when one is saved (`runtime.state.record_children`),
+/// or a `dynamic` continuing inside its own unfinished scope; `Restart`
+/// drops whatever was saved and runs fresh, like a first attempt.
+/// `UseOp::resume_mode` carries a `use`'s own value; `Op::resume_mode`
+/// carries a `dynamic`'s (every other `NodeKind` leaves it at
+/// `Continue`, never read).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
 pub enum ResumeMode {
     #[default]
