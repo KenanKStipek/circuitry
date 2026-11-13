@@ -859,7 +859,9 @@ def run(req: RunRequest) -> RunResult:
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
         # The root document is the first "enclosing document" a nested
         # use/reflector effect's generated child is judged against (#772).
-        from ..generated_doc import GENERATED_DOCUMENT_PROVIDERS_KEY as _DOC_PROVIDERS_KEY
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_PROVIDERS_KEY as _DOC_PROVIDERS_KEY,
+        )
         from ..generated_doc import static_tool_providers as _static_tool_providers
 
         runtime_config[_DOC_PROVIDERS_KEY] = sorted(_static_tool_providers(orch))

@@ -131,7 +131,7 @@ def _same_shape(a: Any, b: Any) -> bool:
             return False
         if len(a) != len(b):
             return False
-        return all(_same_shape(x, y) for x, y in zip(a, b))
+        return all(_same_shape(x, y) for x, y in zip(a, b, strict=True))
     return True
 
 
