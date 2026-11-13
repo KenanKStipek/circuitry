@@ -32,10 +32,10 @@
 //! `--dump-ir` under `run` -- it has no `cof run` equivalent, and stays
 //! reachable through the legacy form only. A missing orchestration
 //! positional under `run` is `Action::MissingOrchestration` (exit 1,
-//! cof's own text on stdout), not `Action::UsageError` (exit 2): cof's
-//! own positional is `Optional[str]` to let `--last` (not implemented
-//! here, #727's scope) stand in for it, so Click never raises a usage
-//! error for its absence either.
+//! cof's own text on stdout) only when `--last` is also absent, not
+//! `Action::UsageError` (exit 2): cof's own positional is `Optional[str]`
+//! precisely so `--last` (issue #760) can stand in for it, so Click never
+//! raises a usage error for its absence either.
 
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -51,10 +51,11 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
                     [--pretty] [--live-state state.json] [--events events.jsonl]
                     [--profile <path>]
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
-       electricity run <orchestration.yml> [-e key=value]... [--config config.json]
+       electricity run [orchestration.yml] [-e key=value]... [--config config.json]
                     [--out state.json] [--live-state state.json] [--events events.jsonl]
                     [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]
                     [--pretty] [--profile <path>] [--state state.json] [--resume MODE] [--force]
+                    [--last]
 
 electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents
 only (persistence and runtime plugins are refused with a
@@ -127,18 +128,24 @@ Options:
                       --resume is also given; named alone, --state
                       still seeds the whole run from the file, with no
                       skip. The -s alias is `run` only, matching cof's.
-  --resume <mode>     `run` only, combined with --state <file>: engages
-                      the skip-and-continue behaviour above. cof's own
-                      'last'/a run-id mode (looked up via its own --last
-                      stash or a runtime.persistence backend) is not
-                      supported -- --resume always needs --state <file>
-                      naming the saved state directly. Refuses a
-                      document that changed since the saved run unless
-                      --force.
+  --resume <mode>     `run` only: 'last' resumes from the most recent
+                      stashed run's own --out (via the same --last
+                      stash below), and --state <file> given alongside
+                      any other value engages the skip-and-continue
+                      behaviour above against that file directly. A
+                      bare run-id (looked up via a runtime.persistence
+                      backend) is not supported. Refuses a document
+                      that changed since the saved run unless --force.
   --force             `run` only: with --resume, continue even though
                       the orchestration's content changed since the
                       saved run (or it carries no recorded digest at
-                      all).";
+                      all).
+  --last              `run` only: replay the most recently stashed run's
+                      own arguments (same file, keys and redaction as
+                      cof's own --last stash) -- every other flag on the
+                      line is overwritten from the stash, including the
+                      orchestration positional, which may be omitted
+                      entirely. Mutually exclusive with --resume.";
 
 /// A successfully parsed run request -- every flag [`USAGE`] lists that
 /// isn't `--dump-ir`/`--version`/`--help`, from either
@@ -182,6 +189,11 @@ struct RunArgs {
     resume: Option<String>,
     /// `--force` (issue #727, `run` only).
     force: bool,
+    /// `--last` (issue #760, `run` only) -- replay the most recently
+    /// stashed run's own arguments, overwriting every other field this
+    /// struct holds (`run_action`'s own `if run_args.last` block),
+    /// exactly as `cof run`'s own `if last:` block does.
+    last: bool,
     /// Whether this came from `electricity run <doc> ...` rather than
     /// the legacy `electricity <config.json> <doc> ...` form -- the one
     /// thing [`run_action`]'s own later usage-error site (a malformed
@@ -202,11 +214,11 @@ enum Action {
     Help,
     Run(RunArgs),
     /// `electricity run` with no orchestration positional and no
-    /// `--last` (which electricity does not implement at all -- #727's
-    /// own scope) -- `cof run`'s own missing-orchestration check,
-    /// which is not a usage error there either (the positional is
-    /// `Optional[str]`, to support `--last`), so this is a distinct
-    /// exit-1 outcome from [`Action::UsageError`]'s exit 2.
+    /// `--last` either (issue #760) -- `cof run`'s own
+    /// missing-orchestration check, which is not a usage error there
+    /// either (the positional is `Optional[str]`, to support `--last`),
+    /// so this is a distinct exit-1 outcome from
+    /// [`Action::UsageError`]'s exit 2.
     MissingOrchestration,
     DumpIr(String, String, Vec<String>),
     UsageError(String),
@@ -282,7 +294,125 @@ const RUN_FLAGS: &[(&str, Arity)] = &[
     ("-s", Arity::Value),
     ("--resume", Arity::Value),
     ("--force", Arity::Boolean),
+    ("--last", Arity::Boolean),
 ];
+
+/// `PathBuf` -> `String` for a stash field (issue #760): the stash
+/// itself stores every path as a plain JSON string (`str(path)`,
+/// `cli/app.py::_save_last_run`'s own shape), so a path read back out
+/// of one is always re-stringified before landing in a [`RunArgs`]
+/// field, which holds the *unparsed* CLI value either way.
+fn path_to_string(path: PathBuf) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// `cli/app.py::_save_last_run`'s own dict literal, in the exact same
+/// key order (issue #760) -- a stash either engine wrote must read back
+/// the same in the other, and `electricity-config::last_run::LastRun`'s
+/// own accessors are keyed by name, not position, so this is purely for
+/// a byte-for-byte-readable file, not a functional requirement. Every
+/// key `cof run` writes that electricity's own CLI has no flag for
+/// (`print_state`/`dry_run`/`json_out`/`verbose`/`tail`/`skip_preflight`/
+/// `profile_from_state`/`model`/`explain_routing`/`decompose_out`/
+/// `scoring`/`routing`/`decompose`/`split`) is written as the value an
+/// invocation that never passed the reference's own equivalent flag
+/// would stash -- `false`/`null` either way. `trust_document` is always
+/// `true` and `remote_library_source` always `false`: electricity's own
+/// positional orchestration argument is always a literal path, never a
+/// library name (this module's own earlier doc comment).
+fn last_run_stash_args(
+    run_args: &RunArgs,
+    resume_default_out_path: Option<&Path>,
+) -> electricity_value::Dict {
+    use electricity_value::{Dict, Value};
+
+    fn opt_str(value: Option<&String>) -> Value {
+        match value {
+            Some(s) => Value::Str(s.clone()),
+            None => Value::None,
+        }
+    }
+
+    let mut args = Dict::new();
+    args.insert(
+        Value::Str("orchestration".to_string()),
+        Value::Str(run_args.orchestration.clone()),
+    );
+    args.insert(
+        Value::Str("config".to_string()),
+        opt_str(run_args.config.as_ref()),
+    );
+    args.insert(
+        Value::Str("state".to_string()),
+        opt_str(run_args.state.as_ref()),
+    );
+    let out_value = run_args
+        .out
+        .clone()
+        .or_else(|| resume_default_out_path.map(|p| path_to_string(p.to_path_buf())));
+    args.insert(Value::Str("out".to_string()), opt_str(out_value.as_ref()));
+    args.insert(
+        Value::Str("pretty".to_string()),
+        Value::Bool(run_args.pretty),
+    );
+    args.insert(Value::Str("print_state".to_string()), Value::Bool(false));
+    args.insert(Value::Str("dry_run".to_string()), Value::Bool(false));
+    args.insert(Value::Str("json_out".to_string()), Value::Bool(false));
+    args.insert(Value::Str("quiet".to_string()), Value::Bool(run_args.quiet));
+    args.insert(Value::Str("verbose".to_string()), Value::Bool(false));
+    args.insert(
+        Value::Str("live_state".to_string()),
+        opt_str(run_args.live_state.as_ref()),
+    );
+    args.insert(
+        Value::Str("events".to_string()),
+        opt_str(run_args.events.as_ref()),
+    );
+    args.insert(
+        Value::Str("env_vars".to_string()),
+        Value::List(
+            electricity_config::redacted_env_pairs(&run_args.inputs)
+                .into_iter()
+                .map(Value::Str)
+                .collect(),
+        ),
+    );
+    args.insert(
+        Value::Str("label".to_string()),
+        opt_str(run_args.label.as_ref()),
+    );
+    args.insert(Value::Str("tail".to_string()), Value::Bool(false));
+    args.insert(Value::Str("skip_preflight".to_string()), Value::Bool(false));
+    args.insert(
+        Value::Str("allow_capabilities".to_string()),
+        opt_str(run_args.allow_capabilities.as_ref()),
+    );
+    args.insert(
+        Value::Str("profile".to_string()),
+        opt_str(run_args.profile.as_ref()),
+    );
+    args.insert(Value::Str("profile_from_state".to_string()), Value::None);
+    args.insert(
+        Value::Str("adapter".to_string()),
+        opt_str(run_args.adapter.as_ref()),
+    );
+    args.insert(Value::Str("model".to_string()), Value::None);
+    args.insert(
+        Value::Str("explain_routing".to_string()),
+        Value::Bool(false),
+    );
+    args.insert(Value::Str("decompose_out".to_string()), Value::None);
+    args.insert(Value::Str("scoring".to_string()), Value::None);
+    args.insert(Value::Str("routing".to_string()), Value::None);
+    args.insert(Value::Str("decompose".to_string()), Value::None);
+    args.insert(Value::Str("split".to_string()), Value::None);
+    args.insert(Value::Str("trust_document".to_string()), Value::Bool(true));
+    args.insert(
+        Value::Str("remote_library_source".to_string()),
+        Value::Bool(false),
+    );
+    args
+}
 
 fn flag_arity<'a>(flags: &'a [(&'static str, Arity)], flag: &str) -> Option<&'a Arity> {
     flags
@@ -323,6 +453,7 @@ struct ParsedFlags {
     state: Option<String>,
     resume: Option<String>,
     force: bool,
+    last: bool,
     positionals: Vec<String>,
 }
 
@@ -348,6 +479,7 @@ fn parse_flags(
         state: None,
         resume: None,
         force: false,
+        last: false,
         positionals: Vec::new(),
     };
     let mut i = 0;
@@ -391,6 +523,7 @@ fn parse_flags(
                     "--pretty" => parsed.pretty = true,
                     "--quiet" => parsed.quiet = true,
                     "--force" => parsed.force = true,
+                    "--last" => parsed.last = true,
                     _ => unreachable!("every Arity::Boolean flag is handled above"),
                 }
                 i += 1;
@@ -512,6 +645,7 @@ fn classify(args: &[String]) -> Action {
             state: None,
             resume: None,
             force: false,
+            last: false,
             via_run: false,
         }),
         _ => Action::UsageError("no config file or orchestration given".to_string()),
@@ -540,9 +674,40 @@ fn classify_run(args: &[String]) -> Action {
         );
     }
     match parsed.positionals.as_slice() {
-        [] => Action::MissingOrchestration,
+        // `cof run`'s own positional is `Optional[str]` precisely so
+        // `--last` can stand in for it (issue #760) -- a bare `electricity
+        // run --last` is `Action::Run` with an empty `orchestration`,
+        // overwritten from the stash inside `run_action` before anything
+        // reads it; only an *absent* `--last` still reaches
+        // `MissingOrchestration`.
+        [] if !parsed.last => Action::MissingOrchestration,
+        [] => Action::Run(RunArgs {
+            config: parsed.config,
+            orchestration: String::new(),
+            inputs: parsed.inputs,
+            out: parsed.out,
+            pretty: parsed.pretty,
+            live_state: parsed.live_state,
+            events: parsed.events,
+            profile: parsed.profile,
+            allow_capabilities: parsed.allow_capabilities,
+            adapter: parsed.adapter,
+            label: parsed.label,
+            quiet: parsed.quiet,
+            state: parsed.state,
+            resume: parsed.resume,
+            force: parsed.force,
+            last: true,
+            via_run: true,
+        }),
         [orchestration] => Action::Run(RunArgs {
             config: parsed.config,
+            // `cof run bogus.yml --last` ignores `bogus.yml` outright
+            // (confirmed directly) -- `run_action`'s own `if
+            // run_args.last` block overwrites this with the stash's own
+            // value before anything reads it, same as the `[]` arm above,
+            // so a positional given alongside `--last` here is harmless,
+            // never validated against.
             orchestration: orchestration.clone(),
             inputs: parsed.inputs,
             out: parsed.out,
@@ -557,6 +722,7 @@ fn classify_run(args: &[String]) -> Action {
             state: parsed.state,
             resume: parsed.resume,
             force: parsed.force,
+            last: parsed.last,
             via_run: true,
         }),
         // `click.exceptions.UsageError`'s own literal template keeps
@@ -972,7 +1138,81 @@ fn parse_allow_capabilities(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn run_action(run_args: RunArgs) -> ExitCode {
+fn run_action(mut run_args: RunArgs) -> ExitCode {
+    // `cof run`'s own very first check in `run_cmd`, before anything
+    // else -- including config/orchestration resolution, both of which
+    // `--last`'s own stash load below needs to run first (issue #760).
+    if run_args.resume.is_some() && run_args.last {
+        write_stdout("Error: --resume and --last are mutually exclusive.\n");
+        return ExitCode::from(1);
+    }
+
+    // `--last` (issue #760): replay the most recent stashed run's own
+    // arguments, the same file/keys `cof run` reads
+    // (`cli/last_run.py::read_last_run`) -- before config/orchestration
+    // resolution, since the stash itself names both (`cli/app.py::
+    // run_cmd`'s own `if last:` block runs first, at ~:1124).
+    if run_args.last {
+        let home = std::env::home_dir();
+        let stash = home
+            .as_deref()
+            .map(electricity_config::last_run_path)
+            .and_then(|path| electricity_config::read_last_run(&path));
+        let stash = match stash {
+            Some(stash) => stash,
+            None => {
+                // `cof run --last` with no stash at all raises a bare
+                // `typer.BadParameter` that nothing in `run_cmd` catches --
+                // Click's own top-level handler renders it as a usage
+                // error (exit 2), not the exit-1 `console.print`-plus-
+                // `typer.Exit` shape every *other* refusal in this
+                // function uses (confirmed directly against a real
+                // `cof run --last`).
+                print_run_usage_error(
+                    "Invalid value: No previous run found. Run an orchestration first.",
+                );
+                return ExitCode::from(2);
+            }
+        };
+        if !stash.ok() {
+            // `cof run --last`'s own `_load_last_run` has no graceful
+            // handling at all for a present-but-unreadable/malformed
+            // stash (an uncaught `JSONDecodeError`/`KeyError`, a Python
+            // traceback on stderr, exit 1) -- not one of issue #760's
+            // own listed refusals (that list is `--resume last`'s,
+            // which *does* read the stash gracefully), so this reports
+            // it cleanly instead of reproducing a traceback.
+            write_stdout(&format!("Error: {}\n", stash.error));
+            return ExitCode::from(1);
+        }
+        if stash.has_redacted_secrets() {
+            write_stdout("Error: previous run included redacted secrets in -e values.\n");
+            write_stdout(
+                "Re-run explicitly with the secret supplied via env var or config file \
+                 (recommended), or via -e for this invocation.\n",
+            );
+            return ExitCode::from(1);
+        }
+        // `cof run`'s own `if last:` block overwrites every one of these
+        // unconditionally from the stash -- including `orchestration`,
+        // silently ignoring whatever positional this invocation itself
+        // gave (confirmed directly: `cof run bogus.yml --last` replays
+        // the stash, never refusing on `bogus.yml` not existing).
+        run_args.orchestration = stash.orchestration();
+        run_args.config = stash.config_path().map(path_to_string);
+        run_args.state = stash.state_path().map(path_to_string);
+        run_args.inputs = stash.env_pairs();
+        run_args.out = stash.out_path().map(path_to_string);
+        run_args.pretty = stash.pretty();
+        run_args.live_state = stash.live_state_path().map(path_to_string);
+        run_args.events = stash.events_path().map(path_to_string);
+        run_args.label = stash.label();
+        run_args.quiet = stash.quiet();
+        run_args.allow_capabilities = stash.allow_capabilities();
+        run_args.profile = stash.profile();
+        run_args.adapter = stash.adapter();
+    }
+
     // Armed *before* config load (issue
     // #431's own step 1), on a dedicated OS thread with its own Tokio
     // runtime -- responsive to a signal even while this thread is deep
@@ -1080,52 +1320,96 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // `electricity` (lib)'s own effective-settings resolution, at that
     // tier, not folded into this CLI-level `out_path` (which ranks
     // above a profile unconditionally).
-    let out_path = run_args.out.map(PathBuf::from);
+    let out_path = run_args.out.clone().map(PathBuf::from);
 
-    // `--resume` (issue #727): only the `--state <file>` form is in
-    // scope. `cof run`'s own two other sources both fail inside
-    // `cli/app.py::_resolve_resume_state` with a `typer.BadParameter`
-    // the caller re-raises as `typer.Exit(code=1)` -- a pre-run
-    // refusal that writes no state at all, not a raw CLI usage error
-    // (DESIGN.md §6.9's own exit-code table), so this is refused the
-    // same way `--resume`'s document-hash checks are: through the
-    // ordinary `RunResult`/`exit_code_for` path, exit 1, nothing
-    // written -- never `ExitCode::from(2)`.
-    if run_args.resume.is_some() && run_args.state.is_none() {
-        signal_guard.disarm();
-        let message = if run_args.resume.as_deref() == Some("last") {
-            // `cof run --resume last` reads its own `--last` stash
-            // (`last-run.json`); electricity keeps none (issue #760
-            // tracks adding one).
-            "--resume last needs cof's own --last stash, which electricity does not keep \
-             (issue #760) -- pass --state <file> naming a saved state directly instead."
-                .to_string()
+    // `--resume` (issue #727, extended by #760): `--state <file>` names
+    // the saved state to resume from directly; `--resume last` resolves
+    // it through the same `--last` stash `--last` itself reads
+    // (`cli/last_run.py::read_last_run`) -- the prior run's own `--out`.
+    // A bare run-id (`cof run`'s own `runtime.persistence` lookup) stays
+    // refused. Every refusal below fails the same way `cof run`'s own
+    // `_resolve_resume_state` does for all three sources -- a pre-run
+    // `typer.BadParameter` the caller re-raises as `typer.Exit(code=1)`,
+    // writing no state at all (DESIGN.md §6.9's own exit-code table) --
+    // through the ordinary `RunResult`/`exit_code_for` path, exit 1,
+    // never `ExitCode::from(2)`.
+    let mut resume_state_path = run_args.state.clone().map(PathBuf::from);
+    let mut resume_default_out_path: Option<PathBuf> = None;
+    if run_args.resume.is_some() {
+        let refusal = if run_args.state.is_some() {
+            resume_default_out_path = run_args.state.clone().map(PathBuf::from);
+            None
+        } else if run_args.resume.as_deref() == Some("last") {
+            let home = std::env::home_dir();
+            let stash = home
+                .as_deref()
+                .map(electricity_config::last_run_path)
+                .and_then(|path| electricity_config::read_last_run(&path));
+            match &stash {
+                None => Some("No previous run found \u{2014} nothing to resume from.".to_string()),
+                Some(stash) if !stash.ok() => {
+                    Some(format!("{} Nothing to resume from.", stash.error))
+                }
+                Some(stash) => {
+                    let stashed_orchestration = stash.orchestration();
+                    if stashed_orchestration != run_args.orchestration {
+                        Some(format!(
+                            "The last run was '{stashed_orchestration}', not {} \u{2014} run \
+                             that orchestration again, or pass --state <file> to resume a \
+                             specific saved state instead of 'last'.",
+                            run_args.orchestration
+                        ))
+                    } else {
+                        match stash.out_path() {
+                            None => Some(
+                                "The last run did not use --out, so it saved no state to \
+                                 resume from."
+                                    .to_string(),
+                            ),
+                            Some(stash_out_path) if !stash_out_path.exists() => Some(format!(
+                                "The last run's --out file is gone: state file not found: {}",
+                                stash_out_path.display()
+                            )),
+                            Some(stash_out_path) => {
+                                resume_state_path = Some(stash_out_path.clone());
+                                resume_default_out_path = Some(stash_out_path);
+                                None
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             // `cof run --resume <run-id>` needs the orchestration's own
             // `runtime.persistence` backend, which stays refused on
             // electricity.
-            "--resume <run-id> needs this orchestration's runtime.persistence backend, which \
-             stays refused on electricity -- pass --state <file> naming a saved state directly \
-             instead."
-                .to_string()
+            Some(
+                "--resume <run-id> needs this orchestration's runtime.persistence backend, \
+                 which stays refused on electricity -- pass --state <file> naming a saved \
+                 state directly instead."
+                    .to_string(),
+            )
         };
-        let result = RunResult {
-            ok: false,
-            out_path: None,
-            state: None,
-            error: Some(message),
-            warnings: config_warnings.clone(),
-            signal: None,
-        };
-        if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
+        if let Some(message) = refusal {
+            signal_guard.disarm();
+            let result = RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(message),
+                warnings: config_warnings.clone(),
+                signal: None,
+            };
+            if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
+                print_stderr_contract(&result);
+                write_stderr(&format!(
+                    "electricity: could not serialize run state: {err}\n"
+                ));
+                return ExitCode::from(1);
+            }
             print_stderr_contract(&result);
-            write_stderr(&format!(
-                "electricity: could not serialize run state: {err}\n"
-            ));
-            return ExitCode::from(1);
+            return exit_code_for(&result);
         }
-        print_stderr_contract(&result);
-        return exit_code_for(&result);
     }
 
     let req = RunRequest {
@@ -1134,21 +1418,17 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         inputs,
         out_path: out_path.clone(),
         pretty: run_args.pretty,
-        live_state_path: run_args.live_state.map(PathBuf::from),
-        events_path: run_args.events.map(PathBuf::from),
-        profile_path: run_args.profile.map(PathBuf::from),
+        live_state_path: run_args.live_state.clone().map(PathBuf::from),
+        events_path: run_args.events.clone().map(PathBuf::from),
+        profile_path: run_args.profile.clone().map(PathBuf::from),
         allow_capabilities: parse_allow_capabilities(run_args.allow_capabilities.as_deref()),
         config_warnings,
         adapter_override: run_args.adapter.clone(),
         label_override: run_args.label.clone(),
         armed: true,
-        state_path: run_args.state.clone().map(PathBuf::from),
+        state_path: resume_state_path,
         resume: run_args.resume.is_some(),
-        resume_default_out: if run_args.resume.is_some() {
-            run_args.state.clone().map(PathBuf::from)
-        } else {
-            None
-        },
+        resume_default_out: resume_default_out_path.clone(),
         force: run_args.force,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1183,6 +1463,25 @@ fn run_action(run_args: RunArgs) -> ExitCode {
                 ));
                 return ExitCode::from(1);
             }
+        }
+    }
+
+    // Stash for `--last`/`--resume last` (issue #760) -- success or
+    // failure, same as `cof run`'s own `_save_last_run` (`cli/app.py`'s
+    // own comment: "a failed run must leave a stash too, or `--resume
+    // last` would have no record to find its --out through"), skipped
+    // only when this run itself replayed one via `--last` (`cli/app.py`'s
+    // own `if not last:` guard) -- a replay must never overwrite the
+    // stash it just read, confirmed directly against a real `cof run
+    // --last`. Best-effort: `electricity_config::write_last_run` already
+    // swallows a write failure silently, exactly as the reference does.
+    if !run_args.last {
+        let home = std::env::home_dir();
+        if let Some(path) = home.as_deref().map(electricity_config::last_run_path) {
+            electricity_config::write_last_run(
+                &path,
+                last_run_stash_args(&run_args, resume_default_out_path.as_deref()),
+            );
         }
     }
 
@@ -1835,6 +2134,45 @@ mod unit_tests {
             ]),
             Action::MissingOrchestration
         ));
+        assert!(matches!(
+            classify(&["run".to_string()]),
+            Action::MissingOrchestration
+        ));
+    }
+
+    #[test]
+    fn run_subcommand_last_flag_with_no_positional_is_a_run_request() {
+        match classify(&["run".to_string(), "--last".to_string()]) {
+            Action::Run(run_args) => {
+                assert!(run_args.last);
+                assert_eq!(run_args.orchestration, "");
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_subcommand_last_flag_with_a_positional_still_sets_last() {
+        // `cof run bogus.yml --last` ignores `bogus.yml` outright
+        // (confirmed directly against a real `cof run`) -- `run_action`
+        // overwrites `orchestration` from the stash before anything
+        // reads it, so the positional is merely parsed here, never
+        // validated against.
+        match classify(&[
+            "run".to_string(),
+            "bogus.yml".to_string(),
+            "--last".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert!(run_args.last);
+                assert_eq!(run_args.orchestration, "bogus.yml");
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_subcommand_without_last_and_no_positional_is_still_missing_orchestration() {
         assert!(matches!(
             classify(&["run".to_string()]),
             Action::MissingOrchestration
