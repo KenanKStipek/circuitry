@@ -470,7 +470,7 @@ effects:
     );
 }
 
-/// Lane I (issue #469), ruling R3 on PR #472's review -- the
+/// Issue #469 -- the
 /// `runtime.state.record_children` config is off here, the common
 /// case: a SIGINT while a `use` child is running must exit 130 and
 /// leave no trace of the child's own effect having run --

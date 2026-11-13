@@ -32,7 +32,7 @@ cancellation is deliberately suppressed for the whole duration of a
 `get_token().cleanup()`, ported directly), so a real SIGINT landing
 inside one never interrupts anything running there at all -- confirmed
 directly against this very step before writing this comment. It uses
-the lane's own other deterministic-interrupt option instead: a step
+the other deterministic interrupt instead: a step
 that fails outright the first time (`exit 1` unless `proceed` already
 exists), with no signal involved -- the run still ends with `--out`
 written and the step's own node unfinished (`meta.error` set), exactly
@@ -48,8 +48,7 @@ every time it runs would make that comparison meaningless by
 construction, independent of whether resuming actually worked.
 
 Cross-engine comparison of the resumed pass's own live state and events
-(the lane's own stretch past #727's bare acceptance criteria) is
-established two ways: directly, by comparing the resumed run's final
+is established two ways: directly, by comparing the resumed run's final
 `--out` state and `--events` stream against a straight-through baseline
 run *on the same engine* (`_EXPECT_IDENTICAL_EVENTS` scenarios, where
 nothing is skipped on resume so the two streams have no reason to
