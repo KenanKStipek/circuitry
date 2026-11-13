@@ -501,6 +501,38 @@ def test_the_legacy_positional_form_is_still_a_working_alias_for_electricity(
     )
 
 
+def test_label_flag_overrides_the_document_and_is_not_rendered_on_either_engine(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """`--label TEXT` (#752) is `cof run`/`electricity run`-only: literal
+    text, never rendered, that wins over the document's own top-level
+    `label:` template -- compared through `runtime.last_run.label` in
+    each engine's own `--out`, since this orchestration has no `--out`
+    of its own on either (the state JSON on stdout carries it too)."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    labelled_orchestration = "label: 'from the document'\n" + ORCHESTRATION
+    args = [
+        "orchestration.yml", "--config", "config.json",
+        "--label", "{{input.ticket}}",
+    ]
+
+    cof_result = _run_cof(
+        tmp_path / "cof_case", home_dir, args=args, orchestration=labelled_orchestration
+    )
+    electricity_result = _run_electricity(
+        electricity_binary, tmp_path / "electricity_case", home_dir, args=args,
+        orchestration=labelled_orchestration,
+    )
+
+    assert cof_result.returncode == 0, cof_result.stderr
+    assert electricity_result.returncode == 0, electricity_result.stderr
+    cof_state = json.loads(cof_result.stdout)
+    electricity_state = json.loads(electricity_result.stdout)
+    assert cof_state["runtime"]["last_run"]["label"] == "{{input.ticket}}"
+    assert electricity_state["runtime"]["last_run"]["label"] == "{{input.ticket}}"
+
+
 def test_a_document_inside_the_library_cache_path_is_gated_on_both_engines(
     tmp_path: Path, electricity_binary: Path,
 ) -> None:

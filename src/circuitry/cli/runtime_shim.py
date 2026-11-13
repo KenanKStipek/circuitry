@@ -31,9 +31,15 @@ from ..core.compiler import (
 )
 from ..core.concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from ..core.concurrency import RunConcurrencyLimiter
-from ..core.document_check import structural_errors, unknown_key_warnings
+from ..core.document_check import (
+    label_syntax_error,
+    structural_errors,
+    unknown_key_warnings,
+)
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.label import clean_label as _clean_label
+from ..core.label import render_document_label
 from ..core.parsed_stdout import parsed_stdout_errors
 from ..core.prompt_record import prompt_sent_errors
 from ..core.report import build_report_payload
@@ -189,6 +195,13 @@ class RunRequest:
     routing_override: bool | None = None
     decompose_override: bool | None = None
     split_override: bool | None = None
+    # ``--label TEXT`` (#752): literal text, never rendered, that wins over
+    # the document's own top-level ``label:`` template. Cleaned the same way
+    # either way (``core.label.clean_label``) before it reaches ``--events``'
+    # ``run_start`` or ``runtime.last_run.label`` — both omit the key with no
+    # label, the same whether that's because neither was given or because
+    # cleaning emptied one out.
+    label_override: str | None = None
     profile_name: str | None = None
     # A recorded `runtime.effective_settings.profile` mapping ({name, content})
     # to reconstruct and apply instead of discovering a profile file by name.
@@ -684,6 +697,25 @@ def run(req: RunRequest) -> RunResult:
             label="",
         )
 
+        # Run label (#752): rendered once, here, now that `input_ns` holds
+        # its final resolved values (declared `default:`s applied, `-e`/
+        # `--state` overrides merged, and — for `--resume` — the resumed
+        # run's own inputs). `--label` is literal text and always wins over
+        # the document's own; otherwise the document's top-level `label:`
+        # template renders against `{"input": ...}` only — nothing has run
+        # yet. A render failure warns once (`core.label`) and the run
+        # continues with no label; either way the result passes through
+        # the same cleaning before it reaches `--events`/`runtime.last_run`.
+        if req.label_override is not None:
+            run_label = _clean_label(req.label_override) or None
+        else:
+            run_label, label_warning = render_document_label(
+                orch.get("label") if isinstance(orch, dict) else None,
+                {"input": input_ns},
+            )
+            if label_warning is not None:
+                warnings.append(label_warning)
+
         state.setdefault("runtime", {})
         run_id = str(uuid4())
         # Assigned here, immediately, rather than right before execution:
@@ -729,6 +761,10 @@ def run(req: RunRequest) -> RunResult:
             "started_at": _now_iso(),
             "completed_at": None,
         }
+        if run_label:
+            # Absent entirely with no label, so an existing --out/state file
+            # with no `label:`/`--label` is byte-for-byte unchanged (#752).
+            state["runtime"]["last_run"]["label"] = run_label
 
         # Redact credential-bearing fields before embedding in state, since
         # state is serialized to --out, --json, --live-state, and last-run.json.
@@ -981,6 +1017,7 @@ def run(req: RunRequest) -> RunResult:
             event_log.run_start(
                 run_id=run_id,
                 orchestration=req.orchestration_path.name,
+                label=run_label,
                 config=req.config_path.name if req.config_path is not None else None,
             )
         if req.state_observer is not None:
@@ -1488,6 +1525,14 @@ def validate(
             return {
                 "ok": False,
                 "errors": document_errors,
+                "warnings": lint_warnings,
+            }
+
+        label_error = label_syntax_error(orch)
+        if label_error is not None:
+            return {
+                "ok": False,
+                "errors": [label_error],
                 "warnings": lint_warnings,
             }
 

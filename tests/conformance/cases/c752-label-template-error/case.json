@@ -1,0 +1,7 @@
+{
+  "spec_case": "#752",
+  "description": "A malformed `label:` template (an unclosed `{{#open` section) is a `cof check` error, but a run that reaches it anyway (this document was never checked first) prints exactly one warning and still succeeds with no label, the same as any other render failure.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "compare_run_warnings": true
+}

@@ -16,6 +16,7 @@ use std::io::IsTerminal as _;
 use std::path::Path;
 
 pub mod events;
+pub mod label;
 pub mod live_state;
 pub mod out;
 pub mod preflight;
@@ -1553,8 +1554,12 @@ pub async fn run_orchestration_with_config(
     // key the final namespace doesn't carry forward,
     // e.g. an optional input whose seed was `null`, must not survive
     // from the step-5 reseed above).
+    let input_namespace_for_label: Value;
     match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
-        Ok(namespace) => state::replace_input_namespace(&store, namespace),
+        Ok(namespace) => {
+            input_namespace_for_label = Value::Dict(namespace.clone());
+            state::replace_input_namespace(&store, namespace);
+        }
         Err(err) => {
             // Step 10 itself failed partway
             // through -- mirror Python's own in-place mutation of
@@ -1611,6 +1616,39 @@ pub async fn run_orchestration_with_config(
         Value::Str("_timestamp".to_string()),
         Value::Str(timestamp),
     );
+
+    // Run label (#752): rendered once, here, now that `input_namespace_
+    // for_label` holds its final resolved values (the same namespace
+    // step 10 above just wrote into the store). `--label` is literal
+    // text and always wins over the document's own; otherwise the
+    // document's top-level `label:` template renders against
+    // `{"input": ...}` only -- nothing has run yet. A render failure
+    // warns once (`crate::label`) and the run continues with no label;
+    // either way the result passes through the same cleaning before it
+    // reaches `--events`/`runtime.last_run`.
+    let run_label = match req.label_override.as_deref() {
+        Some(override_text) => {
+            let cleaned = label::clean_label(override_text);
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            }
+        }
+        None => {
+            let label_template = loaded
+                .document
+                .as_dict()
+                .and_then(|d| d.get(&Value::Str("label".to_string())))
+                .and_then(|v| v.as_str());
+            let (label_value, label_warning) =
+                label::render_document_label(label_template, input_namespace_for_label);
+            if let Some(warning) = label_warning {
+                warnings.push(warning);
+            }
+            label_value
+        }
+    };
 
     // Step 12 (part 2): runtime.last_run -- `document_hash` is computed
     // independently of compilation, exactly as `cli/runtime_shim.py::run`
@@ -1669,6 +1707,15 @@ pub async fn run_orchestration_with_config(
         Value::Str("completed_at".to_string()),
         Value::None,
     );
+    if let Some(label_text) = &run_label {
+        // Absent entirely with no label, so an existing --out/state file
+        // with no `label:`/`--label` is byte-for-byte unchanged (#752).
+        store.set_leaf(
+            &last_run_node,
+            Value::Str("label".to_string()),
+            Value::Str(label_text.clone()),
+        );
+    }
 
     // Step 13: runtime.effective_settings (redacted, limiter dropped --
     // there never was one in this Value to begin with, unlike Python's
@@ -2091,6 +2138,7 @@ pub async fn run_orchestration_with_config(
                 .as_ref()
                 .and_then(|path| path.file_name())
                 .and_then(|n| n.to_str()),
+            run_label.as_deref(),
         );
         log
     });

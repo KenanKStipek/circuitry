@@ -166,7 +166,13 @@ impl EventLog {
         }
     }
 
-    pub fn run_start(&self, run_id: &str, orchestration: &str, config: Option<&str>) {
+    pub fn run_start(
+        &self,
+        run_id: &str,
+        orchestration: &str,
+        config: Option<&str>,
+        label: Option<&str>,
+    ) {
         if self.disabled.get() {
             return;
         }
@@ -189,6 +195,15 @@ impl EventLog {
             Value::Str("orchestration".to_string()),
             Value::Str(orchestration.to_string()),
         );
+        // Present only when this run has one (#752), right after
+        // `orchestration` -- an unlabelled run's `run_start` line is
+        // byte-for-byte what it was before this field existed.
+        if let Some(label) = label.filter(|l| !l.is_empty()) {
+            payload.insert(
+                Value::Str("label".to_string()),
+                Value::Str(label.to_string()),
+            );
+        }
         payload.insert(
             Value::Str("config".to_string()),
             config
@@ -532,7 +547,7 @@ mod tests {
     fn run_start_and_run_end_write_matching_lines() {
         let path = temp_path("basic");
         let log = EventLog::open(&path);
-        log.run_start("run-1", "doc.yml", None);
+        log.run_start("run-1", "doc.yml", None, None);
         log.run_end(true, None, None);
         assert!(!log.close());
         let lines = read_lines(&path);
@@ -567,7 +582,7 @@ mod tests {
     fn run_start_names_the_config_file() {
         let path = temp_path("run_start_config");
         let log = EventLog::open(&path);
-        log.run_start("run-1", "doc.yml", Some("config.json"));
+        log.run_start("run-1", "doc.yml", Some("config.json"), None);
         assert!(!log.close());
         let lines = read_lines(&path);
         assert_eq!(
@@ -581,6 +596,62 @@ mod tests {
         assert!(raw.lines().next().unwrap().contains(
             r#""orchestration":"doc.yml","config":"config.json","engine":"electricity "#
         ));
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_start_omits_label_when_absent() {
+        // No `label` argument at all carries no `label` key -- an
+        // unlabelled run's line is unchanged by this field existing
+        // (#752).
+        let path = temp_path("run_start_no_label");
+        let log = EventLog::open(&path);
+        log.run_start("run-1", "doc.yml", None, None);
+        log.close();
+        let lines = read_lines(&path);
+        assert!(
+            !lines[0]
+                .as_dict()
+                .unwrap()
+                .contains_key(&Value::Str("label".to_string()))
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_start_carries_label_right_after_orchestration() {
+        let path = temp_path("run_start_label");
+        let log = EventLog::open(&path);
+        log.run_start("run-1", "doc.yml", None, Some("ticket 42"));
+        log.close();
+        let lines = read_lines(&path);
+        let payload = lines[0].as_dict().unwrap();
+        assert_eq!(
+            payload.get(&Value::Str("label".to_string())),
+            Some(&Value::Str("ticket 42".to_string()))
+        );
+        let keys: Vec<&str> = payload.keys().map(|k| k.as_str().unwrap()).collect();
+        let orchestration_idx = keys.iter().position(|k| *k == "orchestration").unwrap();
+        let label_idx = keys.iter().position(|k| *k == "label").unwrap();
+        let config_idx = keys.iter().position(|k| *k == "config").unwrap();
+        assert_eq!(label_idx, orchestration_idx + 1);
+        assert_eq!(config_idx, label_idx + 1);
+        fs::remove_file(&path).unwrap();
+    }
+
+    #[test]
+    fn run_start_treats_an_empty_label_as_absent() {
+        let path = temp_path("run_start_empty_label");
+        let log = EventLog::open(&path);
+        log.run_start("run-1", "doc.yml", None, Some(""));
+        log.close();
+        let lines = read_lines(&path);
+        assert!(
+            !lines[0]
+                .as_dict()
+                .unwrap()
+                .contains_key(&Value::Str("label".to_string()))
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -785,7 +856,7 @@ mod tests {
     #[test]
     fn a_write_failure_disables_further_writes_without_panicking() {
         let log = EventLog::open(Path::new("/this/path/does/not/exist/events.jsonl"));
-        log.run_start("run-1", "doc.yml", None);
+        log.run_start("run-1", "doc.yml", None, None);
         assert!(log.close());
     }
 

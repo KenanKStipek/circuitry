@@ -103,6 +103,7 @@ async fn run_case(case: &CorpusCase) -> Ran {
         allow_capabilities: Vec::new(),
         config_warnings: Vec::new(),
         adapter_override: None,
+        label_override: None,
         armed: true,
     };
     let token = CancellationToken::new();

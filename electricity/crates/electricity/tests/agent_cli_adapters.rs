@@ -71,6 +71,7 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         allow_capabilities: Vec::new(),
         config_warnings: Vec::new(),
         adapter_override: None,
+        label_override: None,
         armed: true,
     }
 }

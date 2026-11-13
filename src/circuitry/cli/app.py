@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+from ..core.label import clean_label
 from ..core.prompt_compose import document_content_digest
 from ..core.resume import _legacy_document_sha256
 from ..core.saved_state import dumps_saved_state
@@ -203,6 +204,20 @@ _LAST_RUN_PATH = LAST_RUN_PATH
 
 def _print_header(title: str) -> None:
     console.print(Panel.fit(title, border_style="cyan"))
+
+
+def _label_override_header_line(label: str) -> str | None:
+    """The run header's own ``--label`` line, or ``None`` to print nothing.
+
+    ``--label``'s text is never rendered as a template, but it is still
+    arbitrary user text reaching a Rich ``console.print`` call: cleaned the
+    same way the recorded label is, and escaped so a label like ``"[/x]"``
+    can't be read as closing markup (or any other tag Rich would act on).
+    """
+    cleaned = clean_label(label)
+    if not cleaned:
+        return None
+    return f"[bold]Label (override):[/bold] {escape(cleaned)}"
 
 
 def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
@@ -963,6 +978,19 @@ def run_cmd(
         None, "-e",
         help="Inline state variable (KEY=VALUE). Repeatable.",
     ),
+    label: str | None = typer.Option(
+        None, "--label",
+        help=(
+            "Literal text for this run's label, shown wherever a run's label "
+            "appears (e.g. --events' run_start, runtime.last_run.label). "
+            "Beats the document's own top-level label: template; never "
+            "rendered. Cleaned the same way either way: whitespace collapsed "
+            "to one space, control characters and escape sequences dropped, "
+            "trimmed, and cut at 64 characters; empty after cleaning means no "
+            "label. --resume re-renders the document's label from the same "
+            "inputs unless this is given."
+        ),
+    ),
     tail: bool = typer.Option(
         False, "--tail",
         help="Print only the final effect's value as plain text. Ideal for piping.",
@@ -1120,6 +1148,7 @@ def run_cmd(
         live_state = Path(stashed["live_state"]) if stashed.get("live_state") else None
         events = Path(stashed["events"]) if stashed.get("events") else None
         env_vars = stashed.get("env_vars")
+        label = stashed.get("label")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
         # The stash's own value wins when it has one (`cof run` persists it;
@@ -1285,15 +1314,21 @@ def run_cmd(
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
             console.print(f"[bold]Model (override):[/bold] {model}")
-        for label, value in (
+        for override_label, value in (
             ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
             ("Splitting", split),
         ):
             if value is not None:
-                console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
+                console.print(
+                    f"[bold]{override_label} (override):[/bold] {'on' if value else 'off'}"
+                )
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
         if resume:
             console.print(f"[bold]Resume:[/bold] {resume}{' (--force)' if force else ''}")
+        if label:
+            header_line = _label_override_header_line(label)
+            if header_line:
+                console.print(header_line)
 
     # Build initial state from --state file + -e overrides, or (--resume)
     # from the resolved resume source + -e overrides (the stashed env_vars,
@@ -1363,6 +1398,7 @@ def run_cmd(
         routing_override=routing,
         decompose_override=decompose,
         split_override=split,
+        label_override=label,
         effect_start_observer=effect_start_observer,
         report_observer=report_observer,
         decompose_out=decompose_out,
@@ -1431,6 +1467,7 @@ def run_cmd(
             "live_state": str(live_state) if live_state else None,
             "events": str(events) if events else None,
             "env_vars": redact_env_pairs(env_vars),
+            "label": label,
             "tail": tail,
             "skip_preflight": skip_preflight,
             "allow_capabilities": allow_capabilities,

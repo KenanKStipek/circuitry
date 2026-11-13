@@ -670,6 +670,7 @@ dependencies = [
  "electricity-config",
  "electricity-json",
  "electricity-redaction",
+ "electricity-template",
  "electricity-tools",
  "electricity-value",
  "electricity-vm",

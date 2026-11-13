@@ -31,6 +31,7 @@ Top-level fields of an orchestration YAML file:
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
 | `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
 | `prompts` | object | no | — | Declared prompts — named text any template in the document can splice in with `{{> name}}`. See [Prompt composition](#prompt-composition) |
+| `label` | string | no | — | Mustache template for this run's label, rendered once when the run starts, against `{{input.*}}` only — see [Labelling a Run](#labelling-a-run) |
 
 Other top-level keys: `description` (free text for readers of the file) and two that feed the run's configuration, `runtime:` and `plugins:` (below). Any other key is ignored, and `cof check` says so — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject). How much of `runtime:` and `plugins:` applies depends on how the document reached `cof`:
 
@@ -2402,6 +2403,35 @@ outer binding of the same name.
 
 ---
 
+## Labelling a Run
+
+A run can carry a label: a top-level `label:` Mustache template in the document, rendered once when the run starts, against a context holding only this run's resolved `input.*` — nothing has run yet. `--label "TEXT"` on `cof run` and `electricity run` is literal text, never rendered, that wins over the document's own:
+
+```yaml
+label: "ticket {{input.ticket}}"
+interface:
+  inputs:
+    ticket: {type: string, required: true}
+effects:
+  - type: tool
+    name: t
+    provider: json
+    params: {input: "1"}
+```
+
+```bash
+cof run triage.yml -e ticket=412                 # label: "ticket 412"
+cof run triage.yml -e ticket=412 --label "hotfix" # --label wins: "hotfix"
+```
+
+Either way, the result is cleaned the same way before it is shown anywhere: every whitespace run (line breaks and tabs included) collapses to one space; every control character and escape sequence (an ANSI colour code, an OSC title sequence, ...) is dropped; the result is trimmed and cut at 64 Unicode characters, with nothing appended; an empty result after cleaning means no label. A render failure — a malformed template that reached a run without `cof check` catching it first (below) — prints one warning on stderr and the run continues with no label, the same as every other render failure.
+
+`cof check` rejects a `label:` that isn't a string, and a `label:` whose Mustache syntax doesn't parse, both naming `label` — the same way it rejects every other malformed template, before a run ever starts. `cof run` itself only enforces the type (a non-string `label:` is a structural error, same as any other wrong-typed key); a syntax error that reaches `cof run` anyway degrades to the one warning above instead of failing the run, since a label is display text, not control flow.
+
+Where it shows up: `--events`' `run_start` line gains a `label` field, right after `orchestration`; `runtime.last_run.label` appears in `--out` and `--live-state`. Both are present **only** when the run actually has one, so an existing `--events`/state file with no label is unchanged. `cof run --resume` re-renders the document's label from the resumed run's own inputs, unless `--label` is given on the resuming invocation. Only the root document's `label:` counts — a `use` child's own `label:` is valid in its own file (`cof check` on it alone applies the same rules) but is never read, rendered, or surfaced when that document runs as a child.
+
+---
+
 ## Watching a Run (`cof run --events`)
 
 `cof run --events <file>` (also on `cof run-library`) writes a JSONL stream of
@@ -2428,7 +2458,8 @@ instant it starts, from whichever worker thread runs it:
 | `seq` | Strictly increasing in file order. |
 | `ts` | Wall-clock UTC, millisecond precision. |
 | `ev` | `run_start`, `dispatch`, `start`, `end`, `progress`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report`/`progress` existed still reads the rest of the stream fine. |
-| `config` | `run_start` only, between `orchestration` and `engine`: the `--config` file's name (its last path component), the same form `orchestration` already uses -- `--config some/dir/config.json` writes `"config.json"`, never the directory. `null` when the run was given no `--config` (config discovery can merge more than one file, so there is no single path to name). Always present. |
+| `config` | `run_start` only, between `orchestration` and `engine` — after `label` when the run has one. The `--config` file's name (its last path component), the same form `orchestration` already uses -- `--config some/dir/config.json` writes `"config.json"`, never the directory. `null` when the run was given no `--config` (config discovery can merge more than one file, so there is no single path to name). Always present. |
+| `label` | `run_start` only, right after `orchestration`, present only when the run has one — see [Labelling a Run](#labelling-a-run). Absent (never `null`) with no label. |
 | `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
 | `path` | The absolute state path, as in `--live-state`. |
 | `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is the true branch count: the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces — every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. Its `path` is always the absolute path its own `start`/`end` events would use — for a named loop, its own child path (`prime.outer.iter_0.inner` for a tree loop `inner` nested inside a tree loop `outer`'s pass `iter_0`); for an **unnamed** tree loop, which has no name of its own to carry a path, the absolute path of whichever container directly encloses its passes instead (the document root `prime`, a named ancestor, or a named loop's own pass node `prime.outer.iter_0`). Two unnamed tree loops dispatching one after another, at the same nesting depth, report that same path. A tree loop inside a `use` child's own document composes the same way: its `path` nests under the `use` effect's own absolute path exactly like its `start`/`end` events do (`prime.sub.fan` for a loop `fan` at the top of a child run as `sub`), never the child's own unnamespaced `prime.fan`. |
