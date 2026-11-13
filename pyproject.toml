@@ -333,4 +333,37 @@ circuitry = [
     # file silently stays out of the wheel (#346).
     "bundled/examples/.env.example",
     "bundled/examples/config.example.json",
+    "bundled/man/man1/*.1",
+]
+
+# `cof`'s own man pages (issue #764): installed into share/man/man1 so a
+# venv or pipx install's bin on PATH also has man cof find them (MANPATH
+# on most systems includes <prefix>/share/man next to <prefix>/bin). The
+# electricity/osi pages travel with their own release archives instead
+# (RELEASING.md), not through this wheel.
+[tool.setuptools.data-files]
+"share/man/man1" = [
+    "man/man1/cof.1",
+    "man/man1/cof-check.1",
+    "man/man1/cof-doctor.1",
+    "man/man1/cof-eject.1",
+    "man/man1/cof-fetch.1",
+    "man/man1/cof-gen.1",
+    "man/man1/cof-info.1",
+    "man/man1/cof-init.1",
+    "man/man1/cof-inspect.1",
+    "man/man1/cof-library.1",
+    "man/man1/cof-list.1",
+    "man/man1/cof-man.1",
+    "man/man1/cof-mcp.1",
+    "man/man1/cof-run.1",
+    "man/man1/cof-run-library.1",
+    "man/man1/cof-score.1",
+    "man/man1/cof-setup.1",
+    "man/man1/cof-trust.1",
+    "man/man1/cof-tui.1",
+    "man/man1/cof-untrust.1",
+    "man/man1/cof-validate.1",
+    "man/man1/cof-version.1",
+    "man/man1/cof-wizard.1",
 ]

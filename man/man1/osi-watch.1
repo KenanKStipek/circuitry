@@ -1,0 +1,167 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH OSI-WATCH 1 2026-11-13 "osi watch "
+.SH NAME
+osi watch \- Attaches to a Circuitry orchestration run already in progress, or
+watches its finished state.
+.SH SYNOPSIS
+\fBosi watch\fR [\fB\-\-plan\fR] [\fB\-\-config\fR] [\fB\-e \fR]
+[\fB\-\-log\fR] [\fB\-\-glance\fR] [\fB\-\-once\fR] [\fB\-\-no\-animation\fR]
+[\fB\-\-theme\fR] [\fB\-\-no\-history\fR] [\fB\-h\fR|\fB\-\-help\fR]
+<\fITARGET\fR>
+.SH DESCRIPTION
+Attaches to a Circuitry orchestration run already in progress, or watches its
+finished state.
+.SH OPTIONS
+.TP
+\fB\-\-plan\fR \fI<doc.yml>\fR
+Compiles this document into a plan, the same one a live `osi <doc>` run of it
+would have from the start \-\- without it, container detection (an `if`/loop
+vs. a leaf) can briefly fall back to a snapshot it hasn\*(Aqt seen yet instead
+.TP
+\fB\-\-config\fR \fI<config.json>\fR
+The config `\-\-plan`\*(Aqs own document should be checked against \-\- the
+same `config.json` the watched run itself used, if any. Needed for a document
+whose plan depends on a config\-defined `concurrency_groups`/`runtime:` block;
+without it, `\-\-plan` still compiles, just without that merge
+.TP
+\fB\-e\fR \fI<key=value>\fR
+`\-e key=value` inputs `\-\-plan`\*(Aqs own document needs to compile \-\- the
+same ones the watched run itself was given, if any
+.TP
+\fB\-\-log\fR
+Forces the plain\-text stream even on a TTY \-\- the TUI\*(Aqs own default
+otherwise, the same split `osi <doc>` makes
+.TP
+\fB\-\-glance\fR
+Shows only the header line, without the tabs, rewritten in place about once a
+second \-\- for a tmux status line. Can\*(Aqt be combined with `\-\-log`
+.TP
+\fB\-\-once\fR
+With `\-\-glance`: prints the current line once and exits 0, rather than
+watching \-\- for a tmux status line that runs its own command on a timer
+instead of leaving one process attached
+.TP
+\fB\-\-no\-animation\fR
+Switches off the scope icon\*(Aqs own trace: the header draws a still frame in
+its place instead
+.TP
+\fB\-\-theme\fR \fI<THEME>\fR
+The colour theme. `OSI_THEME` is used when this isn\*(Aqt given; `terminal`
+(today\*(Aqs look) otherwise
+
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+terminal
+.IP \(bu 2
+dracula
+.IP \(bu 2
+nord
+.IP \(bu 2
+solarized\-dark
+.IP \(bu 2
+solarized\-light
+.IP \(bu 2
+gruvbox\-dark
+.IP \(bu 2
+gruvbox\-light
+.IP \(bu 2
+catppuccin\-mocha
+.IP \(bu 2
+catppuccin\-latte
+.IP \(bu 2
+tokyo\-night
+.IP \(bu 2
+one\-dark
+.RE
+.TP
+\fB\-\-no\-history\fR
+Turns run history off \-\- see `osi \-\-help`\*(Aqs own `\-\-no\-history`
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help
+.TP
+<\fITARGET\fR>
+A run directory, or a `state.live.json` file directly
+.SH EXAMPLES
+.TP
+.B osi watch ./run
+Attaches to the run directory a prior osi orchestration.yml --out-dir ./run
+launch wrote.
+.TP
+.B osi watch ./run/state.live.json --plan orchestration.yml
+Watches a live state file directly, compiling orchestration.yml into the same
+plan the live run started from.
+.TP
+.B osi watch ./run --glance --once
+Prints the current header line for a tmux status line and exits, instead of
+watching.
+.SH ENVIRONMENT
+.TP
+.B OSI_THEME
+The colour theme, when --theme isn't given. terminal (today's look) otherwise.
+.TP
+.B OSI_HISTORY
+OSI_HISTORY=off turns run history off, the same as --no-history: nothing is
+read or written, and no history directory is created.
+.TP
+.B OSI_HISTORY_DIR
+Overrides osi's own history directory (see FILES below).
+.TP
+.B OSI_RUNS_DIR
+Overrides osi's own run registry directory (see FILES below).
+.TP
+.B OSI_PROCESS_SCAN
+OSI_PROCESS_SCAN=0 limits bare osi's own discovery (no orchestration, no TTY,
+or --log) to the run registry, skipping the process scan and any
+state.live.json in the current directory.
+.TP
+.B XDG_STATE_HOME
+The base osi's own history and run registry directories are rooted under, when
+OSI_HISTORY_DIR/OSI_RUNS_DIR aren't set.
+.TP
+.B XDG_RUNTIME_DIR
+Preferred over XDG_STATE_HOME for the run registry alone (a live run's own pid
+file), when it's set.
+.TP
+.B CI
+Forces the plain-text stream, the same as --log.
+.SH FILES
+.TP
+.I ~/.local/state/circuitry/osi/history/
+Per-document run history (issue #649): one record per finished run, read back
+for the Recent Runs table and ETA estimates. OSI_HISTORY_DIR overrides this
+directory; OSI_HISTORY=off or --no-history disables it entirely.
+.TP
+.I ~/.local/state/circuitry/osi/runs/
+The run registry: one file per run osi launched or is watching, used by bare
+osi's own discovery and pruned once a run's pid is no longer alive.
+OSI_RUNS_DIR overrides this directory; $XDG_RUNTIME_DIR/circuitry/osi/runs is
+tried first when set.
+.SH EXIT STATUS
+.TP
+.B 0
+The watched or launched run finished without error.
+.TP
+.B 1
+The run finished with an error, or osi could not start or attach to it at all.
+.TP
+.B 2
+A usage error -- an unrecognized option, a missing required argument, or an
+unknown osi man page.
+.TP
+.B 129
+The run ended on SIGHUP.
+.TP
+.B 130
+The run ended on SIGINT (Ctrl-C).
+.TP
+.B 143
+The run ended on SIGTERM.
+.SH SEE ALSO
+.BR osi (1),
+.BR osi\-watch (1),
+.BR cof (1),
+.BR cof\-run (1),
+.BR electricity (1)

@@ -1,0 +1,36 @@
+.TH COF-EJECT 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-eject \- Copy a bundled orchestration to the current directory for editing
+.SH SYNOPSIS
+.nf
+cof eject [OPTIONS] {name}
+.fi
+.SH DESCRIPTION
+Copies a bundled orchestration's own file into the current directory, for
+local editing -- the bundled copy itself is never writable.
+.SH OPTIONS
+.TP
+.B name
+NAME Name of the orchestration to eject.
+.TP
+.B --out, -o
+OUT Output path. Defaults to ./<filename>.
+.TP
+.B --config, -c
+CONFIG Path to config JSON (or use CIRCUITRY_CONFIG).
+.SH EXAMPLES
+.TP
+.B cof eject hello-world
+Copies the bundled hello-world.yml here.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or the input was invalid.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-info(1)\fR, \fBcof-run(1)\fR

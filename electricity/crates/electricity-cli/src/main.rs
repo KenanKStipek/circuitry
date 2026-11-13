@@ -37,7 +37,7 @@
 //! here, #727's scope) stand in for it, so Click never raises a usage
 //! error for its absence either.
 
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -55,6 +55,7 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
                     [--out state.json] [--live-state state.json] [--events events.jsonl]
                     [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]
                     [--pretty] [--profile <path>] [--state state.json] [--resume MODE] [--force]
+       electricity man [run] [--roff]
 
 electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents
 only (persistence and runtime plugins are refused with a
@@ -72,6 +73,10 @@ and the same meaning for --allow-capabilities/--adapter/--quiet. The
 legacy `electricity <config.json> <doc>` form (config always explicit,
 never discovered) keeps working as an alias; --profile/--pretty/--dump-ir
 are electricity-only additions, available under either form.
+
+`electricity man [run]` shows the electricity(1) or electricity-run(1)
+man page through `man` on a terminal, or prints its roff when piped or
+given --roff.
 
 Options:
   -V, --version       Print the version and exit. Legacy form only -- `cof
@@ -219,6 +224,498 @@ enum Action {
     /// dependent wrapping -- DESIGN.md's own row) that this plain
     /// frame approximates rather than reproduces byte for byte.
     RunUsageError(String),
+    /// `electricity man [run] [--roff]` (issue #764): shows the named
+    /// page (legacy form, or `run`) through `man` on a terminal,
+    /// prints its roff when piped or given `--roff`.
+    Man {
+        page: ManPage,
+        roff: bool,
+    },
+    /// `electricity man <anything else>` -- exit 2, listing the pages
+    /// `electricity man` actually has.
+    ManUsageError(String),
+    /// Hidden, generator-only: `electricity --dump-option-table`
+    /// prints [`OPTION_TABLE`] as tab-separated lines, so
+    /// `scripts/generate-man-pages.py` builds the OPTIONS section of
+    /// `electricity(1)`/`electricity-run(1)` from the same table
+    /// `USAGE`'s own Options list is checked against (see
+    /// `option_table_names_match_usage_flags` below) -- never shown
+    /// in `--help`.
+    DumpOptionTable,
+}
+
+/// The two electricity pages `electricity man` knows (issue #764).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManPage {
+    Electricity,
+    ElectricityRun,
+}
+
+/// `OPTION_TABLE`'s own *scope*: which of electricity's two forms an
+/// option applies to -- the same split [`KNOWN_FLAGS`] (legacy) and
+/// [`RUN_FLAGS`] (`run`) already make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Legacy,
+    Run,
+    Both,
+}
+
+/// One row of electricity's own option table (issue #764) -- the
+/// structured source `electricity man`'s OPTIONS sections are built
+/// from. Kept in sync with [`USAGE`]'s own hand-wrapped Options list by
+/// `option_table_names_match_usage_flags` (a test, not a shared
+/// renderer: `USAGE`'s column alignment predates this table and the
+/// two are not literally the same string), and with
+/// [`KNOWN_FLAGS`]/[`RUN_FLAGS`] by `option_table_covers_every_known_flag`.
+struct OptionRow {
+    flags: &'static str,
+    metavar: Option<&'static str>,
+    scope: Scope,
+    help: &'static str,
+}
+
+const OPTION_TABLE: &[OptionRow] = &[
+    OptionRow {
+        flags: "-V, --version",
+        metavar: None,
+        scope: Scope::Legacy,
+        help: "Print the version and exit. Legacy form only.",
+    },
+    OptionRow {
+        flags: "-h",
+        metavar: None,
+        scope: Scope::Legacy,
+        help: "Print this message and exit. Legacy form only; use the long --help under run.",
+    },
+    OptionRow {
+        flags: "--help",
+        metavar: None,
+        scope: Scope::Both,
+        help: "Print this message and exit.",
+    },
+    OptionRow {
+        flags: "-e",
+        metavar: Some("key=value"),
+        scope: Scope::Both,
+        help: "Pass an orchestration input, checked against its declared interface.inputs. \
+               Repeatable; a later -e for the same key wins.",
+    },
+    OptionRow {
+        flags: "--config, -c",
+        metavar: Some("path"),
+        scope: Scope::Run,
+        help: "Path to config JSON, or CIRCUITRY_CONFIG, or the same discovery cof run uses. \
+               The legacy form's first positional is this value, always explicit; --config/-c \
+               is rejected there as redundant.",
+    },
+    OptionRow {
+        flags: "--out, -o",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Write the final state to <path> instead of stdout. The -o alias is run only.",
+    },
+    OptionRow {
+        flags: "--pretty",
+        metavar: None,
+        scope: Scope::Both,
+        help: "Sort state keys and indent by 2 spaces in the final state, whether printed \
+               to stdout or written to --out.",
+    },
+    OptionRow {
+        flags: "--live-state",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Mirror the running state to <path> as it changes.",
+    },
+    OptionRow {
+        flags: "--events",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Write a JSONL event stream to <path>.",
+    },
+    OptionRow {
+        flags: "--allow-capabilities",
+        metavar: Some("cap,cap"),
+        scope: Scope::Both,
+        help: "Comma-separated capabilities to pre-approve for this run.",
+    },
+    OptionRow {
+        flags: "--adapter",
+        metavar: Some("name"),
+        scope: Scope::Both,
+        help: "This run's default adapter, beating a loaded --profile, the orchestration \
+               and the config.",
+    },
+    OptionRow {
+        flags: "--label",
+        metavar: Some("text"),
+        scope: Scope::Run,
+        help: "Literal text for this run's label, beating the document's own top-level \
+               label: template. Never rendered.",
+    },
+    OptionRow {
+        flags: "--quiet",
+        metavar: None,
+        scope: Scope::Both,
+        help: "Suppress non-essential output (accepted for parity).",
+    },
+    OptionRow {
+        flags: "--profile",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Load a profile (adapter/model/inputs/persistence overrides, routing pins \
+               and provider denials) from an explicit path -- no name discovery.",
+    },
+    OptionRow {
+        flags: "--dump-ir",
+        metavar: None,
+        scope: Scope::Legacy,
+        help: "Print the compiled IR as JSON and exit. Unstable: a debugging aid that can \
+               change in any release. Legacy form only.",
+    },
+    OptionRow {
+        flags: "--state, -s",
+        metavar: Some("path"),
+        scope: Scope::Run,
+        help: "Resume from this saved state file -- every top-level key it carries, not \
+               just input. A named effect whose saved node already finished without error \
+               is skipped and reused only when --resume is also given.",
+    },
+    OptionRow {
+        flags: "--resume",
+        metavar: Some("mode"),
+        scope: Scope::Run,
+        help: "Combined with --state <file>: skip a named effect whose saved node already \
+               finished without error. Refuses a document that changed since the saved run \
+               unless --force.",
+    },
+    OptionRow {
+        flags: "--force",
+        metavar: None,
+        scope: Scope::Run,
+        help: "With --resume, continue even though the orchestration's content changed \
+               since the saved run (or it carries no recorded digest at all).",
+    },
+];
+
+/// [`OPTION_TABLE`] as tab-separated lines (`scope\tflags\tmetavar\thelp`,
+/// metavar empty when there isn't one) -- `--dump-option-table`'s own
+/// output, and `scripts/generate-man-pages.py`'s only electricity-
+/// specific parsing.
+fn dump_option_table() -> String {
+    let mut out = String::new();
+    for row in OPTION_TABLE {
+        let scope = match row.scope {
+            Scope::Legacy => "legacy",
+            Scope::Run => "run",
+            Scope::Both => "both",
+        };
+        out.push_str(scope);
+        out.push('\t');
+        out.push_str(row.flags);
+        out.push('\t');
+        out.push_str(row.metavar.unwrap_or(""));
+        out.push('\t');
+        out.push_str(row.help);
+        out.push('\n');
+    }
+    out
+}
+
+/// The hand-written portion of [`USAGE`]'s own text -- everything
+/// between the usage lines and `Options:` -- reused verbatim as both
+/// pages' own DESCRIPTION (issue #764): it already describes what
+/// electricity runs/refuses and how `run`'s config discovery works,
+/// so repeating it by hand in a second place could only drift from
+/// `--help`'s own copy.
+fn usage_description() -> &'static str {
+    let before_options = USAGE
+        .split("\nOptions:\n")
+        .next()
+        .expect("USAGE has an Options: section");
+    let (_first_paragraph, rest) = before_options
+        .split_once("\n\n")
+        .expect("USAGE's usage lines are followed by a blank line");
+    rest.trim_end()
+}
+
+/// [`USAGE`]'s own usage-lines paragraph (issue #764) -- every form
+/// `electricity` accepts, reused verbatim as `electricity(1)`'s own
+/// SYNOPSIS.
+fn usage_synopsis() -> &'static str {
+    USAGE
+        .split("\n\n")
+        .next()
+        .expect("USAGE starts with its usage lines")
+        .trim_start_matches("Usage: ")
+}
+
+/// Just the `electricity run ...` lines of [`usage_synopsis`] (issue
+/// #764) -- `electricity-run(1)`'s own SYNOPSIS, a subset of the same
+/// text rather than a second copy of it.
+fn run_usage_synopsis() -> String {
+    usage_synopsis()
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("electricity run"))
+        .take_while(|line| !line.trim_start().starts_with("electricity man"))
+        .map(|line| line.trim_start())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Word-wraps *text* to at most *width* columns (issue #764): roff
+/// fills text itself when rendered, but `mandoc -Tlint`/`groff -ww`
+/// also lint the *source* file's own line lengths, so every rendered
+/// body needs wrapping before it reaches the page, not just the
+/// terminal.
+fn wrap_width(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut line_len = 0usize;
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if line_len == 0 {
+            out.push_str(word);
+            line_len = word_len;
+        } else if line_len + 1 + word_len > width {
+            out.push('\n');
+            out.push_str(word);
+            line_len = word_len;
+        } else {
+            out.push(' ');
+            out.push_str(word);
+            line_len += 1 + word_len;
+        }
+    }
+    out
+}
+
+/// Wraps each `\n\n`-separated paragraph of *text* independently
+/// (issue #764), rejoining them with `.PP` -- `-man`'s own paragraph
+/// break, since a blank input line alone is not one.
+fn wrap_paragraphs(text: &str, width: usize) -> String {
+    text.split("\n\n")
+        .map(|p| wrap_width(p, width))
+        .collect::<Vec<_>>()
+        .join("\n.PP\n")
+}
+
+const MAN_WIDTH: usize = 78;
+
+/// A fixed `.TH` date (issue #764): never the build date, so
+/// `electricity man`'s output -- and `man/man1/electricity*.1` --
+/// don't change on every build. Bumped only when a page's own content
+/// changes enough to want a newer date shown.
+const MAN_PAGE_DATE: &str = "2026-11-13";
+
+/// Renders [`OPTION_TABLE`] as a `.TP`-tagged OPTIONS section (issue
+/// #764), keeping only the rows *scope_ok* allows -- `electricity(1)`
+/// wants legacy-or-both; `electricity-run(1)` wants run-or-both.
+fn render_options_section(scope_ok: fn(Scope) -> bool) -> String {
+    let mut out = String::new();
+    for row in OPTION_TABLE {
+        if !scope_ok(row.scope) {
+            continue;
+        }
+        out.push_str(".TP\n.B ");
+        out.push_str(row.flags);
+        out.push('\n');
+        let body = match row.metavar {
+            Some(metavar) => format!("\\fI{metavar}\\fR {}", row.help),
+            None => row.help.to_string(),
+        };
+        out.push_str(&wrap_width(&body, MAN_WIDTH));
+        out.push('\n');
+    }
+    out
+}
+
+/// Renders a `.TP` section from (heading, body) rows (issue #764):
+/// *bold_heading* picks `.B` (a flag/exit code/env var) over `.I` (a
+/// file path).
+fn render_tp_section(rows: &[(&str, &str)], bold_heading: bool) -> String {
+    let macro_ = if bold_heading { ".B" } else { ".I" };
+    let mut out = String::new();
+    for (heading, body) in rows {
+        out.push_str(".TP\n");
+        out.push_str(macro_);
+        out.push(' ');
+        out.push_str(heading);
+        out.push('\n');
+        out.push_str(&wrap_width(body, MAN_WIDTH));
+        out.push('\n');
+    }
+    out
+}
+
+const ELECTRICITY_EXAMPLES: &[(&str, &str)] = &[
+    (
+        "electricity config.json orchestration.yml -e name=world --pretty",
+        "Runs a document directly, with one input, and a sorted/indented final \
+         state on stdout.",
+    ),
+    (
+        "electricity run orchestration.yml --out state.json",
+        "Runs a document through the same config discovery and options cof run \
+         uses, writing the final state to a file instead of stdout.",
+    ),
+    (
+        "electricity run orchestration.yml --state state.json --resume continue",
+        "Resumes a previous run from its saved state, skipping any named effect \
+         that already finished without error.",
+    ),
+];
+
+const ELECTRICITY_ENVIRONMENT: &[(&str, &str)] = &[(
+    "CIRCUITRY_CONFIG",
+    "A config JSON path, for electricity run's own discovery (--config takes \
+     priority over it; a trusted project config and then the global config \
+     are tried after it). The legacy form's first positional is always \
+     explicit and never consults this variable.",
+)];
+
+const ELECTRICITY_FILES: &[(&str, &str)] = &[
+    (
+        "~/.config/circuitry/config.json",
+        "The global config, the last layer electricity run's own discovery \
+         tries.",
+    ),
+    (
+        "~/.config/circuitry/.env",
+        "Private environment variables, loaded before config resolution (the \
+         same file cof setup writes).",
+    ),
+    (
+        "~/.config/circuitry/trusted.json",
+        "Project configs trusted by cof trust; electricity run's own discovery \
+         consults it the same way cof run does.",
+    ),
+    (
+        "./circuitry.config.json, ./config.json",
+        "A project config in the working directory, used only once trusted.",
+    ),
+];
+
+const ELECTRICITY_EXIT_STATUS: &[(&str, &str)] = &[
+    ("0", "Success."),
+    (
+        "1",
+        "The run failed, the orchestration was not found, or the config could \
+         not be read.",
+    ),
+    (
+        "2",
+        "A usage error -- an unrecognized option, a missing required argument, \
+         or an unknown electricity man page.",
+    ),
+    ("129", "The run was interrupted by SIGHUP."),
+    ("130", "The run was interrupted by SIGINT (Ctrl-C)."),
+    ("143", "The run was interrupted by SIGTERM."),
+];
+
+const ELECTRICITY_SEE_ALSO: &str = r".BR electricity (1),
+.BR electricity\-run (1),
+.BR cof (1),
+.BR cof\-run (1),
+.BR osi (1)
+";
+
+/// Assembles a full roff man page (issue #764) from [`USAGE`]'s own
+/// text (NAME/SYNOPSIS/DESCRIPTION) and [`OPTION_TABLE`] (OPTIONS),
+/// plus the hand-written sections above -- the same content
+/// `scripts/generate-man-pages.py` writes to `man/man1/electricity.1`/
+/// `electricity-run.1`, computed here directly so `electricity man`
+/// can never show a page the generator wouldn't also produce.
+fn build_man_page(page: ManPage) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let (title, name_line, synopsis, options) = match page {
+        ManPage::Electricity => (
+            "ELECTRICITY",
+            "electricity \\- run a Circuitry orchestration directly (preview)",
+            usage_synopsis().to_string(),
+            render_options_section(|s| matches!(s, Scope::Legacy | Scope::Both)),
+        ),
+        ManPage::ElectricityRun => (
+            "ELECTRICITY-RUN",
+            "electricity-run \\- run a Circuitry orchestration, cof run's own way (preview)",
+            run_usage_synopsis(),
+            render_options_section(|s| matches!(s, Scope::Run | Scope::Both)),
+        ),
+    };
+    format!(
+        ".TH {title} 1 \"{date}\" \"electricity {version}\" \"User Commands\"\n\
+         .SH NAME\n{name_line}\n\
+         .SH SYNOPSIS\n.nf\n{synopsis}\n.fi\n\
+         .SH DESCRIPTION\n{description}\n\
+         .SH OPTIONS\n{options}\
+         .SH EXAMPLES\n{examples}\
+         .SH ENVIRONMENT\n{environment}\
+         .SH FILES\n{files}\
+         .SH EXIT STATUS\n{exit_status}\
+         .SH SEE ALSO\n{see_also}",
+        date = MAN_PAGE_DATE,
+        description = wrap_paragraphs(usage_description(), MAN_WIDTH),
+        examples = render_tp_section(ELECTRICITY_EXAMPLES, true),
+        environment = render_tp_section(ELECTRICITY_ENVIRONMENT, true),
+        files = render_tp_section(ELECTRICITY_FILES, false),
+        exit_status = render_tp_section(ELECTRICITY_EXIT_STATUS, true),
+        see_also = ELECTRICITY_SEE_ALSO,
+    )
+}
+
+/// `electricity man [run] [--roff]` (issue #764) -- *args* is
+/// everything after the literal `man` token.
+fn classify_man(args: &[String]) -> Action {
+    let mut roff = false;
+    let mut page = ManPage::Electricity;
+    let mut saw_page = false;
+    for arg in args {
+        match arg.as_str() {
+            "--roff" => roff = true,
+            "run" if !saw_page => {
+                page = ManPage::ElectricityRun;
+                saw_page = true;
+            }
+            other => {
+                return Action::ManUsageError(format!("no such page: {other}"));
+            }
+        }
+    }
+    Action::Man { page, roff }
+}
+
+/// Shows *page* through `man` on a terminal (`--roff` and false
+/// otherwise); prints its roff when piped, or when `--roff` is given
+/// (issue #764). The roff is written to a temporary file and removed
+/// afterwards -- `man <path>` works on both macOS and Linux, unlike a
+/// hidden `man --roff` path into a pager.
+fn show_man_page(page: ManPage, roff: bool) -> ExitCode {
+    let name = match page {
+        ManPage::Electricity => "electricity",
+        ManPage::ElectricityRun => "electricity-run",
+    };
+    let text = build_man_page(page);
+    let text = text.as_str();
+    if roff || !std::io::stdout().is_terminal() {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+    let mut path = std::env::temp_dir();
+    path.push(format!("{name}.{}.1", std::process::id()));
+    if std::fs::write(&path, text).is_err() {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+    let status = std::process::Command::new("man").arg(&path).status();
+    let _ = std::fs::remove_file(&path);
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
+        Err(_) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+    }
 }
 
 /// One recognized flag's own arity -- whether [`parse_flags`] consumes a
@@ -443,6 +940,18 @@ fn classify(args: &[String]) -> Action {
     // `--help` is honoured.
     if args.first().map(String::as_str) == Some("run") {
         return classify_run(&args[1..]);
+    }
+
+    // `electricity man [run] [--roff]` (issue #764), same reserved-
+    // first-token dispatch as `run` above.
+    if args.first().map(String::as_str) == Some("man") {
+        return classify_man(&args[1..]);
+    }
+
+    // Hidden, generator-only (issue #764): never documented in --help,
+    // only ever invoked by `scripts/generate-man-pages.py`.
+    if args == ["--dump-option-table".to_string()] {
+        return Action::DumpOptionTable;
     }
 
     // `-V`/`--version` and `-h`/`--help` win over everything, including a
@@ -1271,7 +1780,10 @@ fn main() -> ExitCode {
     // thread or the Tokio runtime [`run_action`] goes on to create,
     // the one place in this binary's lifetime mutating the process
     // environment from a single thread is always sound.
-    if !matches!(action, Action::Version | Action::Help) {
+    if !matches!(
+        action,
+        Action::Version | Action::Help | Action::Man { .. } | Action::DumpOptionTable
+    ) {
         user_env::load_user_env();
     }
     let exit_code = match action {
@@ -1326,6 +1838,17 @@ fn main() -> ExitCode {
         Action::RunUsageError(message) => {
             print_run_usage_error(&message);
             ExitCode::from(2)
+        }
+        Action::Man { page, roff } => show_man_page(page, roff),
+        Action::ManUsageError(message) => {
+            write_stderr(&format!(
+                "electricity man: {message}\nPages: electricity, run\n"
+            ));
+            ExitCode::from(2)
+        }
+        Action::DumpOptionTable => {
+            write_stdout(&dump_option_table());
+            ExitCode::SUCCESS
         }
     };
     // The leftover-replies export (electricity/docs/spec/scripted-
@@ -1962,6 +2485,124 @@ mod unit_tests {
     fn usage_text_names_every_known_and_run_flag() {
         for (flag, _) in KNOWN_FLAGS.iter().chain(RUN_FLAGS.iter()) {
             assert!(USAGE.contains(flag), "USAGE never mentions {flag}");
+        }
+    }
+
+    /// [`OPTION_TABLE`] (`electricity man`'s own structured OPTIONS
+    /// source, issue #764) names every flag [`USAGE`]'s own Options
+    /// list does, so the two can't quietly disagree about what
+    /// electricity accepts.
+    #[test]
+    fn option_table_names_match_usage_flags() {
+        for row in OPTION_TABLE {
+            for flag in row.flags.split(", ") {
+                assert!(
+                    USAGE.contains(flag),
+                    "OPTION_TABLE names {flag} but USAGE does not"
+                );
+            }
+        }
+    }
+
+    /// Every flag [`KNOWN_FLAGS`]/[`RUN_FLAGS`] recognizes appears in
+    /// [`OPTION_TABLE`] too (issue #764) -- a flag added to one
+    /// without the other fails this immediately, the same guarantee
+    /// `usage_text_names_every_known_and_run_flag` gives `USAGE`.
+    #[test]
+    fn option_table_covers_every_known_flag() {
+        let table_flags: Vec<&str> = OPTION_TABLE
+            .iter()
+            .flat_map(|row| row.flags.split(", "))
+            .collect();
+        for (flag, _) in KNOWN_FLAGS.iter().chain(RUN_FLAGS.iter()) {
+            assert!(
+                table_flags.contains(flag),
+                "OPTION_TABLE never mentions {flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn man_with_no_page_shows_electricity() {
+        assert!(matches!(
+            classify_man(&[]),
+            Action::Man {
+                page: ManPage::Electricity,
+                roff: false
+            }
+        ));
+    }
+
+    #[test]
+    fn man_run_shows_electricity_run() {
+        assert!(matches!(
+            classify_man(&["run".to_string()]),
+            Action::Man {
+                page: ManPage::ElectricityRun,
+                roff: false
+            }
+        ));
+    }
+
+    #[test]
+    fn man_roff_flag_is_recognized_either_order() {
+        assert!(matches!(
+            classify_man(&["--roff".to_string()]),
+            Action::Man { roff: true, .. }
+        ));
+        assert!(matches!(
+            classify_man(&["run".to_string(), "--roff".to_string()]),
+            Action::Man {
+                page: ManPage::ElectricityRun,
+                roff: true
+            }
+        ));
+    }
+
+    #[test]
+    fn man_unknown_page_is_a_usage_error() {
+        assert!(matches!(
+            classify_man(&["bogus".to_string()]),
+            Action::ManUsageError(_)
+        ));
+    }
+
+    #[test]
+    fn dump_option_table_names_every_flag_and_scope() {
+        let dumped = dump_option_table();
+        for row in OPTION_TABLE {
+            assert!(dumped.contains(row.flags), "dump missing {}", row.flags);
+        }
+        assert!(dumped.lines().count() == OPTION_TABLE.len());
+        for line in dumped.lines() {
+            let mut fields = line.split('\t');
+            let scope = fields.next().unwrap();
+            assert!(matches!(scope, "legacy" | "run" | "both"));
+        }
+    }
+
+    /// `man/man1/electricity.1`/`electricity-run.1` (issue #764) are
+    /// committed snapshots of exactly what [`build_man_page`] computes
+    /// -- the same guarantee `scripts/generate-man-pages.py --check`
+    /// gives from the Python side, run here too since `cargo test` is
+    /// the gate every electricity change already needs green.
+    #[test]
+    fn committed_man_pages_match_build_man_page() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../man/man1")
+            .canonicalize()
+            .expect("man/man1 exists at the repo root");
+        for (page, filename) in [
+            (ManPage::Electricity, "electricity.1"),
+            (ManPage::ElectricityRun, "electricity-run.1"),
+        ] {
+            let committed = std::fs::read_to_string(repo_root.join(filename))
+                .unwrap_or_else(|e| panic!("reading man/man1/{filename}: {e}"));
+            assert_eq!(
+                committed,
+                build_man_page(page),
+                "man/man1/{filename} is stale -- run scripts/generate-man-pages.py"
+            );
         }
     }
 }

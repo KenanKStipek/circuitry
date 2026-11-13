@@ -1,0 +1,114 @@
+.TH COF-WIZARD 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-wizard \- Build an orchestration by talking to the wizard, headlessly.
+(Not `cof gen`
+.SH SYNOPSIS
+.nf
+cof wizard [OPTIONS]
+.fi
+.SH DESCRIPTION
+Builds an orchestration headlessly by talking to the bundled wizard
+orchestration, from a one-line --goal, rather than a single prompt -- a
+multi-turn, clarifying-questions build. Not cof gen, which drives a different,
+single-shot orchestration.
+.SH OPTIONS
+.TP
+.B --goal, -g
+GOAL One-line description of what the orchestration should do.
+.TP
+.B --name, -n
+NAME Name for the result (used for the filename / library slug). Derived from
+--goal if omitted.
+.TP
+.B --category
+CATEGORY One of: recipes, patterns, utilities, agents, learn. [default:
+recipes]
+.TP
+.B --reply, -r
+REPLY File of scripted replies, one per line, used instead of stdin.
+.TP
+.B --out, -o
+OUT Write the final YAML here (default: stdout).
+.TP
+.B --library
+Also save into the local library, indexed like a bundled entry.
+.TP
+.B --max-turns
+MAX_TURNS Stop after this many turns. [default: 10]
+.TP
+.B --config, -c
+CONFIG Path to config JSON.
+.TP
+.B --verbose, -v
+Show orchestration execution logs.
+.SH EXAMPLES
+.TP
+.B cof wizard --goal 'summarize a URL and post it to slack'
+Builds an orchestration through the wizard's own questions.
+.SH ENVIRONMENT
+.TP
+.B CIRCUITRY_CONFIG
+An explicit config JSON path. Checked before a trusted project config in the
+current directory and the global config; replaces both rather than layering on
+top of them.
+.TP
+.B CIRCUITRY_MODEL
+Overrides the resolved config's default_model.
+.TP
+.B CIRCUITRY_ADAPTER
+Overrides the resolved config's default_adapter.
+.TP
+.B CIRCUITRY_ADAPTER_URL
+Overrides the resolved default adapter's own base_url.
+.TP
+.B CIRCUITRY_COMFYUI_URL
+Overrides the comfyui plugin's own base_url.
+.TP
+.B CIRCUITRY_SYSTEMONE_URL
+Overrides the systemone plugin's own base_url.
+.TP
+.B CIRCUITRY_ENABLED_ADAPTERS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_adapters.
+.TP
+.B CIRCUITRY_ENABLED_PLUGINS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_plugins.
+.TP
+.B CIRCUITRY_ENABLED_TOOLS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_tools.
+.TP
+.B CIRCUITRY_ENVIRONMENT
+Overrides the resolved config's environment (dev, prod, or test).
+.TP
+.B CIRCUITRY_TRUST_PROJECT_CONFIG
+Trusts a project config in the current directory without running cof trust
+first.
+.SH FILES
+.TP
+.I ~/.config/circuitry/config.json
+The global config, the last layer config resolution tries.
+.TP
+.I ~/.config/circuitry/.env
+Private environment variables, loaded before config resolution (written by cof
+setup).
+.TP
+.I ~/.config/circuitry/trusted.json
+Project configs trusted by cof trust; config resolution consults it before
+applying a discovered project config.
+.TP
+.I ./circuitry.config.json, ./config.json
+A project config in the working directory, applied only once trusted.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or the input was invalid.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-gen(1)\fR, \fBcof-run(1)\fR

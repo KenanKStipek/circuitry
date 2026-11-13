@@ -1,0 +1,61 @@
+.TH COF-TRUST 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-trust \- Trust a project config file, or consent to an orchestration
+document's capabilities. A .yml/.yaml PATH is a document (shows the
+capabilities it needs and asks); anything else is a project config file (shows
+what it sets and asks)
+.SH SYNOPSIS
+.nf
+cof trust [OPTIONS] [path]
+.fi
+.SH DESCRIPTION
+Trusts a project config file, or consents to an orchestration document's own
+capabilities. A .yml/.yaml PATH is a document (shows the capabilities it needs
+and asks); anything else is a project config file (shows what it sets and
+asks). Trust applies until the file's content changes.
+.SH OPTIONS
+.TP
+.B path
+PATH Config file or .yml/.yaml orchestration document to trust (default:
+circuitry.config.json or config.json in the current directory).
+.TP
+.B --yes, -y
+Trust without asking.
+.TP
+.B --list
+List trusted files and whether each still matches.
+.TP
+.B --config, -c
+CONFIG Config to resolve library sources from, for a .yml/.yaml document's
+use: ref: children (or use CIRCUITRY_CONFIG).
+.SH EXAMPLES
+.TP
+.B cof trust
+Trusts circuitry.config.json or config.json in the current directory.
+.TP
+.B cof trust my-flow.yml
+Shows and consents to a document's own capabilities.
+.TP
+.B cof trust --list
+Lists every trusted file and whether it still matches.
+.SH ENVIRONMENT
+.TP
+.B CIRCUITRY_CONFIG
+Used to resolve a document's own use: ref: library sources, when trusting a
+document.
+.SH FILES
+.TP
+.I ~/.config/circuitry/trusted.json
+Where every trust decision is recorded.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or the input was invalid.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-untrust(1)\fR, \fBcof-run(1)\fR

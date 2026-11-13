@@ -1,0 +1,30 @@
+.TH COF-INSPECT 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-inspect \- Show orchestration metadata
+.SH SYNOPSIS
+.nf
+cof inspect [OPTIONS] {orchestration}
+.fi
+.SH DESCRIPTION
+Prints an orchestration document's own metadata (name, description, inputs,
+outputs) without running or validating it.
+.SH OPTIONS
+.TP
+.B orchestration
+ORCHESTRATION Path to orchestration file.
+.SH EXAMPLES
+.TP
+.B cof inspect my-flow.yml
+Shows a document's declared interface.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or the input was invalid.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-validate(1)\fR

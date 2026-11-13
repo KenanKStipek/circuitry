@@ -63,6 +63,7 @@ from .library_sources import (
     build_registry,
 )
 from .logging_setup import configure_cli_logging
+from .man_pages import register_man
 from .orchestration_loader import load_orchestration_file, serialize_orchestration
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
@@ -193,6 +194,7 @@ def _root(
 
 
 register_doctor(app)
+register_man(app)
 register_score(app)
 register_setup(app)
 register_trust(app)

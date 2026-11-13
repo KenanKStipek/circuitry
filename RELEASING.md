@@ -167,6 +167,14 @@ The workflow then:
 5. Creates a GitHub Release with the changelog excerpt, the Python
    artifacts, and electricity's and osi's archives/checksums, all attached.
 
+`cof`'s own man pages install from the Python wheel/sdist into
+`share/man/man1` (`man cof` finds them once that prefix's `bin` is on
+`PATH`); electricity's and osi's own pages travel inside their release
+archives, under `man/man1/`. `scripts/generate-man-pages.py` writes all of
+them from `man/man1/*.1` at the repo root — see that script's own
+docstring, and `cof man`/`electricity man`/`osi man`, which show the same
+pages without any of this installed at all.
+
 Watch progress at:
 
 ```bash
