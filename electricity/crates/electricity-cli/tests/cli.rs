@@ -1178,6 +1178,73 @@ fn run_subcommand_with_no_orchestration_fails_with_cofs_own_text_and_exit_one() 
     );
 }
 
+/// `--resume last` with no `--state <file>` (issue #727): `cof run`'s
+/// own `_resolve_resume_state` fails this with a `typer.BadParameter`
+/// the caller re-raises as `typer.Exit(code=1)` -- a pre-run refusal,
+/// exit 1, writing no `--out` at all, never a raw CLI usage error
+/// (exit 2).
+#[test]
+fn run_subcommand_resume_last_with_no_state_is_refused_with_exit_one_and_writes_nothing() {
+    let (mut cmd, home) = command("run-sub-resume-last-no-state");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--resume",
+            "last",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(error.contains("--last stash"), "{error}");
+    assert!(error.contains("--state <file>"), "{error}");
+    assert!(!out.exists());
+}
+
+/// `--resume <run-id>` with no `--state <file>` (issue #727): cof's own
+/// run-id lookup needs `runtime.persistence`, which stays refused on
+/// electricity -- refused the same way as `--resume last` above, not a
+/// usage error either.
+#[test]
+fn run_subcommand_resume_run_id_with_no_state_is_refused_with_exit_one_and_writes_nothing() {
+    let (mut cmd, home) = command("run-sub-resume-run-id-no-state");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--resume",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(error.contains("runtime.persistence"), "{error}");
+    assert!(error.contains("--state <file>"), "{error}");
+    assert!(!out.exists());
+}
+
 /// `cli/app.py::run_cmd`'s own `_print_run_warnings(cfg.resolution_
 /// warnings())` runs between "Orchestration not found" and its own
 /// `Tip: ...` line -- a discovered-but-skipped project config's
@@ -1370,6 +1437,127 @@ fn run_subcommand_accepts_short_config_and_out_aliases() {
         .output()
         .unwrap();
     assert!(out.exists(), "status: {:?}", output.status);
+}
+
+/// `-s` is `--state`'s own short alias (issue #727), matching cof's.
+#[test]
+fn run_subcommand_accepts_short_state_alias() {
+    let (mut cmd, home) = command("run-sub-short-state-alias");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let out = home.path.join("out.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+    let saved_a = {
+        let state: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+        state["prime"]["a"]["value"].clone()
+    };
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let resumed_out = home.path.join("resumed.json");
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "-s",
+            out.to_str().unwrap(),
+            "--resume",
+            "state",
+            "-o",
+            resumed_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    let resumed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&resumed_out).unwrap()).unwrap();
+    assert_eq!(
+        resumed["prime"]["a"]["value"], saved_a,
+        "-s named the same state file --state would -- the already-finished effect was skipped"
+    );
+}
+
+/// DESIGN.md §6.8: `--resume` with no explicit `--out` of its own
+/// defaults `--out` to the `--state` file itself -- so a resumed run
+/// writes back to the exact file it resumed from, with no `--out` on
+/// the command line at all.
+#[test]
+fn run_subcommand_resume_with_no_out_writes_back_to_the_state_file() {
+    let (mut cmd, home) = command("run-sub-resume-out-default");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let state_path = home.path.join("state.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            state_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+    let first_mtime = fs::metadata(&state_path).unwrap().modified().unwrap();
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--state",
+            state_path.to_str().unwrap(),
+            "--resume",
+            "state",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    // No --out at all, and yet stdout is empty (the "no --out" success
+    // contract would otherwise print the state there instead) -- the
+    // only place the final state could have gone is back into the
+    // file --state itself named.
+    assert!(second.stdout.is_empty(), "{:?}", second.stdout);
+    let second_mtime = fs::metadata(&state_path).unwrap().modified().unwrap();
+    assert!(
+        second_mtime >= first_mtime,
+        "the --state file was never written back to"
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(state["prime"]["a"]["meta"]["completed_at"].is_string());
 }
 
 /// The legacy form's own first positional already is the config path

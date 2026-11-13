@@ -102,6 +102,7 @@ async fn run_with_adapter(
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -201,6 +202,7 @@ async fn a_cancelled_named_model_if_never_calls_record_totals() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(
@@ -246,6 +248,7 @@ async fn run(root_op: electricity_bytecode::Op) -> (Store, RecordingObserver, Re
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -716,6 +719,7 @@ async fn an_interrupted_named_if_leaves_meta_error_null_and_reports_ok_to_the_ob
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(matches!(result, Err(VmError::Cancelled)), "got {result:?}");
@@ -1312,6 +1316,7 @@ async fn a_tool_params_template_resolves_the_same_sibling_path_as_probe_e() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();

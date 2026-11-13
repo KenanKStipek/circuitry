@@ -72,7 +72,8 @@
                               {
                                 "Name": "tick"
                               }
-                            ]
+                            ],
+                            "resume_mode": "Continue"
                           }
                         ],
                         "overlay": true
@@ -105,7 +106,8 @@
                 {
                   "Name": "poll"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -119,7 +121,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

@@ -113,6 +113,7 @@ pub fn json_tool_leaf(path: EffectPath, name: &str, params: IndexMap<Value, Para
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -131,6 +132,7 @@ pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
         path,
         name: Some(name.to_string()),
         kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -147,6 +149,7 @@ pub fn refused_use_leaf(path: EffectPath, name: &str, on_error: OnError) -> Op {
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -169,6 +172,7 @@ pub fn use_leaf(
         path,
         name: Some(name.to_string()),
         kind: NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source,
             inputs,
@@ -181,6 +185,7 @@ pub fn use_leaf(
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -196,6 +201,7 @@ pub fn chain_dynamic(path: EffectPath, name: &str, on_error: OnError, ops: Vec<O
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -219,6 +225,7 @@ pub fn tree_dynamic(
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -249,6 +256,7 @@ pub fn tree_dynamic_with_finally(
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -276,6 +284,7 @@ pub fn dynamic_with_finally(
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -306,6 +315,7 @@ pub fn cel_if(
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -334,6 +344,7 @@ pub fn model_if(path: EffectPath, name: Option<&str>, template: &str, on_error: 
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 

@@ -1,7 +1,7 @@
 //! Lane A: `Op`, `NodeKind`, `LeafKind`, `OnError` (issue #408's Scope
 //! section; DESIGN.md §5.1).
 
-use crate::effects::{PromptOp, ReflectorOp, ReportOp, ToolOp, UseOp, YieldOp};
+use crate::effects::{PromptOp, ReflectorOp, ReportOp, ResumeMode, ToolOp, UseOp, YieldOp};
 use crate::path::EffectPath;
 use crate::region::Region;
 use electricity_value::Value;
@@ -101,6 +101,13 @@ pub struct Op {
     /// opaque metadata, never interpreted by the compiler itself.
     pub labels: Option<Value>,
     pub enabled: bool,
+    /// `DynamicDefinition.resume` (#590/#727): `continue` (the default)
+    /// or `restart`. Meaningless for every `NodeKind` other than a
+    /// `dynamic`'s own `Control`; every other site sets `Continue`,
+    /// never read there -- a `use`'s own `resume:` lives on
+    /// `crate::effects::UseOp::resume_mode` instead, since a `use`
+    /// compiles to a `Leaf`, not a `Control`.
+    pub resume_mode: ResumeMode,
 }
 
 impl Op {
@@ -131,6 +138,7 @@ mod python_type_name_tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -184,6 +192,7 @@ mod python_type_name_tests {
         );
         assert_eq!(
             op(NodeKind::Leaf(Box::new(LeafKind::Use(UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: UseSource::Path("child.yml".to_string()),
                 inputs: None,

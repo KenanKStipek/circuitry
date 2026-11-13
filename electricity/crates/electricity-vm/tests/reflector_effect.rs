@@ -135,6 +135,7 @@ fn plan_prompt(name: &str) -> Op {
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -194,6 +195,7 @@ fn reflector_leaf_with_inner(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -221,6 +223,7 @@ async fn run_reflector(
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -576,6 +579,7 @@ async fn cancellation_during_the_planner_leaves_no_record() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert_eq!(result.unwrap_err(), VmError::Cancelled);

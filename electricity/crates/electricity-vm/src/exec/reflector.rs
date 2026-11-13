@@ -224,6 +224,8 @@ async fn run_iteration(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        // Synthesized, with no `resume:` of its own -- never read.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     };
     // Issue #516 §4(c): a reflector's own inner `dynamic` always resets
     // to display depth 0, regardless of the reflector's own ambient
@@ -234,6 +236,10 @@ async fn run_iteration(
         .rebased(&op.path, &op.path.push_name("inner"))
         .with_display_depth(crate::complexity::depth::REFLECTOR_RESET);
     let empty_chain: CtxChain = Vec::new();
+    // `cof run --resume`: a reflector's own inner dynamic is never
+    // passed this flag in `core/dynamic.py` either -- it always reruns
+    // whole once reached (the parent's own skip check on the reflector
+    // node as a whole already decided that).
     let inner_result = execute_dynamic(
         &inner_op,
         store,
@@ -243,6 +249,7 @@ async fn run_iteration(
         run_ctx,
         observer,
         token,
+        false,
     )
     .await;
     match inner_result {
@@ -338,6 +345,7 @@ async fn run_iteration(
         .map_err(store_err)?;
     let iter_name = format!("iter_{i}");
     let use_op = UseOp {
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
         parent_trusted: false,
         source: UseSource::Inline(TemplateText::new(plan_yaml, true, Escape::Html)),
         inputs: None,
@@ -358,6 +366,9 @@ async fn run_iteration(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        // `use_op`'s own `resume_mode` lives on the `UseOp` itself --
+        // never read here.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     };
     // `_store_root(store)` at the top level: the reflector's own
     // *containing* scope (`parent`), never the inherited `CtxChain` --
@@ -373,6 +384,7 @@ async fn run_iteration(
     // depth 0, so its own child root `dynamic` ([`Frame::nested`]'s own
     // `+1`) lands at depth 1, matching issue #516 §4(c)'s last row.
     let gen_frame = frame.with_display_depth(crate::complexity::depth::REFLECTOR_RESET);
+    // Same "never resumes" rule as the inner `dynamic` above.
     let use_result = execute_use_with_ctx(
         &use_synth_op,
         &use_op,
@@ -383,6 +395,7 @@ async fn run_iteration(
         run_ctx,
         observer,
         token,
+        false,
     )
     .await;
     match use_result {
@@ -576,6 +589,7 @@ fn prepend_prime_to_plan_prompt(region: &Region, plan_from_step: &str, prime_tex
                                 on_error: op.on_error,
                                 labels: op.labels.clone(),
                                 enabled: op.enabled,
+                                resume_mode: op.resume_mode,
                             };
                         }
                     }
