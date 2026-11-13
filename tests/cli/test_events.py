@@ -45,6 +45,29 @@ def test_run_start_names_the_config_file(tmp_path: Path) -> None:
     assert _lines(tmp_path / "events.jsonl")[0]["config"] == "config.json"
 
 
+def test_run_start_omits_label_when_absent(tmp_path: Path) -> None:
+    """No `label` kwarg at all (the no-label call every existing caller
+    makes) carries no `label` key — an unlabelled run's line is unchanged
+    by this field existing (#752)."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config=None)
+    log.close()
+
+    assert "label" not in _lines(tmp_path / "events.jsonl")[0]
+
+
+def test_run_start_carries_label_right_after_orchestration(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config=None, label="ticket 42")
+    log.close()
+
+    line = _lines(tmp_path / "events.jsonl")[0]
+    assert line["label"] == "ticket 42"
+    keys = list(line.keys())
+    assert keys.index("label") == keys.index("orchestration") + 1
+    assert keys.index("config") == keys.index("label") + 1
+
+
 def test_dispatch_payload_carries_branches_and_concurrency(tmp_path: Path) -> None:
     """`branches` is the true branch total; `concurrency` is the ceiling
     the pool actually enforces — the two differ whenever `max_concurrency`

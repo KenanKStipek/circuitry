@@ -156,7 +156,12 @@ class EventLog:
         self._file.flush()
 
     def run_start(
-        self, *, run_id: str, orchestration: str, config: str | None
+        self,
+        *,
+        run_id: str,
+        orchestration: str,
+        config: str | None,
+        label: str | None = None,
     ) -> None:
         if self._disabled:
             return
@@ -164,19 +169,23 @@ class EventLog:
             with self._lock:
                 if self._disabled:
                     return
-                self._write_line(
-                    {
-                        "v": 1,
-                        "seq": self._take_seq(),
-                        "ts": _now_iso_ms(),
-                        "ev": "run_start",
-                        "run_id": run_id,
-                        "orchestration": orchestration,
-                        "config": config,
-                        "engine": _engine_label(),
-                        "pid": os.getpid(),
-                    }
-                )
+                payload = {
+                    "v": 1,
+                    "seq": self._take_seq(),
+                    "ts": _now_iso_ms(),
+                    "ev": "run_start",
+                    "run_id": run_id,
+                    "orchestration": orchestration,
+                }
+                # Present only when this run has one (#752), right after
+                # `orchestration` — an unlabelled run's `run_start` line is
+                # byte-for-byte what it was before this field existed.
+                if label:
+                    payload["label"] = label
+                payload["config"] = config
+                payload["engine"] = _engine_label()
+                payload["pid"] = os.getpid()
+                self._write_line(payload)
         except Exception as exc:
             self._disable("run_start", exc)
 
