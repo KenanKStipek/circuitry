@@ -561,14 +561,18 @@ def _sandboxed_env(
     # by the time it gets here.
     if extra_env:
         env.update(extra_env)
-    # `case.json`'s own `fake_credentials` (issue #503): set after the
-    # credential filter above, same as `extra_env`, for both engines --
-    # `load_case` already rejected any name outside `CREDENTIAL_ENV_VARS`
-    # or any value not carrying `FAKE_CREDENTIAL_MARKER`, so this is
-    # already known-synthetic by the time it gets here. Without this, a
-    # case that needs `openai`/`anthropic`/... to actually see a key (a
-    # success case, or a 401) has no way to give it one at all, since the
-    # filter above drops every real `CREDENTIAL_ENV_VARS` name first.
+    # `case.json`'s own `fake_credentials` (issue #503; a custom
+    # `api_key_env` name too, issue #669): set after the credential
+    # filter above, same as `extra_env`, for both engines -- `load_case`
+    # already rejected any key that is neither a `CREDENTIAL_ENV_VARS`
+    # name nor an environment-variable-shaped name outside `CIRCUITRY_*`
+    # (`_is_valid_fake_credential_key`), and any value not carrying
+    # `FAKE_CREDENTIAL_MARKER`, so this is already known-synthetic by the
+    # time it gets here. Without this, a case that needs `openai`/
+    # `anthropic`/... (or a custom `api_key_env` target) to actually see
+    # a key (a success case, or a 401) has no way to give it one at all,
+    # since the filter above drops every real `CREDENTIAL_ENV_VARS` name
+    # first.
     if fake_credentials:
         env.update(fake_credentials)
     # Deliberately set *after* the CIRCUITRY_* filter above: a test-only
