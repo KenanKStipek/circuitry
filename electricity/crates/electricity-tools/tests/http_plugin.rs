@@ -29,6 +29,7 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         config: &NONE,
         token,
         armed: false,
+        on_live: None,
         limited: false,
         confine_to: None,
     }

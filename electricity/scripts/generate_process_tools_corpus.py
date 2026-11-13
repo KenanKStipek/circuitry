@@ -20,7 +20,15 @@ understanding of them:
 - Python's own `str()` of synthetic arg values (`_subprocess._validate_args`'s
   own conversion, and `ffmpeg.py`'s `str(flags)`/`str(map)`/`str(extra)`);
 - `bytes.decode("utf-8")`'s own exact `UnicodeDecodeError` text, for a
-  battery of synthetic invalid byte strings (text-mode decoding).
+  battery of synthetic invalid byte strings (text-mode decoding);
+- `subprocess_live._TailBuffer`'s own `append`/`text` (issue #741): a
+  running tool's own `meta.live` tail, fed chunk by chunk and snapshotted
+  after each one, so the Rust port is checked against the exact,
+  stateful incremental-decoder behavior this class has -- not just its
+  eventual, fully-resolved text -- for a `\r\n`/lone `\r` split across
+  chunks, an incomplete multi-byte sequence at a chunk's own end, an
+  empty line, a partial line, multibyte text at the byte cap, a single
+  over-long line, more than 20 lines, and invalid UTF-8.
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
 3.11 in CI), with Circuitry installed (`pip install -e . -c
@@ -49,6 +57,7 @@ from circuitry.plugins.ffmpeg import (
     _escape_drawtext_text,
 )
 from circuitry.plugins.shell import ShellPlugin
+from circuitry.subprocess_live import _TailBuffer
 
 VALUE_CORPUS = (
     Path(__file__).resolve().parent.parent
@@ -373,6 +382,60 @@ def _utf8_decode_cases() -> list[dict[str, Any]]:
     return cases
 
 
+#: Each case is one stream's own chunk sequence, fed to a fresh
+#: `_TailBuffer()` one chunk at a time -- the name says which part of
+#: the spec it exercises. A multibyte character split across two
+#: chunks, right at the point the byte cap also applies, both exercises
+#: the incremental UTF-8 decoder's own split-character handling and the
+#: byte cap's own character-boundary cut in the same case.
+def _tail_buffer_byte_cases() -> list[tuple[str, list[bytes]]]:
+    multibyte_over_cap = (("é" * 3000).encode("utf-8"), 4001)
+    twenty_five_lines = "".join(f"line{i}\n" for i in range(25)).encode("utf-8")
+    twenty_full_plus_partial = (
+        "".join(f"line{i}\n" for i in range(20)) + "partial"
+    ).encode("utf-8")
+    return [
+        ("crlf_split_across_chunks", [b"line1\r", b"\nline2"]),
+        ("bare_crlf_one_chunk", [b"\r\n"]),
+        ("lone_cr_never_resolved", [b"line1\r"]),
+        ("lone_cr_resolved_by_a_non_newline_byte", [b"line1\r", b"Xline2"]),
+        ("lone_cr_then_an_invalid_byte", [b"line1\r", b"\xff"]),
+        ("empty_lines_preserved", [b"a\n\n\nb"]),
+        ("trailing_empty_line_with_no_carry", [b"a\n\n"]),
+        ("partial_line_with_no_newline_at_all", [b"working"]),
+        ("single_complete_line_with_a_trailing_newline", [b"line1\n"]),
+        ("two_complete_lines_no_trailing_newline", [b"line1\nline3"]),
+        (
+            "multibyte_text_split_mid_character_over_the_byte_cap",
+            [multibyte_over_cap[0][: multibyte_over_cap[1]], multibyte_over_cap[0][multibyte_over_cap[1] :]],
+        ),
+        ("a_single_huge_line_over_the_byte_cap", [b"a" * 10_000]),
+        ("more_than_twenty_lines", [twenty_five_lines]),
+        ("twenty_full_lines_plus_one_more_partial", [twenty_full_plus_partial]),
+        ("invalid_utf8_byte_replaced_at_once", [b"a\xffb"]),
+        ("incomplete_multibyte_sequence_never_completes", [b"a\xc3"]),
+        ("an_empty_chunk_is_a_no_op", [b"abc", b"", b"def"]),
+    ]
+
+
+def _tail_buffer_cases() -> list[dict[str, Any]]:
+    cases = []
+    for name, chunks in _tail_buffer_byte_cases():
+        tail = _TailBuffer()
+        snapshots = []
+        for chunk in chunks:
+            tail.append(chunk)
+            snapshots.append({"text": tail.text(), "total_bytes": tail.total_bytes})
+        cases.append(
+            {
+                "name": name,
+                "chunks_hex": [chunk.hex() for chunk in chunks],
+                "snapshots": snapshots,
+            }
+        )
+    return cases
+
+
 def build_tools_corpus() -> dict[str, Any]:
     return {
         "drawtext_escape_cases": _drawtext_escape_cases(),
@@ -385,6 +448,7 @@ def build_tools_corpus() -> dict[str, Any]:
         "resolve_plugin_binary_cases": _resolve_plugin_binary_cases(),
         "check_binary_cases": _check_binary_cases(),
         "utf8_decode_cases": _utf8_decode_cases(),
+        "tail_buffer_cases": _tail_buffer_cases(),
     }
 
 

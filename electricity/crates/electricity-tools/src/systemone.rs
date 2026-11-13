@@ -1472,6 +1472,7 @@ mod tests {
             config,
             token,
             armed: false,
+            on_live: None,
             limited: false,
             confine_to: None,
         }
