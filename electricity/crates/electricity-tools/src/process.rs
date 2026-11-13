@@ -215,37 +215,107 @@ fn cap_to_last_bytes(text: &str, max_bytes: usize) -> &str {
     &text[start..]
 }
 
-/// *buf*'s own tail, decoded the way `meta.live`'s own tails are --
-/// UTF-8 with invalid bytes replaced (never the final output's own
-/// strict [`decode_text`]: a tail is a display value, cut at an
-/// arbitrary byte boundary that can split a multi-byte character, and
-/// must never fail a running tool over that) -- with the same
-/// universal-newline translation (`\r\n`/a lone `\r` both become
-/// `\n`) [`decode_text`] applies to the final output, so a tail is
-/// always a true suffix of the same text `meta.stdout`/`meta.stderr`
-/// end up holding, never split on a `\r` the final text never kept as
-/// its own line break (ffmpeg's own `\r`-separated progress lines,
-/// for one) -- and a `\r\n` split across two separate pipe reads is
-/// still one line end, since this always re-decodes the whole
-/// accumulated buffer from scratch, never a stateful partial left
-/// over from an earlier call.
+/// *lines* joined with `\n`, dropping whole lines from the front --
+/// never a fragment of one -- until the join is itself within
+/// *max_bytes* of UTF-8 (`cof`'s own `_join_within_byte_limit`,
+/// `subprocess_live.py`). Always terminates within *max_bytes* because
+/// [`tail_text`] already caps every individual line to *max_bytes* on
+/// its own before calling this, so the newest line alone is always
+/// enough to fit, in the worst case.
+fn join_within_byte_limit(mut lines: Vec<&str>, max_bytes: usize) -> String {
+    loop {
+        let joined = lines.join("\n");
+        if joined.len() <= max_bytes {
+            return joined;
+        }
+        lines.remove(0);
+    }
+}
+
+/// How many of *buf*'s own trailing bytes are an incomplete UTF-8
+/// sequence -- one that could still become valid if more bytes
+/// arrived, never a sequence that's already definitely invalid
+/// (`std::str::Utf8Error::error_len() == None` is exactly this case:
+/// an incomplete sequence reachable only by running off the end of
+/// *buf*). `cof`'s own incremental UTF-8 decoder withholds exactly
+/// these bytes rather than replacing them -- a chunk ending in a
+/// truncated multi-byte lead byte shows nothing for it yet, waiting
+/// for the rest. An earlier, definitely-invalid sequence (one`
+/// `error_len()` reports a real length for) is skipped over instead,
+/// since the incremental decoder replaces that one immediately and
+/// keeps decoding past it -- this keeps scanning from there for a
+/// *later* incomplete tail, rather than stopping at the first error
+/// found.
+fn trailing_incomplete_utf8_len(buf: &[u8]) -> usize {
+    let mut offset = 0;
+    loop {
+        match std::str::from_utf8(&buf[offset..]) {
+            Ok(_) => return 0,
+            Err(e) => match e.error_len() {
+                Some(bad_len) => offset += e.valid_up_to() + bad_len,
+                None => return buf.len() - (offset + e.valid_up_to()),
+            },
+        }
+    }
+}
+
+/// *buf*'s own trailing raw bytes, decoded the way a tail's own
+/// incremental decoder would have them right now -- lossy UTF-8 (never
+/// the final output's own strict [`decode_text`]: a tail is a display
+/// value, cut at an arbitrary byte boundary, and must never fail a
+/// running tool over that), with the same universal-newline
+/// translation [`decode_text`] applies to the final output, and two
+/// of `cof`'s own incremental decoder's withholding rules applied
+/// first so the *moment* a tail resolves a trailing `\r`/split
+/// character matches `cof`'s own [`subprocess_live.py`]'s
+/// `_TailBuffer` exactly, not just its eventual, fully-resolved text:
+/// - an incomplete trailing multi-byte sequence ([`trailing_incomplete_utf8_len`])
+///   is excluded entirely, never shown as a replacement character
+///   before more bytes confirm what it really is;
+/// - a trailing, not-yet-translated `\r` (ambiguous -- the next byte
+///   could still complete a `\r\n` pair) is dropped from the decoded
+///   text entirely, before translation ever runs, rather than assumed
+///   to already be a line end.
 ///
-/// Capped exactly the way the live-tail spec describes, in this
-/// order:
-/// 1. decode lossily, then translate, over a raw window generous
-///    enough that every line that can possibly survive both caps
-///    below is always fully inside it (never the window's own edge
-///    landing inside such a line and masquerading as this function's
-///    own "single over-long line" case);
-/// 2. split into lines -- an unterminated final run counts as its own
-///    line, live, as soon as it's been read, same as any other;
+/// Both are naturally revisited on the next call once more bytes have
+/// arrived, since this always re-decodes from the same accumulated
+/// buffer `run_tracked` holds, never a stateful partial left over from
+/// an earlier call -- so a `\r\n` split across two separate pipe reads
+/// still ends up translated as one line end, exactly when `cof`'s own
+/// stateful decoder would resolve it too.
+fn decode_live(buf: &[u8]) -> String {
+    let pending = trailing_incomplete_utf8_len(buf);
+    let confirmed = &buf[..buf.len() - pending];
+    let mut decoded = String::from_utf8_lossy(confirmed).into_owned();
+    if decoded.ends_with('\r') {
+        decoded.pop();
+    }
+    universal_newlines(&decoded)
+}
+
+/// *buf*'s own tail, ported exactly from `cof`'s own
+/// [`subprocess_live.py`] `_TailBuffer.append`/`_TailBuffer.text`:
+/// 1. [`decode_live`], over a raw window generous enough that every
+///    line that can possibly survive both caps below is always fully
+///    inside it (never the window's own edge landing inside such a
+///    line and masquerading as this function's own "single
+///    over-long line" case);
+/// 2. split on `\n` -- every segment but the last is a complete line
+///    (an empty one stays an empty line, never dropped), the last is
+///    the current, still-partial line, counted as the tail's own last
+///    line, live, the moment it's been read -- but only when it isn't
+///    itself empty (`cof`'s own `if self._carry:`): a buffer that ends
+///    exactly on a line break never gets a trailing blank line tacked
+///    on for it;
 /// 3. keep the last [`LIVE_TAIL_MAX_LINES`] of those;
 /// 4. cap *each* kept line, independently, to its own last
 ///    [`LIVE_TAIL_MAX_BYTES`] bytes ([`cap_to_last_bytes`]) -- the
 ///    only place a single line's own bytes are ever cut, and only
 ///    ever a suffix of that one line;
-/// 5. drop whole lines from the front -- never a partial one -- until
-///    what's left, rejoined, is itself within [`LIVE_TAIL_MAX_BYTES`].
+/// 5. [`join_within_byte_limit`]: drop whole lines from the front --
+///    never a partial one -- until the `\n`-joined result is itself
+///    within [`LIVE_TAIL_MAX_BYTES`], with no trailing `\n` ever added
+///    beyond what joining the kept lines already produces.
 fn tail_text(buf: &[u8]) -> String {
     // 4x the aggregate cap: even in the worst case for both ends of
     // decoding at once -- every one of the up to `LIVE_TAIL_MAX_LINES`
@@ -259,48 +329,27 @@ fn tail_text(buf: &[u8]) -> String {
     // own edge.
     const RAW_WINDOW_BYTES: usize = LIVE_TAIL_MAX_BYTES * 4;
     let window = &buf[buf.len().saturating_sub(RAW_WINDOW_BYTES)..];
-    let decoded = String::from_utf8_lossy(window);
-    let translated = universal_newlines(&decoded);
+    let decoded = decode_live(window);
 
-    if translated.is_empty() {
-        return String::new();
+    let mut segments: Vec<&str> = decoded.split('\n').collect();
+    // `split` on a non-empty pattern always yields at least one
+    // element, so this is only ever `None` for a `decoded` that can't
+    // exist (`split` on `""` still gives `[""]`) -- `unwrap_or("")`
+    // is just the honest fallback for that impossible case, not a
+    // real one this hits.
+    let carry = segments.pop().unwrap_or("");
+    let mut lines: Vec<&str> = segments;
+    if !carry.is_empty() {
+        lines.push(carry);
     }
-    let ends_with_newline = translated.ends_with('\n');
-    let body = if ends_with_newline {
-        &translated[..translated.len() - 1]
-    } else {
-        translated.as_str()
-    };
-    let mut lines: Vec<&str> = body.split('\n').collect();
     if lines.len() > LIVE_TAIL_MAX_LINES {
         lines.drain(0..lines.len() - LIVE_TAIL_MAX_LINES);
     }
-    let mut capped: Vec<&str> = lines
+    let capped: Vec<&str> = lines
         .into_iter()
         .map(|line| cap_to_last_bytes(line, LIVE_TAIL_MAX_BYTES))
         .collect();
-
-    // Whole lines dropped from the front until what's left -- joined
-    // by `\n`, plus one trailing `\n` if the original text had one --
-    // fits the aggregate cap. Every remaining line is already within
-    // the cap on its own (step 4, above), so this can only ever drop
-    // a line in full, never keep a fragment of one.
-    loop {
-        let separators = capped.len().saturating_sub(1);
-        let trailing = usize::from(ends_with_newline && !capped.is_empty());
-        let total: usize =
-            capped.iter().map(|line| line.len()).sum::<usize>() + separators + trailing;
-        if total <= LIVE_TAIL_MAX_BYTES || capped.is_empty() {
-            break;
-        }
-        capped.remove(0);
-    }
-
-    let mut result = capped.join("\n");
-    if ends_with_newline && !capped.is_empty() {
-        result.push('\n');
-    }
-    result
+    join_within_byte_limit(capped, LIVE_TAIL_MAX_BYTES)
 }
 
 fn live_tail(stdout_buf: &[u8], stderr_buf: &[u8]) -> LiveTail {
@@ -972,8 +1021,22 @@ mod tests {
     }
 
     #[derive(serde::Deserialize)]
+    struct TailBufferSnapshot {
+        text: String,
+        total_bytes: u64,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct TailBufferCase {
+        name: String,
+        chunks_hex: Vec<String>,
+        snapshots: Vec<TailBufferSnapshot>,
+    }
+
+    #[derive(serde::Deserialize)]
     struct ProcessToolsCorpus {
         utf8_decode_cases: Vec<Utf8DecodeCase>,
+        tail_buffer_cases: Vec<TailBufferCase>,
     }
 
     #[test]
@@ -1011,6 +1074,53 @@ mod tests {
             .step_by(2)
             .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
             .collect()
+    }
+
+    /// Replays every chunk sequence in `process_tools_corpus.json`'s
+    /// own `tail_buffer_cases` byte for byte -- generated from `cof`'s
+    /// own real `subprocess_live._TailBuffer`, chunk by chunk, so this
+    /// checks [`tail_text`] against its exact, stateful incremental
+    /// decoder behavior (a `\r\n`/lone `\r` split across chunks, an
+    /// incomplete multi-byte sequence at a chunk's own end, ...), not
+    /// only the eventual, fully-resolved text once every chunk has
+    /// landed. [`run_tracked`]'s own buffer only ever grows (never
+    /// discards bytes already read), so accumulating every chunk here
+    /// and calling [`tail_text`] on the growing whole after each one is
+    /// the exact same input its own on_live callback ever sees.
+    #[test]
+    fn tail_text_matches_cofs_own_tail_buffer_chunk_by_chunk() {
+        let corpus: ProcessToolsCorpus =
+            serde_json::from_str(include_str!("../tests/golden/process_tools_corpus.json"))
+                .expect("process_tools_corpus.json must parse");
+        assert!(
+            !corpus.tail_buffer_cases.is_empty(),
+            "corpus must carry at least one tail_buffer_cases entry"
+        );
+        for case in corpus.tail_buffer_cases {
+            assert_eq!(
+                case.chunks_hex.len(),
+                case.snapshots.len(),
+                "case {}: one snapshot expected per chunk",
+                case.name
+            );
+            let mut accumulated: Vec<u8> = Vec::new();
+            for (chunk_hex, snapshot) in case.chunks_hex.iter().zip(case.snapshots.iter()) {
+                accumulated.extend(hex_decode(chunk_hex));
+                assert_eq!(
+                    tail_text(&accumulated),
+                    snapshot.text,
+                    "case {}: text() after chunk ending at byte {}",
+                    case.name,
+                    accumulated.len()
+                );
+                assert_eq!(
+                    accumulated.len() as u64,
+                    snapshot.total_bytes,
+                    "case {}: total_bytes after a chunk",
+                    case.name
+                );
+            }
+        }
     }
 
     #[test]
@@ -1147,6 +1257,54 @@ mod tests {
         let mut buf = b"line1\r".to_vec();
         buf.extend_from_slice(b"\nline2");
         assert_eq!(tail_text(&buf), "line1\nline2");
+    }
+
+    #[test]
+    fn tail_text_never_adds_a_trailing_newline_cof_never_would() {
+        // `cof`'s own `_TailBuffer.text()` only ever joins complete
+        // lines (plus a non-empty carry) with `\n` *between* them --
+        // never a trailing one tacked on because the raw buffer
+        // happened to end on a line break. A single complete line
+        // shows as just that line, with nothing after it.
+        assert_eq!(tail_text(b"line1\n"), "line1");
+        // Two complete lines, no final line break at all (the second
+        // is still *partial*, counted as the tail's own live last
+        // line) -- still never a trailing `\n`.
+        assert_eq!(tail_text(b"line1\nline3"), "line1\nline3");
+    }
+
+    #[test]
+    fn tail_text_keeps_an_empty_line_as_an_empty_line() {
+        // A blank line between two others is a genuine complete line
+        // of its own (empty), never dropped or collapsed.
+        assert_eq!(tail_text(b"a\n\nb"), "a\n\nb");
+    }
+
+    #[test]
+    fn tail_text_withholds_a_lone_trailing_cr_until_it_is_resolved() {
+        // A `\r` with nothing after it yet is ambiguous -- it might
+        // still turn into `\r\n` once the next byte arrives -- so
+        // `cof`'s own incremental decoder shows nothing for it at all
+        // until that's resolved, not an early `\n`. Once a *non*-`\n`
+        // byte follows, the withheld `\r` resolves to its own `\n`,
+        // prepended ahead of that byte.
+        assert_eq!(tail_text(b"line1\r"), "line1");
+        assert_eq!(tail_text(b"line1\rX"), "line1\nX");
+    }
+
+    #[test]
+    fn tail_text_withholds_an_incomplete_trailing_multibyte_sequence() {
+        // The lead byte of a 2-byte UTF-8 sequence, with the
+        // continuation byte that would complete it not arrived yet --
+        // `cof`'s own incremental decoder shows nothing for it, never
+        // an early replacement character, until more bytes confirm
+        // what it really is (or never resolves at all, if none ever
+        // do).
+        assert_eq!(tail_text(b"a\xc3"), "a");
+        // An unconditionally invalid byte (never a valid lead byte for
+        // anything) is a different case entirely -- replaced at once,
+        // never withheld.
+        assert_eq!(tail_text(b"a\xff"), "a\u{fffd}");
     }
 
     #[tokio::test]
