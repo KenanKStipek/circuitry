@@ -1093,6 +1093,21 @@ pub struct RunModel {
     /// `run_start`'s own `config` field (issue #697), when the engine
     /// writes one -- neither engine does yet.
     run_start_config: Option<String>,
+    /// `run_start`'s own `label` field (issue #752), cleaned here
+    /// (the one point a `label` read off `--events` is ever
+    /// cleaned, since a stream can be written by anything, not only
+    /// an engine that already cleaned it) -- `None` with no label on
+    /// the line at all, or one that cleans away to nothing.
+    run_start_label: Option<String>,
+    /// `osi <doc> --label TEXT`'s own cleaned value (issue #752), set
+    /// once by the caller that actually launched this run -- the
+    /// header's own fallback below `run_start_label` and the state
+    /// file's `runtime.last_run.label`, so a labelled run shows its
+    /// label from its very first frame, before `run_start` has even
+    /// arrived. `None` for every caller with nothing of its own to
+    /// fall back to (`osi watch`, which never launches anything, and
+    /// every test fixture that never calls [`RunModel::set_label_hint`]).
+    label_hint: Option<String>,
     /// `Event::Start`'s own `ts`, by `id` -- `started_at` alone keeps
     /// only the latest start *per path*, which can't tell two
     /// concurrently open ids at the same (unnamed-loop) path apart.
@@ -1271,6 +1286,8 @@ impl RunModel {
             report_event_paths: BTreeSet::new(),
             run_start_engine: None,
             run_start_config: None,
+            run_start_label: None,
+            label_hint: None,
             start_ts_by_id: BTreeMap::new(),
             paths_with_id_events: BTreeSet::new(),
             step_intervals: Vec::new(),
@@ -1310,11 +1327,13 @@ impl RunModel {
                 pid,
                 engine,
                 config,
+                label,
             } => {
                 self.run_start = Some((run_id.clone(), *pid));
                 self.run_start_ts = Some(ts.clone());
                 self.run_start_engine = engine.clone();
                 self.run_start_config = config.clone();
+                self.run_start_label = label.as_deref().and_then(crate::names::clean_label);
             }
             Event::Start { ts, id, path } => {
                 self.started_at.insert(path.clone(), ts.clone());
@@ -1834,6 +1853,31 @@ impl RunModel {
     /// carried one.
     pub fn run_start_engine(&self) -> Option<&str> {
         self.run_start_engine.as_deref()
+    }
+
+    /// `run_start`'s own `label` field (issue #752), already cleaned
+    /// -- `None` with no `run_start` seen yet, no `label` on the
+    /// line at all, or one that cleaned away to nothing.
+    pub fn run_start_label(&self) -> Option<&str> {
+        self.run_start_label.as_deref()
+    }
+
+    /// Sets [`RunModel::label_hint`] (issue #752) -- called once, by
+    /// whichever caller actually launched this run, right after
+    /// [`RunModel::new`], from `osi <doc> --label TEXT`'s own
+    /// already-[`crate::names::clean_label`]'d value. A no-op with
+    /// `None` (no `--label` given).
+    pub fn set_label_hint(&mut self, hint: Option<String>) {
+        self.label_hint = hint;
+    }
+
+    /// `osi <doc> --label TEXT`'s own cleaned value (issue #752), set
+    /// by [`RunModel::set_label_hint`] -- the header's own fallback
+    /// below [`RunModel::run_start_label`] and the state file's
+    /// `runtime.last_run.label`, so a labelled run shows its label
+    /// from its very first frame.
+    pub fn label_hint(&self) -> Option<&str> {
+        self.label_hint.as_deref()
     }
 
     /// Whether `--events` has actually been flowing at all (any
@@ -4019,6 +4063,7 @@ mod tests {
             pid: Some(4242),
             engine: None,
             config: None,
+            label: None,
         });
         assert_eq!(model.run_start_pid(), Some(4242));
         assert_eq!(model.run_start_id(), Some("abc"));

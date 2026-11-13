@@ -95,8 +95,11 @@ pub fn build_rows(runs: &[DiscoveredRun]) -> Vec<Row> {
         .map(|r| r.config.as_deref().map(basename))
         .collect();
     let document_labels = disambiguated_document_labels(runs, &config_labels);
-    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
-    let names = crate::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = crate::names::disambiguated_names(&labelled_ids);
 
     let mut rows = Vec::with_capacity(runs.len() + 1);
     rows.push(Row::All {
@@ -252,8 +255,11 @@ pub fn build_recent_rows(
     records: &[HistoryRecord],
     run_dir_exists: &dyn Fn(&str) -> bool,
 ) -> Vec<RecentRow> {
-    let run_ids: Vec<Option<&str>> = records.iter().map(|r| Some(r.run_id.as_str())).collect();
-    let names = crate::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = records
+        .iter()
+        .map(|r| (r.label.as_deref(), Some(r.run_id.as_str())))
+        .collect();
+    let names = crate::names::disambiguated_names(&labelled_ids);
     let mut rows: Vec<RecentRow> = records
         .iter()
         .zip(names)
@@ -424,6 +430,7 @@ mod tests {
             run_dir: run_dir.map(str::to_string),
             document_hash: None,
             engine: Some("cof".to_string()),
+            label: None,
             started_at: started_at.to_string(),
             ended_at: ended_at.to_string(),
             outcome,

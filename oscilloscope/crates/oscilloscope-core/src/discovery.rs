@@ -34,6 +34,13 @@ pub struct DiscoveredRun {
     pub events: Option<PathBuf>,
     pub live_state: Option<PathBuf>,
     pub started_at: Option<String>,
+    /// This run's own label (issue #752), already [`crate::names::
+    /// clean_label`]'d -- read from `events`' own `run_start` line
+    /// first, else `live_state`'s own `runtime.last_run.label`,
+    /// backfilled by [`discover_runs`] the same way `run_id` is for
+    /// a scanned process, for every source here (the registry never
+    /// knows it, having been written before `run_start` arrived).
+    pub label: Option<String>,
 }
 
 impl From<RegistryEntry> for DiscoveredRun {
@@ -49,6 +56,7 @@ impl From<RegistryEntry> for DiscoveredRun {
             events: Some(PathBuf::from(entry.events)),
             live_state: Some(PathBuf::from(entry.live_state)),
             started_at: Some(entry.started_at),
+            label: None,
         }
     }
 }
@@ -151,16 +159,26 @@ fn resolve_maybe_relative(path: &str, cwd: Option<&Path>) -> PathBuf {
 /// against `cwd` when given, else shown as-is.
 ///
 /// `cof run <doc> [--config <cfg>] --quiet --live-state <path> --out
-/// <path> [--events <path>] [-e k=v]...` and `electricity <config>
-/// <doc> [-e k=v]... --out <path> [--events <path>] [--live-state
-/// <path>]` (`oscilloscope_core::engine`'s own two `command`
-/// builders) are the only two shapes this ever needs to parse: a
-/// plain `split_whitespace` is enough for both, since neither engine
-/// is ever invoked by osi with a path argument containing a space.
-/// `cof` is a pip console script, so a real `cof run`'s own command
-/// line names the Python interpreter first and `cof` second;
-/// [`engine_invocation`] recognises that shape the same way
-/// liveness does.
+/// <path> [--events <path>] [-e k=v]... [--label TEXT]` and
+/// `electricity <config> <doc> [-e k=v]... --out <path> [--events
+/// <path>] [--live-state <path>] [--label TEXT]`
+/// (`oscilloscope_core::engine`'s own two `command` builders) are
+/// the only two shapes this ever needs to parse: a plain
+/// `split_whitespace` is enough for both, since osi never invokes
+/// either engine with a path argument containing a space -- but
+/// `--label`'s own value can be several words (issue #752), so the
+/// loop below treats every token after `--label` as part of it, up
+/// to the next token starting with `-`, rather than splitting on
+/// whitespace there too. A label containing its own `-`-prefixed
+/// word (`--label "--urgent fix"`) still confuses this the same way
+/// a path with a space would; this scan never reads a label's own
+/// value regardless, falling back to the run's own `events`/`live_
+/// state` for it instead (`discovered_label`), so a mis-parsed
+/// argument here costs this one source a correct document/config
+/// pair at worst, never a wrong label. `cof` is a pip console
+/// script, so a real `cof run`'s own command line names the Python
+/// interpreter first and `cof` second; [`engine_invocation`]
+/// recognises that shape the same way liveness does.
 pub fn match_scanned_process(
     pid: u32,
     args_line: &str,
@@ -203,6 +221,22 @@ pub fn match_scanned_process(
             }
             "-e" => {
                 i += 2;
+            }
+            // `--label TEXT` (issue #752): never read here (osi
+            // backfills the real, engine-cleaned label from
+            // `events`/`live_state` instead), but its own value
+            // still needs skipping explicitly -- otherwise the
+            // generic flag fallback below would leave it to be
+            // picked up as a stray positional (or several: a multi-
+            // word label splits on whitespace the same as every
+            // other token here) by the branch after it. Every token
+            // up to the next one starting with `-` is this label's
+            // own, however many words it has.
+            "--label" => {
+                i += 1;
+                while tokens.get(i).is_some_and(|t| !t.starts_with('-')) {
+                    i += 1;
+                }
             }
             t if t.starts_with('-') => {
                 i += 1;
@@ -248,6 +282,7 @@ pub fn match_scanned_process(
         engine: Some(engine.to_string()),
         pid: Some(pid),
         launcher: None,
+        label: None,
         run_dir,
         events: events.map(|p| resolve_maybe_relative(p, cwd)),
         live_state: live_state.map(|p| resolve_maybe_relative(p, cwd)),
@@ -305,6 +340,34 @@ fn run_id_from_state_file(live_state: &Path) -> Option<String> {
     value.get("_run_id")?.as_str().map(str::to_string)
 }
 
+/// `label` (issue #752), cleaned, from `events`' own first line --
+/// `None` for a stream with no `run_start` carrying one at all.
+fn label_from_events_first_line(events: &Path) -> Option<String> {
+    let value = first_event(events)?;
+    let raw = value.get("label")?.as_str()?;
+    crate::names::clean_label(raw)
+}
+
+/// `label`, cleaned, from `state.live.json`'s own `runtime.last_run.
+/// label` -- the fallback issue #752 names for a run found with no
+/// `--events` stream of its own at all, the same shape `run_id_
+/// from_state_file`'s own `_run_id` fallback already uses.
+fn label_from_state_file(live_state: &Path) -> Option<String> {
+    let bytes = std::fs::read(live_state).ok()?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    let raw = value.pointer("/runtime/last_run/label")?.as_str()?;
+    crate::names::clean_label(raw)
+}
+
+/// `label` (issue #752), events' own first line preferred over
+/// `state.live.json`'s `runtime.last_run.label` -- the same
+/// preference order [`discovered_run_id`] already uses for `run_id`.
+fn discovered_label(events: Option<&Path>, live_state: Option<&Path>) -> Option<String> {
+    events
+        .and_then(label_from_events_first_line)
+        .or_else(|| live_state.and_then(label_from_state_file))
+}
+
 /// `run_id` (issue #717), events' own first line preferred over
 /// `state.live.json`'s `_run_id` -- either, both or neither of
 /// `events`/`live_state` may be known, and this never fails just
@@ -329,6 +392,11 @@ fn live_state_run_if_fresh(dir: &Path, now: SystemTime) -> Option<DiscoveredRun>
         None => (None, None),
     };
     let run_id = run_id.or_else(|| run_id_from_state_file(&live_state));
+    // `label` stays `None` here -- `discover_runs`'s own backfill
+    // loop reads this run's `events`/`live_state` for it exactly
+    // once; computing it here too, ahead of that, used to parse
+    // `state.live.json` a second time for every run this source
+    // found with no label at all, on every refresh.
     Some(DiscoveredRun {
         run_id,
         run_dir: Some(dir.to_path_buf()),
@@ -436,6 +504,9 @@ pub fn discover_runs(
             discovered.events.as_deref(),
             discovered.live_state.as_deref(),
         );
+        // `label` stays `None` here -- the backfill loop below, the
+        // one place every source's own `events`/`live_state` is ever
+        // read for a label, reads it exactly once there instead.
         runs.push(discovered);
     }
 
@@ -447,6 +518,17 @@ pub fn discover_runs(
             continue;
         }
         runs.push(discovered);
+    }
+
+    // The registry source carries no label of its own (written
+    // before `run_start` ever arrives) -- backfilled here, the one
+    // place every source's own `events`/`live_state` paths are
+    // already known, the same way the scanned-process source's own
+    // `run_id` is backfilled above.
+    for run in runs.iter_mut() {
+        if run.label.is_none() {
+            run.label = discovered_label(run.events.as_deref(), run.live_state.as_deref());
+        }
     }
 
     runs.sort_by(|a, b| match (&a.started_at, &b.started_at) {
@@ -698,6 +780,188 @@ mod tests {
         let found = scan_live_state_in_cwd(dir.path(), std::time::SystemTime::now());
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].orchestration, None);
+    }
+
+    #[test]
+    fn scan_live_state_in_cwd_leaves_the_label_for_discover_runs_own_backfill() {
+        // `scan_live_state_in_cwd` itself never reads a label at all
+        // any more (only `discover_runs`'s own backfill loop does,
+        // the one place every source's `events`/`live_state` is ever
+        // read for one) -- so this source's own result always comes
+        // back with `label: None`, whatever the run's files actually
+        // hold.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r1\",\"orchestration\":\"do.yml\",\"label\":\"ticket 42\"}\n",
+        )
+        .unwrap();
+
+        let found = scan_live_state_in_cwd(dir.path(), std::time::SystemTime::now());
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].label, None);
+    }
+
+    #[test]
+    fn discover_runs_names_a_cwd_sourced_runs_label_from_the_events_first_line() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r1\",\"orchestration\":\"do.yml\",\"label\":\"ticket 42\"}\n",
+        )
+        .unwrap();
+
+        let runs = discover_runs(
+            None,
+            &AllAlive,
+            &NoScan,
+            &NoCwd,
+            Some(dir.path()),
+            std::time::SystemTime::now(),
+        );
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].label, Some("ticket 42".to_string()));
+    }
+
+    #[test]
+    fn discover_runs_falls_back_to_a_cwd_sourced_runs_own_live_state_label_with_no_events() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("state.live.json"),
+            br#"{"runtime":{"last_run":{"label":"ticket 42"}}}"#,
+        )
+        .unwrap();
+
+        let runs = discover_runs(
+            None,
+            &AllAlive,
+            &NoScan,
+            &NoCwd,
+            Some(dir.path()),
+            std::time::SystemTime::now(),
+        );
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].label, Some("ticket 42".to_string()));
+        // No `_run_id` in this bare `state.live.json` and no events
+        // file at all -- exactly the shape a file written by
+        // something other than cof/electricity can take (a label
+        // with no run id known at all), which `names::
+        // disambiguated_names` must never panic on (see its own
+        // tests).
+        assert_eq!(runs[0].run_id, None);
+    }
+
+    #[test]
+    fn discover_runs_cleans_a_cwd_sourced_runs_label_holding_ansi_and_a_newline() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("state.live.json"), b"{}").unwrap();
+        std::fs::write(
+            dir.path().join("events.jsonl"),
+            "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r1\",\"label\":\"\\u001b[1mticket\\n42\\u001b[0m\"}\n",
+        )
+        .unwrap();
+
+        let runs = discover_runs(
+            None,
+            &AllAlive,
+            &NoScan,
+            &NoCwd,
+            Some(dir.path()),
+            std::time::SystemTime::now(),
+        );
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].label, Some("ticket 42".to_string()));
+    }
+
+    #[test]
+    fn match_scanned_process_skips_the_labels_own_value_rather_than_taking_it_as_a_positional() {
+        let run = match_scanned_process(
+            123,
+            "cof run /work/doc.yml --live-state /work/run-dir/state.live.json --label a-label",
+            None,
+        )
+        .unwrap();
+        assert_eq!(run.orchestration, Some("/work/doc.yml".to_string()));
+        assert_eq!(run.label, None);
+    }
+
+    #[test]
+    fn match_scanned_process_skips_every_word_of_a_multi_word_labels_own_value() {
+        let run = match_scanned_process(
+            123,
+            "cof run /work/doc.yml --live-state /work/run-dir/state.live.json --label ticket 42 -e x=1",
+            None,
+        )
+        .unwrap();
+        // Every word up to the next `-`-prefixed token belongs to
+        // the label, not to the document/config positionals a
+        // one-word skip would otherwise have spilled "42" into.
+        assert_eq!(run.orchestration, Some("/work/doc.yml".to_string()));
+        assert_eq!(run.label, None);
+    }
+
+    #[test]
+    fn match_scanned_process_never_reports_a_multi_word_labels_own_word_as_the_document() {
+        // A `cof run` started by something other than osi can put
+        // `--label` ahead of the document -- osi's own two command
+        // builders never do (DESIGN.md §4), but a `ps` scan can see
+        // any `cof`/`electricity` invocation on the machine, not
+        // only ones osi started. A one-word skip used to read this
+        // multi-word label's own second word, "42", as the document
+        // itself; skipping every word up to the next `-`-prefixed
+        // token instead at least never reports that, even though the
+        // real document is lost here too (a known limit: nothing
+        // marks where a positional-less label's own value ends).
+        let run = match_scanned_process(
+            123,
+            "cof run --label ticket 42 doc.yml --live-state /work/run-dir/state.live.json",
+            None,
+        )
+        .unwrap();
+        assert_ne!(run.orchestration, Some("42".to_string()));
+    }
+
+    #[test]
+    fn discover_runs_backfills_a_registry_entrys_label_from_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let run_dir = dir.path().join("run");
+        std::fs::create_dir(&run_dir).unwrap();
+        std::fs::write(
+            run_dir.join("events.jsonl"),
+            "{\"v\":1,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"run-1\",\"label\":\"ticket 42\"}\n",
+        )
+        .unwrap();
+        std::fs::write(run_dir.join("state.live.json"), b"{}").unwrap();
+        let registry_dir = dir.path().join("registry");
+        let entry = RegistryEntry {
+            run_id: "run-1".to_string(),
+            orchestration: "/work/doc.yml".to_string(),
+            config: None,
+            engine: "cof".to_string(),
+            pid: 123,
+            launcher: "osi 0.1.0".to_string(),
+            run_dir: run_dir.to_string_lossy().into_owned(),
+            events: run_dir.join("events.jsonl").to_string_lossy().into_owned(),
+            live_state: run_dir
+                .join("state.live.json")
+                .to_string_lossy()
+                .into_owned(),
+            started_at: "2026-01-01T00:00:00Z".to_string(),
+        };
+        crate::registry::write_entry(&registry_dir, &entry).unwrap();
+
+        let runs = discover_runs(
+            Some(&registry_dir),
+            &AllAlive,
+            &NoScan,
+            &NoCwd,
+            None,
+            std::time::SystemTime::now(),
+        );
+        assert_eq!(runs.len(), 1);
+        assert_eq!(runs[0].label, Some("ticket 42".to_string()));
     }
 
     #[test]

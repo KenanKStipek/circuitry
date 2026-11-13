@@ -263,6 +263,7 @@ mod tests {
             pid: Some(pid),
             engine: Some("cof".to_string()),
             config: None,
+            label: None,
         });
         model
     }
@@ -481,6 +482,7 @@ mod tests {
             pid: Some(1),
             engine: Some("cof 0.1.0".to_string()),
             config: None,
+            label: None,
         });
         let base = tempfile::tempdir().unwrap();
         let dir = base.path().join("runs");
