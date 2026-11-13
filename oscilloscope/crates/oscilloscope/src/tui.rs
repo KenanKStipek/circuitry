@@ -19702,99 +19702,12 @@ mod tape_frame_goldens {
         .unwrap_or_else(|e| panic!("{path:?}: invalid JSON: {e}"))
     }
 
-    /// Prunes a loaded `state.live.json` (a *finished* run's own
-    /// document) down to what the real engine would actually have
-    /// written to disk by `cutoff` -- a node the real run hadn't
-    /// reached by then has no entry at all (not even a `null`
-    /// placeholder), and a loop container not yet finished as a
-    /// whole has no `value` of its own and no `completed_at`, its
-    /// own `progress.done`/`completed_passes` recomputed from
-    /// whichever of its own passes actually finished by `cutoff`.
-    /// `rows`/the model get the mid-run truth for everything a real
-    /// document never persists (what's running right now) from
-    /// events alone, same as a real attached run would.
+    /// `ts` at or before `cutoff` (RFC3339) -- only ever used to
+    /// filter `events.jsonl` down to a cutoff, since `--events`
+    /// never goes through the state tree [`oscilloscope_core::model::
+    /// truncate_state_to`] prunes.
     fn at_or_before(ts: &str, cutoff: &str) -> bool {
-        match (
-            chrono::DateTime::parse_from_rfc3339(ts),
-            chrono::DateTime::parse_from_rfc3339(cutoff),
-        ) {
-            (Ok(ts), Ok(cutoff)) => ts <= cutoff,
-            _ => false,
-        }
-    }
-
-    fn truncate_document(value: &mut serde_json::Value, cutoff: &str) -> bool {
-        let Some(obj) = value.as_object_mut() else {
-            return true;
-        };
-        if !obj.contains_key("meta") {
-            // A bare container (a loop's own `iter_N`, or a wrapper
-            // key like `prime` itself's non-node children): no
-            // `created_at` of its own to check, only its children's.
-            let keys: Vec<String> = obj.keys().cloned().collect();
-            for key in keys {
-                let keep = truncate_document(obj.get_mut(&key).unwrap(), cutoff);
-                if !keep {
-                    obj.remove(&key);
-                }
-            }
-            return !obj.is_empty();
-        }
-        let created_at = obj
-            .get("meta")
-            .and_then(|m| m.get("created_at"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        if !created_at.is_some_and(|c| at_or_before(&c, cutoff)) {
-            return false;
-        }
-        let completed_at = obj
-            .get("meta")
-            .and_then(|m| m.get("completed_at"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_string);
-        let own_done = completed_at.is_some_and(|c| at_or_before(&c, cutoff));
-        let keys: Vec<String> = obj
-            .keys()
-            .filter(|k| k.as_str() != "value" && k.as_str() != "meta")
-            .cloned()
-            .collect();
-        for key in &keys {
-            let keep = truncate_document(obj.get_mut(key).unwrap(), cutoff);
-            if !keep {
-                obj.remove(key);
-            }
-        }
-        if !own_done {
-            let has_progress = obj.get("meta").is_some_and(|m| m.get("progress").is_some());
-            let done = keys
-                .iter()
-                .filter(|k| k.starts_with("iter_"))
-                .filter(|k| {
-                    let pass = obj.get(k.as_str()).and_then(serde_json::Value::as_object);
-                    pass.is_some_and(|p| {
-                        p.values().all(|leaf| {
-                            leaf.get("meta")
-                                .and_then(|m| m.get("completed_at"))
-                                .and_then(serde_json::Value::as_str)
-                                .is_some_and(|c| at_or_before(c, cutoff))
-                        })
-                    })
-                })
-                .count();
-            // `Null`, never removed outright: `flatten_state`'s own
-            // `walk` only registers a path that has both `value`
-            // and `meta` present at all, and a loop container not
-            // yet finished still needs its own `meta.progress` seen.
-            obj.insert("value".to_string(), serde_json::Value::Null);
-            let meta = obj.get_mut("meta").unwrap().as_object_mut().unwrap();
-            meta.remove("completed_at");
-            if has_progress {
-                meta["progress"]["done"] = serde_json::json!(done);
-                meta.remove("completed_passes");
-            }
-        }
-        true
+        oscilloscope_core::observe::duration_seconds(ts, cutoff).is_some_and(|d| d >= 0.0)
     }
 
     fn demo_plan() -> oscilloscope_core::plan::PlanTree {
@@ -23168,9 +23081,9 @@ mod tape_frame_goldens {
 
     fn run2_frozen_at_3_62s() -> (serde_json::Value, Vec<serde_json::Value>) {
         let run_dir = fixtures_dir().join("run2");
-        let mut state = load_json(&run_dir.join("state.live.json"));
+        let state = load_json(&run_dir.join("state.live.json"));
         let now = RUN2_FROZEN_NOW;
-        truncate_document(state.get_mut("prime").unwrap(), now);
+        let mut state = oscilloscope_core::model::truncate_state_to(&state, now);
         // `runtime.last_run.totals`/`completed_at` are themselves
         // only ever written as the run goes/ends; `build_header`'s
         // own token/effects-run figures read `totals` first when
@@ -23590,6 +23503,8 @@ mod tape_frame_goldens {
             None,
             None,
             now,
+            true,
+            &Default::default(),
         );
         (rendered, signal_screen)
     }
@@ -23839,6 +23754,8 @@ mod tape_frame_goldens {
             Some(24),
             None,
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(
             signal_screen.step_rows.len(),
@@ -23854,6 +23771,13 @@ mod tape_frame_goldens {
         let zone = frame_zone();
         let mut app = crate::keys::App::new(false);
         app.screen = oscilloscope_core::screens::Screen::Signal;
+        // `screens::build_signal` was given `cursor_col: Some(24)`
+        // above, but the drawn chart reads its own scrub cursor from
+        // `app.signal_cursor_col` (issue #734), not from the screen
+        // model's own `cursor_col` -- without this, the frame draws
+        // the reconstructed past with no cursor mark at all, a
+        // combination the real TUI never shows.
+        app.signal_cursor_col = Some(24);
         let ctx = DrawCtx {
             theme: &theme,
             theme_banner: None,
@@ -24539,6 +24463,42 @@ mod tape_frame_goldens {
             buffer[(border_x - 1, y)].symbol(),
             " ",
             "expected at least one blank column before the border: {row:?}"
+        );
+    }
+
+    /// Issue #690's own `Ahead3s` collision: a second mark landing
+    /// right after the bare, no-history `Ahead` label still keeps
+    /// the same blank column every other mark/label pair on this
+    /// row already does (#734's `mark_clears_label`/`after_
+    /// everything`), never running the two together.
+    #[test]
+    fn signal_a_mark_after_the_ahead_label_still_keeps_a_blank_column_without_history() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            column_ms: 1000,
+            now_col: Some(2),
+            now_ts: Some("2026-01-01T00:00:02.700Z".to_string()),
+            now_elapsed_s: Some(2.0),
+            ahead_eta_ts: None,
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 3],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 60, 16, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+        let row: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        let ahead_idx = row
+            .find("Ahead")
+            .unwrap_or_else(|| panic!("Ahead must still draw: {row:?}"));
+        let after = &row[ahead_idx + "Ahead".len()..];
+        let gap = after
+            .find(|c: char| c.is_ascii_digit())
+            .unwrap_or_else(|| panic!("a later mark must still draw: {row:?}"));
+        assert!(
+            gap >= 1,
+            "a mark right after Ahead must keep at least one blank column: {row:?}"
         );
     }
 
@@ -26589,6 +26549,8 @@ mod tape_frame_goldens {
             None,
             Some(selected),
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(
             signal_screen.selected.as_ref().map(|s| s.path.as_str()),

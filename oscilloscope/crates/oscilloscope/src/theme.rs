@@ -502,10 +502,15 @@ impl Theme {
             // this crate's own 4.5 floor (#730): darkening a light
             // theme's own near-white background pulls it *toward*
             // `text`'s own luminance, lowering the contrast between
-            // them rather than raising it. Lightening instead keeps
-            // `bg_inset` distinct from both `bg` and `bg_surface`
-            // while raising the ratio to 4.72:1.
-            bg_inset: lighten(bg, 1.02),
+            // them rather than raising it. Lightening clears the
+            // floor instead, but only barely at a small factor (1.02
+            // reads 4.72:1 and differs from `bg` by at most 5 per
+            // channel, close enough to read as the same fill) --
+            // white itself both clears the floor by more (4.90:1)
+            // and reads as a plainly different area from `bg`'s own
+            // cream (differing by up to 28 per channel), while
+            // staying distinct from `bg_surface` too.
+            bg_inset: rgb(0xff, 0xff, 0xff),
             bg_surface: highlight,
             fg_muted: lighten(text, 1.19),
             accent_primary: blue,

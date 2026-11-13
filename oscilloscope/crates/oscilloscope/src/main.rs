@@ -2003,6 +2003,8 @@ fn build_signal_screen_if_active(
         app.signal_cursor_col,
         app.selected_path.as_deref(),
         now,
+        app.fold_enabled,
+        &app.expanded_quick_steps,
     ))
 }
 
@@ -6136,6 +6138,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:01Z",
+            true,
+            &Default::default(),
         );
         let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
             rendered

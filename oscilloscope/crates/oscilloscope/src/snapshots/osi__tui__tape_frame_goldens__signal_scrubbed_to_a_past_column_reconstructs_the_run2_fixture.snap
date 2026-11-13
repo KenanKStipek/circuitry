@@ -1,6 +1,5 @@
 ---
 source: crates/oscilloscope/src/tui.rs
-assertion_line: 23885
 expression: terminal.backend().to_string()
 ---
 " osi  demo.yml · ochre-desert · ● Running 3.6s                                                       SIGNAL    12:50:50 "
@@ -27,7 +26,7 @@ expression: terminal.backend().to_string()
 "╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯"
 "╭─ Now · 1 Running ──────────────────────────────────────────╮╭─ Readings ─────────────────────────────────────────────╮"
 "│ ● tests                     2.5s · sleep 3                 ││ Sent     796 t                                         │"
-"│ Last Burst  0.6s ago · ↑584 ↓66 · 3 prompts in one step    ││ Received 69 t                                          │"
+"│ Last Burst  2.5s ago · ↑212 ↓3 · 1 prompt in one step      ││ Received 69 t                                          │"
 "│ Next Signal gate › reply · queued · usually 265 t          ││ Ratio    11.5 : 1                                      │"
 "│                                                            ││ Peak     212 t at 12:50:47                             │"
 "╰────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────────────────╯"

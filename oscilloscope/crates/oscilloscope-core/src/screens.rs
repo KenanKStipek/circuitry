@@ -9,7 +9,7 @@
 //! so `oscilloscope`'s `tui.rs` is the only thing that turns a
 //! segment's role or a row's field into colour and position.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -3884,6 +3884,8 @@ pub(crate) fn last_finished_row(
         })
 }
 
+type SignalReconstruction = (Vec<Row>, BTreeMap<String, NodeMeta>, RunModel, Value);
+
 /// Issue #690: the step rows and the Now pane, while actually
 /// scrubbed away from Now, reconstruct the run as of `cutoff`
 /// instead of showing its current state -- `state` truncated the
@@ -3892,13 +3894,16 @@ pub(crate) fn last_finished_row(
 /// its own (never the real, live one, which only ever runs forward)
 /// so `running_or_queued_bound` and every other model-backed figure
 /// read exactly as a real attach at that instant would. `None` with
-/// nothing to truncate against yet (no `state` at all).
-type SignalReconstruction = (Vec<Row>, BTreeMap<String, NodeMeta>, RunModel, Value);
-
+/// nothing to truncate against yet (no `state` at all). The rebuilt
+/// rows are folded with the same `fold_enabled`/`expanded_quick_steps`
+/// the live rows already were, so scrubbing never changes a row's
+/// own shape, only what it says.
 fn signal_reconstruct_at(
     state: Option<&Value>,
     plan: &PlanTree,
     cutoff: &str,
+    fold_enabled: bool,
+    expanded_quick_steps: &BTreeSet<String>,
 ) -> Option<SignalReconstruction> {
     let truncated = crate::model::truncate_state_to(state?, cutoff);
     let flat = crate::model::flatten_state(&truncated);
@@ -3906,6 +3911,7 @@ fn signal_reconstruct_at(
     let statuses = model.observe(&truncated, plan, crate::model::ProcessState::Running);
     let all_paths = crate::render::all_observed_paths(&flat, &statuses, plan, &model);
     let rows = crate::render::build_rows(plan, &flat, &statuses, &all_paths, cutoff, &model, None);
+    let rows = crate::fold::fold_rows(rows, fold_enabled, expanded_quick_steps);
     Some((rows, flat, model, truncated))
 }
 
@@ -3926,6 +3932,11 @@ pub fn build_signal(
     cursor_col: Option<usize>,
     selected_path: Option<&str>,
     now: &str,
+    // Issue #690: scrubbing reconstructs a past column's own rows
+    // with the same fold the live ones already have, so a scrub
+    // never changes a row's own shape, only what it says.
+    fold_enabled: bool,
+    expanded_quick_steps: &BTreeSet<String>,
 ) -> SignalScreen {
     let find_selected_row = |p: &str| {
         rows.iter()
@@ -3982,12 +3993,20 @@ pub fn build_signal(
     // explicit `cursor_col`, never the plain selection-column
     // fallback above) does the past get reconstructed at all -- `n`
     // clears `cursor_col` back to `None` and this reverts with it,
-    // the same as "n returns to the live state".
-    let scrub_recon = cursor_col.filter(|&c| Some(c) != now_col).and_then(|c| {
-        let cutoff =
-            run_start.and_then(|s| crate::observe::add_seconds(s, (c + 1) as f64 * column_s))?;
-        signal_reconstruct_at(state, plan, &cutoff)
+    // the same as "n returns to the live state". `scrub_cutoff` is
+    // kept on its own (not only inside `scrub_recon`) because Last
+    // Burst and Quiet, below, read an instant too, not only the
+    // step rows and the Now pane.
+    let scrub_cutoff: Option<String> = cursor_col.filter(|&c| Some(c) != now_col).and_then(|c| {
+        run_start.and_then(|s| crate::observe::add_seconds(s, (c + 1) as f64 * column_s))
     });
+    let scrub_recon = scrub_cutoff.as_deref().and_then(|cutoff| {
+        signal_reconstruct_at(state, plan, cutoff, fold_enabled, expanded_quick_steps)
+    });
+    // Readings' own "now" for everything scoped to the cursor: the
+    // cutoff instant while actually scrubbed, the live `now`
+    // otherwise -- the same split `scrub_recon` itself reads.
+    let cursor_now = scrub_cutoff.as_deref().unwrap_or(now);
 
     let model_label = rows
         .iter()
@@ -4141,7 +4160,15 @@ pub fn build_signal(
     // way the Tape's own list does), each at its own start column.
     // Issue #690: `rows`/`flat`/`model` shadow to the reconstructed
     // past, local to this block alone -- Readings and the selected
-    // step below read the live ones, unaffected.
+    // step below read the live ones, unaffected. `live_model` keeps
+    // the always-live model reachable too: a loop's own dispatch
+    // info (`running_or_queued_bound`) comes from `--events`, which
+    // the reconstructed model, built from state alone, never
+    // replays, so the loop's own concurrency reads from `live_model`
+    // even while scrubbed -- a loop's concurrency doesn't change
+    // mid-run, so the live model's figure is exactly the past
+    // instant's own.
+    let live_model = model;
     let (step_rows, ahead_suffix, now_pane) = {
         let rows: &[Row] = scrub_recon
             .as_ref()
@@ -4330,18 +4357,23 @@ pub fn build_signal(
         {
             ahead_items.push(tape_row_label(row, flat, plan));
         }
+        // Issue #690: scrubbed back to before the run's own real end,
+        // it hadn't ended yet as of the cutoff either -- `■ End` reads
+        // whether the run had ended *by the cutoff*, not whether it
+        // has since, on the live clock.
+        let ended_by_now = header
+            .run_end_ts
+            .as_deref()
+            .is_some_and(|end| scrub_cutoff.as_deref().is_none_or(|cutoff| end <= cutoff));
         let ahead_suffix = if ahead_items.is_empty() {
-            header
-                .run_end_ts
-                .is_none()
-                .then(|| "\u{25a0} End".to_string())
+            (!ended_by_now).then(|| "\u{25a0} End".to_string())
         } else {
             let mut text = ahead_items
                 .iter()
                 .map(|i| format!("\u{b7} {i}"))
                 .collect::<Vec<_>>()
                 .join("   ");
-            if header.run_end_ts.is_none() {
+            if !ended_by_now {
                 text.push_str("   \u{25a0} End");
             }
             Some(text)
@@ -4381,6 +4413,7 @@ pub fn build_signal(
                 .count() as u64;
             let slots = model
                 .running_or_queued_bound(&loop_row.path)
+                .or_else(|| live_model.running_or_queued_bound(&loop_row.path))
                 .unwrap_or(busy);
             format!("{busy} of {slots} Slots Busy")
         });
@@ -4456,8 +4489,13 @@ pub fn build_signal(
             )
         });
 
+        // Issue #690: while scrubbed, Last Burst only looks at the
+        // columns up to the cursor, and its own age is the cutoff's
+        // own distance, never the live clock's -- the same "as of
+        // that instant" rule Readings' own Peak/Largest/Quiet follow.
         let last_burst_idx = buckets
             .iter()
+            .take(cursor.map(|c| (c + 1).min(buckets.len())).unwrap_or(0))
             .enumerate()
             .rev()
             .find(|(_, b)| b.sent + b.received > 0)
@@ -4465,7 +4503,7 @@ pub fn build_signal(
         let last_burst = last_burst_idx.and_then(|i| {
             let b = &buckets[i];
             let ts = b.last_ts.as_deref()?;
-            let age = duration_seconds(ts, now)?;
+            let age = duration_seconds(ts, cursor_now)?;
             let plural =
                 |n: u64, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
             // An agent's tokens arrive as sightings rather than a prompt's
@@ -4594,7 +4632,7 @@ pub fn build_signal(
         .map(|(i, _)| i);
     let quiet_s = cursor_burst_idx
         .and_then(|i| cursor_buckets[i].last_ts.as_deref())
-        .and_then(|ts| duration_seconds(ts, now));
+        .and_then(|ts| duration_seconds(ts, cursor_now));
 
     let largest_usual_step = header
         .history_step_usual
@@ -7720,6 +7758,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:03.100Z",
+            true,
+            &Default::default(),
         );
         assert_eq!(signal.sent_axis_top, 600, "no single column passed 600");
     }
@@ -7769,6 +7809,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:03.100Z",
+            true,
+            &Default::default(),
         );
         // Bucket 30 spans [3.0s, 3.1s) -- both ends land there.
         let bucket = &signal.buckets[30];
@@ -7818,6 +7860,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:03.100Z",
+            true,
+            &Default::default(),
         );
         match &signal.step_rows[0].kind {
             SignalStepKind::Prompt { rest } => {
@@ -7877,6 +7921,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:03.100Z",
+            true,
+            &Default::default(),
         );
         let mark = signal
             .marks
@@ -7916,7 +7962,19 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.650Z";
         let signal = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
         assert_eq!(signal.now_col, Some(6));
         let bucket = &signal.buckets[6];
@@ -7977,6 +8035,8 @@ mod tests {
             None,
             None,
             now,
+            true,
+            &Default::default(),
         );
         // The two live sightings land at their own observation
         // columns (350ms and 1350ms since the run started, at 100ms
@@ -8063,7 +8123,19 @@ mod tests {
         header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
         let now = "2026-01-01T00:00:01.100Z";
         let signal = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
         let (total_sent, total_received) = signal
             .buckets
@@ -8124,6 +8196,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:03.100Z",
+            true,
+            &Default::default(),
         );
         assert_eq!(signal.readings.ratio, Some(9.0));
         let (peak_tokens, peak_ts) = signal.readings.peak.expect("a peak column");
@@ -8180,6 +8254,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:01.100Z",
+            true,
+            &Default::default(),
         );
         let (bucket_sent, bucket_received) = signal
             .buckets
@@ -8292,6 +8368,8 @@ mod tests {
             Some(0),
             None,
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(
             scrubbed.step_rows.len(),
@@ -8337,12 +8415,176 @@ mod tests {
             None,
             None,
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(live.step_rows.len(), 2);
         assert_eq!(live.step_rows[0].path, "prime.drafts");
         assert_eq!(live.step_rows[1].path, "prime.slow");
         assert_eq!(live.now_pane.running.len(), 1);
         assert_eq!(live.now_pane.running[0].path, "prime.slow");
+    }
+
+    /// Issue #690: scrubbed to before a *finished* run's own real
+    /// end, the ahead suffix's own "■ End" marker reads whether the
+    /// run had ended by the cutoff, not whether it has since on the
+    /// live clock -- a finished run scrubbed back to a column that
+    /// was still live must still read that way.
+    #[test]
+    fn build_signal_ahead_suffix_shows_end_scrubbed_before_a_finished_runs_own_end() {
+        let rows = vec![tape_row(
+            "prime.slow",
+            1,
+            "slow",
+            RowKind::Tool,
+            StatusKind::Done,
+        )];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.slow".to_string(),
+            tape_node("2026-01-01T00:00:00.000Z", Some("2026-01-01T00:00:02.000Z")),
+        );
+        let state = json!({"prime": {"value": null, "meta": {
+            "created_at": "2026-01-01T00:00:00.000Z", "completed_at": "2026-01-01T00:00:02.000Z"},
+            "slow": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:02.000Z",
+                "provider": "shell"}}
+        }});
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        header.run_end_ts = Some("2026-01-01T00:00:02.000Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:02.000Z";
+
+        let scrubbed = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            1000,
+            Some(0),
+            None,
+            now,
+            true,
+            &Default::default(),
+        );
+        assert_eq!(
+            scrubbed.ahead_suffix.as_deref(),
+            Some("\u{25a0} End"),
+            "the run hadn't ended yet as of the cutoff, 1s into a run that ended at 2s: {:?}",
+            scrubbed.ahead_suffix
+        );
+
+        let live = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            1000,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
+        );
+        assert_eq!(
+            live.ahead_suffix, None,
+            "the run has actually ended by now, no further End marker needed: {:?}",
+            live.ahead_suffix
+        );
+    }
+
+    /// Issue #690: a loop's own slots figure, while scrubbed, reads
+    /// the loop's real concurrency, not however many passes
+    /// happened to be busy right at the cutoff -- the reconstructed
+    /// model is observed from `state` alone, which never carries a
+    /// `dispatch` event's own `concurrency`, so it falls back to the
+    /// always-live model's own bound for the same path, the one
+    /// `--events` actually told it.
+    #[test]
+    fn build_signal_scrubbed_slots_text_reads_the_loops_real_concurrency() {
+        let rows = vec![
+            tape_row(
+                "prime.drafts",
+                1,
+                "drafts",
+                RowKind::Loop,
+                StatusKind::Running,
+            ),
+            tape_row(
+                "prime.drafts.iter_0.draft",
+                2,
+                "draft",
+                RowKind::Prompt,
+                StatusKind::Running,
+            ),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.drafts".to_string(),
+            tape_node("2026-01-01T00:00:00.000Z", None),
+        );
+        flat.insert(
+            "prime.drafts.iter_0.draft".to_string(),
+            signal_node("2026-01-01T00:00:00.500Z", None, 0, 0),
+        );
+        let state = json!({"prime": {"value": null, "meta": {
+            "created_at": "2026-01-01T00:00:00.000Z", "completed_at": null},
+            "drafts": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": null,
+                "progress": {"done": 0, "total": 2}},
+                "iter_0": {"draft": {"value": null, "meta": {
+                    "created_at": "2026-01-01T00:00:00.500Z",
+                    "completed_at": null, "adapter": "scripted"}}}
+            }
+        }});
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        // The loop's own real concurrency (2): only the always-live
+        // model, fed `--events`, ever carries this -- the
+        // reconstructed one, observed from `state` alone, never
+        // does.
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::Dispatch {
+            ts: "2026-01-01T00:00:00.000Z".to_string(),
+            path: "prime.drafts".to_string(),
+            branches: 2,
+            concurrency: Some(2),
+        });
+        let now = "2026-01-01T00:00:02.000Z";
+
+        let scrubbed = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            1000,
+            Some(0),
+            None,
+            now,
+            true,
+            &Default::default(),
+        );
+        assert_eq!(
+            scrubbed.now_pane.slots_text.as_deref(),
+            Some("1 of 2 Slots Busy"),
+            "only one pass was busy at the cutoff, but the loop's own \
+             concurrency is 2: {:?}",
+            scrubbed.now_pane.slots_text
+        );
     }
 
     /// The Now pane's own lines: a running leaf with its slot, the
@@ -8413,7 +8655,19 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:02.100Z";
         let signal = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
 
         assert_eq!(signal.now_pane.running.len(), 1);
@@ -8469,7 +8723,19 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:01.000Z";
         let signal = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
 
         assert_eq!(signal.now_pane.slots_text, None);
@@ -8517,7 +8783,19 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:02.100Z";
         let signal = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
 
         let (loop_label, loop_status) = signal
@@ -8572,6 +8850,8 @@ mod tests {
             None,
             Some("prime.ask"),
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(signal.cursor_col, Some(10));
         assert_eq!(
@@ -8593,6 +8873,8 @@ mod tests {
             None,
             Some("prime.fix"),
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(signal.cursor_col, Some(15));
         assert_eq!(
@@ -8616,6 +8898,8 @@ mod tests {
             Some(10),
             Some("prime.fix"),
             now,
+            true,
+            &Default::default(),
         );
         assert_eq!(signal.cursor_col, Some(10));
         assert_eq!(
@@ -8666,6 +8950,8 @@ mod tests {
             None,
             None,
             now,
+            true,
+            &Default::default(),
         );
         assert!(running.buckets[6].received_live);
         assert_eq!(running.buckets[6].received, 7);
@@ -8688,7 +8974,19 @@ mod tests {
             ),
         );
         let done = build_signal(
-            &rows_done, &rows_done, &header, &flat_done, &plan, &model, None, 100, None, None, now,
+            &rows_done,
+            &rows_done,
+            &header,
+            &flat_done,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
         assert!(!done.buckets[6].received_live);
         assert_eq!(done.buckets[6].received, 9);
@@ -8722,10 +9020,34 @@ mod tests {
         let model = RunModel::new();
         let now = "2026-01-01T00:00:00.400Z";
         let at_100ms = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            100,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
         let at_200ms = build_signal(
-            &rows, &rows, &header, &flat, &plan, &model, None, 200, None, None, now,
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            None,
+            200,
+            None,
+            None,
+            now,
+            true,
+            &Default::default(),
         );
         assert_eq!(at_100ms.buckets[3].sent, 10, "0.35s is column 3 at 100ms");
         assert_eq!(at_200ms.buckets[1].sent, 10, "0.35s is column 1 at 200ms");

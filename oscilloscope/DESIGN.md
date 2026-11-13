@@ -2924,24 +2924,17 @@ its content, capped at the screen, and splits onto as many pages as
 a small terminal needs (issue #738, also settling #684's own
 frame-locked blank rows), so the close row -- the only hint a second
 page exists -- shows on every page down to 60x24. Every dialog --
-Help, the quit and cancel confirms, the filter prompt -- blanks the
+Help, the quit and cancel confirms, the filter prompt -- dims the
 whole screen behind it the same way (`tui::dim_backdrop_for_dialog`):
-a flat dim sweep over every row of the frame it is drawn on top of,
-the detail pane included, except the status line, which dims its
-own spans directly instead (`draw_tape_status_line`'s own
-`dialog_open`) so its own trailing blank stays at the frame's own
-full brightness, not this sweep's. Issue #684's own open question
-is settled this way: no dialog leaves the pane behind it untouched.
-
-**The follow notice (issue #684).** With `follow` off and the Now
-band's own row scrolled outside the list's own window
-(`App::tape_now_out_of_view`, set by `tui::draw_tape_list` right
-after it computes the window, the same lifecycle `tape_list_start`
-already has), the status line says so and names `f`: "follow is off
-· Now is out of view · f follows it again", in place of the newest-
-finished-step text it otherwise reads -- `f` isn't in the Tape's own
-key bar at all, so nothing else on screen below 100 columns would
-ever tell the user it's the way back.
+every row's own style falls to a flat `fg.dim` sweep, the detail
+pane included, except the status line, which dims its own spans
+directly instead (`draw_tape_status_line`'s own `dialog_open`) so
+its own trailing blank stays at the frame's own full brightness, not
+this sweep's. The detail pane's own content stops drawing at all
+while a dialog is open, leaving only its border and title at the
+dimmed style -- nothing on screen actually blanks, only dims. Issue
+#684's own open question is settled this way: no dialog leaves the
+pane behind it untouched.
 
 `?` always opens on the Keys page
 (page `0`, `App::help_page`'s own default), the same order the merged
@@ -3015,6 +3008,16 @@ band's own `● n run · m wait` reading only makes sense that way; and
 below 100 columns, the design's own prose naming only the Story
 pane's own drop there.
 
+**The follow notice (issue #684).** With `follow` off and the Now
+band's own row scrolled outside the list's own window
+(`App::tape_now_out_of_view`, set by `tui::draw_tape_list` right
+after it computes the window, the same lifecycle `tape_list_start`
+already has), the status line says so and names `f`: "follow is off
+· Now is out of view · f follows it again", in place of the newest-
+finished-step text it otherwise reads -- `f` isn't in the Tape's own
+key bar at all, so nothing else on screen below 100 columns would
+ever tell the user it's the way back.
+
 **From the frames, not from the design text: the Key's own contents
 (issue #738).** §3.7 and §4 name the glyphs and keys; which of them
 each screen's own Key page actually lists is read off the frames and
@@ -3060,26 +3063,42 @@ step rows and the Now pane follow the cursor's column" now does:
 `screens::signal_reconstruct_at` truncates a clone of the run's own
 raw state down to what the real engine would actually have
 persisted by the cursor's own column -- a node not yet reached by
-then has no entry at all, a container not yet finished as a whole
-has no `value`/`completed_at` of its own and its own `progress.done`
+then has no entry at all (the root itself included: unreached, the
+whole tree is dropped, not kept as if the run were already under
+way), a container not yet finished as a whole has no
+`value`/`completed_at` of its own, every field only ever written at
+completion (`error`, `exit_code`, `branch`, the `tokens_*_total`
+pair) stripped back off it too, and its own `progress.done`
 recomputed from whichever of its own passes had actually finished by
 then (`model::truncate_state_to`, the same rule the design's own
 fixture frames are themselves built with, ported out of the test-only
 helper that already did this into a production one). The truncated
 document is observed into a brand new `RunModel` of its own -- never
-the real, live one, which only ever runs forward -- so `rows`/`flat`
-and everything `running_or_queued_bound` and the rest of the Now
-pane's own figures read off them come back exactly as a real attach
-at that instant would see them. This only ever runs while `←→` is
-actually scrubbed away from Now (`cursor_col` itself `Some` and not
-equal to it); `n` clears it and the step rows and the Now pane revert
-to the live state on the very next redraw. Readings' own Sent,
-Received and Ratio stay the run's own live totals regardless, same
-as before; Peak, Largest and Quiet already read only up to the
-cursor's own column, unchanged. A new golden (`tui::signal_scrubbed_
-to_a_past_column_reconstructs_the_run2_fixture`, an `insta` snapshot,
-not a design frame) pins this against the `run2` fixture scrubbed to
-a column before `tests` has even finished.
+the real, live one, which only ever runs forward -- and its own rows
+fold with the same `fold_enabled`/`expanded_quick_steps` the live
+ones already do, so scrubbing never changes a row's own shape, only
+what it says. A loop's own real concurrency is the one figure the
+reconstructed model can't answer on its own: `running_or_queued_
+bound` reads a `dispatch` event's own `concurrency`, which only ever
+arrives over `--events`, never through `state` -- so the Now pane's
+own slots figure falls back to the always-live model's own bound for
+the same path once the reconstructed one has none, a loop's own
+concurrency being fixed for its whole run, not something scrubbing
+ever needs to rebuild. Last Burst, and the ahead suffix's own
+`■ End` marker, both read as of the cutoff too -- the one measuring
+its own age from it rather than the live clock, the other asking
+whether the run had ended by then, not whether it has since. This
+only ever runs while `←→` is actually scrubbed away from Now
+(`cursor_col` itself `Some` and not equal to it); `n` clears it and
+the step rows and the Now pane revert to the live state on the very
+next redraw. Readings' own Sent, Received and Ratio stay the run's
+own live totals regardless, same as before; Peak, Largest and Quiet
+already read only up to the cursor's own column, unchanged. A new
+golden (`tui::signal_scrubbed_to_a_past_column_reconstructs_the_
+run2_fixture`, an `insta` snapshot, not a design frame, its own
+scrub cursor drawn the same way `←→` leaves it) pins this against
+the `run2` fixture scrubbed to a column before `tests` has even
+finished.
 
 **The Ahead label and a short-run's own Now pane title (issue
 #690).** The seconds row's own usable width now keeps one trailing

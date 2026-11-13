@@ -670,6 +670,17 @@ fn truncate_node(value: &mut Value, cutoff: &str) -> bool {
         obj.insert("value".to_string(), Value::Null);
         let meta = obj.get_mut("meta").unwrap().as_object_mut().unwrap();
         meta.remove("completed_at");
+        // Every one of these is only ever written once the node is
+        // actually done -- a prompt/tool/agent step not finished by
+        // `cutoff` keeps the real document's own final meta for them
+        // otherwise, reading as if it had already finished.
+        meta.remove("error");
+        meta.remove("exit_code");
+        meta.remove("branch");
+        meta.remove("tokens_sent_total");
+        meta.remove("tokens_received_total");
+        meta.remove("tokens_sent");
+        meta.remove("tokens_received");
         if has_progress {
             meta["progress"]["done"] = serde_json::json!(done);
             meta.remove("completed_passes");
@@ -691,7 +702,13 @@ fn truncate_node(value: &mut Value, cutoff: &str) -> bool {
 pub fn truncate_state_to(state: &Value, cutoff: &str) -> Value {
     let mut state = state.clone();
     if let Some(prime) = state.get_mut("prime") {
-        truncate_node(prime, cutoff);
+        // The root itself unreached by `cutoff` (an engine still
+        // starting up, say) drops the whole tree rather than keeping
+        // it: `truncate_node`'s own `false` means exactly that for
+        // every other node, and the root is no different.
+        if !truncate_node(prime, cutoff) {
+            *prime = Value::Object(serde_json::Map::new());
+        }
     }
     state
 }

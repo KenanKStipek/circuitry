@@ -3008,16 +3008,12 @@ fn follow_off_with_now_out_of_view_shows_a_status_line_notice() {
         );
     }
 
-    let before_g = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"g");
-    std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_g..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        let screen = support::screen_grid(&captured_buf.lock().unwrap(), 200, 60).join("\n");
+        let screen = wait_for_screen_text(&captured_buf, "follow is off", Duration::from_secs(10));
         assert!(
             !screen.contains("\u{2501}\u{2501} Now"),
-            "expected the Now band's own rule scrolled out of view after g; got:\n{rendered:?}\nscreen:\n{screen}"
+            "expected the Now band's own rule scrolled out of view after g; got:\n{screen}"
         );
         assert!(
             screen.contains("follow is off") && screen.contains(" f "),
