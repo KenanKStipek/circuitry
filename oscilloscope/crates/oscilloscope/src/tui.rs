@@ -15567,6 +15567,8 @@ mod golden_tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))),
             on_error,
             labels: None,

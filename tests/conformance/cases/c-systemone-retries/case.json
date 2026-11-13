@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "A 500 (retryable by status) then a 200 -- the effect's own retries: policy runs the same way it does for any tool, retries_used: 1.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml"
+}

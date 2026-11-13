@@ -1,0 +1,12 @@
+name: c-systemone-http-500
+effects:
+  - type: tool
+    name: decide
+    provider: systemone
+    params:
+      model: typesafe-1
+      state: "a short diff"
+      questions:
+        risky:
+          type: noul
+          instructions: "Does this change risk data loss?"
