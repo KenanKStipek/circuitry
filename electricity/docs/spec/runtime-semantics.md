@@ -297,7 +297,9 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   `adapter, model, model_reason ("explicit"|"router"|"default"), prompt_type,
   prompt_sent, prompt_sent_sha256, prompt_chars, tokens_sent, tokens_received,
   tokens_sent_total, tokens_received_total, dry_run, fallback_attempts[], fallback_recovered,
-  waiting_for, retries_used?, answer? (boolean/number prompt_type only),
+  waiting_for, retries_used?, attempts? (present exactly when retries_used is;
+  one entry per attempt, oldest first -- see "Every attempt" below; issue #668),
+  answer? (boolean/number prompt_type only),
   complexity? (scoring enabled only), band? nested under complexity,
   decomposition? (decomposition triggered only), finish_reason?, warnings?,
   assets?, template_files? (a `file: {from: ...}` source read at dispatch only),
@@ -309,6 +311,8 @@ Per-effect-type `meta` (confirmed field sets from live runs):
   stdout_sha256? (`runtime.state.parsed_stdout: drop` on a parsed stdout only,
   #592), binary? (process plugins), status_code? (HTTP-family only), raw
   (redacted + size-capped), waiting_for, retries_used?, expect?,
+  attempts? (present exactly when retries_used is; one entry per attempt,
+  oldest first -- see "Every attempt" below; issue #668),
   template_files? (an `agent` effect's `params.prompt` read from a file only,
   #591)`.
 - **use** (`core/use.py:271` `UseDefinition`, confirmed live): `orchestration,
@@ -1235,6 +1239,29 @@ start of every pass, same as `expect`/`retries_used`. A `--resume`d,
 unfinished retried `use` lists only the resumed run's attempts, as
 `retries_used` counts them. Ported in `electricity-vm::exec::use_` the same
 way.
+
+**`meta.attempts` on `tool` and `prompt`** (issue #668): the same contract
+(present exactly when `meta.retries_used` is, oldest first, written and
+published before each backoff wait, reset at the start of every pass),
+with each effect type's own fields in place of `use`'s child-run ones. A
+`tool` entry: `created_at`, `completed_at`, `value`, `error`, `expect`
+(that attempt's own `meta.expect`, or `null` when the check never ran),
+then `exit_code` and `status_code`, each only when this attempt's own
+`meta` carries it (every tool sets `exit_code`, `null` for a non-process
+plugin; only an HTTP-family provider ever sets `status_code`). A `prompt`
+entry: `created_at`, `completed_at`, `value`, `error`, `fallback_attempts`
+(that attempt's own provider tries -- a #660 `error_code`/`http_status`
+lives inside each of those, not at the entry's own top level), `tokens_sent`
+and `tokens_received`; a prompt has no `expect` to carry. Neither entry
+changes a run's own totals: a prompt's `tokens_sent_total`/
+`tokens_received_total` already summed every attempt before `meta.attempts`
+existed; a tool's `expect: {mode: model}` check spends tokens on an
+attempt that is later retried, and those still don't reach any run total
+on either engine -- the retried attempt's own `meta.attempts` entry is the
+only record of them. No size cap: a prompt's own entry repeats that
+attempt's whole reply. `runtime.state.prompt_sent` shapes only
+`meta.prompt_sent` itself, never a `meta.attempts` entry's `value`. Ported
+in `electricity-vm::exec::tool`/`exec::prompt` the same way.
 
 **Confirmed live node** (full-namespace mode):
 ```json
