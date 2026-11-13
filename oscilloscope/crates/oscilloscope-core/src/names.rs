@@ -227,6 +227,22 @@ pub fn truncate_display_width(text: &str, max_cells: usize) -> String {
     cut
 }
 
+/// `text`, right-padded with plain spaces to `width` display cells
+/// (issue #752's §3: "never byte or char counts") -- the column-
+/// padding equivalent of [`truncate_display_width`]: `format!("{:<
+/// width$}", text)` pads by `char` count, which overshoots for any
+/// text narrower, cell for cell, than its own `char` count (a label
+/// holding a CJK character or an emoji) and leaves every later
+/// column misaligned. `text` already wider than `width` is returned
+/// unchanged, same as `format!`'s own `<width$>` for a `str` that
+/// overruns its column.
+pub fn pad_display_width(text: &str, width: usize) -> String {
+    let pad = width.saturating_sub(display_width(text));
+    let mut padded = text.to_string();
+    padded.push_str(&" ".repeat(pad));
+    padded
+}
+
 /// A run's own label (issue #752), cleaned exactly the way both
 /// engines already clean it before ever writing it -- osi cleans it
 /// again on every read, since a `--events`/state file can be
@@ -556,6 +572,18 @@ mod tests {
         let cut = truncate_display_width(text, 6);
         assert_eq!(display_width(&cut), 5);
         assert!(cut.ends_with('\u{22ef}'));
+    }
+
+    #[test]
+    fn pad_display_width_pads_a_wide_character_string_by_cells_not_chars() {
+        // One CJK character is 2 cells but 1 char: padding to 5
+        // cells needs 3 spaces, not 4.
+        assert_eq!(pad_display_width("注", 5), "注   ");
+    }
+
+    #[test]
+    fn pad_display_width_leaves_text_already_at_width_unchanged() {
+        assert_eq!(pad_display_width("abc", 3), "abc");
     }
 
     #[test]
