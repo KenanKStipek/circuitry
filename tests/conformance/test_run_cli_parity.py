@@ -60,12 +60,14 @@ SHELL_ORCHESTRATION = (
 )
 
 #: A single slow `awk` step (issue #741/#751's own cross-engine `meta.live`
-#: parity requirement) -- two 0.6s `system("sleep ...")` calls between
-#: three `print`s, one of them to stderr, give a wide, deterministic
-#: window in which both engines have printed `line1` to stdout and
-#: nothing to stderr yet, long before `line2`/`line3` -- the same
-#: checkpoint `electricity/crates/electricity-cli/tests/live_state.rs`
-#: samples for the single-engine case.
+#: parity requirement) -- two 2.5s `system("sleep ...")` calls between
+#: three `print`s, one of them to stderr. Both engines publish `meta.live`
+#: at most once a second (plus one trailing publish after a second of
+#: quiet); a 0.6s gap is shorter than that throttle window, so on cof's
+#: own side (a separate reader thread per stream, racing the publisher's
+#: own 1 s tick) it can land a first publish *after* `line2` has already
+#: arrived, never showing `line1` alone at all -- 2.5s leaves a wide,
+#: unambiguous margin past the throttle on both engines.
 SLOW_AWK_ORCHESTRATION = (
     "effects:\n"
     "  - name: slow_awk\n"
@@ -73,9 +75,9 @@ SLOW_AWK_ORCHESTRATION = (
     "    provider: awk\n"
     "    params:\n"
     "      args:\n"
-    '        - \'BEGIN{print "line1"; fflush(); system("sleep 0.6"); '
+    '        - \'BEGIN{print "line1"; fflush(); system("sleep 2.5"); '
     'print "line2" > "/dev/stderr"; fflush("/dev/stderr"); '
-    'system("sleep 0.6"); print "line3"}\'\n'
+    'system("sleep 2.5"); print "line3"}\'\n'
 )
 
 _CREDENTIAL_ENV_VARS = (
@@ -645,12 +647,10 @@ def test_a_running_tools_meta_live_tail_matches_byte_for_byte_on_both_engines(
     same slow `awk` step runs, both engines' `--live-state` must show
     the same `stdout_tail`/`stderr_tail`/`stdout_bytes`/`stderr_bytes`
     at the same point in the run (`_slow_awk_live_checkpoint`), apart
-    from timestamps. Skips while the installed cof doesn't publish a
-    process-backed tool's `meta.live` at all yet -- `core/tool.py`
-    only ever passes `on_live` to an `AgentPlugin` today, so a
-    `GenericSubprocessTool` step like this one never gets a `meta.live`
-    on cof's side until #751 lands. Once it does, this must run and
-    pass, not skip."""
+    from timestamps. #751 ported `on_live` to cof's own
+    `GenericSubprocessTool` path, so this runs for real on both
+    engines now -- a cof that publishes nothing is a real failure
+    here, never a skip."""
     home_dir = tmp_path / "home"
     home_dir.mkdir()
 
@@ -677,11 +677,10 @@ def test_a_running_tools_meta_live_tail_matches_byte_for_byte_on_both_engines(
     assert cof_returncode == 0
 
     cof_checkpoint = _slow_awk_live_checkpoint(cof_observations)
-    if cof_checkpoint is None:
-        pytest.skip(
-            "installed cof does not yet publish a process-backed tool's meta.live (#751); "
-            "once it does, this parity test must run and pass"
-        )
+    assert cof_checkpoint is not None, (
+        "cof never published a prime.slow_awk.meta.live with line1 alone; observed "
+        f"{len(cof_observations)} version(s): {cof_observations!r}"
+    )
 
     electricity_observations, electricity_returncode = run_and_sample(
         [str(electricity_binary), "run", "orchestration.yml", "--config", "config.json"],
