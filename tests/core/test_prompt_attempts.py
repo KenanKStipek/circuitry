@@ -209,7 +209,7 @@ def test_attempts_is_reset_on_a_reused_node() -> None:
 def test_attempts_live_published_before_the_backoff_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """R1: each entry is written and published as its attempt ends and
+    """Each entry is written and published as its attempt ends and
     another follows, before the backoff wait."""
     seen: list[int] = []
 
