@@ -143,7 +143,11 @@ pub fn disambiguated_names(runs: &[(Option<&str>, Option<&str>)]) -> Vec<Option<
                     // `id_suffix(id)` keeps #717's own original rule
                     // unchanged, exactly as before #752.
                     if label.is_some()
-                        && suffixed_counts.get(suffixed_name.as_str()).copied().unwrap_or(0) > 1
+                        && suffixed_counts
+                            .get(suffixed_name.as_str())
+                            .copied()
+                            .unwrap_or(0)
+                            > 1
                     {
                         let id = id.expect("a suffixed name always came from a known run id");
                         Some(format!("{suffixed_name}\u{b7}{}", id_suffix(id)))
@@ -497,7 +501,8 @@ mod tests {
         // suffix, `run_name(id)`, draws from) but whose `id_suffix`
         // doesn't -- found by search, since `run_name`'s hash gives
         // no simple way to construct one by hand.
-        let mut by_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut by_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         let (a, b) = (0..100_000)
             .map(|i| format!("id-{i}"))
             .find_map(|id| {

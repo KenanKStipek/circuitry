@@ -42,7 +42,7 @@ import os, sys, time
 
 args = sys.argv[1:]
 if args[:1] == ["--help"]:
-    print("usage: --events PATH --live-state PATH")
+    print("usage: --events PATH --live-state PATH --label TEXT")
     sys.exit(0)
 
 out = None
@@ -211,10 +211,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
         ],
         &[
             ("PATH", path_env.as_os_str()),
-            (
-                "OSI_DOUBLE_EVENTS",
-                OsStr::new(&running_events("run-a")),
-            ),
+            ("OSI_DOUBLE_EVENTS", OsStr::new(&running_events("run-a"))),
             ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
             ("OSI_DOUBLE_FINISH_FILE", finish_file_a.as_os_str()),
             (
@@ -249,10 +246,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
         ],
         &[
             ("PATH", path_env.as_os_str()),
-            (
-                "OSI_DOUBLE_EVENTS",
-                OsStr::new(&running_events("run-b")),
-            ),
+            ("OSI_DOUBLE_EVENTS", OsStr::new(&running_events("run-b"))),
             ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
             (
                 "OSI_DOUBLE_FINISH_FILE",

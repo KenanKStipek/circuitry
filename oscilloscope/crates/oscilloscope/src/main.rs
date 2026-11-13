@@ -414,6 +414,32 @@ fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<Stri
     }
 }
 
+/// `do_run`'s own notice for `osi <doc> --label TEXT` against an
+/// engine whose `--help` never mentioned `--label` at all (issue
+/// #752): `--label` is simply never passed to it (`CofEngine`/
+/// `ElectricityEngine::command`'s own `self.caps.label` check), so
+/// nothing the engine writes -- `run_start`, `runtime.last_run` --
+/// ever carries this run's own label; osi still shows it everywhere
+/// it shows a run's name today, from `RunSpec::label` alone, so this
+/// is purely informational, never a reason to withhold the label
+/// osi can perfectly well show on its own. `None` with no `--label`
+/// given at all, or with a timed-out/missing probe (whichever more
+/// specific notice [`engine_capability_notice`] already prints for
+/// those covers this too, rather than piling a second, redundant
+/// notice with the same root cause on top of it).
+fn label_capability_notice(
+    caps: &EngineCaps,
+    engine_name: &str,
+    label_given: bool,
+) -> Option<String> {
+    if !label_given || caps.label || caps.missing || caps.timed_out {
+        return None;
+    }
+    Some(format!(
+        "osi: this {engine_name} has no --label: showing it in osi only"
+    ))
+}
+
 /// `oscilloscope_core::plan::compile`, mirroring `cof`'s own config
 /// discovery (issue #433) when `config` is `None`: `$HOME` and osi's
 /// own current directory are read here, at this one real call site,
@@ -658,7 +684,10 @@ fn run_glance(
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
-    let label_hint = spec.label.as_deref().and_then(oscilloscope_core::names::clean_label);
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
     differ.set_label_hint(label_hint.clone());
     model.set_label_hint(label_hint);
     let mut current_state: Option<serde_json::Value> = None;
@@ -1111,6 +1140,11 @@ fn do_run(args: RunArgs) -> ExitCode {
     if let Some(notice) = engine_capability_notice(&engine.caps(), engine.name()) {
         eprintln!("{notice}");
     }
+    if let Some(notice) =
+        label_capability_notice(&engine.caps(), engine.name(), spec.label.is_some())
+    {
+        eprintln!("{notice}");
+    }
 
     let cmd = match engine.command(&spec) {
         Ok(cmd) => cmd,
@@ -1252,7 +1286,10 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
-    let label_hint = spec.label.as_deref().and_then(oscilloscope_core::names::clean_label);
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
     differ.set_label_hint(label_hint.clone());
     model.set_label_hint(label_hint);
 
@@ -2141,7 +2178,10 @@ fn run_tui(
     // run's very first frame, as a fallback below `run_start` and
     // the state file's own label, in both the header and the exit
     // summary.
-    let label_hint = spec.label.as_deref().and_then(oscilloscope_core::names::clean_label);
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
     differ.set_label_hint(label_hint.clone());
     model.set_label_hint(label_hint);
     let mut clock = Clock::new();
@@ -7449,6 +7489,7 @@ mod tests {
         let timed_out = EngineCaps {
             events: false,
             live_state: true,
+            label: false,
             missing: false,
             timed_out: true,
         };
@@ -7460,6 +7501,7 @@ mod tests {
         let no_events = EngineCaps {
             events: false,
             live_state: true,
+            label: false,
             missing: false,
             timed_out: false,
         };
@@ -7471,6 +7513,7 @@ mod tests {
         let fully_capable = EngineCaps {
             events: true,
             live_state: true,
+            label: true,
             missing: false,
             timed_out: false,
         };
@@ -7479,6 +7522,7 @@ mod tests {
         let missing = EngineCaps {
             events: false,
             live_state: false,
+            label: false,
             missing: true,
             timed_out: false,
         };
@@ -7486,6 +7530,56 @@ mod tests {
             engine_capability_notice(&missing, "cof"),
             None,
             "a missing binary gets its own, more specific error once the spawn fails"
+        );
+    }
+
+    #[test]
+    fn label_capability_notice_only_fires_with_a_label_against_an_engine_with_no_label_support() {
+        let no_label = EngineCaps {
+            events: true,
+            live_state: true,
+            label: false,
+            missing: false,
+            timed_out: false,
+        };
+        assert_eq!(
+            label_capability_notice(&no_label, "cof", true).as_deref(),
+            Some("osi: this cof has no --label: showing it in osi only")
+        );
+        assert_eq!(
+            label_capability_notice(&no_label, "cof", false),
+            None,
+            "no --label given at all: nothing to notice about"
+        );
+
+        let has_label = EngineCaps {
+            label: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&has_label, "cof", true),
+            None,
+            "the engine supports --label: nothing to notice about"
+        );
+
+        let timed_out = EngineCaps {
+            timed_out: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&timed_out, "cof", true),
+            None,
+            "the probe's own notice already covers a timed-out --help"
+        );
+
+        let missing = EngineCaps {
+            missing: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&missing, "cof", true),
+            None,
+            "the later spawn failure already covers a missing binary"
         );
     }
 

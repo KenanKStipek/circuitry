@@ -45,7 +45,11 @@ digits; in a column (Select's NAME, the Combined Signal's Per Run, a tile's
 own band) a label is cut to 32 display cells, never a byte or character
 count, so CJK or emoji text is cut exactly where it stops fitting -- the
 header alone shows a label in full, cut only once the header itself is too
-narrow for it.
+narrow for it. An engine too old to have `--label` at all never gets it
+passed (the same `--help` probe that already detects `--events`/
+`--live-state` support), but osi still shows it everywhere above --
+just from the flag given on this command line, never from the engine's
+own `run_start`/state, which such an engine never writes it into.
 
 - With no `config.json`, `cof` resolves its own config layers (global,
   project, environment) exactly as `cof run` would. The plan osi compiles

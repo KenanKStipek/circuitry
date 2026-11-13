@@ -6150,7 +6150,10 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
     }
     if !fits(&left) {
         let without_name = build(false, None);
-        let base_width: usize = without_name.iter().map(|s| display_width(&s.content)).sum::<usize>()
+        let base_width: usize = without_name
+            .iter()
+            .map(|s| display_width(&s.content))
+            .sum::<usize>()
             + display_width(&right_text);
         let budget = (area.width as usize).saturating_sub(base_width);
         let cut_name = tile.name.as_deref().and_then(|full| {
@@ -7549,7 +7552,10 @@ fn per_run_label(document: &str, name: Option<&str>, width: usize) -> String {
     match name {
         Some(name) if display_width(name) + 3 < width => {
             let doc_width = width - display_width(name) - 1;
-            format!("{} {name}", cut_display_width_with_margin(document, doc_width))
+            format!(
+                "{} {name}",
+                cut_display_width_with_margin(document, doc_width)
+            )
         }
         _ => cut_display_width_with_margin(&full, width),
     }

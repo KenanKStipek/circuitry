@@ -75,6 +75,14 @@ pub struct EngineCaps {
     /// real, since M0-H added both flags together and an older build
     /// has neither.
     pub live_state: bool,
+    /// `--label` (issue #752), detected the same way as `events` --
+    /// an older `cof`/`electricity` built before the engines' own
+    /// label lane has neither. `RunSpec::label` is always osi's own
+    /// display fallback regardless (`names::display_name`'s own
+    /// `label_hint`), so a run against an engine with no `--label`
+    /// still shows its label in osi, it just never reaches the
+    /// engine, nor `run_start`/state at all.
+    pub label: bool,
     /// Set when the `--help` probe itself couldn't find the binary at
     /// all (M4): lets a caller skip the "this cof has no --events"
     /// notice in that case, which otherwise printed -- wrongly --
@@ -128,7 +136,8 @@ pub(crate) fn strip_ansi_escapes(text: &str) -> String {
         match chars.peek() {
             Some('[') => {
                 chars.next();
-                while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?') {
+                while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?')
+                {
                     chars.next();
                 }
                 while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
@@ -323,18 +332,21 @@ impl CofEngine {
         cmd.process_group(0);
         let outcome = run_probe(cmd, timeout, signals);
         let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        let (events, timed_out) = match outcome {
-            Ok(ProbeOutcome::Completed { stdout, stderr }) => {
-                (help_mentions(&stdout, &stderr, "--events"), false)
-            }
-            Ok(ProbeOutcome::TimedOut) => (false, true),
-            Err(_) => (false, false),
+        let (events, label, timed_out) = match outcome {
+            Ok(ProbeOutcome::Completed { stdout, stderr }) => (
+                help_mentions(&stdout, &stderr, "--events"),
+                help_mentions(&stdout, &stderr, "--label"),
+                false,
+            ),
+            Ok(ProbeOutcome::TimedOut) => (false, false, true),
+            Err(_) => (false, false, false),
         };
         CofEngine {
             binary,
             caps: EngineCaps {
                 events,
                 live_state: true,
+                label,
                 missing,
                 timed_out,
             },
@@ -370,8 +382,10 @@ impl Engine for CofEngine {
         if self.caps.events {
             cmd.arg("--events").arg(spec.events_path());
         }
-        if let Some(label) = &spec.label {
-            cmd.arg("--label").arg(label);
+        if self.caps.label {
+            if let Some(label) = &spec.label {
+                cmd.arg("--label").arg(label);
+            }
         }
         for kv in &spec.sets {
             cmd.arg("-e").arg(kv);
@@ -426,20 +440,22 @@ impl ElectricityEngine {
         cmd.process_group(0);
         let outcome = run_probe(cmd, PROBE_TIMEOUT, signals);
         let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        let (events, live_state, timed_out) = match outcome {
+        let (events, live_state, label, timed_out) = match outcome {
             Ok(ProbeOutcome::Completed { stdout, stderr }) => (
                 help_mentions(&stdout, &stderr, "--events"),
                 help_mentions(&stdout, &stderr, "--live-state"),
+                help_mentions(&stdout, &stderr, "--label"),
                 false,
             ),
-            Ok(ProbeOutcome::TimedOut) => (false, false, true),
-            Err(_) => (false, false, false),
+            Ok(ProbeOutcome::TimedOut) => (false, false, false, true),
+            Err(_) => (false, false, false, false),
         };
         ElectricityEngine {
             binary,
             caps: EngineCaps {
                 events,
                 live_state,
+                label,
                 missing,
                 timed_out,
             },
@@ -475,8 +491,10 @@ impl Engine for ElectricityEngine {
         for kv in &spec.sets {
             cmd.arg("-e").arg(kv);
         }
-        if let Some(label) = &spec.label {
-            cmd.arg("--label").arg(label);
+        if self.caps.label {
+            if let Some(label) = &spec.label {
+                cmd.arg("--label").arg(label);
+            }
         }
         cmd.arg("--out").arg(spec.out_path());
         if self.caps.events {
@@ -550,6 +568,7 @@ mod tests {
             EngineCaps {
                 events: true,
                 live_state: true,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -575,7 +594,13 @@ mod tests {
 
     #[test]
     fn cof_command_includes_label_when_given() {
-        let engine = CofEngine::with_caps("cof", EngineCaps::default());
+        let engine = CofEngine::with_caps(
+            "cof",
+            EngineCaps {
+                label: true,
+                ..EngineCaps::default()
+            },
+        );
         let spec = RunSpec {
             orchestration: PathBuf::from("do.yml"),
             config: None,
@@ -594,7 +619,13 @@ mod tests {
 
     #[test]
     fn cof_command_omits_label_when_none() {
-        let engine = CofEngine::with_caps("cof", EngineCaps::default());
+        let engine = CofEngine::with_caps(
+            "cof",
+            EngineCaps {
+                label: true,
+                ..EngineCaps::default()
+            },
+        );
         let spec = RunSpec {
             orchestration: PathBuf::from("do.yml"),
             config: None,
@@ -611,12 +642,31 @@ mod tests {
     }
 
     #[test]
+    fn cof_command_omits_label_when_the_engine_does_not_support_it() {
+        let engine = CofEngine::with_caps("cof", EngineCaps::default());
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--label".to_string()));
+    }
+
+    #[test]
     fn cof_command_omits_events_when_unsupported() {
         let engine = CofEngine::with_caps(
             "cof",
             EngineCaps {
                 events: false,
                 live_state: true,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -678,6 +728,7 @@ mod tests {
             EngineCaps {
                 events: true,
                 live_state: true,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -715,7 +766,13 @@ mod tests {
 
     #[test]
     fn electricity_command_includes_label_when_given() {
-        let engine = ElectricityEngine::new("electricity");
+        let engine = ElectricityEngine::with_caps(
+            "electricity",
+            EngineCaps {
+                label: true,
+                ..EngineCaps::default()
+            },
+        );
         let spec = RunSpec {
             orchestration: PathBuf::from("do.yml"),
             config: Some(PathBuf::from("config.json")),
@@ -733,12 +790,31 @@ mod tests {
     }
 
     #[test]
+    fn electricity_command_omits_label_when_the_engine_does_not_support_it() {
+        let engine = ElectricityEngine::new("electricity");
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: Some(PathBuf::from("config.json")),
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--label".to_string()));
+    }
+
+    #[test]
     fn electricity_command_omits_events_and_live_state_when_unsupported() {
         let engine = ElectricityEngine::with_caps(
             "electricity",
             EngineCaps {
                 events: false,
                 live_state: false,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
