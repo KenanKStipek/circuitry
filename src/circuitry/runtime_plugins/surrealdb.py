@@ -205,7 +205,9 @@ class SurrealdbPlugin:
         from surrealdb import Surreal  # type: ignore[import-not-found]
 
         cfg = _resolve_config(runtime_config)
-        client = open_client(Surreal, cfg["url"])
+        url = cfg["url"]
+        assert url is not None  # _resolve_config always fills in a default
+        client = open_client(Surreal, url)
         if cfg["token"]:
             client.authenticate(cfg["token"])
         elif cfg["user"] and cfg["password"]:
