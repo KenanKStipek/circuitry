@@ -93,6 +93,22 @@ fn posix_only_error() -> ToolError {
     }
 }
 
+/// Joins every `service` teardown or stop a cancelled (or otherwise
+/// dropped) call displaced -- `electricity-cli`'s own `main` calls
+/// this, on the same runtime the run itself used, after the run's
+/// `block_on` has returned and before the process's exit code is
+/// decided, so the process never exits while one of those is still
+/// signalling a group or rewriting a record. A no-op once nothing is
+/// outstanding (the common case): draining an empty list costs
+/// nothing.
+#[cfg(unix)]
+pub async fn join_pending_teardowns() {
+    imp::join_pending_teardowns().await;
+}
+
+#[cfg(not(unix))]
+pub async fn join_pending_teardowns() {}
+
 #[cfg(unix)]
 mod imp {
     use super::ServicePlugin;
@@ -104,7 +120,7 @@ mod imp {
     use std::collections::HashMap;
     use std::fs::{self, OpenOptions};
     use std::io::{self, Read, Seek, SeekFrom};
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
     use std::path::{Path, PathBuf};
@@ -1106,27 +1122,28 @@ mod imp {
         }
     }
 
-    /// Creates *dir* with mode `0o700` only when this call is the one
-    /// that creates it (`Path.mkdir(mode=0o700, parents=True,
-    /// exist_ok=True)`'s own behaviour: an already-existing directory's
-    /// permissions are left untouched, and any missing *parent* gets
-    /// the process's default mode, not `0o700`).
+    /// Creates *dir* with mode `0o700` directly (`DirBuilder::mode`,
+    /// not a plain `create_dir` followed by `set_permissions`: a
+    /// window between the two would leave *dir* briefly
+    /// world-readable), only when this call is the one that creates it
+    /// (`Path.mkdir(mode=0o700, parents=True, exist_ok=True)`'s own
+    /// behaviour: an already-existing directory's permissions are left
+    /// untouched, and any missing *parent* gets the process's default
+    /// mode, not `0o700`).
+    fn create_0700(dir: &Path) -> io::Result<()> {
+        std::fs::DirBuilder::new().mode(0o700).create(dir)
+    }
+
     fn ensure_dir(dir: &Path) -> io::Result<()> {
-        match fs::create_dir(dir) {
-            Ok(()) => {
-                let _ = fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-                Ok(())
-            }
+        match create_0700(dir) {
+            Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
                 if let Some(parent) = dir.parent() {
                     fs::create_dir_all(parent)?;
                 }
-                match fs::create_dir(dir) {
-                    Ok(()) => {
-                        let _ = fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
-                        Ok(())
-                    }
+                match create_0700(dir) {
+                    Ok(()) => Ok(()),
                     Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
                     Err(e) => Err(e),
                 }
@@ -1166,26 +1183,6 @@ mod imp {
                 }
                 tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
             }
-        }
-
-        /// A genuinely blocking acquire, for `TeardownOnCancel::drop`'s
-        /// own dedicated OS thread (never the async runtime: `Drop`
-        /// cannot `.await` the non-blocking loop above) -- blocking
-        /// that thread is harmless, since nothing else runs on it.
-        fn acquire_blocking(dir: &Path) -> io::Result<Self> {
-            ensure_dir(dir)?;
-            let file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .mode(0o600)
-                .open(dir.join(".lock"))?;
-            let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) };
-            if ret != 0 {
-                return Err(io::Error::last_os_error());
-            }
-            Ok(LockGuard { file })
         }
     }
 
@@ -1374,6 +1371,43 @@ mod imp {
         }
     }
 
+    /// Teardown/stop work this process displaced -- a [`TeardownOnCancel`]
+    /// drop, or [`stop_internal`]'s own locked section -- spawned onto
+    /// the runtime rather than run inline or awaited to completion, so
+    /// a call whose own future is dropped (cancellation; see both call
+    /// sites' own comments) never leaves a group half-signalled or a
+    /// record in the wrong state. [`join_pending_teardowns`] joins
+    /// every handle pushed here exactly once, right before the process
+    /// decides its exit code.
+    static PENDING_TEARDOWNS: std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>> =
+        std::sync::Mutex::new(Vec::new());
+
+    fn register_pending_teardown(handle: tokio::task::JoinHandle<()>) {
+        PENDING_TEARDOWNS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(handle);
+    }
+
+    /// `electricity-cli`'s own `main`, on the same runtime the run
+    /// itself used, after that run's `block_on` has already returned
+    /// and before the process's exit code is decided -- so a cancelled
+    /// run's exit 130 is never returned while one of these is still
+    /// signalling a group or rewriting a record, matching cof's own
+    /// cancellation path running the same cleanup synchronously before
+    /// the exception that triggered it finishes propagating.
+    pub(super) async fn join_pending_teardowns() {
+        let handles: Vec<_> = {
+            let mut guard = PENDING_TEARDOWNS
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            std::mem::take(&mut *guard)
+        };
+        for handle in handles {
+            let _ = handle.await;
+        }
+    }
+
     /// A safety net against this whole `start` future being dropped
     /// outright (`electricity_vm::exec::tool`'s own `select!` races
     /// dispatch against the run's cancellation and drops the loser) --
@@ -1392,34 +1426,51 @@ mod imp {
             if !self.armed {
                 return;
             }
-            // Synchronous, blocking the thread that drops this --
-            // `Drop` cannot `.await`, and a *detached* thread (one this
-            // call doesn't join before returning) is not good enough
-            // either: the whole point of a cancelled run is that the
-            // process is about to exit, and nothing then waits for a
-            // detached thread to finish before it does, so the signal
-            // it was meant to send might simply never go out. Blocking
-            // here is the same trade the reference makes: cof's own
-            // cancellation path runs this exact cleanup synchronously
-            // too, under the lock, before the exception that triggered
-            // it finishes propagating. Same lock, same ownership
-            // re-check (a restart of this exact name, racing this very
-            // call's own `wait_ready`, must never have *its* group torn
-            // down just because this call's group shared the old name),
-            // and the same graceful `SIGTERM`-then-`grace_ms`-then-
-            // `SIGKILL` cof's own cancellation path gives a `start` it
-            // is tearing down.
-            cancel_teardown(&self.dir, &self.name, self.pgid, self.grace);
+            // Spawned, never run synchronously inside `Drop` itself --
+            // `Drop` cannot `.await`, and a genuinely *blocking*
+            // `flock(LOCK_EX)` here would block electricity's own
+            // single runtime thread for as long as another branch (a
+            // `stop` holding the very same state directory's lock
+            // across its own `grace_ms`, as `ServicePlugin._stop` does)
+            // takes to finish -- and that branch can never make
+            // progress while this thread is blocked, so the two
+            // deadlock for good (issue #721's own follow-up: a `start`
+            // still armed and a `stop` holding the lock through its
+            // grace, both alive when the run is cancelled, hung every
+            // time). Spawning instead lets the runtime keep polling
+            // every other branch while this waits for the lock, same
+            // as [`stop_internal`]'s own locked section; both are
+            // tracked in [`PENDING_TEARDOWNS`], which
+            // `join_pending_teardowns` joins before the process exits,
+            // so a cancelled run never exits while one of these is
+            // still signalling a group or rewriting a record -- same
+            // guarantee cof's own synchronous cleanup gives, reached a
+            // different way.
+            let dir = self.dir.clone();
+            let name = self.name.clone();
+            let pgid = self.pgid;
+            let grace = self.grace;
+            register_pending_teardown(tokio::spawn(async move {
+                cancel_teardown(dir, name, pgid, grace).await;
+            }));
         }
     }
 
     /// [`TeardownOnCancel`]'s own cleanup (see its `Drop` impl's own
-    /// comment for why this runs on a dedicated thread).
-    fn cancel_teardown(dir: &Path, name: &str, pgid: u32, grace: Duration) {
-        let Ok(lock) = LockGuard::acquire_blocking(dir) else {
+    /// comment for why this is spawned rather than run inline). Same
+    /// lock, same ownership re-check (a restart of this exact name,
+    /// racing this very call's own `wait_ready`, must never have *its*
+    /// group torn down just because this call's group shared the old
+    /// name), and the same graceful `SIGTERM`-then-`grace_ms`-then-
+    /// `SIGKILL` cof's own cancellation path gives a `start` it is
+    /// tearing down -- and, like `ServicePlugin._stop`, the record is
+    /// dropped only once the group is confirmed gone, not before the
+    /// signal is even sent.
+    async fn cancel_teardown(dir: PathBuf, name: String, pgid: u32, grace: Duration) {
+        let Ok(lock) = LockGuard::acquire(&dir).await else {
             return;
         };
-        let Ok((record, _)) = live_record(dir, name) else {
+        let Ok((record, _)) = live_record_nb(dir.clone(), name.clone()).await else {
             return;
         };
         let Some(rec) = record else {
@@ -1429,51 +1480,11 @@ mod imp {
         if actual != pgid {
             return;
         }
-        drop_record(dir, name);
-        drop(lock);
-        terminate_group_blocking(pgid, grace);
-    }
-
-    /// [`terminate_group`]'s own logic, blocking (`std::thread::sleep`,
-    /// not `tokio::time::sleep`) for [`cancel_teardown`]'s dedicated
-    /// thread, which cannot `.await`.
-    fn terminate_group_blocking(pgid: u32, grace: Duration) -> (bool, Option<String>) {
-        let mut sent: Option<String> = None;
-        for (sig, wait) in [
-            (libc::SIGTERM, grace),
-            (libc::SIGKILL, Duration::from_secs_f64(SETTLE_SECONDS)),
-        ] {
-            if !group_exists(pgid) {
-                return (true, sent);
-            }
-            let ret = unsafe { libc::killpg(pgid as libc::pid_t, sig) };
-            if ret != 0 {
-                let errno = io::Error::last_os_error().raw_os_error();
-                if errno == Some(libc::ESRCH) {
-                    return (true, sent);
-                }
-                return (!group_exists(pgid), sent);
-            }
-            sent = Some(
-                if sig == libc::SIGTERM {
-                    "SIGTERM"
-                } else {
-                    "SIGKILL"
-                }
-                .to_string(),
-            );
-            let deadline = Instant::now() + wait;
-            loop {
-                if !group_exists(pgid) {
-                    return (true, sent);
-                }
-                if Instant::now() >= deadline {
-                    break;
-                }
-                std::thread::sleep(Duration::from_millis(POLL_MS));
-            }
+        let (gone, _sent) = terminate_group(pgid, grace).await;
+        if gone {
+            drop_record(&dir, &name);
         }
-        (!group_exists(pgid), sent)
+        drop(lock);
     }
 
     /// `core/cancellation.py::_terminate_group`.
@@ -2016,6 +2027,98 @@ mod imp {
         ToolResult::new(Value::Dict(value), Value::Dict(raw))
     }
 
+    struct Stopped {
+        pgid: u32,
+        sent: Option<String>,
+        ports: Vec<i64>,
+    }
+
+    /// [`stop_internal`]'s own outcome, once the lock is released:
+    /// either an early result the lock-held checks already settled
+    /// (nothing to stop, or the group survived `SIGKILL`), or the
+    /// group this call actually stopped.
+    enum StopLocked {
+        Early(ToolResult),
+        Stopped(Stopped),
+    }
+
+    /// `ServicePlugin._stop`'s own `with self._locked(): ...` block --
+    /// acquires the state directory's lock, confirms ownership, signals
+    /// the group and (once it's confirmed gone) removes the record.
+    /// Spawned by [`stop_internal`] rather than awaited inline, and
+    /// tracked in [`PENDING_TEARDOWNS`]: cof's own equivalent block has
+    /// no cancellation checkpoint of its own, so once it starts it
+    /// always finishes, holding the lock the whole time -- here, a
+    /// cancelled run dropping `stop_internal`'s own await (`exec::
+    /// tool`'s `select!` races every dispatch against the run's
+    /// cancellation and drops the loser) must not stop this from
+    /// finishing the same way, or the group it already sent `SIGTERM`
+    /// to is never followed up with `SIGKILL`, and its record outlives
+    /// it.
+    async fn stop_locked(
+        dir: PathBuf,
+        name: String,
+        grace: Duration,
+        expected_pgid: Option<u32>,
+    ) -> Result<StopLocked, ToolError> {
+        let lock = LockGuard::acquire(&dir).await.map_err(|e| {
+            runtime_error(format!("service: cannot lock the state directory: {e}"))
+        })?;
+        let (mut record, stale) = live_record_nb(dir.clone(), name.clone()).await?;
+        if let Some(rec) = &record {
+            if let Some(expected) = expected_pgid {
+                let actual = get(rec, "pgid").and_then(value_as_i64).unwrap_or(-1) as u32;
+                if actual != expected {
+                    record = None;
+                }
+            }
+        }
+        let Some(rec) = record else {
+            return Ok(StopLocked::Early(stopped_false_result(&name, stale)));
+        };
+        let pgid = get(&rec, "pgid").and_then(value_as_i64).unwrap_or(0) as u32;
+        let (gone, sent) = terminate_group(pgid, grace).await;
+        if !gone {
+            let message = if sent.as_deref() == Some("SIGKILL") {
+                format!(
+                    "service {}: process group {pgid} survived SIGKILL.",
+                    repr_str(&name)
+                )
+            } else {
+                format!(
+                    "service {}: not permitted to signal process group {pgid}.",
+                    repr_str(&name)
+                )
+            };
+            let mut raw = Dict::new();
+            raw.insert(Value::from("action"), Value::from("stop"));
+            raw.insert(Value::from("name"), Value::from(name.as_str()));
+            raw.insert(Value::from("pgid"), Value::from(pgid as i64));
+            raw.insert(
+                Value::from("signal"),
+                sent.map(|s| Value::from(s.as_str())).unwrap_or(Value::None),
+            );
+            return Ok(StopLocked::Early(ToolResult {
+                value: Value::None,
+                raw: Value::Dict(raw),
+                stdout: None,
+                stderr: Some(message),
+                exit_code: None,
+                ok: false,
+                stdout_parsed: false,
+                tokens_sent: None,
+                tokens_received: None,
+            }));
+        }
+        drop_record(&dir, &name);
+        let ports: Vec<i64> = get(&rec, "ports")
+            .and_then(Value::as_list)
+            .map(|l| l.iter().filter_map(value_as_i64).collect())
+            .unwrap_or_default();
+        drop(lock);
+        Ok(StopLocked::Stopped(Stopped { pgid, sent, ports }))
+    }
+
     /// `ServicePlugin._stop`. With *expected_pgid* (a start cleaning up
     /// after itself), only when the record still names that group.
     async fn stop_internal(
@@ -2024,70 +2127,28 @@ mod imp {
         grace: Duration,
         expected_pgid: Option<u32>,
     ) -> Result<ToolResult, ToolError> {
-        struct Stopped {
-            pgid: u32,
-            sent: Option<String>,
-            ports: Vec<i64>,
-        }
-        let stopped: Stopped;
-        {
-            let lock = LockGuard::acquire(dir).await.map_err(|e| {
-                runtime_error(format!("service: cannot lock the state directory: {e}"))
-            })?;
-            let (mut record, stale) = live_record_nb(dir.to_path_buf(), name.to_string()).await?;
-            if let Some(rec) = &record {
-                if let Some(expected) = expected_pgid {
-                    let actual = get(rec, "pgid").and_then(value_as_i64).unwrap_or(-1) as u32;
-                    if actual != expected {
-                        record = None;
-                    }
-                }
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let handle = tokio::spawn({
+            let dir = dir.to_path_buf();
+            let name = name.to_string();
+            async move {
+                let outcome = stop_locked(dir, name, grace, expected_pgid).await;
+                let _ = tx.send(outcome);
             }
-            let Some(rec) = record else {
-                return Ok(stopped_false_result(name, stale));
-            };
-            let pgid = get(&rec, "pgid").and_then(value_as_i64).unwrap_or(0) as u32;
-            let (gone, sent) = terminate_group(pgid, grace).await;
-            if !gone {
-                let message = if sent.as_deref() == Some("SIGKILL") {
-                    format!(
-                        "service {}: process group {pgid} survived SIGKILL.",
-                        repr_str(name)
-                    )
-                } else {
-                    format!(
-                        "service {}: not permitted to signal process group {pgid}.",
-                        repr_str(name)
-                    )
-                };
-                let mut raw = Dict::new();
-                raw.insert(Value::from("action"), Value::from("stop"));
-                raw.insert(Value::from("name"), Value::from(name));
-                raw.insert(Value::from("pgid"), Value::from(pgid as i64));
-                raw.insert(
-                    Value::from("signal"),
-                    sent.map(|s| Value::from(s.as_str())).unwrap_or(Value::None),
-                );
-                return Ok(ToolResult {
-                    value: Value::None,
-                    raw: Value::Dict(raw),
-                    stdout: None,
-                    stderr: Some(message),
-                    exit_code: None,
-                    ok: false,
-                    stdout_parsed: false,
-                    tokens_sent: None,
-                    tokens_received: None,
-                });
+        });
+        register_pending_teardown(handle);
+        let locked = match rx.await {
+            Ok(outcome) => outcome?,
+            Err(_) => {
+                return Err(runtime_error(
+                    "service: internal error: the stop task ended early".to_string(),
+                ));
             }
-            drop_record(dir, name);
-            let ports: Vec<i64> = get(&rec, "ports")
-                .and_then(Value::as_list)
-                .map(|l| l.iter().filter_map(value_as_i64).collect())
-                .unwrap_or_default();
-            stopped = Stopped { pgid, sent, ports };
-            drop(lock);
-        }
+        };
+        let stopped = match locked {
+            StopLocked::Early(result) => return Ok(result),
+            StopLocked::Stopped(stopped) => stopped,
+        };
 
         let deadline = Instant::now() + Duration::from_secs_f64(SETTLE_SECONDS);
         let mut holders: Vec<Holder>;
@@ -2555,10 +2616,12 @@ mod imp {
             };
             drop(start_fut); // the dispatch cancellation this guards against
 
-            let deadline = Instant::now() + Duration::from_secs(10);
-            while group_exists(pgid) && Instant::now() < deadline {
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
+            // The actual teardown is spawned off that drop, never run
+            // synchronously (`TeardownOnCancel::drop`'s own comment) --
+            // joining every such task is exactly what
+            // `electricity-cli`'s own `main` does, on the same
+            // runtime, before the process's exit code is decided.
+            join_pending_teardowns().await;
             assert!(
                 !group_exists(pgid),
                 "the group should be gone after cancellation"
@@ -2629,6 +2692,144 @@ mod imp {
             assert_eq!(
                 b.value.as_dict().and_then(|d| get(d, "stopped")),
                 Some(&Value::from(true))
+            );
+        }
+
+        /// The deadlock issue #721's own follow-up found: a `start`
+        /// still armed and waiting for `ready` (branch A), and a
+        /// `stop` holding the state directory's lock through its own
+        /// `grace_ms` because its target ignores `SIGTERM` (branch B,
+        /// same as `ServicePlugin._stop`'s own `with self._locked():`),
+        /// dropped together -- exactly what `electricity_vm::exec::
+        /// tool`'s own `select!` does to every branch in flight when a
+        /// run is cancelled. A synchronous, blocking
+        /// `TeardownOnCancel::drop` would park this test's only thread
+        /// right there (`flavor = "current_thread"`, matching
+        /// electricity's own single-threaded dispatch) while B still
+        /// holds the lock, so neither branch could ever finish; this
+        /// hung 3 runs out of 3 before the fix.
+        #[tokio::test(flavor = "current_thread")]
+        async fn cancelling_a_waiting_start_and_a_locked_stop_together_never_hangs() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let pid = std::process::id();
+            let stub_name = format!("svc-deadlock-stub-{pid}");
+            let waiting_name = format!("svc-deadlock-wait-{pid}");
+            let the_call = call(&token);
+            let ignored_marker = dir.path().join("ignored-term");
+
+            // B's own target: ignores `SIGTERM` (keeps running, same as
+            // the conformance fake's own `ignore-term` mode), so `stop`
+            // holds the lock through the whole `grace_ms`.
+            let stub_script = format!(
+                "trap 'touch {}' TERM; while true; do sleep 1; done",
+                ignored_marker.display()
+            );
+            let start_stub = plugin
+                .execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from(stub_name.as_str())),
+                        ("command", Value::from(stub_script.as_str())),
+                        ("shell", Value::from(true)),
+                    ]),
+                    &the_call,
+                )
+                .await
+                .unwrap();
+            assert!(start_stub.ok, "{start_stub:?}");
+            let stub_pgid = start_stub
+                .value
+                .as_dict()
+                .and_then(|d| get(d, "pgid"))
+                .and_then(value_as_i64)
+                .expect("a successful start always reports its own pgid")
+                as u32;
+            let stub_record_path = dir.path().join(format!("{stub_name}.json"));
+
+            // B: stops the stub, with a grace period generous enough
+            // that A below can still be mid-`wait_ready` once both are
+            // dropped.
+            let mut stop_fut = Box::pin(plugin.execute(
+                params(vec![
+                    ("action", Value::from("stop")),
+                    ("name", Value::from(stub_name.as_str())),
+                    ("grace_ms", Value::from(5_000)),
+                ]),
+                &the_call,
+            ));
+            let wait_for_ignored = async {
+                while !ignored_marker.exists() {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            tokio::select! {
+                _ = &mut stop_fut => panic!("stop finished before SIGTERM was even ignored"),
+                () = wait_for_ignored => {}
+            }
+            // B now holds the lock, somewhere in `terminate_group`'s
+            // own `grace_ms` wait.
+
+            // A: a start still waiting for `ready`, armed, never
+            // satisfied.
+            let waiting_record_path = dir.path().join(format!("{waiting_name}.json"));
+            let mut start_fut = Box::pin(plugin.execute(
+                params(vec![
+                    ("action", Value::from("start")),
+                    ("name", Value::from(waiting_name.as_str())),
+                    ("command", Value::from("sleep 30")),
+                    ("shell", Value::from(true)),
+                    ("ready", Value::from(1)),
+                    ("ready_timeout_ms", Value::from(30_000)),
+                    ("grace_ms", Value::from(2_000)),
+                ]),
+                &the_call,
+            ));
+            let find_pgid = async {
+                loop {
+                    if let Ok(text) = fs::read_to_string(&waiting_record_path) {
+                        if let Ok(v) = loads(&text) {
+                            if let Some(d) = v.as_dict() {
+                                if let Some(p) = get(d, "pgid").and_then(value_as_i64) {
+                                    return p as u32;
+                                }
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            let waiting_pgid = tokio::select! {
+                _ = &mut start_fut => panic!("start finished before a pgid could be observed"),
+                p = find_pgid => p,
+            };
+
+            // The cancellation this guards against: both branches
+            // dropped together, exactly as `exec::tool`'s own `select!`
+            // drops every loser when a run is cancelled.
+            drop(start_fut);
+            drop(stop_fut);
+
+            tokio::time::timeout(Duration::from_secs(10), join_pending_teardowns())
+                .await
+                .expect("join_pending_teardowns must not hang");
+
+            assert!(
+                !group_exists(waiting_pgid),
+                "the waiting start's group should be gone"
+            );
+            assert!(
+                !waiting_record_path.exists(),
+                "the waiting start's record should be gone"
+            );
+            assert!(
+                !group_exists(stub_pgid),
+                "the stub's group should be gone"
+            );
+            assert!(
+                !stub_record_path.exists(),
+                "the stub's record should be gone"
             );
         }
 

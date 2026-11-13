@@ -31,6 +31,13 @@ pub use electricity_adapters::write_leftover_export;
 pub use electricity_vm::CancellationToken;
 pub use run::{RunRequest, RunResult, Signal};
 
+/// `electricity_tools::service::join_pending_teardowns` -- re-exported
+/// so `electricity-cli`'s own exit path (the only caller) doesn't need
+/// its own direct dependency on `electricity-tools` just for this one
+/// function (issue #721's own follow-up: a `service` teardown or stop
+/// a cancelled run displaced must finish before the process exits).
+pub use electricity_tools::service::join_pending_teardowns;
+
 /// The crate's version, taken from the workspace's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

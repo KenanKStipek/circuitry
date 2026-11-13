@@ -783,3 +783,169 @@ def test_parallel_start_and_stop_branches_in_one_run_do_not_deadlock(
         assert starts["b"]["value"]["running"] is True, payload
         assert stops["a"]["value"]["stopped"] is True, payload
         assert stops["b"]["value"]["stopped"] is True, payload
+
+
+def _ignores_sigterm_command() -> list:
+    script = Path(__file__).resolve().parent / "fakes" / "service_ignores_sigterm.py"
+    return [sys.executable, str(script)]
+
+
+def test_sigint_during_a_waiting_start_and_a_locked_stop_does_not_hang(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """issue #721's own follow-up: one branch (A) starts a service still
+    waiting for `ready` (armed, never satisfied); a sibling branch (B)
+    waits briefly, then stops a service whose process ignores
+    `SIGTERM` -- holding the state directory's lock through its own
+    `grace_ms`, exactly as `ServicePlugin._stop`'s own `with
+    self._locked():` block does. `SIGINT` to the run itself, sent only
+    once A's record exists and B's target has logged that it ignored
+    `SIGTERM`, cancels the run on both engines -- it must never hang:
+    electricity used to tear A's group down with a synchronous,
+    blocking lock acquire right there in `Drop`, which parked its own
+    single runtime thread for good while B's `stop` still held that
+    same lock, so neither branch could ever finish and the process sat
+    past its own grace period until something force-killed it. Both
+    engines must end the same way: exit 130, both groups gone, both
+    records gone."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    for engine, build_cmd, setup_run in (
+        (
+            "cof",
+            lambda doc, cfg: [
+                sys.executable, "-m", "circuitry.cli.app", "run", str(doc), "--config", str(cfg),
+            ],
+            lambda doc, cfg: _run_cof(doc, cfg, home_dir),
+        ),
+        (
+            "electricity",
+            lambda doc, cfg: [str(electricity_binary), "run", str(doc), "--config", str(cfg)],
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-cancel-parallel"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+
+        # B's own target: started ahead of the run under test (same as
+        # the engines sharing one state directory elsewhere in this
+        # module), so its record already exists when that run starts.
+        setup_doc = case_dir / "setup.json"
+        _write_orchestration(
+            setup_doc,
+            {"action": "start", "name": "stub", "command": _ignores_sigterm_command()},
+        )
+        setup_result = setup_run(setup_doc, config_path)
+        assert setup_result.returncode == 0, setup_result.stderr
+        stub_record_path = state_dir / "stub.json"
+        stub_pgid = json.loads(stub_record_path.read_text(encoding="utf-8"))["pgid"]
+        stub_log_path = state_dir / "stub.log"
+
+        doc_path = case_dir / "orchestration.json"
+        doc_path.write_text(
+            json.dumps(
+                {
+                    "effects": [
+                        {
+                            "type": "dynamic",
+                            "name": "fan",
+                            "flow": "tree",
+                            "effects": [
+                                {
+                                    "type": "tool",
+                                    "name": "a",
+                                    "provider": "service",
+                                    "params": {
+                                        "action": "start",
+                                        "name": "cx",
+                                        "command": "sleep 30",
+                                        "shell": True,
+                                        # Nothing ever listens here, so A
+                                        # is still waiting for `ready`
+                                        # when the signal below arrives.
+                                        "ready": 1,
+                                        "ready_timeout_ms": 30_000,
+                                        "grace_ms": 2_000,
+                                    },
+                                },
+                                {
+                                    "type": "dynamic",
+                                    "name": "b",
+                                    "effects": [
+                                        {
+                                            "type": "tool",
+                                            "name": "wait",
+                                            "provider": "shell",
+                                            "params": {
+                                                "command": "sleep",
+                                                "args": ["2"],
+                                                "allowed_commands": ["sleep"],
+                                            },
+                                        },
+                                        {
+                                            "type": "tool",
+                                            "name": "stop",
+                                            "provider": "service",
+                                            "params": {
+                                                "action": "stop",
+                                                "name": "stub",
+                                                "grace_ms": 12_000,
+                                            },
+                                        },
+                                    ],
+                                },
+                            ],
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        proc = subprocess.Popen(
+            build_cmd(doc_path, config_path), cwd=doc_path.parent,
+            env=_sandboxed_env(home_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        cx_record_path = state_dir / "cx.json"
+        cx_pgid: int | None = None
+        try:
+            deadline = time.monotonic() + 20
+            armed = False
+            while time.monotonic() < deadline and not armed:
+                armed = (
+                    cx_record_path.exists()
+                    and stub_log_path.exists()
+                    and "ignored SIGTERM" in stub_log_path.read_text(encoding="utf-8")
+                )
+                if not armed:
+                    time.sleep(0.05)
+            assert armed, f"{engine}: never saw the start armed while the stop held the lock"
+            cx_pgid = json.loads(cx_record_path.read_text(encoding="utf-8"))["pgid"]
+
+            proc.send_signal(signal.SIGINT)
+            try:
+                proc.communicate(timeout=25)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.communicate(timeout=5)
+                pytest.fail(f"{engine}: the run hung instead of exiting after SIGINT")
+            assert proc.returncode == 130, (engine, proc.returncode)
+
+            deadline = time.monotonic() + 10
+            while (_pgid_exists(cx_pgid) or _pgid_exists(stub_pgid)) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not _pgid_exists(cx_pgid), f"{engine}: the waiting start's group outlived the cancel"
+            assert not _pgid_exists(stub_pgid), f"{engine}: the stub's group outlived the cancel"
+            assert not cx_record_path.exists(), f"{engine}: the waiting start's record should be gone"
+            assert not stub_record_path.exists(), f"{engine}: the stub's record should be gone"
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            if cx_pgid is not None:
+                _stop_and_wait_free(cx_pgid)
+            _stop_and_wait_free(stub_pgid)
