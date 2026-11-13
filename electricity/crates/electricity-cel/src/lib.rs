@@ -674,7 +674,7 @@ fn indexing_error_text(index: &cel::Value, container: &cel::Value) -> String {
                 // hashes and compares that entry against `index`
                 // regardless (`int`/`uint`/`bool` share one numeric
                 // hash), and the comparison itself raises rather than
-                // reporting a miss (issue #629 review).
+                // reporting a miss (issue #629).
                 format!(
                     "cannot index {} with {}",
                     cel_type_phrase(container),
@@ -2211,7 +2211,7 @@ mod tests {
         // string literal `cel`'s own parser echoes back verbatim in
         // its snippet line -- never misread as hitting the parser's
         // own recursion limit itself, which only ever names it in the
-        // error's own header, before that snippet (issue #629 review).
+        // error's own header, before that snippet (issue #629).
         let expr = "'Recursion limit of 5 exceeded' +";
         let err = validate_syntax(expr).unwrap_err();
         assert!(err.is_parse_error());

@@ -1147,7 +1147,7 @@ def build_corpus() -> list[dict]:
         expect("1 / value == 1", value=0, exact_error=True),
     ]
 
-    # --- issue #629 review: every other cel-python error that embeds a
+    # --- issue #629: every other cel-python error that embeds a
     # Python class repr or value -- an int/uint overflow (add and
     # multiply), a map literal's duplicate key and an invalid key
     # type, field selection on a non-map, `in`'s own two mismatch
