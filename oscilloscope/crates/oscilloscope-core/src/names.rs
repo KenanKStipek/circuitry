@@ -72,13 +72,17 @@ pub fn display_name(label: Option<&str>, run_id: Option<&str>) -> Option<String>
 /// rule): two positions whose bare display name collides each add their own tell-apart suffix -- two shared
 /// labels each add their own [`run_name`] (`ticket-42 \u{b7} amber-falcon`), two shared generated names (no
 /// label on either) each add the first four hex digits of their own run id instead (`amber-falcon\u{b7}0299`,
-/// #717's own original rule), exactly as before when no label is in play at all. A label alone is capped at
-/// [`MAX_NAME_DISPLAY_CELLS`] display cells, cut with `\u{22ef}`, before collision counting -- the "longest +
-/// 2" column-width rule ([`name_column_width`]) a caller derives from this result's own strings never has to
-/// reserve more than that for one run's own name, however long a label actually is; the tell-apart suffix
-/// itself is never further cut, since it alone still has to tell the two runs apart. `None` passes straight
-/// through unchanged, a run whose `run_start` hasn't arrived yet (no label, no run id) showing no name at all
-/// rather than colliding with anything.
+/// #717's own original rule), exactly as before when no label is in play at all. A label whose own run id
+/// isn't known yet (a file written by something other than `cof`/`electricity` can carry a `label` with no
+/// `run_id` at all, see [`clean_label`]'s own doc comment on why osi never trusts a file to be well-formed)
+/// gets no suffix to derive one from either: a colliding one instead gets a plain positional count, `\u{b7}2`,
+/// `\u{b7}3`, ... in the order `runs` lists them, its very first occurrence keeping the bare name unsuffixed --
+/// never a panic. A label alone is capped at [`MAX_NAME_DISPLAY_CELLS`] display cells, cut with `\u{22ef}`,
+/// before collision counting -- the "longest + 2" column-width rule ([`name_column_width`]) a caller derives
+/// from this result's own strings never has to reserve more than that for one run's own name, however long a
+/// label actually is; the tell-apart suffix itself is never further cut, since it alone still has to tell the
+/// two runs apart. `None` passes straight through unchanged, a run whose `run_start` hasn't arrived yet (no
+/// label, no run id) showing no name at all rather than colliding with anything.
 pub fn disambiguated_names(runs: &[(Option<&str>, Option<&str>)]) -> Vec<Option<String>> {
     let bare: Vec<Option<String>> = runs
         .iter()
@@ -91,7 +95,8 @@ pub fn disambiguated_names(runs: &[(Option<&str>, Option<&str>)]) -> Vec<Option<
     for name in bare.iter().flatten() {
         *counts.entry(name.as_str()).or_insert(0) += 1;
     }
-    runs.iter()
+    let suffixed: Vec<Option<String>> = runs
+        .iter()
         .zip(bare.iter())
         .map(|((label, id), name)| {
             let name = name.as_ref()?;
@@ -99,15 +104,62 @@ pub fn disambiguated_names(runs: &[(Option<&str>, Option<&str>)]) -> Vec<Option<
             if !collides {
                 return Some(name.clone());
             }
-            match label {
-                Some(_) => {
-                    let id = id.expect("a label implies this run's own run_id is known");
-                    Some(format!("{name} \u{b7} {}", run_name(id)))
+            let Some(id) = id else {
+                // No run id to tell this one apart with at all --
+                // left for the positional pass below, which also
+                // needs every other colliding bare name's own count
+                // decided first.
+                return None;
+            };
+            Some(match label {
+                Some(_) => format!("{name} \u{b7} {}", run_name(id)),
+                None => format!("{name}\u{b7}{}", id_suffix(id)),
+            })
+        })
+        .collect();
+    // Finding on #752's own collision rule: a shared label's own
+    // generated-name suffix (`run_name(id)`, same ~40,000-way spread
+    // as the bare generated name itself) can collide too, for two
+    // different ids -- counted only among `suffixed`'s own `Some`s,
+    // so a `None` left for the positional pass just below never
+    // joins this count.
+    let mut suffixed_counts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for name in suffixed.iter().flatten() {
+        *suffixed_counts.entry(name.as_str()).or_insert(0) += 1;
+    }
+    let mut no_id_seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    runs.iter()
+        .zip(bare.iter())
+        .zip(suffixed.iter())
+        .map(|(((label, id), name), suffixed_name)| {
+            let name = name.as_ref()?;
+            match suffixed_name {
+                Some(suffixed_name) => {
+                    // The extra append only ever applies to a shared
+                    // label's own `run_name(id)` suffix (the one with
+                    // a ~40,000-way spread that can itself collide
+                    // for two different ids) -- the no-label branch's
+                    // `id_suffix(id)` keeps #717's own original rule
+                    // unchanged, exactly as before #752.
+                    if label.is_some()
+                        && suffixed_counts.get(suffixed_name.as_str()).copied().unwrap_or(0) > 1
+                    {
+                        let id = id.expect("a suffixed name always came from a known run id");
+                        Some(format!("{suffixed_name}\u{b7}{}", id_suffix(id)))
+                    } else {
+                        Some(suffixed_name.clone())
+                    }
                 }
-                None => Some(format!(
-                    "{name}\u{b7}{}",
-                    id_suffix(id.expect("name implies id"))
-                )),
+                None => {
+                    let seen = no_id_seen.entry(name.as_str()).or_insert(0);
+                    *seen += 1;
+                    if *seen == 1 {
+                        Some(name.clone())
+                    } else {
+                        Some(format!("{name}\u{b7}{seen}"))
+                    }
+                }
             }
         })
         .collect()
@@ -386,6 +438,71 @@ mod tests {
             names,
             vec![Some("ticket 42".to_string()), Some("ticket 43".to_string()),]
         );
+    }
+
+    #[test]
+    fn disambiguated_names_never_panics_on_a_shared_label_with_no_run_id_at_all() {
+        // A file written by something other than cof/electricity can
+        // carry `runtime.last_run.label` with no `_run_id` at all --
+        // two such runs sharing a label must never panic, and each
+        // gets told apart by plain position instead of a suffix
+        // derived from an id neither one has.
+        let names = disambiguated_names(&[(Some("ticket 42"), None), (Some("ticket 42"), None)]);
+        assert_eq!(
+            names,
+            vec![
+                Some("ticket 42".to_string()),
+                Some("ticket 42\u{b7}2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn disambiguated_names_numbers_a_third_shared_label_with_no_run_id() {
+        let names = disambiguated_names(&[
+            (Some("ticket 42"), None),
+            (Some("ticket 42"), None),
+            (Some("ticket 42"), None),
+        ]);
+        assert_eq!(
+            names,
+            vec![
+                Some("ticket 42".to_string()),
+                Some("ticket 42\u{b7}2".to_string()),
+                Some("ticket 42\u{b7}3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn disambiguated_names_tells_apart_two_shared_labels_whose_generated_names_also_collide() {
+        // Two distinct ids whose bare generated name collides (the
+        // same ~40,000-way spread a shared label's own tell-apart
+        // suffix, `run_name(id)`, draws from) but whose `id_suffix`
+        // doesn't -- found by search, since `run_name`'s hash gives
+        // no simple way to construct one by hand.
+        let mut by_name: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let (a, b) = (0..100_000)
+            .map(|i| format!("id-{i}"))
+            .find_map(|id| {
+                let name = run_name(&id);
+                if let Some(other) = by_name.get(&name) {
+                    if id_suffix(other) != id_suffix(&id) {
+                        return Some((other.clone(), id));
+                    }
+                }
+                by_name.insert(name, id);
+                None
+            })
+            .expect("some collision within 100k ids");
+        let names = disambiguated_names(&[
+            (Some("ticket 42"), Some(a.as_str())),
+            (Some("ticket 42"), Some(b.as_str())),
+        ]);
+        assert_ne!(names[0], names[1], "{names:?}");
+        for name in names.iter().flatten() {
+            assert!(name.starts_with("ticket 42 \u{b7} "), "{name:?}");
+        }
     }
 
     #[test]
