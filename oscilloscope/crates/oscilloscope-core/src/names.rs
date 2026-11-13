@@ -585,6 +585,17 @@ mod tests {
     }
 
     #[test]
+    fn clean_label_trims_the_space_the_64_character_cut_itself_lands_on() {
+        // 63 characters, then a space, then more text: the cut at 64
+        // characters keeps that space as its own 64th character --
+        // trimmed again afterwards, so the result never ends in one,
+        // the same rule the engines apply to their own cut (issue
+        // #752's cleaning rule, matched exactly).
+        let raw = format!("{} more text", "a".repeat(63));
+        assert_eq!(clean_label(&raw), Some("a".repeat(63)));
+    }
+
+    #[test]
     fn clean_label_is_none_for_text_that_cleans_away_to_nothing() {
         assert_eq!(clean_label("  \x01\x02  "), None);
     }
