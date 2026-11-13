@@ -682,7 +682,10 @@ fn attempt_entry(
     );
     entry.insert(Value::from("expect"), read_key(store, meta_node, "expect"));
     if has_key(meta_node, "exit_code") {
-        entry.insert(Value::from("exit_code"), read_key(store, meta_node, "exit_code"));
+        entry.insert(
+            Value::from("exit_code"),
+            read_key(store, meta_node, "exit_code"),
+        );
     }
     if has_key(meta_node, "status_code") {
         entry.insert(
@@ -5298,5 +5301,339 @@ mod tests {
                 "cel: the result does not match params.schema: (root): 'not a number' is not of type 'number'"
             ))
         );
+    }
+
+    /// A test-only [`electricity_tools::ToolPlugin`] whose own `value`
+    /// grows by one `"x"` character each call (`core/tool.py`'s own
+    /// test suite's `fs` counter fake, in-process): a provider whose
+    /// result actually differs attempt to attempt, the way `meta.
+    /// attempts` (#668) needs to prove more than one entry ever gets
+    /// recorded. `exit_codes` lets a test drive a retry off `meta.
+    /// exit_code` instead of the tally itself -- `ok` always stays
+    /// `true` regardless, the same contract `shell`'s own `allow_nonzero`
+    /// gives a nonzero exit in `core/tool.py`.
+    struct CountingTool {
+        calls: std::cell::Cell<u32>,
+        exit_codes: Vec<i32>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for CountingTool {
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            let call = self.calls.get() as usize;
+            self.calls.set(self.calls.get() + 1);
+            let mut result = electricity_tools::ToolResult::new(
+                Value::from("x".repeat(call + 1)),
+                Value::Dict(Dict::new()),
+            );
+            result.exit_code = self.exit_codes.get(call).copied();
+            Ok(result)
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    fn counting_registry(exit_codes: Vec<i32>) -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(CountingTool {
+            calls: std::cell::Cell::new(0),
+            exit_codes,
+        }));
+        registry
+    }
+
+    async fn run_counting_tool(
+        tool: &mut ToolOp,
+        registry: &ToolRegistry,
+        store: &crate::Store,
+    ) -> Result<(), VmError> {
+        tool.provider = "counting".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        execute_tool(
+            &op,
+            tool,
+            store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+    }
+
+    fn fetch_meta(store: &crate::Store) -> Dict {
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone();
+        node.get(&Value::from("meta"))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn attempts_absent_when_only_one_attempt_ran() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'x'".to_string(),
+        });
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(meta.get(&Value::from("attempts")), None);
+        assert_eq!(meta.get(&Value::from("retries_used")), None);
+    }
+
+    #[tokio::test]
+    async fn attempts_tool_passes_on_third_attempt_expect_driven() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'xxx'".to_string(),
+        });
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(2i64))
+        );
+        let keys: Vec<&Value> = meta.keys().collect();
+        assert_eq!(keys.last(), Some(&&Value::from("attempts")));
+
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(attempts.len(), 3);
+        assert_eq!(
+            attempts[0].as_dict().unwrap().get(&Value::from("value")),
+            Some(&Value::from("x"))
+        );
+        assert_eq!(
+            attempts[2].as_dict().unwrap().get(&Value::from("value")),
+            Some(&Value::from("xxx"))
+        );
+        assert_eq!(
+            attempts[2].as_dict().unwrap().get(&Value::from("error")),
+            Some(&Value::None)
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_tool_passes_on_third_attempt_exit_code_driven() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "meta.exit_code == 0".to_string(),
+        });
+        let registry = counting_registry(vec![1, 1, 0]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(2i64))
+        );
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(attempts.len(), 3);
+        let exit_codes: Vec<&Value> = attempts
+            .iter()
+            .map(|a| a.as_dict().unwrap().get(&Value::from("exit_code")).unwrap())
+            .collect();
+        assert_eq!(
+            exit_codes,
+            vec![&Value::from(1i64), &Value::from(1i64), &Value::from(0i64)]
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_entry_key_order() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'xx'".to_string(),
+        });
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        for entry in attempts {
+            let keys: Vec<&Value> = entry.as_dict().unwrap().keys().collect();
+            assert_eq!(
+                keys,
+                vec![
+                    &Value::from("created_at"),
+                    &Value::from("completed_at"),
+                    &Value::from("value"),
+                    &Value::from("error"),
+                    &Value::from("expect"),
+                    &Value::from("exit_code"),
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn attempts_on_error_continue_keeps_every_attempt() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        // Never satisfiable -- both attempts fail the same way.
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'never matches'".to_string(),
+        });
+        tool.provider = "counting".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let meta = fetch_meta(&store);
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert!(
+            attempts
+                .iter()
+                .all(|a| { a.as_dict().unwrap().get(&Value::from("error")) != Some(&Value::None) })
+        );
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_is_reset_on_a_reused_node() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+
+        // A previous pass left a stale meta.attempts/retries_used on this
+        // same node -- an unnamed loop's own next pass reuses it exactly
+        // this way.
+        let effect_node = store
+            .ensure_dict(&store.root, Value::from("fetch"))
+            .unwrap();
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::from("meta"))
+            .unwrap();
+        set_leaf(&store, &meta_node, "retries_used", Value::from(2i64));
+        let mut stale_entry = Dict::new();
+        stale_entry.insert(Value::from("created_at"), Value::from("T"));
+        stale_entry.insert(Value::from("completed_at"), Value::from("T"));
+        stale_entry.insert(Value::from("value"), Value::None);
+        stale_entry.insert(Value::from("error"), Value::from("boom"));
+        stale_entry.insert(Value::from("expect"), Value::None);
+        stale_entry.insert(Value::from("exit_code"), Value::None);
+        write_attempts(&store, &meta_node, &[Value::Dict(stale_entry)]);
+
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(meta.get(&Value::from("attempts")), None);
+        assert_eq!(meta.get(&Value::from("retries_used")), None);
     }
 }

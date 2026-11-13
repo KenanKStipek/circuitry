@@ -881,8 +881,12 @@ fn last_fallback_tokens(attempts_meta: &[Value]) -> (Value, Value) {
         .and_then(Value::as_dict)
         .map(|dict| {
             (
-                dict.get(&key("tokens_sent")).cloned().unwrap_or(Value::None),
-                dict.get(&key("tokens_received")).cloned().unwrap_or(Value::None),
+                dict.get(&key("tokens_sent"))
+                    .cloned()
+                    .unwrap_or(Value::None),
+                dict.get(&key("tokens_received"))
+                    .cloned()
+                    .unwrap_or(Value::None),
             )
         })
         .unwrap_or((Value::None, Value::None))
