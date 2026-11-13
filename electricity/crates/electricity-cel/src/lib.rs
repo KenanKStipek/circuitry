@@ -463,12 +463,36 @@ fn check_parity_nesting(expr: &str) -> Result<(), CelError> {
     }
 }
 
+/// Whether *msg* is the `cel` crate's own parser hitting its internal
+/// recursion limit (`vendor/cel/src/parser/parser.rs`'s `RecursionListener`,
+/// a fixed depth over every recursive grammar rule at once -- parens,
+/// calls, list/map literals, unary/binary chains -- lower than any one
+/// of `nesting.rs`'s own shape-specific caps or its `MAX_SAFETY_CHAIN_DEPTH`
+/// backstop, so an expression nested almost entirely in one shape this
+/// crate does check (a deep chain of parens around a short accessor,
+/// issue #629) reaches the parser's own limit before any of ours would
+/// reject it). Detected by message text, the only thing `cel::parser::ParseError`
+/// exposes here, rather than a distinct error variant -- the crate has none.
+fn is_parser_recursion_limit(msg: &str) -> bool {
+    msg.contains("Recursion limit of")
+}
+
 fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
     env.compile(expr).map_err(|e| {
-        CelError::new(
-            expr,
-            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
-        )
+        let text = e.to_string();
+        if is_parser_recursion_limit(&text) {
+            return CelError {
+                too_deeply_nested: true,
+                ..CelError::new(
+                    expr,
+                    format!(
+                        "CEL evaluation failed for {}: expression is nested too deeply",
+                        py_repr(expr)
+                    ),
+                )
+            };
+        }
+        CelError::new(expr, format!("CEL evaluation failed for {}: {text}", py_repr(expr)))
     })
 }
 
@@ -608,6 +632,13 @@ fn evaluation_error_text(err: &cel::ExecutionError) -> String {
         }
         cel::ExecutionError::UnsupportedIndex(index, container) => {
             indexing_error_text(index, container)
+        }
+        // Field selection (`value.missing_key`), not `[...]` indexing --
+        // a different `cel` crate variant from `UnsupportedIndex` for the
+        // same missing-map-key failure, worded the same way
+        // `_StateEvaluator::member_dot`'s own `MapType` branch is.
+        cel::ExecutionError::NoSuchKey(key) => {
+            format!("no such key: {}", py_repr(key))
         }
         cel::ExecutionError::DivisionByZero(_) => "division by zero".to_string(),
         cel::ExecutionError::RemainderByZero(_) => "modulus by zero".to_string(),
@@ -1019,6 +1050,16 @@ pub enum CelSyntaxError {
     /// wraps it with the usual effect-path prefix like any other
     /// located check error, matching `core/cel_eval.py::validate_cel_syntax`.
     TooDeeplyNestedAccessor(usize),
+    /// The `cel` crate's own parser hit its internal recursion limit
+    /// ([`is_parser_recursion_limit`]) before [`TooDeeplyNestedAccessor`]
+    /// or [`TooDeeplyNestedForSafety`] below ever would -- a chain of
+    /// parens, calls or list/map literals deep enough on its own, with
+    /// no long accessor chain to trip the former or enough raw links to
+    /// trip the latter's much higher cap (issue #629). Worded and
+    /// wrapped exactly like [`TooDeeplyNestedAccessor`]: the depth at
+    /// which each shape, and each engine, gives up differs, but the
+    /// text naming it does not.
+    TooDeeplyNestedToParse,
     /// Not reachable from `core/cel_eval.py` parity at all -- a Rust-only
     /// safety backstop ([`nesting::MAX_SAFETY_CHAIN_DEPTH`]'s own module
     /// docs) so a compile-time syntax check can't itself stack-overflow
@@ -1045,6 +1086,17 @@ impl CelSyntaxError {
     }
 }
 
+impl CelSyntaxError {
+    fn from_compile_error(e: impl std::fmt::Display) -> CelSyntaxError {
+        let text = e.to_string();
+        if is_parser_recursion_limit(&text) {
+            CelSyntaxError::TooDeeplyNestedToParse
+        } else {
+            CelSyntaxError::Parse(text)
+        }
+    }
+}
+
 impl fmt::Display for CelSyntaxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -1053,7 +1105,7 @@ impl fmt::Display for CelSyntaxError {
                 f,
                 "expression is too long ({len} chars, max {MAX_EXPR_LENGTH})."
             ),
-            CelSyntaxError::TooDeeplyNestedAccessor(_depth) => {
+            CelSyntaxError::TooDeeplyNestedAccessor(_) | CelSyntaxError::TooDeeplyNestedToParse => {
                 write!(f, "expression is nested too deeply")
             }
             CelSyntaxError::TooDeeplyNestedForSafety(depth) => write!(
@@ -1110,8 +1162,7 @@ pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
         ));
     }
     let env = stdlib_env();
-    env.compile(expr)
-        .map_err(|e| CelSyntaxError::Parse(e.to_string()))?;
+    env.compile(expr).map_err(CelSyntaxError::from_compile_error)?;
     Ok(())
 }
 
@@ -1760,6 +1811,19 @@ mod tests {
     }
 
     #[test]
+    fn dot_access_missing_key_is_worded_the_same_as_bracket_indexing() {
+        let value = dict(vec![("present", Value::from(1_i64))]);
+        let err = evaluate_expect(
+            "value.missing_key == 1",
+            &value,
+            &Value::Dict(Dict::new()),
+            &Value::Dict(Dict::new()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().ends_with("no such key: 'missing_key'"));
+    }
+
+    #[test]
     fn list_index_out_of_range_names_the_index_not_the_list() {
         let state = index_error_test_state();
         let err = evaluate_condition("state.l[5] == 1", &state, true).unwrap_err();
@@ -1855,6 +1919,30 @@ mod tests {
         assert!(matches!(err, CelSyntaxError::TooDeeplyNestedAccessor(_)));
         assert_eq!(err.to_string(), "expression is nested too deeply");
         assert!(!err.is_parse_error());
+    }
+
+    #[test]
+    fn validate_syntax_rejects_deep_paren_nesting_around_a_short_accessor_the_same_way() {
+        // Issue #629's own example: 150 pairs of parens around a short
+        // accessor trips `cel`'s own parser recursion limit (96) long
+        // before `MAX_ACCESSOR_NESTING_DEPTH`/`MAX_SAFETY_CHAIN_DEPTH`
+        // would -- worded exactly the same as the accessor case above,
+        // never the raw parser dump or the whole expression quoted back.
+        let expr = format!("{}state.input.missing{}", "(".repeat(150), ")".repeat(150));
+        let err = validate_syntax(&expr).unwrap_err();
+        assert_eq!(err, CelSyntaxError::TooDeeplyNestedToParse);
+        assert_eq!(err.to_string(), "expression is nested too deeply");
+        assert!(!err.is_parse_error());
+    }
+
+    #[test]
+    fn evaluate_condition_rejects_deep_paren_nesting_the_same_clean_way() {
+        let state = Value::Dict(Dict::new());
+        let expr = format!("{}state.input.missing{}", "(".repeat(150), ")".repeat(150));
+        let err = evaluate_condition(&expr, &state, false).unwrap_err();
+        assert!(err.is_too_deeply_nested());
+        assert!(err.to_string().ends_with("expression is nested too deeply"));
+        assert!(!err.to_string().contains("Recursion limit"));
     }
 
     #[test]
