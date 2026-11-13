@@ -97,6 +97,16 @@ pub struct Frame {
     /// [`Frame::rebased`]'s own doc comment for why this composes
     /// correctly with both [`Frame::nested`] and [`Frame::with_pass`].
     rebase: Rc<Vec<(EffectPath, EffectPath)>>,
+    /// `circuitry.generated_doc.GENERATED_DOCUMENT_PROVIDERS_KEY` (#772):
+    /// the *current* document's own, statically referenced tool-plugin
+    /// provider names -- the ceiling a nested `use`/`reflector` effect's
+    /// own generated child is judged against (plus that effect's own
+    /// literal `allow_tools:`). Replaced, never extended, by
+    /// [`Frame::with_document_tool_providers`] -- unlike
+    /// [`Frame::use_call_stack`], this is not a history, only the
+    /// providers of whichever document is executing right now. Every
+    /// other builder on this struct carries it forward unchanged.
+    document_tool_providers: Rc<std::collections::BTreeSet<String>>,
     /// `core/prompt.py`'s own container-nesting display depth
     /// (`structure.depth`, a.k.a. the `structural_position` signal) --
     /// issue #516's §4(c) table, superseding the one-value-per-run
@@ -122,6 +132,7 @@ impl Frame {
             use_call_stack: Rc::new(Vec::new()),
             rebase: Rc::new(Vec::new()),
             display_depth: 0,
+            document_tool_providers: Rc::new(std::collections::BTreeSet::new()),
         }
     }
 
@@ -144,7 +155,34 @@ impl Frame {
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: self.rebase.clone(),
             display_depth,
+            document_tool_providers: Rc::clone(&self.document_tool_providers),
         }
+    }
+
+    /// This frame, with [`Frame::document_tool_providers`] replaced --
+    /// every other field unchanged. Called once, when a `use`/
+    /// decomposition child's own document starts executing, with that
+    /// child's own static providers (#772) -- never accumulated with
+    /// the parent's, since each document is judged against its own
+    /// text, not an ancestor's.
+    pub fn with_document_tool_providers(
+        &self,
+        providers: std::collections::BTreeSet<String>,
+    ) -> Frame {
+        Frame {
+            prefix: Rc::clone(&self.prefix),
+            pass_indices: Rc::clone(&self.pass_indices),
+            use_call_stack: Rc::clone(&self.use_call_stack),
+            rebase: self.rebase.clone(),
+            display_depth: self.display_depth,
+            document_tool_providers: Rc::new(providers),
+        }
+    }
+
+    /// The current document's own static tool providers (#772) -- the
+    /// ceiling a nested generated child is judged against.
+    pub fn document_tool_providers(&self) -> &std::collections::BTreeSet<String> {
+        &self.document_tool_providers
     }
 
     /// `core/effect_identity.py::call_path` -- *path*'s own pass
@@ -256,6 +294,7 @@ impl Frame {
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: Rc::new(stack),
             display_depth: self.display_depth,
+            document_tool_providers: Rc::clone(&self.document_tool_providers),
         }
     }
 
@@ -284,6 +323,7 @@ impl Frame {
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: Rc::new(Vec::new()),
             display_depth: self.display_depth,
+            document_tool_providers: Rc::clone(&self.document_tool_providers),
         }
     }
 
@@ -302,6 +342,7 @@ impl Frame {
             use_call_stack: Rc::clone(&self.use_call_stack),
             rebase: self.rebase.clone(),
             display_depth: self.display_depth,
+            document_tool_providers: Rc::clone(&self.document_tool_providers),
         }
     }
 
@@ -321,6 +362,7 @@ impl Frame {
             use_call_stack: Rc::new(stack),
             rebase: self.rebase.clone(),
             display_depth: self.display_depth,
+            document_tool_providers: Rc::clone(&self.document_tool_providers),
         }
     }
 

@@ -695,6 +695,9 @@ effects:
         retries: RetryPolicy::default(),
         expect: None,
         description: None,
+        allow_tools: std::collections::BTreeSet::new(),
+        force_generated: false,
+        generating_effect_path_override: None,
     };
     let op = support::use_leaf(
         root_path().push_name("step"),
@@ -1295,6 +1298,9 @@ effects:
         retries: RetryPolicy::default(),
         expect: None,
         description: None,
+        allow_tools: std::collections::BTreeSet::new(),
+        force_generated: false,
+        generating_effect_path_override: None,
     };
     let op = support::use_leaf(
         root_path().push_name("step"),

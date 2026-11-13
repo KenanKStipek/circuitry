@@ -27,6 +27,52 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::Path;
 
+/// `core/compiler.py::_compile_allow_tools` (#772): a 'use'/'reflector'
+/// effect's literal 'allow_tools:'. Must be a literal list of plain
+/// strings -- never a Mustache template or a '{from: ...}' reference --
+/// so a generated document's own tool-provider ceiling can never be
+/// widened by rendered content, params_json or state. Unlike Python,
+/// does not check each name against the known tool-plugin registry:
+/// electricity-compiler cannot depend on electricity-tools (that crate
+/// depends back on this one), so an unknown name here is simply inert
+/// rather than a compile error -- a documented divergence.
+fn compile_allow_tools(
+    effect: &Dict,
+    label: &str,
+    effect_path: &str,
+) -> Result<BTreeSet<String>, CompileError> {
+    let Some(raw) = effect.get(&Value::Str("allow_tools".to_string())) else {
+        return Ok(BTreeSet::new());
+    };
+    if matches!(raw, Value::None) {
+        return Ok(BTreeSet::new());
+    }
+    let Value::List(items) = raw else {
+        return Err(CompileError(format!(
+            "{label} effect at '{effect_path}': 'allow_tools' must be a literal list of \
+             plain strings."
+        )));
+    };
+    let mut names = BTreeSet::new();
+    for item in items {
+        let Value::Str(item) = item else {
+            return Err(CompileError(format!(
+                "{label} effect at '{effect_path}': 'allow_tools' must be a literal list \
+                 of plain strings."
+            )));
+        };
+        if item.contains("{{") {
+            return Err(CompileError(format!(
+                "{label} effect at '{effect_path}': 'allow_tools' must be a literal list \
+                 of plain strings; {} is a Mustache template, never honoured here.",
+                Value::Str(item.clone()).py_repr()
+            )));
+        }
+        names.insert(item.trim().to_string());
+    }
+    Ok(names)
+}
+
 fn leaf_op(path: EffectPath, name: &str, kind: LeafKind, on_error: OnError) -> Op {
     Op {
         path,
@@ -944,6 +990,7 @@ pub(crate) fn compile_use(
     let description = optional_str(effect, "description");
     let retries = compile_retries(effect).unwrap_or_default();
     let expect = compile_expect(effect, "use", effect_path, loop_names)?;
+    let allow_tools = compile_allow_tools(effect, "Use", effect_path)?;
 
     let source = if let Some(path_value) = path_field {
         UseSource::Path(path_value)
@@ -968,6 +1015,9 @@ pub(crate) fn compile_use(
         retries,
         expect,
         description,
+        allow_tools,
+        force_generated: false,
+        generating_effect_path_override: None,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Use(op), on_error))
 }
@@ -1269,6 +1319,7 @@ pub(crate) fn compile_reflector(
     .map(py_int)
     .unwrap_or(electricity_bytecode::defaults::MAX_EFFECTS as i64)
     .clamp(0, i64::from(u32::MAX)) as u32;
+    let allow_tools = compile_allow_tools(effect, "Reflector", effect_path)?;
 
     let op = ReflectorOp {
         inner: Box::new(inner_region),
@@ -1278,6 +1329,7 @@ pub(crate) fn compile_reflector(
         stop_on_done,
         prime_template,
         max_effects,
+        allow_tools,
     };
     Ok(Op {
         path: own_path,

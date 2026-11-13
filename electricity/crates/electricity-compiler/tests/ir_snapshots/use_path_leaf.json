@@ -18,8 +18,11 @@
               "kind": {
                 "Leaf": {
                   "Use": {
+                    "allow_tools": [],
                     "description": null,
                     "expect": null,
+                    "force_generated": false,
+                    "generating_effect_path_override": null,
                     "inputs": {
                       "Map": {
                         "topic": {

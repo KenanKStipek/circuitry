@@ -888,6 +888,35 @@ async fn attempt_once<R: ParamsCtx>(
         )));
     }
 
+    // Generated-document ceiling (#772): a generated child -- forced by
+    // the reflector's own synthetic `use`, or an inline child whose
+    // structure only exists because it was rendered -- may never widen
+    // the shell allowlist or use a tool provider its enclosing document
+    // doesn't use itself, beyond this effect's own literal `allow_tools`.
+    let is_generated = match &use_op.source {
+        UseSource::Inline(text) => {
+            use_op.force_generated
+                || crate::generated_doc::is_generated_inline(&text.source, &loaded.document)
+        }
+        UseSource::Path(_) | UseSource::Orchestration(_) => false,
+    };
+    if is_generated {
+        let mut allowed_providers = frame.document_tool_providers().clone();
+        allowed_providers.extend(use_op.allow_tools.iter().cloned());
+        let generating_effect_path = use_op
+            .generating_effect_path_override
+            .clone()
+            .unwrap_or_else(|| frame.effect_path(&op.path).to_string());
+        let errors = crate::generated_doc::generated_document_errors(
+            &loaded.document,
+            Some(&allowed_providers),
+            &generating_effect_path,
+        );
+        if !errors.is_empty() {
+            return Err(not_retried(errors.join("; ")));
+        }
+    }
+
     // Cycle detection -- the stack is per call path (`Frame::
     // push_use`'s own fresh `Vec`), checked after the allowlist check,
     // matching Python's own order.
@@ -913,7 +942,10 @@ async fn attempt_once<R: ParamsCtx>(
         .with_display_depth(crate::complexity::depth::use_child_root(
             frame.display_depth(),
         ))
-        .push_use(loaded.identity.clone());
+        .push_use(loaded.identity.clone())
+        .with_document_tool_providers(crate::generated_doc::static_tool_providers(
+            &loaded.document,
+        ));
 
     let child_program = electricity_compiler::compile_document(&loaded.document, &loaded.origin)
         .map_err(|e| not_retried(e.0))?;
@@ -2076,6 +2108,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2210,6 +2245,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 expr: "value.result == value.result".to_string(),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2410,6 +2448,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 ),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2520,6 +2561,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 ),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2689,6 +2733,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 ),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2923,6 +2970,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -3020,6 +3070,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),

@@ -368,7 +368,25 @@ fn validate_generated_yaml(yaml: &str, result_path: &str, runtime_config: &Value
     }
     let mut problems = check_merge_contract(&throwaway);
     problems.extend(check_allowlists(&throwaway, runtime_config));
+    problems.extend(check_generated_tool_ceiling(yaml));
     problems
+}
+
+/// `core/decompose.py::_check_generated_tool_ceiling` (#772): a
+/// decomposition plan is always generated -- its own `allowed_commands`
+/// never widen the shell allowlist, and a `service` effect's `shell:
+/// true` is always refused. Unlike a `use`/`reflector` generated child,
+/// it has no generating effect of its own to carry a literal
+/// `allow_tools:`, so it is not held to the tool-provider ceiling:
+/// `None` here skips that half of `generated_document_errors` entirely.
+fn check_generated_tool_ceiling(yaml: &str) -> Vec<String> {
+    let Ok(parsed) = electricity_yaml::load_yaml(yaml) else {
+        return Vec::new(); // already reported by the schema check
+    };
+    if parsed.as_dict().is_none() {
+        return Vec::new();
+    }
+    crate::generated_doc::generated_document_errors(&parsed, None, "")
 }
 
 /// `core/decompose.py::_validate_plan`. `_check_capability_ceiling`
@@ -449,6 +467,7 @@ pub fn validate_plan(
 
     problems.extend(check_merge_contract(plan));
     problems.extend(check_allowlists(plan, runtime_config));
+    problems.extend(check_generated_tool_ceiling(&yaml));
     Ok(problems)
 }
 

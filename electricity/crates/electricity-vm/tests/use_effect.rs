@@ -106,6 +106,9 @@ fn base_use_op(source: UseSource) -> electricity_bytecode::UseOp {
         retries: RetryPolicy::default(),
         expect: None,
         description: None,
+        allow_tools: std::collections::BTreeSet::new(),
+        force_generated: false,
+        generating_effect_path_override: None,
     }
 }
 

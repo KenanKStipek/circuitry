@@ -354,6 +354,13 @@ async fn run_iteration(
         retries: RetryPolicy::default(),
         expect: None,
         description: None,
+        allow_tools: reflector.allow_tools.clone(),
+        // A reflector's plan has no author template of its own to
+        // compare against -- it is unconditionally generated (#772).
+        force_generated: true,
+        // Named in a refusal as the effect to add allow_tools to --
+        // the reflector's own path, not the synthetic use's.
+        generating_effect_path_override: Some(frame.effect_path(&op.path).to_string()),
     };
     let use_path = op
         .path
