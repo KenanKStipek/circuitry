@@ -240,7 +240,7 @@ def test_a_state_file_one_engine_wrote_resumes_on_the_other_with_the_same_final_
         resume_engine, electricity_binary,
         [
             "orchestration.yml", "--config", "config.json", "--out", "out.json",
-            "--state", "out.json", "--resume", "state",
+            "--state", "out.json", "--resume", "state", "--force",
         ],
         cwd=case_dir, env=env,
     )

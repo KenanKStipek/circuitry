@@ -356,7 +356,10 @@ frames 0–249 never happen again.
 either engine wrote resumes on the other, with the same result. Its own
 `--resume` always needs `--state <file>` naming the saved state directly:
 `--resume last`/a run-id (this section's own persistence lookup) aren't
-supported on electricity.
+supported on electricity, and given without `--state <file>` either, it
+refuses the same way cof's own safety checks do — before anything runs,
+writing no state, exit 1. electricity's own `--last` stash is tracked
+separately (#760).
 
 Continuing where a run stopped is wrong for a scope whose first effects start
 something its `finally:` stops — a server, a lock, a migration. The stopped

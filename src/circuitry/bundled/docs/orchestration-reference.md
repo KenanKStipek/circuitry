@@ -2501,7 +2501,10 @@ the same way (everything below, `resume: restart` included) — a state
 file either engine wrote resumes on the other. `--resume last`/a run-id
 (the other two rows of the table below) aren't supported: electricity has
 no `--last` stash and `runtime.persistence` stays refused on it, so
-`--resume` always needs `--state <file>` naming the saved state directly.
+`--resume` always needs `--state <file>` naming the saved state directly—
+given without it, electricity refuses the same way cof's own safety checks
+do (before anything runs, writing no state, exit 1). electricity's own
+`--last` stash is tracked separately (#760).
 
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An

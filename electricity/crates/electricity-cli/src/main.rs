@@ -1083,31 +1083,49 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     let out_path = run_args.out.map(PathBuf::from);
 
     // `--resume` (issue #727): only the `--state <file>` form is in
-    // scope -- `cof run --resume <run-id>` needs a `runtime.persistence`
-    // backend lookup, which stays refused on electricity; `cof run
-    // --resume last` needs cof's own `--last` stash (`last-run.json`),
-    // which electricity does not keep (#760 tracks adding one).
-    if run_args.resume.as_deref() == Some("last") && run_args.state.is_none() {
-        signal_guard.disarm();
-        let message = "--resume last needs cof's own --last stash, which electricity does not \
-                        keep; pass --state <file> naming a saved state directly instead";
-        if run_args.via_run {
-            print_run_usage_error(message);
-        } else {
-            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
-        }
-        return ExitCode::from(2);
-    }
+    // scope. `cof run`'s own two other sources both fail inside
+    // `cli/app.py::_resolve_resume_state` with a `typer.BadParameter`
+    // the caller re-raises as `typer.Exit(code=1)` -- a pre-run
+    // refusal that writes no state at all, not a raw CLI usage error
+    // (DESIGN.md §6.9's own exit-code table), so this is refused the
+    // same way `--resume`'s document-hash checks are: through the
+    // ordinary `RunResult`/`exit_code_for` path, exit 1, nothing
+    // written -- never `ExitCode::from(2)`.
     if run_args.resume.is_some() && run_args.state.is_none() {
         signal_guard.disarm();
-        let message = "--resume needs --state <file> naming a saved state directly; \
-                        'last' and a run-id are not supported by electricity";
-        if run_args.via_run {
-            print_run_usage_error(message);
+        let message = if run_args.resume.as_deref() == Some("last") {
+            // `cof run --resume last` reads its own `--last` stash
+            // (`last-run.json`); electricity keeps none (issue #760
+            // tracks adding one).
+            "--resume last needs cof's own --last stash, which electricity does not keep \
+             (issue #760) -- pass --state <file> naming a saved state directly instead."
+                .to_string()
         } else {
-            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+            // `cof run --resume <run-id>` needs the orchestration's own
+            // `runtime.persistence` backend, which stays refused on
+            // electricity.
+            "--resume <run-id> needs this orchestration's runtime.persistence backend, which \
+             stays refused on electricity -- pass --state <file> naming a saved state directly \
+             instead."
+                .to_string()
+        };
+        let result = RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(message),
+            warnings: config_warnings.clone(),
+            signal: None,
+        };
+        if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
+            print_stderr_contract(&result);
+            write_stderr(&format!(
+                "electricity: could not serialize run state: {err}\n"
+            ));
+            return ExitCode::from(1);
         }
-        return ExitCode::from(2);
+        print_stderr_contract(&result);
+        return exit_code_for(&result);
     }
 
     let req = RunRequest {

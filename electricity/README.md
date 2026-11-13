@@ -60,7 +60,10 @@ saved record's own digest and inputs still match, and `finally:` always
 reruns. A document that changed since the saved run is refused unless
 `--force`. A state file either engine wrote resumes on the other.
 `--resume last`/a run-id (cof's own persistence-backed modes) are not
-supported -- only naming a saved file directly with `--state`. [What
+supported -- only naming a saved file directly with `--state`; a `--resume`
+with neither is refused the same way cof's own safety checks refuse it
+(before anything runs, writing no state, exit 1), naming `--state <file>`
+as the only form electricity accepts (`--last`'s own stash is #760). [What
 electricity can't run yet](#what-electricity-cant-run-yet), below, still
 refuses with a preview message pointing at `cof run`. A document and its
 literal `use` children are checked before the run starts; an inline or
@@ -91,7 +94,7 @@ release alongside the Python distributions, marked as a preview.
   run`'s own `--resume last`/a run-id (looked up via its own `--last`
   stash or a `runtime.persistence` backend) isn't supported either --
   `--resume` always needs `--state <file>` naming the saved state
-  directly.
+  directly; electricity's own `--last` stash is tracked separately (#760).
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
 - **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
