@@ -1,6 +1,6 @@
 {
   "spec_case": "issue #511",
-  "description": "A reflector-generated plan names a tool provider that is not a cof plugin at all, with no on_error: continue on the reflector itself -- refused up front by the generated-document ceiling (#772), since the enclosing document never uses that provider itself, before the plan's own effects ever run; the error text is character-for-character the same as the on_error: continue variant.",
+  "description": "A reflector-generated plan names a tool provider that is not a cof plugin at all, with no on_error: continue on the reflector itself -- the error text is character-for-character the same as the on_error: continue variant: this is an ordinary generated-child failure, never absorbed by the reflector regardless of on_error, so on_error has nothing to change here.",
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "failure",

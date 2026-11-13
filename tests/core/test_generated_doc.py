@@ -115,10 +115,13 @@ def test_allowed_commands_on_generated_shell_effect_is_always_refused() -> None:
             }
         ]
     }
-    errors = generated_document_errors(orch, allowed_providers=frozenset({"shell"}))
+    errors = generated_document_errors(
+        orch, allowed_providers=frozenset({"shell"}), generating_effect_path="prime.plan_it"
+    )
     assert errors
     assert "allowed_commands" in errors[0]
     assert "shell" in errors[0]
+    assert "prime.plan_it" in errors[0]
 
 
 def test_service_shell_true_is_always_refused() -> None:
@@ -132,17 +135,35 @@ def test_service_shell_true_is_always_refused() -> None:
             }
         ]
     }
-    errors = generated_document_errors(orch, allowed_providers=frozenset({"service"}))
+    errors = generated_document_errors(
+        orch, allowed_providers=frozenset({"service"}), generating_effect_path="prime.plan_it"
+    )
     assert errors
     assert "shell: true" in errors[0]
+    assert "prime.plan_it" in errors[0]
 
 
-def test_provider_outside_ceiling_is_refused() -> None:
+def test_provider_outside_the_allowed_set_is_refused() -> None:
     orch = {"effects": [{"type": "tool", "name": "t", "provider": "git"}]}
-    errors = generated_document_errors(orch, allowed_providers=frozenset({"shell"}))
+    errors = generated_document_errors(
+        orch, allowed_providers=frozenset({"shell"}), generating_effect_path="prime.plan_it"
+    )
     assert errors
     assert "git" in errors[0]
     assert "allow_tools" in errors[0]
+    assert "prime.plan_it" in errors[0]
+    assert "ceiling" not in errors[0]
+
+
+def test_an_unknown_provider_is_not_flagged_here() -> None:
+    """A provider that isn't a real plugin at all fails the usual way
+    ("Unknown plugin") at dispatch, never this check -- adding an unknown
+    name to allow_tools would itself be a check error."""
+    orch = {"effects": [{"type": "tool", "name": "t", "provider": "nonexistent_tool"}]}
+    errors = generated_document_errors(
+        orch, allowed_providers=frozenset({"shell"}), generating_effect_path="prime.plan_it"
+    )
+    assert errors == []
 
 
 def test_provider_within_ceiling_is_clean() -> None:

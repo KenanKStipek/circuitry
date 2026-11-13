@@ -292,6 +292,9 @@ class ReflectorRuntime:
                 # A reflector's plan has no author template of its own to
                 # compare against -- it is unconditionally generated (#772).
                 force_generated=True,
+                # Named in a refusal as the effect to add allow_tools to --
+                # the reflector's own path, not the synthetic use's.
+                generating_effect_path_override=store.effect_path(self.defn.name),
             )
 
             gen_parent = reflector_store.child(self.defn.generated_key)

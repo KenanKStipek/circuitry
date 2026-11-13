@@ -603,6 +603,13 @@ class UseDefinition:
     #: ``generated_doc.is_generated_inline``).
     force_generated: bool = False
 
+    #: The dotted state path of the effect that actually generated this
+    #: child, named in a generated-document refusal so the fix is
+    #: actionable (#772) -- ``None`` for an ordinary 'use' effect (its own
+    #: node path is the generating effect); set by ``ReflectorRuntime`` to
+    #: the reflector's own path for its synthetic 'use'.
+    generating_effect_path_override: str | None = None
+
 
 class UseRuntime:
     """
@@ -925,7 +932,7 @@ class UseRuntime:
                 "enforcement: " + "; ".join(denials)
             )
 
-    def _check_generated_document(self, child_orch: dict[str, Any]) -> None:
+    def _check_generated_document(self, child_orch: dict[str, Any], node_path: str) -> None:
         """Refuse a generated child that widens the shell allowlist, enables
         a service's shell, or uses a tool provider its enclosing document
         does not itself use (#772).
@@ -956,12 +963,14 @@ class UseRuntime:
             self.runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ()
         )
         allowed_providers = enclosing | self.defn.allow_tools
-        errors = generated_document_errors(child_orch, allowed_providers=allowed_providers)
+        generating_path = self.defn.generating_effect_path_override or node_path
+        errors = generated_document_errors(
+            child_orch,
+            allowed_providers=allowed_providers,
+            generating_effect_path=generating_path,
+        )
         if errors:
-            raise ValueError(
-                f"use '{self.defn.name}': generated child failed the "
-                "generated-document ceiling: " + "; ".join(errors)
-            )
+            raise ValueError("; ".join(errors))
 
     def _check_capability_consent(
         self, child_orch: dict[str, Any], label: str, digest: str
@@ -1225,7 +1234,7 @@ class UseRuntime:
                     if self._pin is not None:
                         meta["library_ref"] = self._pin
                     self._check_allowlists(child_orch, label)
-                    self._check_generated_document(child_orch)
+                    self._check_generated_document(child_orch, node_path)
 
                     # Cycle detection — runtime call-stack tracking by resolved identity.
                     # The stack is derived per call-path rather than mutated in place:
