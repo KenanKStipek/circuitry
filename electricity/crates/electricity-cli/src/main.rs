@@ -306,6 +306,36 @@ fn path_to_string(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// `str(pathlib.Path(s))`'s own normalisation for a POSIX path string --
+/// drop a `.` component, collapse repeated `/`, and drop a trailing `/`
+/// (verified directly: `Path('./a//b/')` stringifies to `'a/b'`). Never
+/// resolves `..` or touches the filesystem; a lone `//` prefix is kept
+/// (POSIX's own implementation-defined two-slash root, `Path('//a')` ->
+/// `'//a'`). `cof run` gets this for free the moment a CLI path flag is
+/// typed `Path` (Typer's own conversion, before `_save_last_run`/
+/// `_resolve_resume_state` ever see it); `electricity run`'s own flags
+/// stay plain `String`s, so a path headed for the stash or the
+/// `--resume last` orchestration comparison is normalised here instead
+/// (issue #760) -- otherwise `./doc.yml` and `doc.yml` stash and compare
+/// as different orchestrations when `cof run` would treat them the same.
+fn normalize_path_str(raw: &str) -> String {
+    let double_slash_prefix = raw.starts_with("//") && !raw.starts_with("///");
+    let is_absolute = raw.starts_with('/');
+    let joined = raw
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    match (is_absolute, double_slash_prefix, joined.is_empty()) {
+        (true, true, true) => "//".to_string(),
+        (true, true, false) => format!("//{joined}"),
+        (true, false, true) => "/".to_string(),
+        (true, false, false) => format!("/{joined}"),
+        (false, _, true) => ".".to_string(),
+        (false, _, false) => joined,
+    }
+}
+
 /// `cli/app.py::_save_last_run`'s own dict literal, in the exact same
 /// key order (issue #760) -- a stash either engine wrote must read back
 /// the same in the other, and `electricity-config::last_run::LastRun`'s
@@ -333,24 +363,34 @@ fn last_run_stash_args(
         }
     }
 
+    fn opt_path_str(value: Option<&String>) -> Value {
+        match value {
+            Some(s) => Value::Str(normalize_path_str(s)),
+            None => Value::None,
+        }
+    }
+
     let mut args = Dict::new();
     args.insert(
         Value::Str("orchestration".to_string()),
-        Value::Str(run_args.orchestration.clone()),
+        Value::Str(normalize_path_str(&run_args.orchestration)),
     );
     args.insert(
         Value::Str("config".to_string()),
-        opt_str(run_args.config.as_ref()),
+        opt_path_str(run_args.config.as_ref()),
     );
     args.insert(
         Value::Str("state".to_string()),
-        opt_str(run_args.state.as_ref()),
+        opt_path_str(run_args.state.as_ref()),
     );
     let out_value = run_args
         .out
         .clone()
         .or_else(|| resume_default_out_path.map(|p| path_to_string(p.to_path_buf())));
-    args.insert(Value::Str("out".to_string()), opt_str(out_value.as_ref()));
+    args.insert(
+        Value::Str("out".to_string()),
+        opt_path_str(out_value.as_ref()),
+    );
     args.insert(
         Value::Str("pretty".to_string()),
         Value::Bool(run_args.pretty),
@@ -362,11 +402,11 @@ fn last_run_stash_args(
     args.insert(Value::Str("verbose".to_string()), Value::Bool(false));
     args.insert(
         Value::Str("live_state".to_string()),
-        opt_str(run_args.live_state.as_ref()),
+        opt_path_str(run_args.live_state.as_ref()),
     );
     args.insert(
         Value::Str("events".to_string()),
-        opt_str(run_args.events.as_ref()),
+        opt_path_str(run_args.events.as_ref()),
     );
     args.insert(
         Value::Str("env_vars".to_string()),
@@ -1352,12 +1392,13 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
                 }
                 Some(stash) => {
                     let stashed_orchestration = stash.orchestration();
-                    if stashed_orchestration != run_args.orchestration {
+                    let normalized_orchestration = normalize_path_str(&run_args.orchestration);
+                    if stashed_orchestration != normalized_orchestration {
                         Some(format!(
                             "The last run was '{stashed_orchestration}', not {} \u{2014} run \
                              that orchestration again, or pass --state <file> to resume a \
                              specific saved state instead of 'last'.",
-                            run_args.orchestration
+                            normalized_orchestration
                         ))
                     } else {
                         match stash.out_path() {

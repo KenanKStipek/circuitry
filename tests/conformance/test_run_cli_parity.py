@@ -1136,3 +1136,55 @@ def test_a_refused_resume_never_overwrites_the_stash_it_read(
     assert stash_path.read_bytes() == stash_before, (
         "the refused --resume last overwrote the stash the first run wrote"
     )
+
+
+@pytest.mark.parametrize("replay_engine", ENGINES)
+@pytest.mark.parametrize("write_engine", ENGINES)
+def test_resume_last_normalizes_a_leading_dot_slash_the_same_way_cof_does(
+    tmp_path: Path, electricity_binary: Path, write_engine: str, replay_engine: str,
+) -> None:
+    """`cof run`'s own CLI path flags are all `Path`s by the time they
+    reach `_save_last_run`/`_resolve_resume_state` (Typer's own
+    conversion), so `./orchestration.yml` stashes and compares as
+    `orchestration.yml` -- electricity's own plain-`String` flags must
+    normalize the same way, on both the write and the read side, or a
+    stash written for one spelling refuses a resume naming the other."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_RESUME_ORCHESTRATION)
+
+    first = _run(
+        write_engine, electricity_binary, case_dir, home_dir,
+        ["./orchestration.yml", "--config", "config.json", "--out", "out.json"],
+    )
+    assert first.returncode == 1, (write_engine, first.stdout, first.stderr)
+    stash = json.loads(_stash_path(home_dir).read_text(encoding="utf-8"))
+    assert stash["orchestration"] == "orchestration.yml", stash
+
+    resumed = _run(
+        replay_engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert resumed.returncode == 1, (replay_engine, resumed.stdout, resumed.stderr)
+
+
+@pytest.mark.parametrize("write_engine", ENGINES)
+def test_last_normalizes_a_leading_dot_slash_the_same_way_cof_does(
+    tmp_path: Path, electricity_binary: Path, write_engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    written = _run(
+        write_engine, electricity_binary, case_dir, home_dir,
+        ["./orchestration.yml", "--config", "config.json", "-e", "topic=widgets", "--out", "out.json"],
+    )
+    assert written.returncode == 0, (write_engine, written.stdout, written.stderr)
+
+    replayed = _run("electricity", electricity_binary, case_dir, home_dir, ["--last"])
+    assert replayed.returncode == 0, (replayed.stdout, replayed.stderr)
+    state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert state["input"]["topic"] == "widgets"
