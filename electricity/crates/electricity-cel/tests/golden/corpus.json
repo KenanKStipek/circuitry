@@ -9240,6 +9240,446 @@
     }
   },
   {
+    "expr": "9223372036854775807 + 1 == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '9223372036854775807 + 1 == 1': return error for overflow"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "9223372036854775807 * 2 == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '9223372036854775807 * 2 == 1': return error for overflow"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "18446744073709551615u + 1u == 1u",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '18446744073709551615u + 1u == 1u': return error for overflow"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "18446744073709551615u * 2u == 1u",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '18446744073709551615u * 2u == 1u': return error for overflow"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "{'a': 1, 'a': 2}.a == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for \"{'a': 1, 'a': 2}.a == 1\": duplicate key: 'a'"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "{[1]: 2} == {}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '{[1]: 2} == {}': cannot use a list as a key"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[1, 2].zz == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '[1, 2].zz == 1': cannot select field 'zz' on a list"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "5 in 5",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '5 in 5': cannot apply 'in' to an int and an int"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "1 in [1.0]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '1 in [1.0]': no such overload"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.n + state.l == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.n + state.l == 1': cannot apply '+' to an int and a list"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "5"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.n * state.l == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.n * state.l == 1': cannot apply '*' to an int and a list"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "5"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "1.5 % 2.0 == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for '1.5 % 2.0 == 1': cannot apply '%' to a double and a double"
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.n / state.l == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.n / state.l == 1': cannot apply '/' to an int and a list"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "5"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.n - state.l == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.n - state.l == 1': cannot apply '-' to an int and a list"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "5"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.m[1u] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.m[1u] == 1': cannot index a map with a uint"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.m[true] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.m[true] == 1': cannot index a map with a bool"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.m[5u] == 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.m[5u] == 1': no such key: 5"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "str",
+                  "v": "a"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
     "expr": "state.a < state.b",
     "mode": "condition",
     "outcome": {

@@ -1147,6 +1147,35 @@ def build_corpus() -> list[dict]:
         expect("1 / value == 1", value=0, exact_error=True),
     ]
 
+    # --- issue #629 review: every other cel-python error that embeds a
+    # Python class repr or value -- an int/uint overflow (add and
+    # multiply), a map literal's duplicate key and an invalid key
+    # type, field selection on a non-map, `in`'s own two mismatch
+    # shapes, and a map key of a mismatched integer type (celpy's own
+    # `IntType`/`UintType.__eq__` being `@type_matched`, raising rather
+    # than missing when the probe's hash collides with an existing key
+    # of a different exact type) -- exact in both engines, mapped to
+    # the same wording arm by arm against `evaluation_error_text`.
+    cases += [
+        condition("9223372036854775807 + 1 == 1", {}, exact_error=True),
+        condition("9223372036854775807 * 2 == 1", {}, exact_error=True),
+        condition("18446744073709551615u + 1u == 1u", {}, exact_error=True),
+        condition("18446744073709551615u * 2u == 1u", {}, exact_error=True),
+        condition("{'a': 1, 'a': 2}.a == 1", {}, exact_error=True),
+        condition("{[1]: 2} == {}", {}, exact_error=True),
+        condition("[1, 2].zz == 1", {}, exact_error=True),
+        condition("5 in 5", {}, exact_error=True),
+        condition("1 in [1.0]", {}, exact_error=True),
+        condition("state.n + state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("state.n * state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("1.5 % 2.0 == 1", {}, exact_error=True),
+        condition("state.n / state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("state.n - state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("state.m[1u] == 1", {"m": {1: "a"}}, exact_error=True),
+        condition("state.m[true] == 1", {"m": {1: "a"}}, exact_error=True),
+        condition("state.m[5u] == 1", {"m": {1: "a"}}, exact_error=True),
+    ]
+
     # --- issue #400: ordering's remaining gaps -- string/string
     # (bytes/bytes is already pinned above), a computed duration
     # against another (celpy's own `DurationType` has no state-side
