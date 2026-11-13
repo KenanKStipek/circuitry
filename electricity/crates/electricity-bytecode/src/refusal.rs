@@ -98,6 +98,10 @@ const TOOL_GH_PROVIDERS: &[&str] = &["gh"];
 /// built on the shared HTTP client ([`TOOL_HTTP_PROVIDERS`]'s own
 /// stack) but with its own flag, since it was added after that set.
 const TOOL_SYSTEMONE_PROVIDERS: &[&str] = &["systemone"];
+/// The `service` provider (#721): starts, stops and reports on a
+/// process the tool itself owns, built on its own record/lock rather
+/// than any other provider's machinery.
+const TOOL_SERVICE_PROVIDERS: &[&str] = &["service"];
 
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +248,8 @@ pub struct Supported<'a> {
     pub tool_gh: bool,
     /// Issue #724: `systemone` ([`TOOL_SYSTEMONE_PROVIDERS`]).
     pub tool_systemone: bool,
+    /// Issue #721: `service` ([`TOOL_SERVICE_PROVIDERS`]).
+    pub tool_service: bool,
     /// Lane K2 (#448, #516): scoring and routing are wired into
     /// `prompt` from this lane on -- read nowhere by the walker itself
     /// (nothing in a compiled [`Program`] says "this effect is
@@ -308,6 +314,7 @@ impl<'a> Supported<'a> {
             tool_cel: false,
             tool_gh: false,
             tool_systemone: false,
+            tool_service: false,
             complexity: false,
             decomposition: false,
             secrets: false,
@@ -373,6 +380,8 @@ impl<'a> Supported<'a> {
             tool_gh: true,
             // issue #724
             tool_systemone: true,
+            // issue #721
+            tool_service: true,
             // lane K2 (#448, #516)
             complexity: true,
             // lane L2b (#448, #522)
@@ -402,6 +411,7 @@ impl<'a> Supported<'a> {
             || (self.tool_cel && TOOL_CEL_PROVIDERS.contains(&name))
             || (self.tool_gh && TOOL_GH_PROVIDERS.contains(&name))
             || (self.tool_systemone && TOOL_SYSTEMONE_PROVIDERS.contains(&name))
+            || (self.tool_service && TOOL_SERVICE_PROVIDERS.contains(&name))
     }
 }
 
@@ -765,6 +775,11 @@ mod tests {
         // field this change flips.
         assert!(current.tool_gh);
         assert!(!m0.tool_gh);
+        // issue #721: `tool_service` is `true` now -- asserted directly
+        // rather than against `m0.tool_service` (always `false`), the
+        // one field this change flips.
+        assert!(current.tool_service);
+        assert!(!m0.tool_service);
         // lane K2 (#448, #516): `complexity` is `true` now -- asserted
         // directly rather than against `m0.complexity` (always
         // `false`), the one field this lane's own PR flips.
@@ -1078,6 +1093,47 @@ mod tests {
         let program = program_with_root(root_block(vec![tool]));
         let supported = Supported {
             tool_systemone: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
+    }
+
+    #[test]
+    fn service_is_a_known_cof_plugin_and_is_refused_with_the_preview_marker_while_off() {
+        // `service` (issue #721) is in `PLUGIN_NAMES` (so it is not
+        // mistaken for an unknown name) and still refused under the exact
+        // M0 capability set.
+        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"service"));
+        let tool = leaf_op(
+            EffectPath::root().push_name("start_web"),
+            LeafKind::Tool(tool_op_with_provider(
+                "service",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("service".to_string())
+        );
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("service"));
+    }
+
+    #[test]
+    fn a_service_provider_is_accepted_once_tool_service_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("start_web"),
+            LeafKind::Tool(tool_op_with_provider(
+                "service",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_service: true,
             ..m0()
         };
         assert!(first_unsupported(&program, false, &supported).is_none());
