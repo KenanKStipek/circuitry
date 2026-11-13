@@ -3976,6 +3976,85 @@ fn large_token_figures_never_show_thousands_separators_on_any_screen() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #741: while a `shell` step is still running, its own Tape
+/// detail pane shows `meta.live`'s bounded stdout tail as a
+/// `── Output (live) ───` section -- read off the replayed screen
+/// (`support::screen_grid`), never the bytes drawn since a key, the
+/// same rule every other PTY test here follows.
+#[test]
+fn a_running_shell_steps_detail_pane_shows_its_live_output() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    // Prints "tick-1" (built with arithmetic expansion, never that
+    // literal text in the command line itself -- the Tape's own
+    // Command field would otherwise satisfy a plain `contains("tick-
+    // 1")` from the argv text alone, before the subprocess has ever
+    // run), pauses long enough for the test to observe it mid-run,
+    // then prints "tick-2" and exits -- the pause is what keeps this
+    // step `Running` (not already `Ended`) while the assertion below
+    // runs.
+    // A trivial second step follows `work` so the run's own
+    // default end-of-run selection (the last plan row -- the same
+    // rule `after_a_run_ends_down_and_enter_browse_a_row_and_
+    // bracket_steps_to_the_next` relies on) lands on it, never on
+    // `work` itself; one ↑ then reaches `work`'s own detail pane
+    // instead of the run-level summary a selection matching the
+    // last-reached row always shows.
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: work\n    type: tool\n    provider: shell\n    params:\n      command: bash\n      args: [\"-c\", \"echo tick-$((1)); sleep 6; echo tick-$((2))\"]\n      allowed_commands: [\"bash\"]\n  - name: after\n    type: tool\n    provider: uuid\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "── Output (live) ", Duration::from_secs(20));
+    assert!(
+        screen.contains("── Output (live) "),
+        "expected a live Output section while the step still runs; screen:\n{screen}"
+    );
+    assert!(screen.contains("tick-1"), "screen:\n{screen}");
+    assert!(!screen.contains("tick-2"), "screen:\n{screen}");
+
+    wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[A");
+    let screen = wait_for_screen_text(&captured_buf, "work · Selected", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Output (live)"),
+        "expected the live section gone once the step finished; screen:\n{screen}"
+    );
+    assert!(screen.contains("── Output "), "screen:\n{screen}");
+    assert!(
+        screen.contains("tick-1") && screen.contains("tick-2"),
+        "screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
 /// A comma with a digit on both sides is a thousands separator in
 /// every token figure this screen ever draws -- nothing else in the
 /// chrome puts a digit directly against a comma, and no axis label

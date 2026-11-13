@@ -21,10 +21,13 @@ from ..adapters._retry import (
 from ..cli.redaction import redact
 from ..output import console as _console
 from ..output import live_region as _live_region
+from ..plugins._subprocess import GenericSubprocessTool
 from ..plugins.agent import AgentPlugin
 from ..plugins.base import ToolResult
 from ..plugins.cel import CelPlugin
+from ..plugins.ffmpeg import FfmpegPlugin
 from ..plugins.http import HttpPlugin
+from ..plugins.shell import ShellPlugin
 from ..secrets import (
     SecretError,
     SecretRef,
@@ -1040,16 +1043,41 @@ class ToolRuntime:
                     else:
                         live_cm = nullcontext()
 
-                    def _on_live(snapshot: dict[str, Any]) -> None:
-                        # meta.live never carries anything the secrets
-                        # scrubber would need to touch (numbers, times, ids,
-                        # the model name and tool names only), but it goes
-                        # through the same scrub as any other tool result
-                        # regardless (#598).
-                        store.set(
-                            f"{self.defn.name}.meta.live",
-                            dispatch_secrets.scrub(snapshot) if dispatch_secrets else snapshot,
-                        )
+                    def _on_live(snapshot: dict[str, Any] | None) -> None:
+                        # The agent tool's own meta.live never carries
+                        # anything the secrets scrubber would need to touch
+                        # (numbers, times, ids, the model name and tool
+                        # names only); a subprocess tool's own (#741) tails
+                        # can carry anything the process printed, so both
+                        # go through the same scrub as any other tool
+                        # result (#598). A subprocess tool also calls this
+                        # with None right after its own run ends -- success,
+                        # failure or cancellation alike -- to clear
+                        # meta.live itself, since cancellation raises a
+                        # BaseException that never reaches this method's
+                        # own `meta.pop("live", None)` below.
+                        if snapshot is None:
+                            store.unset(f"{self.defn.name}.meta.live")
+                            return
+                        if dispatch_secrets:
+                            snapshot = dispatch_secrets.scrub(snapshot)
+                            if "stdout_tail" in snapshot:
+                                # A multi-line secret only part of which
+                                # ever reaches a tail at all (#741's own
+                                # bound) has no full-value match for
+                                # `scrub` above to catch -- this drops any
+                                # tail line that still carries a whole line
+                                # of one.
+                                snapshot = {
+                                    **snapshot,
+                                    "stdout_tail": dispatch_secrets.scrub_live_tail(
+                                        snapshot["stdout_tail"]
+                                    ),
+                                    "stderr_tail": dispatch_secrets.scrub_live_tail(
+                                        snapshot["stderr_tail"]
+                                    ),
+                                }
+                        store.set(f"{self.defn.name}.meta.live", snapshot)
 
                     with live_cm:
                         if isinstance(plugin, CelPlugin):
@@ -1074,6 +1102,24 @@ class ToolRuntime:
                                     if attempt_index > 0
                                     else None
                                 ),
+                            )
+                        elif isinstance(
+                            plugin, (GenericSubprocessTool, ShellPlugin, FfmpegPlugin)
+                        ):
+                            # A running subprocess tool publishes its latest
+                            # output the same way the agent tool does
+                            # (#741) -- but only when something is actually
+                            # watching (`--live-state`, or an embedding
+                            # caller's own state observer): with no
+                            # `store.on_write`, skipping `on_live`
+                            # altogether means `run_tracked` takes its
+                            # plain `communicate()` path, no reader threads
+                            # or tail tracking at all, so a run with
+                            # nothing watching pays nothing for this.
+                            result = plugin.execute(
+                                params=plugin_params,
+                                timeout_seconds=timeout_seconds,
+                                on_live=_on_live if store.on_write is not None else None,
                             )
                         else:
                             result = plugin.execute(

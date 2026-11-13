@@ -43,6 +43,12 @@ _FORBIDDEN_CHARS = ("\r", "\n", "\0")
 
 _SOURCES = ("keychain", "command", "env")
 
+#: A secret's own line, inside :meth:`SecretValues.scrub_live_tail`, is
+#: never checked against a #741 live tail below this length -- short
+#: enough that ordinary output could coincide with it by chance, making
+#: dropping on a match cost more than it protects.
+_MIN_TAIL_SECRET_LINE_CHARS = 4
+
 
 @dataclass(frozen=True)
 class SecretRef:
@@ -267,3 +273,35 @@ class SecretValues:
         if isinstance(value, tuple):
             return tuple(self.scrub(item) for item in value)
         return value
+
+    def scrub_live_tail(self, text: str) -> str:
+        """*text* (one of #741's own live tails) with every line that
+        contains a line of a resolved secret -- at least
+        :data:`_MIN_TAIL_SECRET_LINE_CHARS` characters of it -- dropped
+        outright, on top of :meth:`scrub`'s own exact-value replacement.
+
+        A single-line secret that appears whole in a tail is already
+        replaced by :meth:`scrub` before this ever runs. This instead
+        covers a multi-line secret value only *part* of which -- one or
+        more of its own lines -- ever reaches a tail at all, since a tail
+        is itself bounded in lines and bytes (#741's own cap): a full,
+        multi-line match for ``scrub``'s own literal replace to catch is
+        then never present in a single tail line to begin with. Because a
+        tail line cut by the byte cap is always dropped whole, never kept
+        as a fragment (``subprocess_live._join_within_byte_limit``), that
+        same cap can never expose a partial secret line either.
+        """
+        secret_lines = [
+            secret_line
+            for value in self.values.values()
+            for secret_line in value.split("\n")
+            if len(secret_line) >= _MIN_TAIL_SECRET_LINE_CHARS
+        ]
+        if not secret_lines or not text:
+            return text
+        kept = [
+            line
+            for line in text.split("\n")
+            if not any(secret_line in line for secret_line in secret_lines)
+        ]
+        return "\n".join(kept)
