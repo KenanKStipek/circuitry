@@ -808,6 +808,26 @@ def test_auth_failure_maps_to_credentials_hint(fake_sdk: type[FakeSurreal]) -> N
         _plugin().execute(params={"mode": "select", "target": "person"})
 
 
+def test_request_timeout_is_reported_as_a_timeout_not_a_connection_failure(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    fake_sdk.op_error = TimeoutError("the request timed out")
+
+    with pytest.raises(RuntimeError, match="timed out") as excinfo:
+        _plugin().execute(params={"mode": "select", "target": "person"})
+    assert "cannot connect" not in str(excinfo.value)
+
+
+def test_connect_timeout_is_reported_as_a_timeout_not_a_connection_failure(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    fake_sdk.connect_error = TimeoutError("the connection attempt timed out")
+
+    with pytest.raises(RuntimeError, match="timed out") as excinfo:
+        _plugin().execute(params={"mode": "select", "target": "person"})
+    assert "cannot connect" not in str(excinfo.value)
+
+
 def test_surrealql_error_raised_from_operation(fake_sdk: type[FakeSurreal]) -> None:
     fake_sdk.op_error = Exception("Parse error: Failed to parse query at line 1")
 

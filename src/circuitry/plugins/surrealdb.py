@@ -42,6 +42,7 @@ from ..curl_support import redact_host_url
 from ..preflight import CheckResult
 from ..surrealdb_sdk import (
     is_record_range,
+    open_client,
     record_target,
     run_delete_range,
     run_query_raw,
@@ -105,13 +106,39 @@ def _credentials() -> dict[str, str]:
     )
 
 
+def _is_timeout_error(exc: BaseException) -> bool:
+    """A request that timed out, as distinct from one that never reached the server.
+
+    SDK 3.x raises its own ``TransportTimeoutError`` for this; SDK 2.x has no
+    request timeout and never raises it. Checked ahead of
+    ``_is_connection_error`` so a slow query is reported as having timed out,
+    not as the server being unreachable.
+    """
+    try:
+        from surrealdb.errors import (
+            TransportTimeoutError,  # type: ignore[import-not-found]
+        )
+    except ImportError:
+        pass
+    else:
+        if isinstance(exc, TransportTimeoutError):
+            return True
+    if isinstance(exc, TimeoutError | socket.timeout):
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "timed out" in text or "timeout" in text
+
+
 def _is_connection_error(exc: BaseException) -> bool:
     """Best-effort split between 'server unreachable' and 'server said no'.
 
     The SDK wraps transport failures in its own exception types, so type
     checks alone under-report; the message sniff catches the wrapped cases.
+    A timeout is never a connection error here -- see ``_is_timeout_error``.
     """
-    if isinstance(exc, ConnectionError | TimeoutError | socket.gaierror | OSError):
+    if _is_timeout_error(exc):
+        return False
+    if isinstance(exc, ConnectionError | socket.gaierror | OSError):
         return True
     text = f"{type(exc).__name__}: {exc}".lower()
     return any(
@@ -119,8 +146,6 @@ def _is_connection_error(exc: BaseException) -> bool:
         for needle in (
             "refused",
             "unreachable",
-            "timed out",
-            "timeout",
             "connection",
             "name or service not known",
             "failed to establish",
@@ -245,12 +270,14 @@ def _authenticate(
                     db.signin({**creds, **scope})
                     break
                 except Exception as exc:
-                    if _is_connection_error(exc):
+                    if _is_timeout_error(exc) or _is_connection_error(exc):
                         raise
                     last_exc = exc
             else:
                 raise last_exc
     except Exception as exc:
+        if _is_timeout_error(exc):
+            raise RuntimeError(_timed_out(url, exc)) from exc
         if _is_connection_error(exc):
             raise RuntimeError(_unreachable(url, exc)) from exc
         raise RuntimeError(
@@ -265,6 +292,14 @@ def _unreachable(url: str, exc: BaseException) -> str:
         f"surrealdb: cannot connect to {url} ({exc}). Is the server running "
         "and is runtime.plugins.surrealdb.url correct? Start one locally with: "
         "surreal start --user root --pass root"
+    )
+
+
+def _timed_out(url: str, exc: BaseException) -> str:
+    return (
+        f"surrealdb: {url} timed out ({exc}). The request may still be "
+        "running on the server; a slow query may need more time than this "
+        "client allows."
     )
 
 
@@ -286,7 +321,7 @@ class SurrealDBPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
     ) -> ToolResult:
-        del timeout_seconds  # SDK manages its own socket timeouts.
+        del timeout_seconds  # the SDK's own request timeout is disabled -- see open_client().
 
         mode = str(params.get("mode") or "query").lower()
         if mode not in MODES:
@@ -317,8 +352,10 @@ class SurrealDBPlugin:
         creds = _credentials()
 
         try:
-            db = surreal(self.url)
+            db = open_client(surreal, self.url)
         except Exception as exc:
+            if _is_timeout_error(exc):
+                raise RuntimeError(_timed_out(self.url, exc)) from exc
             if _is_connection_error(exc):
                 raise RuntimeError(_unreachable(self.url, exc)) from exc
             raise RuntimeError(f"surrealdb: could not open {self.url} ({exc}).") from exc
@@ -336,6 +373,8 @@ class SurrealDBPlugin:
             try:
                 response = call(db)
             except Exception as exc:
+                if _is_timeout_error(exc):
+                    raise RuntimeError(_timed_out(self.url, exc)) from exc
                 if _is_connection_error(exc):
                     raise RuntimeError(_unreachable(self.url, exc)) from exc
                 raise RuntimeError(f"surrealdb {mode} failed: {exc}") from exc

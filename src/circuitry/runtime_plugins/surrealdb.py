@@ -56,7 +56,7 @@ import threading
 from typing import Any
 
 from ..preflight import CheckResult
-from ..surrealdb_sdk import run_query
+from ..surrealdb_sdk import open_client, run_query
 from ._sql_persistence import (
     coerce_bool,
     extract_inputs,
@@ -205,7 +205,7 @@ class SurrealdbPlugin:
         from surrealdb import Surreal  # type: ignore[import-not-found]
 
         cfg = _resolve_config(runtime_config)
-        client = Surreal(cfg["url"])
+        client = open_client(Surreal, cfg["url"])
         if cfg["token"]:
             client.authenticate(cfg["token"])
         elif cfg["user"] and cfg["password"]:

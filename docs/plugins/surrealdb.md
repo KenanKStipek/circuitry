@@ -70,12 +70,14 @@ the bare-payload fallback.
 ## Params
 
 - `mode` (string, default `query`) — `query` | `select` | `create` | `upsert` | `delete`
-- `query` (string, `query`) — SurrealQL statement
+- `query` (string, `query`) — SurrealQL, one statement or several; a failing
+  statement raises, whichever one it is — see [Errors](#errors)
 - `params` (dict, `query`, optional) — bound SurrealQL variables (`$name`)
-- `target` (string, `select`) — table name or record id (aliases: `record`, `table`)
+- `target` (string, `select`) — table name, record id, or record range
+  (`"table:1..10"`) (aliases: `record`, `table`)
 - `table` (string, `create`) + `data` (dict)
 - `record` (string, `upsert`) + `data` (dict)
-- `record` (string, `delete`)
+- `record` (string, `delete`) — record id or record range
 - `namespace` / `database` (string, optional) — override the configured pair
 
 Values are coerced to JSON-safe types (record ids and datetimes become strings)
@@ -130,9 +132,19 @@ Failures map to actionable messages and mark the run `ok=False`:
 | Condition | Message shape |
 | --- | --- |
 | server unreachable | `surrealdb: cannot connect to <url> (...). Is the server running ...` |
+| request timed out | `surrealdb: <url> timed out (...)` |
 | bad credentials | `surrealdb: authentication rejected by <url> (...)` |
 | wrong namespace/database | `surrealdb: USE <ns> <db> failed (...)` |
 | SurrealQL error | `surrealdb <mode> failed: ...` / `SurrealQL error: ...` |
+
+A `query` mode call with more than one SurrealQL statement raises on the
+first one that fails, in statement order — the same statement, and the same
+`SurrealQL error: ...` text, no matter which `surrealdb` SDK major is
+installed. On success `query`'s value is the first statement's own result.
+
+The SDK's own request timeout is disabled, so a slow query is given as long
+as it needs rather than failing partway through; if the underlying transport
+times out anyway, that is reported as "timed out", never as "cannot connect".
 
 ## Running the integration tests
 

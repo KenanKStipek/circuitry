@@ -166,3 +166,25 @@ def record_target(value: str) -> Any:
     except ImportError:
         return value
     return StringRecordId(value)
+
+
+def open_client(surreal: Any, url: str) -> Any:
+    """Open *url* with ``surreal`` (the SDK's ``Surreal`` factory), without
+    SDK 3.x's 30-second default per-request timeout.
+
+    SDK 2.x's client has no request timeout at all. SDK 3.x's defaults to
+    30 seconds and raises ``TransportTimeoutError`` past it, which would
+    turn a long-running query into a spurious failure. SDK 3.x's
+    ``Surreal()`` accepts ``timeout=None`` to disable it; SDK 2.x's accepts
+    no keyword arguments at all, so this only passes it when the installed
+    SDK's signature has a ``timeout`` parameter.
+    """
+    import inspect
+
+    try:
+        accepts_timeout = "timeout" in inspect.signature(surreal).parameters
+    except (TypeError, ValueError):
+        accepts_timeout = False
+    if accepts_timeout:
+        return surreal(url, timeout=None)
+    return surreal(url)

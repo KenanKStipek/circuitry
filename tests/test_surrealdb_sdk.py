@@ -10,6 +10,7 @@ import pytest
 
 from circuitry.surrealdb_sdk import (
     is_record_range,
+    open_client,
     record_target,
     run,
     run_delete_range,
@@ -200,6 +201,27 @@ def test_run_delete_range_sends_a_delete_statement_and_turns_none_into_an_empty_
     db = _FakeQueryRawDb({"result": [{"status": "OK", "result": None}]})
     assert run_delete_range(db, "person:1..10") == []
     assert db.queries == ["DELETE person:1..10 RETURN BEFORE"]
+
+
+class _FakeSurrealNoTimeoutParam:
+    def __init__(self, url: str) -> None:
+        self.url = url
+
+
+def test_open_client_does_not_pass_timeout_when_unsupported() -> None:
+    client = open_client(_FakeSurrealNoTimeoutParam, "ws://localhost:8000/rpc")
+    assert client.url == "ws://localhost:8000/rpc"
+
+
+class _FakeSurrealWithTimeoutParam:
+    def __init__(self, url: str, *, timeout: float | None = 30.0) -> None:
+        self.url = url
+        self.timeout = timeout
+
+
+def test_open_client_disables_the_default_timeout_when_supported() -> None:
+    client = open_client(_FakeSurrealWithTimeoutParam, "ws://localhost:8000/rpc")
+    assert client.timeout is None
 
 
 def test_record_target_wraps_a_table_colon_id_string(
