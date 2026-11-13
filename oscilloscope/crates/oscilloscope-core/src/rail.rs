@@ -594,7 +594,6 @@ fn build_level(
         .map(|d| concretize_decision(d, &normalized_host, host))
         .collect();
     let mut unnamed_emitted = vec![false; unnamed.len()];
-    let mut index_for_host = 0usize;
     let mut hidden: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut i = start;
     while i < rows.len() && rows[i].depth >= depth {
@@ -624,10 +623,16 @@ fn build_level(
                     .any(|p| p == &row.path)
         }) {
             unnamed_emitted[pos] = true;
-            let index = index_for_host;
-            index_for_host += 1;
+            // Issue #693 item 4: the suffix (`__if`, `__if_1`, ...)
+            // is this decision's own position in `unnamed` -- plan
+            // order, since `PlanTree::unnamed_if_decisions` records
+            // them walking the plan depth-first -- never a counter
+            // advanced in whichever order each one happens to get
+            // evidence first, or two unnamed `if`s on the same host
+            // can swap suffixes depending on which one's branch ran
+            // (or got skipped as a vacuous `else`) first.
             let (station, fork, consumed, hide) =
-                build_unnamed_decision(&unnamed[pos], rows, i, depth, index, ctx);
+                build_unnamed_decision(&unnamed[pos], rows, i, depth, pos, ctx);
             items.push(RailItem::Station(station));
             items.push(RailItem::Fork(fork));
             hidden.extend(hide);
@@ -704,10 +709,8 @@ fn build_level(
         if unnamed_emitted[k] {
             continue;
         }
-        let index = index_for_host;
-        index_for_host += 1;
         let (station, fork, _, _) =
-            build_unnamed_decision(decision, rows, rows.len(), depth, index, ctx);
+            build_unnamed_decision(decision, rows, rows.len(), depth, k, ctx);
         items.push(RailItem::Station(station));
         items.push(RailItem::Fork(fork));
     }
@@ -1306,13 +1309,26 @@ fn ahead_template_item(item: &RailItem, loop_path: &str, index: u64, ctx: &Ctx<'
                 ),
                 _ => (Headline::Blank, Detail::Blank),
             };
+            // An unnamed `if`'s own synthetic station (`row_kind`
+            // `If`, `s.path` ending in `__if`/`__if_1`) has no plan
+            // step of its own to name it by: `step_label` would read
+            // the synthetic path's own last segment (`__if`), never
+            // the condition `build_unnamed_decision` already wrote
+            // to `s.name` (the same text the live station shows) --
+            // carried over here verbatim instead, so an ahead pass's
+            // pending decision reads `if <condition…>` too.
+            let name = if s.row_kind == RowKind::If {
+                s.name.clone()
+            } else {
+                step_label(&s.path)
+            };
             RailItem::Station(Station {
                 path: format!("{loop_path}.iter_ahead_{index}.{}", step_label(&s.path)),
                 selectable: false,
                 is_edge: false,
                 row_kind: s.row_kind,
                 status: StatusKind::Pending,
-                name: step_label(&s.path),
+                name,
                 headline,
                 detail,
             })
@@ -2773,6 +2789,119 @@ mod tests {
         );
     }
 
+    /// Issue #693 item 4: when the *second* of two unnamed `if`s
+    /// on one host gets evidence before the first (here, the first
+    /// is a vacuous `else` with nothing run at all), the suffixes
+    /// must still follow plan order -- the first one keeps `.__if`,
+    /// the second `.__if_1` -- never the order either one actually
+    /// resolved in, or a selected `.__if` ends up showing the other
+    /// decision's own branch.
+    #[test]
+    fn two_unnamed_ifs_keep_plan_order_suffixes_even_when_the_second_resolves_first() {
+        let plan = compile_doc(&unnamed_if_yaml("a", "b"));
+        let state = serde_json::json!({
+            "prime": {
+                "value": null,
+                "meta": {"created_at": "t0", "completed_at": null},
+                "b_then": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
+            }
+        });
+        let rail = build_rail_for(&plan, &state);
+        let stations: Vec<&Station> = rail
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                RailItem::Station(s) if s.path.contains(".__if") => Some(s),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(stations.len(), 2, "{stations:?}");
+        let first = stations
+            .iter()
+            .find(|s| s.path == "prime.__if")
+            .unwrap_or_else(|| {
+                panic!("the first if in plan order must keep the bare suffix: {stations:?}")
+            });
+        let second = stations
+            .iter()
+            .find(|s| s.path == "prime.__if_1")
+            .unwrap_or_else(|| {
+                panic!("the second if in plan order must get the _1 suffix: {stations:?}")
+            });
+        // `a` (first in plan order, under `.__if`) never resolved;
+        // `b` (second, under `.__if_1`) did -- a selected `.__if_1`
+        // must read `b`'s own branch, never `a`'s, and vice versa.
+        assert_eq!(first.headline, Headline::Branch(None), "{stations:?}");
+        assert_eq!(
+            second.headline,
+            Headline::Branch(Some("then".to_string())),
+            "{stations:?}"
+        );
+    }
+
+    /// Issue #693 item 4: a selection held across two redraws, by
+    /// its own path alone (`crate::screens::build_flow`'s own
+    /// `selected_path`, the same way `App::selected_path` persists
+    /// in the real TUI without the user touching a key again), must
+    /// keep reading the same decision once the *other* unnamed `if`
+    /// on the same host gets real evidence in between -- the actual
+    /// failure mode the plan-order suffix fixes: the old counter,
+    /// recomputed fresh on every call from whichever decision had
+    /// evidence first, could repoint an already-selected `.__if` at
+    /// the other decision the moment the second one resolved.
+    #[test]
+    fn a_selection_of_prime_if_keeps_as_own_decision_once_the_other_resolves() {
+        let plan = compile_doc(&unnamed_if_yaml("a", "b"));
+        let before = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        });
+        let after = serde_json::json!({
+            "prime": {
+                "value": null,
+                "meta": {"created_at": "t0", "completed_at": null},
+                "b_then": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
+            }
+        });
+        for (label, state) in [("before", &before), ("after", &after)] {
+            let mut model = crate::model::RunModel::new();
+            let rendered = crate::render::build(
+                "do.yml",
+                "test",
+                &plan,
+                &mut model,
+                Some(state),
+                crate::model::ProcessState::Running,
+                0.0,
+                "2026-01-01T00:00:00Z",
+                &[],
+            );
+            let flat = crate::model::flatten_state(state);
+            let zone = chrono::FixedOffset::east_opt(0).unwrap();
+            let screen = crate::screens::build_flow(
+                &rendered.rows,
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(state),
+                &[],
+                Some("prime.__if"),
+                &zone,
+                None,
+                "2026-01-01T00:00:00Z",
+            );
+            let decision = screen
+                .selected_decision
+                .unwrap_or_else(|| panic!("{label}: expected a selected decision"));
+            assert_eq!(
+                decision.branch, None,
+                "{label}: prime.__if is a's own decision, never resolved in this scenario -- \
+                 reading b's own `then` here means the suffix swapped"
+            );
+        }
+    }
+
     fn each_loop_yaml(body_tool: &str) -> String {
         format!(
             "effects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n      as: item\n    body:\n      - name: {body_tool}\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n"
@@ -3078,6 +3207,56 @@ mod tests {
                     "an ahead pass must never show a real ✓: {ahead:?}"
                 );
             }
+        }
+    }
+
+    /// Issue #693 item 1: an ahead pass's own preview of an unnamed
+    /// `if` that hasn't run yet still reads its own condition (`if
+    /// true`, same as the live decision), never its internal
+    /// `__if` path -- `ahead_template_item` must carry the
+    /// template's own already-computed name over, not recompute one
+    /// from the synthetic path's own last segment.
+    #[test]
+    fn an_ahead_passes_own_unnamed_if_is_labelled_by_its_condition_not_its_internal_path() {
+        let yaml = "effects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n      as: item\n    body:\n      - type: if\n        if: {mode: cel, expr: \"true\"}\n        then:\n          - name: nap\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"x\\\"\"}\n        else:\n          - name: snooze\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"y\\\"\"}\n";
+        let plan = compile_doc(yaml);
+        let state = serde_json::json!({
+            "input": {"items": ["cats", "dogs", "birds"]},
+            "prime": {"value": null, "meta": {"completed_at": null},
+                "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 1, "total": 3}},
+                    "iter_0": {
+                        "nap": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1", "provider": "json"}}
+                    }
+                }
+            }
+        });
+        let rail = build_rail_for(&plan, &state);
+        let fork = find_fork_after(&rail.items, "fan").expect("a fork after fan");
+        let live_decision = fork.lanes[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                RailItem::Station(s) if s.row_kind == RowKind::If => Some(s),
+                _ => None,
+            })
+            .expect("pass 0's own decision station");
+        for ahead in &fork.lanes[1..] {
+            let ahead_decision = ahead
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    RailItem::Station(s) if s.row_kind == RowKind::If => Some(s),
+                    _ => None,
+                })
+                .expect("an ahead pass must preview the decision's own station too");
+            assert_eq!(
+                ahead_decision.name, live_decision.name,
+                "an ahead decision must read the same condition the live one does: {ahead:?}"
+            );
+            assert!(
+                !ahead_decision.name.contains("__if"),
+                "an ahead decision must never be labelled by its own internal path: {ahead_decision:?}"
+            );
         }
     }
 
