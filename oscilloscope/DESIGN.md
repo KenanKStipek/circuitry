@@ -983,7 +983,7 @@ own rules are unchanged:
     `provider` is `agent` (cof's own rule at `core/compiler.py`,
     trimmed and case-insensitive) is counted alongside running
     prompts (`2 prompts · 1 agent in flight`), with no token estimate
-    of its own — live agent token usage (#612) is a later lane. Both
+    of its own — live agent token usage (#612) comes later. Both
     engines can produce a running agent now (#720): electricity's own
     `agent` plugin runs a headless `pi`/Claude Code session exactly as
     cof's does, publishing the same `meta.live` while it runs. With

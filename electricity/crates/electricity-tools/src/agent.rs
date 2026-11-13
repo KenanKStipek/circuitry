@@ -1532,7 +1532,7 @@ mod tests {
     /// A plugin whose own configured binary never resolves to anything
     /// real -- every test here that needs to clear every param check and
     /// reach `resolve_binary` must still never start a real `pi`/`claude`
-    /// process (the lane's own hard rule), regardless of what the host
+    /// process, regardless of what the host
     /// running this test happens to have on `PATH`.
     fn plugin_with_unresolvable_binaries() -> AgentPlugin {
         AgentPlugin {
@@ -1913,7 +1913,7 @@ mod tests {
         );
     }
 
-    /// Issue #720's own review finding: `result_schema: null` (the shape
+    /// `result_schema: null` (the shape
     /// a rendered `params_json` overlay can carry for an omitted key) is
     /// absent, exactly like a missing key -- never `params['result_schema']
     /// needs params['result_file']`. With no `result_file` either, this

@@ -237,7 +237,7 @@ pub struct LiveTracker<'a> {
     tool_seq: Cell<i64>,
     seen_message_ids: RefCell<std::collections::HashSet<String>>,
     earlier_attempts: Option<(Option<i64>, Option<i64>)>,
-    /// `agent_live.py::LivePublisher`'s own throttle (#636, ruling 5):
+    /// `agent_live.py::LivePublisher`'s own throttle (#636):
     /// at most one publish a second, with a pending update from inside
     /// that window still flushed once the window ends -- here, by
     /// [`LiveTracker::maybe_flush`], called from the same periodic tick

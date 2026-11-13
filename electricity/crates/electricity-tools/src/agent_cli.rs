@@ -359,8 +359,8 @@ pub fn claude_json_schema(schema: &Value) -> Value {
 /// (#636's agent-tool live summary, the one caller that needs it).
 /// *on_tick*, when given, is `run_tracked`'s own periodic poll tick
 /// while the CLI runs, independent of whether any output arrived --
-/// [`crate::agent_live::LiveTracker::maybe_flush`] (#636's own at-
-/// most-once-a-second throttle, ruling 5) uses it to flush a publish
+/// [`crate::agent_live::LiveTracker::maybe_flush`] (#636's at-most-
+/// once-a-second throttle) uses it to flush a publish
 /// its own throttle window denied, even through a stretch with no new
 /// stdout at all, without this module needing a timer of its own.
 #[allow(clippy::too_many_arguments)]
