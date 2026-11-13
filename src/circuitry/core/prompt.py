@@ -138,6 +138,39 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     return classify_exception(exc)
 
 
+def _attempt_entry(
+    *,
+    created_at: str,
+    completed_at: str,
+    value: Any,
+    error: str | None,
+    fallback_attempts: list[dict[str, Any]],
+    tokens_sent: int | None,
+    tokens_received: int | None,
+) -> dict[str, Any]:
+    """One ``meta.attempts`` entry for a prompt: ``core.use._attempt_entry``'s
+    counterpart, with a prompt's own per-attempt fields in place of a use
+    effect's child-run ones. A prompt has no ``expect`` to carry (see
+    :class:`PromptDefinition`), unlike ``tool``'s own entry.
+    """
+    return {
+        "created_at": created_at,
+        "completed_at": completed_at,
+        "value": copy.deepcopy(value),
+        "error": error,
+        "fallback_attempts": copy.deepcopy(fallback_attempts),
+        "tokens_sent": tokens_sent,
+        "tokens_received": tokens_received,
+    }
+
+
+def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    """``meta.attempts``, always written as the last key of *meta* -- same
+    contract as ``core.use._write_attempts``."""
+    meta.pop("attempts", None)
+    meta["attempts"] = list(attempts)
+
+
 @dataclass
 class _LiveAttemptState:
     """One attempt's running ``meta.live`` figures (#674), updated from
