@@ -14,7 +14,7 @@ from circuitry.adapters._retry import AdapterCallError, RetryInfo
 from circuitry.adapters.base import GenerateResult
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
-from circuitry.core.prompt import PromptDefinition, PromptRuntime, RetryPolicyDef
+from circuitry.core.prompt import PromptDefinition, PromptRuntime
 from circuitry.core.store import Store
 
 
