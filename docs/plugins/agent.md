@@ -191,7 +191,10 @@ The form and its rules are a `prompt` effect's [`file: {from: <state path>}`](..
   `params_json` shows them, and at dispatch otherwise.
 
 A string `prompt` behaves as before. electricity checks the form the same way
-when it compiles a document, but does not run the `agent` tool.
+when it compiles a document, and runs the `agent` tool too, with the same
+contract this page describes; see `electricity/DESIGN.md` §13 for its few
+documented differences (`result_schema`'s single-error report, `meta.live`
+always cleared on interruption, `meta.live.earlier_attempts` never present).
 
 ## The result contract
 

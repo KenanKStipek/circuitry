@@ -22,7 +22,9 @@ use electricity_value::{CancellationToken, Value};
 use std::collections::HashMap;
 use std::fmt;
 
+pub mod agent;
 pub mod agent_cli;
+pub mod agent_live;
 pub mod awk;
 pub mod cel;
 pub mod clock;
@@ -62,8 +64,9 @@ pub mod validate_yaml;
 pub use electricity_value::pycompat::PyExc;
 pub use registry::{build_plugin, supported_names};
 
-/// `plugins/base.py::ToolResult`, field for field.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `plugins/base.py::ToolResult`, field for field. `PartialEq` only, not
+/// `Eq`: `cost_usd` is an `Option<f64>`, which has no total order.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolResult {
     pub value: Value,
     /// Always a dict (`core/tool.py`'s own meta.raw convention) -- a
@@ -91,6 +94,15 @@ pub struct ToolResult {
     /// way a prompt's adapter reply does.
     pub tokens_sent: Option<i64>,
     pub tokens_received: Option<i64>,
+    /// `plugins/base.py::ToolResult.cost_usd` -- `None` for every
+    /// provider but `agent` (issue #720), which reports the CLI's own
+    /// cost figure on a successful turn only, never on a returned or
+    /// raised failure. `exec/tool.rs` writes this into `meta.cost_usd`
+    /// the same way a prompt's adapter reply does; unlike `tokens_sent`/
+    /// `tokens_received`, it has no `_total` accumulation across a
+    /// pass's retried attempts (cof's own `agent.py`/`core/tool.py`
+    /// never sum a cost across attempts either).
+    pub cost_usd: Option<f64>,
 }
 
 impl ToolResult {
@@ -107,6 +119,7 @@ impl ToolResult {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            cost_usd: None,
         }
     }
 
@@ -282,6 +295,18 @@ pub struct ToolCall<'a> {
     /// parameter).
     pub scrub: Option<&'a dyn Fn(&str) -> String>,
     pub on_live: Option<&'a dyn Fn(process::LiveTail)>,
+    /// Issue #720 (#636's own `meta.live` for the `agent` tool): called
+    /// with the already-built `meta.live` [`Value`] snapshot while an
+    /// `agent` effect's session runs. Unlike [`ToolCall::on_live`], which
+    /// hands the caller a raw tail/byte-count and lets it build `meta.live`
+    /// itself, [`crate::agent::AgentPlugin::execute`] builds the whole
+    /// value (`agent_live::LiveTracker`'s own shape) and this is just the
+    /// write -- `None` for every provider but `agent`.
+    pub on_agent_live: Option<&'a dyn Fn(Value)>,
+    /// The attempt number (1-based) this dispatch is on -- only
+    /// `agent`'s own `meta.live.attempt` reads it; every other provider
+    /// ignores it.
+    pub agent_attempt: u32,
     /// `ToolDefinition.limited`: true for a tool effect compiled from a
     /// document not run by path. Only [`crate::systemone::SystemOnePlugin`]
     /// reads this.
@@ -374,6 +399,8 @@ mod tests {
             secret_headers: &[],
             scrub: None,
             on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
             limited: false,
             confine_to: None,
         }

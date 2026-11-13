@@ -166,6 +166,8 @@ pub async fn run_tool(
     secret_headers: &[String],
     scrub: Option<&dyn Fn(&str) -> String>,
     on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)>,
+    on_agent_live: Option<&dyn Fn(electricity_value::Value)>,
+    agent_attempt: u32,
     limited: bool,
     confine_to: Option<&str>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
@@ -179,6 +181,8 @@ pub async fn run_tool(
         secret_headers,
         scrub,
         on_live,
+        on_agent_live,
+        agent_attempt,
         limited,
         confine_to,
     };
@@ -453,6 +457,90 @@ fn reject_overlay_within(overlay: &Dict) -> Result<(), String> {
     Ok(())
 }
 
+/// `plugins/agent.py::reject_overlay_prompt` -- `params_json` is rendered
+/// at run time and can carry generated content, so it never supplies
+/// `prompt` as `{file: {from: ...}, within: ...}` (a trust boundary, like
+/// `systemone`'s `within`), and never replaces a `prompt` the document
+/// reads from a file (*prompt_from_file*).
+fn reject_overlay_prompt(overlay: &Dict, prompt_from_file: bool) -> Result<(), String> {
+    let Some(value) = overlay.get(&Value::Str("prompt".to_string())) else {
+        return Ok(());
+    };
+    if electricity_compiler::prompt_files::is_dispatch_file(value) {
+        return Err(
+            "params_json must not set params.prompt to {file: {from: <state path>}, \
+             within: <dir>}: a prompt file is only honoured from a document's literal \
+             params block."
+                .to_string(),
+        );
+    }
+    if prompt_from_file {
+        return Err(
+            "params_json must not set params.prompt: this effect reads params.prompt \
+             from a file ({file: {from: <state path>}, within: <dir>}), which \
+             params_json cannot replace."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// One `agent` effect's own `params.prompt` of `{file: {from: <state
+/// path>}, within: <dir>}` (issue #591), read once before the first
+/// attempt (`resolve_agent_prompt_file`'s own caller caches this): the
+/// text sent to the session, the `{file, within}` form `meta.
+/// params_rendered.prompt` keeps instead of the text, and the `meta.
+/// template_files` record.
+struct AgentPromptFile {
+    text: String,
+    form: Dict,
+    record: Dict,
+}
+
+fn resolve_agent_prompt_file<R: ParamsCtx>(
+    source: &electricity_bytecode::DispatchFile,
+    ctx: &R,
+    tool_name: &str,
+) -> Result<AgentPromptFile, String> {
+    let raw_path = ctx.resolve_from(&source.path_from);
+    let within_value = source
+        .within_from
+        .as_deref()
+        .and_then(|path| ctx.resolve_from(path));
+    let read = electricity_compiler::prompt_files::read_dispatch_file(
+        source,
+        raw_path.as_ref(),
+        within_value.as_ref(),
+        "params.prompt",
+        &format!("Tool effect '{tool_name}'"),
+    )?;
+    let mut form = Dict::new();
+    form.insert(
+        Value::Str("file".to_string()),
+        Value::Str(read.path.clone()),
+    );
+    form.insert(
+        Value::Str("within".to_string()),
+        Value::Str(read.within.clone()),
+    );
+    let mut record = Dict::new();
+    record.insert(
+        Value::Str("field".to_string()),
+        Value::Str("params.prompt".to_string()),
+    );
+    record.insert(Value::Str("path".to_string()), Value::Str(read.path));
+    record.insert(Value::Str("sha256".to_string()), Value::Str(read.sha256));
+    record.insert(
+        Value::Str("chars".to_string()),
+        Value::from(read.chars as i64),
+    );
+    Ok(AgentPromptFile {
+        text: read.text,
+        form,
+        record,
+    })
+}
+
 /// `plugins/http.py::reject_limited_save_to` -- a limited document's
 /// `http` effect never saves a file, whatever supplied `save_to` or
 /// `within` (`params_json`, or a profile that switched the provider to
@@ -613,6 +701,9 @@ fn render_tool_call<R: ParamsCtx>(
             electricity_value::pycompat::py_strip(&tool.provider).to_lowercase();
         if normalized_provider == "systemone" || normalized_provider == "http" {
             reject_overlay_within(&overlay)?;
+        }
+        if normalized_provider == "agent" {
+            reject_overlay_prompt(&overlay, tool.prompt_file.is_some())?;
         }
         params = deep_merge_params(params, overlay);
     }
@@ -926,6 +1017,15 @@ pub async fn execute_tool<R: ParamsCtx>(
     // the only provider that ever does.
     let mut total_tokens_sent: Option<i64> = None;
     let mut total_tokens_received: Option<i64> = None;
+    // Issue #720: an `agent` effect's `params.prompt` of `{file: {from:
+    // <state path>}, within: <dir>}` (issue #591) is read once, before
+    // the first attempt -- a retry and the session's own repair turn use
+    // that same text (`core/tool.py:871-879`'s own `attempt_index == 0`
+    // guard, ported as a cache filled on the first attempt and reused by
+    // every later one, rather than re-checking an index each time).
+    let is_agent_provider =
+        electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "agent";
+    let mut agent_prompt_file: Option<Result<AgentPromptFile, String>> = None;
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -963,8 +1063,10 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "tokens_received");
         pop_leaf(&meta_node, "tokens_sent_total");
         pop_leaf(&meta_node, "tokens_received_total");
+        pop_leaf(&meta_node, "cost_usd");
         pop_leaf(&meta_node, "stdout_chars");
         pop_leaf(&meta_node, "stdout_sha256");
+        pop_leaf(&meta_node, "template_files");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
         // Published the moment a fresh attempt's own `meta` is visible,
         // the same way `--live-state` would catch up with Python's own
@@ -997,6 +1099,12 @@ pub async fn execute_tool<R: ParamsCtx>(
         // outcome (the tail end below, success only).
         let mut attempt_tokens_sent: Option<i64> = None;
         let mut attempt_tokens_received: Option<i64> = None;
+        // Issue #720: `agent`'s own `cost_usd`, written to `meta.cost_usd`
+        // only once this attempt is the one that decided the pass's
+        // outcome -- the same "attempt, not total" rule `tokens_sent`/
+        // `tokens_received` (not their own `_total` siblings) already
+        // follow; `agent` is the only provider that ever reports one.
+        let mut attempt_cost_usd: Option<f64> = None;
         // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
         // `expect:` check, raised or not, overriding whatever this
         // provider's own HTTP-family status/cause classification would
@@ -1016,6 +1124,9 @@ pub async fn execute_tool<R: ParamsCtx>(
         // reference but isn't the document's own literal one, is never
         // retried -- a retry would hit the same failure.
         let mut secret_unresolved = false;
+        // Issue #720 (#591): a prompt file that could not be read is
+        // never retried either -- a retry reads the same file.
+        let mut prompt_file_unread = false;
 
         match render_tool_call(
             name,
@@ -1027,7 +1138,32 @@ pub async fn execute_tool<R: ParamsCtx>(
             Err(message) => {
                 failure = Some(electricity_tools::ToolError::message(message));
             }
-            Ok(rendered) => {
+            Ok(mut rendered) => {
+                let mut agent_prompt_record: Option<Dict> = None;
+                if is_agent_provider {
+                    if let Some(source) = &tool.prompt_file {
+                        if attempt_index == 0 {
+                            agent_prompt_file = Some(resolve_agent_prompt_file(source, ctx, name));
+                        }
+                        match agent_prompt_file
+                            .as_ref()
+                            .expect("filled on the first attempt")
+                        {
+                            Ok(resolved) => {
+                                rendered.insert(
+                                    Value::Str("prompt".to_string()),
+                                    Value::Dict(resolved.form.clone()),
+                                );
+                                agent_prompt_record = Some(resolved.record.clone());
+                            }
+                            Err(message) => {
+                                prompt_file_unread = true;
+                                failure =
+                                    Some(electricity_tools::ToolError::message(message.clone()));
+                            }
+                        }
+                    }
+                }
                 let rendered_value = Value::Dict(rendered);
                 let is_http =
                     electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http";
@@ -1054,6 +1190,19 @@ pub async fn execute_tool<R: ParamsCtx>(
                 // (and therefore `meta.params_rendered`) keeps the
                 // placeholder-shaped reference, never the real value.
                 let mut dispatch_value = rendered_value.clone();
+                // Issue #720: the dispatched `params.prompt` is the file's
+                // real text; `rendered_value` (and so `meta.params_rendered`)
+                // already carries the `{file, within}` form instead, inserted
+                // above -- the same split `dispatch_secrets`' own resolved
+                // headers use below.
+                if let Some(Ok(resolved)) = &agent_prompt_file {
+                    if let Value::Dict(dict) = &mut dispatch_value {
+                        dict.insert(
+                            Value::Str("prompt".to_string()),
+                            Value::Str(resolved.text.clone()),
+                        );
+                    }
+                }
                 let mut params_rendered_record =
                     electricity_redaction::redact(rendered_value.clone());
                 if let Ok(Some(detected)) = &detected_headers {
@@ -1071,6 +1220,14 @@ pub async fn execute_tool<R: ParamsCtx>(
                     }
                 }
                 set_leaf(store, &meta_node, "params_rendered", params_rendered_record);
+                if let Some(record) = agent_prompt_record {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "template_files",
+                        Value::List(vec![Value::Dict(record)]),
+                    );
+                }
 
                 // The actual resolution, only once detection succeeded --
                 // a value that fails to resolve (the Keychain, a command
@@ -1246,6 +1403,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                     electricity_value::pycompat::py_strip(&tool.provider)
                                         .to_lowercase();
                                 let is_cel = normalized_provider == "cel";
+                                let is_agent = normalized_provider == "agent";
                                 let live_state = live::publishes_live(&normalized_provider)
                                     .then(live::LiveToolState::new);
                                 if let Some(state) = &live_state {
@@ -1272,6 +1430,18 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 });
                                 let on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)> =
                                     on_live_closure.as_ref().map(|f| f as _);
+                                // Issue #720 (#636's own `meta.live`, built
+                                // entirely by `AgentPlugin::execute` itself
+                                // through `agent_live::LiveTracker`) -- this
+                                // closure is just the write, same `set_leaf`/
+                                // `observer.write()` pair `on_live_closure`
+                                // above uses for a process-backed tool.
+                                let on_agent_live_closure = is_agent.then_some(|value: Value| {
+                                    set_leaf(store, &meta_node, "live", value);
+                                    observer.write();
+                                });
+                                let on_agent_live: Option<&dyn Fn(Value)> =
+                                    on_agent_live_closure.as_ref().map(|f| f as _);
                                 struct ClearLiveOnDrop<'a> {
                                     meta_node: &'a crate::NodeRef,
                                     observer: &'a dyn RunObserver,
@@ -1282,10 +1452,11 @@ pub async fn execute_tool<R: ParamsCtx>(
                                         self.observer.write();
                                     }
                                 }
-                                let _clear_live = live_state.is_some().then(|| ClearLiveOnDrop {
-                                    meta_node: &meta_node,
-                                    observer,
-                                });
+                                let _clear_live =
+                                    (live_state.is_some() || is_agent).then(|| ClearLiveOnDrop {
+                                        meta_node: &meta_node,
+                                        observer,
+                                    });
                                 // Issue #725: an http dispatch's own error
                                 // excerpt is scrubbed before it is cut, so
                                 // no part of a secret survives the cut
@@ -1311,6 +1482,8 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 &secret_header_names,
                                                 scrub,
                                                 on_live,
+                                                on_agent_live,
+                                                attempt_index + 1,
                                                 tool.limited,
                                                 tool.confine_to.as_deref(),
                                             ).await
@@ -1514,6 +1687,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                         // pass's total.
                                         attempt_tokens_sent = result.tokens_sent;
                                         attempt_tokens_received = result.tokens_received;
+                                        attempt_cost_usd = result.cost_usd;
                                         if let Some(sent) = result.tokens_sent {
                                             total_tokens_sent =
                                                 Some(total_tokens_sent.unwrap_or(0) + sent);
@@ -1757,6 +1931,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             // retryable regardless of provider (`expect_failed` above).
             let retryable = !timeout_unresolved
                 && !secret_unresolved
+                && !prompt_file_unread
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
                     http_status_for_retry,
@@ -1851,12 +2026,17 @@ pub async fn execute_tool<R: ParamsCtx>(
         // every other tool's own success stays exactly as it was before,
         // with no new `Totals` event, matching this crate's own pinned
         // call counts for a loop/if's own model-mode condition.
-        let reported_tokens = attempt_tokens_sent.is_some() || attempt_tokens_received.is_some();
+        let reported_tokens = attempt_tokens_sent.is_some()
+            || attempt_tokens_received.is_some()
+            || attempt_cost_usd.is_some();
         if let Some(sent) = attempt_tokens_sent {
             set_leaf(store, &meta_node, "tokens_sent", Value::from(sent));
         }
         if let Some(received) = attempt_tokens_received {
             set_leaf(store, &meta_node, "tokens_received", Value::from(received));
+        }
+        if let Some(cost) = attempt_cost_usd {
+            set_leaf(store, &meta_node, "cost_usd", Value::Float(cost));
         }
         if reported_tokens {
             observer.record_totals(&store.snapshot(&meta_node));
@@ -1917,6 +2097,8 @@ mod tests {
             &[],
             None,
             None,
+            None,
+            1,
             false,
             None,
         )
@@ -1944,6 +2126,8 @@ mod tests {
             &[],
             None,
             None,
+            None,
+            1,
             false,
             None,
         )

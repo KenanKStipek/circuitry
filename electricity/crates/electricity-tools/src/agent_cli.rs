@@ -352,6 +352,12 @@ pub fn claude_json_schema(schema: &Value) -> Value {
 /// issue #520's settled question 3), then sets *env* (an adapter alias's
 /// own variables) through [`RunOpts::env_set`], so a variable in both
 /// `unset_env` and *env* gets the *env* value.
+///
+/// The agent CLIs never publish `meta.live`'s process-tool tail/byte-
+/// count shape (#741's own scope) -- `on_live` stays `None` always.
+/// *on_line*, when given, is `run_tracked`'s own per-line stdout feed
+/// (#636's agent-tool live summary, the one caller that needs it).
+#[allow(clippy::too_many_arguments)]
 pub async fn run_agent_cli(
     cmd: &[String],
     unset_env: &[String],
@@ -360,6 +366,7 @@ pub async fn run_agent_cli(
     input: Vec<u8>,
     cwd: Option<PathBuf>,
     token: &CancellationToken,
+    on_line: Option<&dyn Fn(&str)>,
 ) -> Result<process::Completed, AgentCliRunError> {
     let name = os_path_basename(&cmd[0]);
     let opts = RunOpts {
@@ -371,10 +378,7 @@ pub async fn run_agent_cli(
         env_set: env.to_vec(),
         new_session: true,
     };
-    // The agent CLIs never publish `meta.live`'s process-tool shape
-    // (#741's own scope, issue #636's agent-tool live summary
-    // being the one `meta.live` an agent effect gets instead).
-    match process::run_tracked(cmd, &opts, token, None).await {
+    match process::run_tracked(cmd, &opts, token, None, on_line).await {
         Ok(completed) => Ok(completed),
         Err(ProcError::Timeout { .. }) => Err(AgentCliRunError::Timeout(timeout_message(
             &cmd[0],
@@ -1632,7 +1636,7 @@ mod tests {
     #[tokio::test]
     async fn run_agent_cli_delivers_stdin_and_closes_it() {
         let cmd = vec!["cat".to_string()];
-        let result = run_agent_cli(&cmd, &[], &[], 5.0, b"hello".to_vec(), None, &token())
+        let result = run_agent_cli(&cmd, &[], &[], 5.0, b"hello".to_vec(), None, &token(), None)
             .await
             .unwrap();
         assert_eq!(result.stdout, "hello");
@@ -1652,7 +1656,7 @@ mod tests {
             "-c".to_string(),
             "test -p /dev/stdin && cat; echo \"rc=$?\"".to_string(),
         ];
-        let result = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token())
+        let result = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap();
         assert_eq!(result.stdout, "rc=0\n");
@@ -1661,7 +1665,7 @@ mod tests {
     #[tokio::test]
     async fn run_agent_cli_times_out_with_the_basename_and_g_formatted_seconds() {
         let cmd = vec!["sleep".to_string(), "30".to_string()];
-        let err = run_agent_cli(&cmd, &[], &[], 0.1, Vec::new(), None, &token())
+        let err = run_agent_cli(&cmd, &[], &[], 0.1, Vec::new(), None, &token(), None)
             .await
             .unwrap_err();
         assert_eq!(
@@ -1678,7 +1682,7 @@ mod tests {
             "-c".to_string(),
             "sleep 8521 & echo hi".to_string(),
         ];
-        run_agent_cli(&cmd, &[], &[], 0.1, Vec::new(), None, &token())
+        run_agent_cli(&cmd, &[], &[], 0.1, Vec::new(), None, &token(), None)
             .await
             .unwrap_err();
         tokio::time::sleep(Duration::from_millis(300)).await;
@@ -1714,6 +1718,7 @@ mod tests {
             Vec::new(),
             None,
             &token,
+            None,
         ));
         tokio::select! {
             _ = &mut fut => panic!("must not finish on the first poll"),
@@ -1735,7 +1740,7 @@ mod tests {
     #[tokio::test]
     async fn run_agent_cli_reports_a_missing_binary_with_pythons_errno_text() {
         let cmd = vec!["/circuitry-test-missing-claude".to_string()];
-        let err = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token())
+        let err = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap_err();
         assert_eq!(
@@ -1756,7 +1761,7 @@ mod tests {
         std::fs::write(&path, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o644)).unwrap();
         let cmd = vec![path.to_string_lossy().into_owned()];
-        let err = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token())
+        let err = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AgentCliRunError::StartFailed(_)));
@@ -1782,7 +1787,7 @@ mod tests {
             "-c".to_string(),
             "printf '\\377'".to_string(),
         ];
-        let err = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token())
+        let err = run_agent_cli(&cmd, &[], &[], 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap_err();
         assert!(matches!(err, AgentCliRunError::Decode(_)));
@@ -1816,7 +1821,7 @@ mod tests {
         // with ETXTBSY during that window.
         let cmd = vec!["sh".to_string(), script.to_string_lossy().into_owned()];
         let unset: Vec<String> = DEFAULT_UNSET_ENV.iter().map(|s| s.to_string()).collect();
-        let result = run_agent_cli(&cmd, &unset, &[], 5.0, Vec::new(), None, &token())
+        let result = run_agent_cli(&cmd, &unset, &[], 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap();
         unsafe {
@@ -1852,7 +1857,7 @@ mod tests {
             ("ANTHROPIC_API_KEY".to_string(), "from-env".to_string()),
             ("ALIAS_PROBE".to_string(), "alpha".to_string()),
         ];
-        let result = run_agent_cli(&cmd, &unset, &env, 5.0, Vec::new(), None, &token())
+        let result = run_agent_cli(&cmd, &unset, &env, 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap();
         let _ = std::fs::remove_dir_all(&dir);
@@ -1897,7 +1902,7 @@ mod tests {
         // Through `sh`, not the script directly: see issue #623.
         let cmd = vec!["sh".to_string(), script.to_string_lossy().into_owned()];
         let unset = vec!["AGENT_CLI_TEST_TO_REMOVE".to_string()];
-        let result = run_agent_cli(&cmd, &unset, &[], 5.0, Vec::new(), None, &token())
+        let result = run_agent_cli(&cmd, &unset, &[], 5.0, Vec::new(), None, &token(), None)
             .await
             .unwrap();
         unsafe {

@@ -1052,6 +1052,7 @@ fn failed_result(raw: Dict, kind: &str, message: String, key: Option<&str>) -> T
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        cost_usd: None,
     }
 }
 
@@ -1446,6 +1447,7 @@ impl SystemOnePlugin {
             stdout_parsed: false,
             tokens_sent,
             tokens_received,
+            cost_usd: None,
         }
     }
 }
@@ -1486,6 +1488,8 @@ mod tests {
             secret_headers: &[],
             scrub: None,
             on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
             limited: false,
             confine_to: None,
         }

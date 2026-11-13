@@ -41,6 +41,10 @@ electricity-redaction = { path = "../electricity-redaction" }
 # compiles/loads a path/inline child with. Neither depends on this
 # crate or on `electricity-vm`, so this adds no dependency cycle.
 electricity-compiler = { path = "../electricity-compiler" }
+# `agent::read_result`'s own `result_schema` validation (issue #720) --
+# already part of the shared dependency graph through `electricity-
+# compiler`, so this adds no new serde_json feature unification risk.
+electricity-schema = { path = "../electricity-schema" }
 electricity-yaml = { path = "../electricity-yaml" }
 # `http.rs`'s own header map (insertion order matters for `Request.
 # add_header`'s own capitalize-collapse, "a later one wins, never
