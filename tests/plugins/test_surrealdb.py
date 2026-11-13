@@ -519,6 +519,30 @@ def test_select_accepts_record_alias(fake_sdk: type[FakeSurreal]) -> None:
     assert ("select", ("person:1",)) in fake_sdk.instances[-1].calls
 
 
+def test_select_of_a_record_range_uses_raw_surrealql(fake_sdk: type[FakeSurreal]) -> None:
+    fake_sdk.query_raw_result = {
+        "result": [{"status": "OK", "result": [{"name": "ada"}, {"name": "grace"}]}]
+    }
+
+    result = _plugin().execute(params={"mode": "select", "target": "person:1..10"})
+
+    db = fake_sdk.instances[-1]
+    assert ("query_raw", ("SELECT * FROM person:1..10",)) in db.calls
+    assert not any(name == "select" for name, _ in db.calls)
+    assert result.value == [{"name": "ada"}, {"name": "grace"}]
+
+
+def test_delete_of_a_record_range_uses_raw_surrealql(fake_sdk: type[FakeSurreal]) -> None:
+    fake_sdk.query_raw_result = {"result": [{"status": "OK", "result": None}]}
+
+    result = _plugin().execute(params={"mode": "delete", "record": "person:1..10"})
+
+    db = fake_sdk.instances[-1]
+    assert ("query_raw", ("DELETE person:1..10 RETURN BEFORE",)) in db.calls
+    assert not any(name == "delete" for name, _ in db.calls)
+    assert result.value == []
+
+
 def test_params_override_namespace_and_database(fake_sdk: type[FakeSurreal]) -> None:
     _plugin().execute(
         params={

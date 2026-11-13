@@ -23,8 +23,10 @@ it always runs eagerly (never a builder) and always hands back
 ``{"result": [{"status": ..., "result": ...}, ...], ...}``, one entry per
 SurrealQL statement, without raising for a failed statement itself.
 ``run_query_raw`` is built on that shared shape, so the ``query`` mode
-(arbitrary, possibly multi-statement SurrealQL) is driven through it
-instead of through ``query()``.
+(arbitrary, possibly multi-statement SurrealQL) and record ranges
+(``"table:1..10"``, which neither SDK's typed ``select()``/``delete()``
+handles the same way on both majors) are driven through it instead of
+through ``query()``/``select()``/``delete()``.
 """
 
 from __future__ import annotations
@@ -119,13 +121,43 @@ def run_query_raw(response: Any, *, mode: str = "query") -> Any:
     return first.get("result") if isinstance(first, dict) else first
 
 
+def is_record_range(value: str) -> bool:
+    """Whether *value* is a ``"table:start..end"`` record range, not one id.
+
+    SDK 2.x's typed ``select()``/``delete()`` (via a plain string target)
+    and SurrealQL itself both support a range this way. SDK 3.x's ``select()``
+    / ``delete()`` read a bare string only as a table name -- there is no
+    string spelling of a range that reaches them the way ``"table:id"``
+    does -- so a range target is run as raw SurrealQL via ``run_query_raw``
+    instead, which gives the same rows on both majors.
+    """
+    return ":" in value and ".." in value
+
+
+def run_select_range(db: Any, target: str) -> Any:
+    """``select()`` of a record range, via raw SurrealQL -- see ``is_record_range``."""
+    response = db.query_raw(f"SELECT * FROM {target}")
+    result = run_query_raw(response, mode="select")
+    if result is None:
+        return []
+    return result if isinstance(result, list) else [result]
+
+
+def run_delete_range(db: Any, target: str) -> Any:
+    """``delete()`` of a record range, via raw SurrealQL -- see ``is_record_range``."""
+    response = db.query_raw(f"DELETE {target} RETURN BEFORE")
+    result = run_query_raw(response, mode="delete")
+    return [] if result is None else result
+
+
 def record_target(value: str) -> Any:
     """A ``select`` / ``create`` / ``upsert`` / ``delete`` target string.
 
-    A string containing ``:`` (and not a ``..`` range) names one record.
-    SDK 2.x reads that out of a plain string by itself; SDK 3.x requires it
-    wrapped in ``StringRecordId`` — which only exists there — or it treats
-    the whole string, colon included, as a table name.
+    A string containing ``:`` (and not a ``..`` range -- see
+    ``is_record_range``, handled separately) names one record. SDK 2.x reads
+    that out of a plain string by itself; SDK 3.x requires it wrapped in
+    ``StringRecordId`` — which only exists there — or it treats the whole
+    string, colon included, as a table name.
     """
     if ":" not in value or ".." in value:
         return value

@@ -9,11 +9,14 @@ from typing import Any
 import pytest
 
 from circuitry.surrealdb_sdk import (
+    is_record_range,
     record_target,
     run,
+    run_delete_range,
     run_query,
     run_query_raw,
     run_select,
+    run_select_range,
     run_write,
 )
 
@@ -163,6 +166,40 @@ def test_run_query_raw_raises_on_an_early_failing_statement_even_with_a_later_ok
 def test_run_query_raw_rejects_an_unexpected_response_shape() -> None:
     with pytest.raises(RuntimeError, match="unexpected response shape"):
         run_query_raw({"no_result_key": True})
+
+
+def test_is_record_range() -> None:
+    assert is_record_range("person:1..10") is True
+    assert is_record_range("person:1..=10") is True
+    assert is_record_range("person:1") is False
+    assert is_record_range("person") is False
+
+
+class _FakeQueryRawDb:
+    def __init__(self, response: Any) -> None:
+        self._response = response
+        self.queries: list[str] = []
+
+    def query_raw(self, query: str) -> Any:
+        self.queries.append(query)
+        return self._response
+
+
+def test_run_select_range_sends_a_select_statement_and_always_returns_a_list() -> None:
+    db = _FakeQueryRawDb({"result": [{"status": "OK", "result": [{"name": "ada"}]}]})
+    assert run_select_range(db, "person:1..10") == [{"name": "ada"}]
+    assert db.queries == ["SELECT * FROM person:1..10"]
+
+
+def test_run_select_range_turns_none_into_an_empty_list() -> None:
+    db = _FakeQueryRawDb({"result": [{"status": "OK", "result": None}]})
+    assert run_select_range(db, "person:1..10") == []
+
+
+def test_run_delete_range_sends_a_delete_statement_and_turns_none_into_an_empty_list() -> None:
+    db = _FakeQueryRawDb({"result": [{"status": "OK", "result": None}]})
+    assert run_delete_range(db, "person:1..10") == []
+    assert db.queries == ["DELETE person:1..10 RETURN BEFORE"]
 
 
 def test_record_target_wraps_a_table_colon_id_string(

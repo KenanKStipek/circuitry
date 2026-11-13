@@ -19,11 +19,11 @@ Params:
   - ``query`` (query): SurrealQL string, which may hold more than one
     statement; a failing statement raises, whichever one it is.
   - ``params`` (query, optional): dict of SurrealQL variables.
-  - ``target`` (select): table name or record id (``record`` / ``table``
-    accepted as aliases).
+  - ``target`` (select): table name, record id, or record range
+    (``"table:1..10"``) (``record`` / ``table`` accepted as aliases).
   - ``table`` (create) + ``data`` (dict).
   - ``record`` (upsert) + ``data`` (dict).
-  - ``record`` (delete).
+  - ``record`` (delete): record id or record range.
   - ``namespace`` / ``database`` (optional): override the configured pair.
 """
 
@@ -40,7 +40,15 @@ from urllib.parse import urlsplit
 
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
-from ..surrealdb_sdk import record_target, run_query_raw, run_select, run_write
+from ..surrealdb_sdk import (
+    is_record_range,
+    record_target,
+    run_delete_range,
+    run_query_raw,
+    run_select,
+    run_select_range,
+    run_write,
+)
 from .base import ToolResult
 
 DEFAULT_URL = "ws://localhost:8000/rpc"
@@ -178,6 +186,8 @@ def _build_call(mode: str, params: dict[str, Any]) -> Callable[[Any], Any]:
 
     if mode == "select":
         target = _require_str(params, ("target", "record", "table"), mode="select")
+        if is_record_range(target):
+            return lambda db: run_select_range(db, target)
         return lambda db: run_select(db.select(record_target(target)))
 
     if mode == "create":
@@ -191,6 +201,8 @@ def _build_call(mode: str, params: dict[str, Any]) -> Callable[[Any], Any]:
         return lambda db: run_write(db.upsert(record_target(record), data))
 
     record = _require_str(params, ("record", "target"), mode="delete")
+    if is_record_range(record):
+        return lambda db: run_delete_range(db, record)
     return lambda db: run_write(db.delete(record_target(record)))
 
 

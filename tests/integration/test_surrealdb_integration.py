@@ -129,6 +129,27 @@ def test_create_select_upsert_delete_round_trip(
     assert remaining.value == []
 
 
+def test_select_and_delete_of_a_record_range(plugin: SurrealDBPlugin, table: str) -> None:
+    for i in (1, 2, 3):
+        plugin.execute(
+            params={
+                "mode": "create",
+                "table": f"{table}:{i}",
+                "data": {"name": f"person-{i}"},
+            }
+        )
+
+    # "1..3" is half-open (excludes 3), the same on both SDK majors.
+    selected = plugin.execute(params={"mode": "select", "target": f"{table}:1..3"})
+    assert isinstance(selected.value, list)
+    assert {record["name"] for record in selected.value} == {"person-1", "person-2"}
+
+    plugin.execute(params={"mode": "delete", "record": f"{table}:1..3"})
+
+    remaining = plugin.execute(params={"mode": "select", "target": table})
+    assert {record["name"] for record in remaining.value} == {"person-3"}
+
+
 def test_query_with_bound_params(plugin: SurrealDBPlugin, table: str) -> None:
     plugin.execute(
         params={"mode": "create", "table": table, "data": {"name": "ada", "score": 10}}
