@@ -149,6 +149,12 @@ fn builders() -> HashMap<&'static str, Builder> {
         },
     );
     map.insert(
+        "service",
+        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
+            crate::service::make_plugin(cfg)
+        },
+    );
+    map.insert(
         "agent",
         |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::agent::make_plugin(cfg) },
     );
@@ -349,6 +355,7 @@ mod tests {
             "validate_yaml",
             "gh",
             "systemone",
+            "service",
             "agent",
         ] {
             let plugin = build_plugin(name, &Value::None)
