@@ -822,6 +822,33 @@ mod tests {
     }
 
     #[test]
+    fn cel_syntax_reports_a_too_deep_accessor_chain_with_no_expression_repeated_back() {
+        let expr = format!(
+            "state{}",
+            ".a".repeat(electricity_cel::MAX_ACCESSOR_NESTING_DEPTH + 1)
+        );
+        let err = validate_cel_syntax(&expr, "p", Some("cond"), "CEL expression").unwrap_err();
+        assert_eq!(
+            err.0,
+            "CEL expression at 'p' (effect 'cond'): expression is nested too deeply"
+        );
+    }
+
+    #[test]
+    fn cel_syntax_reports_deep_paren_nesting_the_same_clean_way_issue_629() {
+        // The issue's own example: parens around a short accessor trip
+        // `cel`'s own parser recursion limit long before the accessor
+        // cap above would -- same location prefix, same one-line text,
+        // never the raw parser dump or the whole expression repeated.
+        let expr = format!("{}state.input.missing{}", "(".repeat(150), ")".repeat(150));
+        let err = validate_cel_syntax(&expr, "p", Some("cond"), "CEL expression").unwrap_err();
+        assert_eq!(
+            err.0,
+            "CEL expression at 'p' (effect 'cond'): expression is nested too deeply"
+        );
+    }
+
+    #[test]
     fn bare_input_refs_pass_when_nothing_declared() {
         let document = Value::Dict(Dict::new());
         assert!(validate_bare_input_refs(&document).is_ok());
