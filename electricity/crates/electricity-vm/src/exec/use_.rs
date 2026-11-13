@@ -1117,6 +1117,29 @@ async fn attempt_once<R: ParamsCtx>(
     )
     .await;
 
+    // `core/use.py::UseRuntime.execute`'s own `except BaseException`
+    // (issue #727 follow-up): an interrupt is not an `Exception`, so it
+    // never reaches cof's `_collect_child_errors` walk (that only runs
+    // from the success/`except Exception` paths below) -- it grafts
+    // whatever the child got to, when `record_children` asks, and
+    // re-raises with `meta.child_errors` left at the `None` this
+    // attempt's own reset already wrote, and no `meta.attempts` entry
+    // at all (the caller's own `Fatal` propagation never reaches
+    // `write_attempts`). Checked before the `meta.attempts[].children`/
+    // `child_errors` collection below, which only apply to the
+    // `except Exception` cof paths (an ordinary failure, a refusal, a
+    // successful run) this `use` child's own cancellation never takes.
+    if matches!(run_result, Err(VmError::Cancelled)) {
+        if record_children {
+            if let Ok(Some(child_prime_node)) =
+                child_store.child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))
+            {
+                graft_child_record(effect_node, &child_prime_node);
+            }
+        }
+        return Err(AttemptProblem::Fatal(VmError::Cancelled));
+    }
+
     // `meta.attempts[].children` (issue #659): whenever this attempt
     // actually ran the child and `record_children` is on, whatever it
     // got to -- a success, an `expect` failure (grafted again below,
@@ -1152,7 +1175,7 @@ async fn attempt_once<R: ParamsCtx>(
     }
 
     match run_result {
-        Err(VmError::Cancelled) => return Err(AttemptProblem::Fatal(VmError::Cancelled)),
+        Err(VmError::Cancelled) => unreachable!("handled above, before the child_errors walk"),
         Err(VmError::Refused {
             refusal,
             child_label,

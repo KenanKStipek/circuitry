@@ -276,6 +276,33 @@ def _quick_step(name: str, *, indent: str) -> str:
     )
 
 
+def _step_log_child_orchestration(*, log: str = "steplog.txt") -> str:
+    """A plain chain of three `shell` steps, each appending its own name
+    to *log* every time it runs (never just once, however many times
+    the orchestration re-executes it): s1 (quick), s2 (blocks until
+    `proceed` exists on disk, logging itself before it blocks), s3
+    (quick). Lets a test tell a step `--resume` correctly skipped
+    (logged once total) apart from one it reran from scratch (logged
+    twice) -- unlike comparing final state, which can't: `s1` finishing
+    a second identical time looks the same in `--out` either way."""
+    s2_script = f"echo s2 >> {log}; [ -f proceed ] || {{ touch started; exec sleep 60; }}"
+    return (
+        "effects:\n"
+        "  - type: tool\n    name: s1\n    provider: shell\n    params:\n"
+        "      command: bash\n"
+        f'      args: ["-c", "echo s1 >> {log}"]\n'
+        '      allowed_commands: ["bash"]\n'
+        "  - type: tool\n    name: s2\n    provider: shell\n    params:\n"
+        "      command: bash\n"
+        f'      args: ["-c", "{s2_script}"]\n'
+        '      allowed_commands: ["bash"]\n'
+        "  - type: tool\n    name: s3\n    provider: shell\n    params:\n"
+        "      command: bash\n"
+        f'      args: ["-c", "echo s3 >> {log}"]\n'
+        '      allowed_commands: ["bash"]\n'
+    )
+
+
 class _Scenario:
     def __init__(
         self, *, orchestration: str, child: str | None, config: str, blocking_name: str,
@@ -509,3 +536,64 @@ def test_a_state_file_one_engine_wrote_resumes_on_the_other_with_the_same_final_
         assert resumed_events.strip(), "the resumed run wrote no events at all"
         for line in resumed_events.splitlines():
             json.loads(line)
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("interrupt_engine", ENGINES)
+def test_a_use_childs_interrupted_step_runs_again_only_when_it_never_finished(
+    tmp_path: Path, electricity_binary: Path, interrupt_engine: str, resume_engine: str,
+) -> None:
+    """issue #727 follow-up: an interrupted `use` child's own finished
+    steps stay finished across `--resume`, never rerun just because the
+    interrupting engine's own saved state lost their record. s1 (quick)
+    must run exactly once, s2 (blocking, interrupted mid-step) exactly
+    twice (once before the interrupt, once on resume, since it never
+    finished the first time), s3 (quick, never reached before the
+    interrupt) exactly once -- on every pair of `{cof, electricity}` as
+    the interrupting and the resuming engine. A log, not the final
+    state, is what tells a correctly skipped `s1` apart from one
+    rerun from scratch: both leave the same value in `--out`.
+    """
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    log_name = "steplog.txt"
+    _write(case_dir / "child.yml", _step_log_child_orchestration(log=log_name))
+    _write(
+        case_dir / "orchestration.yml",
+        "effects:\n  - type: use\n    name: step\n    path: child.yml\n",
+    )
+    _write(case_dir / "config.json", _RECORD_CHILDREN_CONFIG)
+
+    proc = _popen(
+        interrupt_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--live-state", "live.json",
+        ],
+        cwd=case_dir, env=env,
+    )
+    _wait_for_marker_file(proc, case_dir / "started")
+    proc.send_signal(signal.SIGINT)
+    try:
+        interrupted_stdout, interrupted_stderr = proc.communicate(timeout=20.0)
+    except subprocess.TimeoutExpired:
+        _diagnose_and_fail(proc, timeout=20.0, label="waiting for SIGINT to stop the run")
+        interrupted_stdout, interrupted_stderr = "", ""  # unreachable
+    assert proc.returncode == 130, (interrupt_engine, interrupted_stdout, interrupted_stderr)
+    assert (case_dir / "out.json").exists()
+
+    (case_dir / "proceed").write_text("")
+    resumed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert resumed.returncode == 0, (resumed.stdout, resumed.stderr)
+
+    log_lines = (case_dir / log_name).read_text(encoding="utf-8").splitlines()
+    counts = {name: log_lines.count(name) for name in ("s1", "s2", "s3")}
+    assert counts == {"s1": 1, "s2": 2, "s3": 1}, (interrupt_engine, resume_engine, log_lines)
