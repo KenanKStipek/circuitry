@@ -250,12 +250,16 @@ fn tree_overlay_snapshot(
 }
 
 /// One [`LiveStateMirror::grafts`] entry: either a `use` child's own
-/// latest pushed snapshot ([`LiveStateMirror::graft_child_write`]), or
-/// a tree's own still-live branch [`NodeRef`]s, read lazily
+/// still-live root [`NodeRef`], read lazily
+/// ([`LiveStateMirror::register_child_graft`]), or a tree's own
+/// still-live branch `NodeRef`s, read lazily
 /// ([`LiveStateMirror::register_tree_branches`]) -- see each
-/// variant's own constructor for which.
+/// variant's own constructor for which. Both variants are read the
+/// same way, at the same point ([`LiveStateMirror::apply_grafts`]):
+/// issue #662 brought a `use` child's own overlay in line with a
+/// tree's, which never pushed a snapshot up front to begin with.
 enum GraftEntry {
-    Child(Value),
+    Child(NodeRef),
     Tree(Vec<NodeRef>),
 }
 
@@ -269,9 +273,10 @@ pub struct LiveStateMirror {
     /// this entirely -- its own write is unconditional.
     pending: Cell<bool>,
     had_failure: Cell<bool>,
-    /// Every currently in-flight overlay -- a `use` child's own latest
-    /// pushed write ([`Self::graft_child_write`]/[`Self::clear_graft`],
-    /// issue #448 item U6) or a tree's own still-live branches
+    /// Every currently in-flight overlay -- a `use` child's own live
+    /// root ([`Self::register_child_graft`]/[`Self::clear_graft`],
+    /// issue #448 item U6, read lazily since issue #662) or a tree's
+    /// own still-live branches
     /// ([`Self::register_tree_branches`]/[`Self::clear_tree_branches`],
     /// issue #465) -- keyed by the overlaid node's own absolute dotted
     /// path. A `BTreeMap`, not a `HashMap`, so [`Self::apply_grafts`]
@@ -292,13 +297,14 @@ pub struct LiveStateMirror {
     /// container (an unnamed loop appends no name segment either,
     /// `exec::loop_::run_each_tree`'s own `dispatch_path` comment); and
     /// two concurrent sibling unnamed tree loops can collide the same
-    /// way with each other. [`Self::graft_child_write`] updates its own
-    /// `GraftEntry::Child` entry *in place*, wherever it already sits
-    /// in the `Vec`, rather than moving it to the end, so a path's own
-    /// relative order between a child graft and a tree overlay is
-    /// fixed the moment both are first registered, never reshuffled by
-    /// a later child write; [`Self::register_tree_branches`] always
-    /// pushes a new `GraftEntry::Tree` entry, never replacing one, and
+    /// way with each other. [`Self::register_child_graft`] replaces its
+    /// own `GraftEntry::Child` entry's `NodeRef` *in place*, wherever it
+    /// already sits in the `Vec`, rather than moving it to the end, so
+    /// a path's own relative order between a child graft and a tree
+    /// overlay is fixed the moment both are first registered, never
+    /// reshuffled by a retried attempt's fresh child root;
+    /// [`Self::register_tree_branches`] always pushes a new
+    /// `GraftEntry::Tree` entry, never replacing one, and
     /// [`Self::clear_tree_branches`] removes only the one entry whose
     /// branches are *this* tree's own (matched by `Rc::ptr_eq` on the
     /// first branch, since two different trees' `NodeRef`s are never
@@ -323,29 +329,36 @@ impl LiveStateMirror {
         }
     }
 
-    /// [`electricity_vm::RunObserver::graft_child_write`]'s own
-    /// implementation: records *snapshot* as *node_path*'s own latest
-    /// grafted overlay and marks a mid-run write pending, the same as
-    /// an ordinary [`Self::mark_pending`] call -- a graft is itself a
-    /// store change a live-state reader should eventually see. A
-    /// second call at a path already carrying a `GraftEntry::Child`
-    /// updates that entry's own value *in place*, at whatever position
-    /// it already holds in the `Vec` (this struct's own `grafts` field
-    /// doc comment) -- never appended anew, so a tree overlay already
-    /// registered at the same path keeps whichever relative order the
-    /// two were first registered in.
-    pub fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+    /// [`electricity_vm::RunObserver::register_child_graft`]'s own
+    /// implementation: records *child_root* as *node_path*'s own live
+    /// overlay, read lazily -- straight off the still-running child's
+    /// own tree, through [`Self::apply_grafts`] -- every time this
+    /// mirror actually publishes, the same lazy-pull pattern
+    /// [`Self::register_tree_branches`] already used for a tree's own
+    /// branches (issue #662: a `use` child's own overlay used to be a
+    /// snapshot pushed, throttled, on every child write instead).
+    /// Called once, when the child's own execution starts, before it
+    /// could have written anything yet -- so, like
+    /// [`Self::register_tree_branches`], this never marks a write
+    /// pending on its own; the child's own first write does that
+    /// through the ordinary [`Self::mark_pending`] path. A second call
+    /// at a path already carrying a `GraftEntry::Child` (a retried
+    /// `use` attempt's own fresh child root) replaces that entry's
+    /// `NodeRef` *in place*, at whatever position it already holds in
+    /// the `Vec` (this struct's own `grafts` field doc comment) --
+    /// never appended anew, so a tree overlay already registered at
+    /// the same path keeps whichever relative order the two were
+    /// first registered in.
+    pub fn register_child_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
         let mut grafts = self.grafts.borrow_mut();
         let entries = grafts.entry(node_path.to_string()).or_default();
         match entries
             .iter_mut()
             .find(|entry| matches!(entry, GraftEntry::Child(_)))
         {
-            Some(GraftEntry::Child(existing)) => *existing = snapshot.clone(),
-            _ => entries.push(GraftEntry::Child(snapshot.clone())),
+            Some(GraftEntry::Child(existing)) => *existing = child_root.clone(),
+            _ => entries.push(GraftEntry::Child(child_root.clone())),
         }
-        drop(grafts);
-        self.mark_pending();
     }
 
     /// [`electricity_vm::RunObserver::clear_graft`]'s own
@@ -372,7 +385,7 @@ impl LiveStateMirror {
     /// *new* tree overlay at *node_path*, always pushed, never
     /// replacing an existing entry there (PR #549's review:
     /// two sibling trees, or a child graft and a tree, can share a
-    /// path). Unlike [`Self::graft_child_write`] this never marks a
+    /// path). Like [`Self::register_child_graft`] this never marks a
     /// write pending on its own -- it runs once, before any branch has
     /// written anything at all, so there would be nothing new to
     /// publish yet; every branch's own first effect write already
@@ -421,9 +434,19 @@ impl LiveStateMirror {
     /// over a dotted path -- this struct's own `grafts` field doc
     /// comment), and within a path, in the order each entry was first
     /// registered (the `Vec`'s own order -- same field doc comment).
-    /// *store* resolves a [`GraftEntry::Tree`] entry's own branch
-    /// [`NodeRef`]s lazily, right here -- the only place any of them is
-    /// ever read. Only [`Self::flush_if_due`] ever calls this:
+    /// *store* resolves both a [`GraftEntry::Tree`] entry's own branch
+    /// `NodeRef`s and a [`GraftEntry::Child`] entry's own still-running
+    /// child root lazily, right here -- the only place either is ever
+    /// read (issue #662: a `use` child's own root used to arrive as an
+    /// already-rendered snapshot, taken -- throttled -- inside the
+    /// VM's own child observer; now it is pulled fresh here instead,
+    /// the same lazy pattern the tree overlay always used).
+    /// `Store::saved` reads only the `NodeRef` it is given, never
+    /// anything of *store*'s own, so resolving a child's root this way
+    /// through the run's own *store* -- not the child's own, separate
+    /// `Store`, which this function never even sees -- is exactly as
+    /// correct as resolving it through any other `Store` value would
+    /// be. Only [`Self::flush_if_due`] ever calls this:
     /// [`Self::write_initial`] runs before anything could have
     /// grafted, and [`Self::close`] writes the final, already-really-
     /// merged state, where no overlay should ever still apply.
@@ -433,7 +456,9 @@ impl LiveStateMirror {
             .iter()
             .fold(snapshot, |acc, (path, entries)| {
                 entries.iter().fold(acc, |acc, entry| match entry {
-                    GraftEntry::Child(child) => grafted_snapshot(&acc, path, child),
+                    GraftEntry::Child(child_root) => {
+                        grafted_snapshot(&acc, path, &store.saved(child_root))
+                    }
                     GraftEntry::Tree(branches) => {
                         tree_overlay_snapshot(&acc, path, store, branches)
                     }
@@ -570,28 +595,49 @@ mod tests {
         mirror.write_initial(&root).unwrap();
         std::thread::sleep(Duration::from_millis(5));
 
-        // The child's own current snapshot: an `inner` tool effect
-        // already ran inside it; the child's own top-level `value`/
-        // `meta` are never mirrored (the parent's `use` node's own
-        // decide those, once it actually merges for real).
-        let mut inner = Dict::new();
-        inner.insert(Value::Str("value".to_string()), Value::from("hi"));
-        inner.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
-        let mut child_prime = Dict::new();
-        child_prime.insert(Value::Str("value".to_string()), Value::None);
-        child_prime.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
-        child_prime.insert(Value::Str("inner".to_string()), Value::Dict(inner.clone()));
-        let mut child_snapshot = Dict::new();
-        child_snapshot.insert(Value::Str("prime".to_string()), Value::Dict(child_prime));
-        let child_snapshot = Value::Dict(child_snapshot);
+        // The child's own live store: an `inner` tool effect already
+        // ran inside it; the child's own top-level `value`/`meta` are
+        // never mirrored (the parent's `use` node's own decide those,
+        // once it actually merges for real). Registered once, the
+        // same way `run_isolated_inner` registers the real child's
+        // root before any effect inside it runs -- the mirror reads
+        // this live store's own current content lazily, at flush
+        // time, never a snapshot pushed up front.
+        let child_store = Store::new();
+        let child_prime = child_store
+            .ensure_dict(&child_store.root, Value::Str("prime".to_string()))
+            .unwrap();
+        child_store.set_leaf(&child_prime, Value::Str("value".to_string()), Value::None);
+        child_store.set_leaf(
+            &child_prime,
+            Value::Str("meta".to_string()),
+            Value::Dict(Dict::new()),
+        );
+        let inner_node = child_store
+            .ensure_dict(&child_prime, Value::Str("inner".to_string()))
+            .unwrap();
+        child_store.set_leaf(
+            &inner_node,
+            Value::Str("value".to_string()),
+            Value::from("hi"),
+        );
+        child_store.set_leaf(
+            &inner_node,
+            Value::Str("meta".to_string()),
+            Value::Dict(Dict::new()),
+        );
 
         let node_path = EffectPath::root().push_name("fetch");
-        mirror.graft_child_write(&node_path, &child_snapshot);
+        mirror.register_child_graft(&node_path, &child_store.root);
+        mirror.mark_pending();
         let store = Store::new();
         mirror.flush_if_due(&store, || root.clone());
 
         // The expected published state: the use node's own `value`/
         // `meta` untouched, with `inner` mirrored in alongside them.
+        let mut inner = Dict::new();
+        inner.insert(Value::Str("value".to_string()), Value::from("hi"));
+        inner.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
         let mut expected_fetch = use_node;
         expected_fetch.insert(Value::Str("inner".to_string()), Value::Dict(inner));
         let mut expected_prime = Dict::new();
@@ -614,15 +660,23 @@ mod tests {
         mirror.write_initial(&Value::Dict(Dict::new())).unwrap();
         std::thread::sleep(Duration::from_millis(5));
 
-        let mut child_prime = Dict::new();
-        child_prime.insert(Value::Str("value".to_string()), Value::None);
-        child_prime.insert(Value::Str("meta".to_string()), Value::Dict(Dict::new()));
-        child_prime.insert(Value::Str("inner".to_string()), Value::from("leftover"));
-        let mut child_snapshot = Dict::new();
-        child_snapshot.insert(Value::Str("prime".to_string()), Value::Dict(child_prime));
-        let child_snapshot = Value::Dict(child_snapshot);
+        let child_store = Store::new();
+        let child_prime = child_store
+            .ensure_dict(&child_store.root, Value::Str("prime".to_string()))
+            .unwrap();
+        child_store.set_leaf(&child_prime, Value::Str("value".to_string()), Value::None);
+        child_store.set_leaf(
+            &child_prime,
+            Value::Str("meta".to_string()),
+            Value::Dict(Dict::new()),
+        );
+        child_store.set_leaf(
+            &child_prime,
+            Value::Str("inner".to_string()),
+            Value::from("leftover"),
+        );
         let node_path = EffectPath::root().push_name("fetch");
-        mirror.graft_child_write(&node_path, &child_snapshot);
+        mirror.register_child_graft(&node_path, &child_store.root);
         mirror.clear_graft(&node_path);
 
         mirror.mark_pending();
@@ -630,6 +684,157 @@ mod tests {
         mirror.flush_if_due(&store, || Value::Dict(Dict::new()));
         assert_eq!(fs::read_to_string(&path).unwrap(), "{}\n");
 
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// R4 (issue #662): a nested `use` composes through two live
+    /// grafts the same way [`grafted_snapshot_composes_at_a_nested_path`]
+    /// already proves for the pure transform -- here through the real
+    /// [`LiveStateMirror::register_child_graft`]/[`LiveStateMirror::
+    /// apply_grafts`] path, with each level's own, separate live
+    /// child [`Store`], exactly the shape `run_isolated_inner` builds
+    /// for a `use` effect nested inside another `use` child.
+    #[test]
+    fn a_nested_use_childs_live_root_composes_through_both_grafts() {
+        let path = temp_path("nested-use");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let outer = store.ensure_dict(&prime, str_key("outer")).unwrap();
+        store.set_leaf(&outer, str_key("value"), Value::None);
+        store.set_leaf(&outer, str_key("meta"), Value::Dict(Dict::new()));
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let outer_path = EffectPath::root().push_name("outer");
+
+        // The outer `use` child's own live store -- it contains a
+        // nested `use` at `inner`, still just a skeleton so far.
+        let outer_child_store = Store::new();
+        let outer_child_prime = outer_child_store
+            .ensure_dict(&outer_child_store.root, str_key("prime"))
+            .unwrap();
+        outer_child_store.set_leaf(&outer_child_prime, str_key("value"), Value::None);
+        outer_child_store.set_leaf(
+            &outer_child_prime,
+            str_key("meta"),
+            Value::Dict(Dict::new()),
+        );
+        let inner_skeleton = outer_child_store
+            .ensure_dict(&outer_child_prime, str_key("inner"))
+            .unwrap();
+        outer_child_store.set_leaf(&inner_skeleton, str_key("value"), Value::None);
+        outer_child_store.set_leaf(&inner_skeleton, str_key("meta"), Value::Dict(Dict::new()));
+        mirror.register_child_graft(&outer_path, &outer_child_store.root);
+
+        // The inner `use` child -- its own, separate live store,
+        // registered at `prime.outer.inner`, the same way a nested
+        // `use`'s own `run_isolated_inner` registers it on the *outer*
+        // `ChildObserver`, which forwards it unchanged up to the
+        // mirror (`exec::use_::ChildObserver::register_child_graft`).
+        let inner_path = outer_path.clone().push_name("inner");
+        let inner_child_store = Store::new();
+        let inner_child_prime = inner_child_store
+            .ensure_dict(&inner_child_store.root, str_key("prime"))
+            .unwrap();
+        inner_child_store.set_leaf(&inner_child_prime, str_key("value"), Value::None);
+        inner_child_store.set_leaf(
+            &inner_child_prime,
+            str_key("meta"),
+            Value::Dict(Dict::new()),
+        );
+        inner_child_store.set_leaf(&inner_child_prime, str_key("deep"), Value::from("found"));
+        mirror.register_child_graft(&inner_path, &inner_child_store.root);
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&str_key(key)))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let deep = get(&get(&get(&get(&parsed, "prime"), "outer"), "inner"), "deep");
+        assert_eq!(
+            deep,
+            Value::from("found"),
+            "the inner use child's own graft must compose on top of the outer's, got {text}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// R4 (issue #662): a child that finishes *between* two flushes --
+    /// the first flush still sees the running overlay off the child's
+    /// own live store; once the child's real output merges into the
+    /// parent's own store and its graft is cleared (the exact order
+    /// `run_isolated_inner` always calls them in), the next flush
+    /// shows that merged value directly, never a stale copy of the
+    /// overlay the clear just removed.
+    #[test]
+    fn a_child_that_finishes_between_two_flushes_then_shows_the_merged_value() {
+        let path = temp_path("child-finishes-between-flushes");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let step = store.ensure_dict(&prime, str_key("step")).unwrap();
+        store.set_leaf(&step, str_key("value"), Value::None);
+        store.set_leaf(&step, str_key("meta"), Value::Dict(Dict::new()));
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let node_path = EffectPath::root().push_name("step");
+
+        let child_store = Store::new();
+        let child_prime = child_store
+            .ensure_dict(&child_store.root, str_key("prime"))
+            .unwrap();
+        child_store.set_leaf(&child_prime, str_key("value"), Value::None);
+        child_store.set_leaf(&child_prime, str_key("meta"), Value::Dict(Dict::new()));
+        child_store.set_leaf(&child_prime, str_key("inner"), Value::from("running"));
+        mirror.register_child_graft(&node_path, &child_store.root);
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&str_key(key)))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        assert_eq!(
+            get(&get(&get(&parsed, "prime"), "step"), "inner"),
+            Value::from("running"),
+            "the first flush must show the child's own overlay while it's still registered, \
+             got {text}"
+        );
+
+        // The child finishes between this flush and the next: its
+        // real output merges into the parent's own store (the way
+        // `execute_use`'s own merge write does, mirrored here
+        // directly), and its graft is cleared.
+        store.set_leaf(&step, str_key("inner"), Value::from("merged for real"));
+        mirror.clear_graft(&node_path);
+
+        mirror.mark_pending();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        assert_eq!(
+            get(&get(&get(&parsed, "prime"), "step"), "inner"),
+            Value::from("merged for real"),
+            "the second flush must show the child's own real, merged value, not the cleared \
+             overlay, got {text}"
+        );
         fs::remove_file(&path).unwrap();
     }
 
@@ -1061,8 +1266,11 @@ mod tests {
     /// child frame maps the child root to the `use` node's own path
     /// the same way an unnamed/transparent tree appends no name
     /// segment of its own). Both entries must compose rather than one
-    /// replacing the other -- and a *second* child write at the same
-    /// path must update that entry in place, never disturbing the
+    /// replacing the other -- and a *later* write to the child's own
+    /// live store must show up at the next flush with no second
+    /// [`LiveStateMirror::register_child_graft`] call at all (issue
+    /// #662: the overlay is read lazily off the child's own tree each
+    /// time, never a snapshot pushed per write), never disturbing the
     /// tree overlay already registered there.
     #[test]
     fn a_child_graft_and_a_tree_overlay_compose_at_the_same_path() {
@@ -1086,16 +1294,22 @@ mod tests {
         mirror.register_tree_branches(&node_path, &branches);
         store.set_leaf(&branches[0], str_key("fast"), Value::from("fast done"));
 
-        // A child write lands at the same path -- a snapshot of
-        // *something else* the child wrote, under a key the branch
-        // overlay above never touches.
-        let mut child_prime = Dict::new();
-        child_prime.insert(str_key("value"), Value::None);
-        child_prime.insert(str_key("meta"), Value::Dict(Dict::new()));
-        child_prime.insert(str_key("sibling"), Value::from("from child write"));
-        let mut child_snapshot = Dict::new();
-        child_snapshot.insert(str_key("prime"), Value::Dict(child_prime));
-        mirror.graft_child_write(&node_path, &Value::Dict(child_snapshot.clone()));
+        // A child graft registers at the same path -- a live,
+        // isolated child store, read lazily at flush time, never a
+        // pushed snapshot. It writes something *else* than the branch
+        // overlay above, under a key that overlay never touches.
+        let child_store = Store::new();
+        let child_prime = child_store
+            .ensure_dict(&child_store.root, str_key("prime"))
+            .unwrap();
+        child_store.set_leaf(&child_prime, str_key("value"), Value::None);
+        child_store.set_leaf(&child_prime, str_key("meta"), Value::Dict(Dict::new()));
+        child_store.set_leaf(
+            &child_prime,
+            str_key("sibling"),
+            Value::from("from child write"),
+        );
+        mirror.register_child_graft(&node_path, &child_store.root);
 
         mirror.mark_pending();
         mirror.flush_if_due(&store, || store.saved(&store.root));
@@ -1120,15 +1334,14 @@ mod tests {
             "the child graft at the same path must also show, got {text}"
         );
 
-        // A second child write updates its own entry in place -- the
-        // tree overlay (registered first) must still win over it.
-        let mut child_prime2 = Dict::new();
-        child_prime2.insert(str_key("value"), Value::None);
-        child_prime2.insert(str_key("meta"), Value::Dict(Dict::new()));
-        child_prime2.insert(str_key("sibling"), Value::from("second write"));
-        let mut child_snapshot2 = Dict::new();
-        child_snapshot2.insert(str_key("prime"), Value::Dict(child_prime2));
-        mirror.graft_child_write(&node_path, &Value::Dict(child_snapshot2));
+        // A later write to the same live child store shows up at the
+        // next flush with no second registration call -- the tree
+        // overlay (registered first) must still win over it.
+        child_store.set_leaf(
+            &child_prime,
+            str_key("sibling"),
+            Value::from("second write"),
+        );
         mirror.mark_pending();
         std::thread::sleep(Duration::from_millis(5));
         mirror.flush_if_due(&store, || store.saved(&store.root));
@@ -1139,12 +1352,12 @@ mod tests {
         assert_eq!(
             get(&step_node, "fast"),
             Value::from("fast done"),
-            "the tree overlay must survive a second child write at the same path, got {text}"
+            "the tree overlay must survive a later child write at the same path, got {text}"
         );
         assert_eq!(
             get(&step_node, "sibling"),
             Value::from("second write"),
-            "the child graft's own second write must land, got {text}"
+            "the child graft's own later write must land, got {text}"
         );
         fs::remove_file(&path).unwrap();
     }

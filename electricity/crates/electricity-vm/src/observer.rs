@@ -83,55 +83,53 @@ pub trait RunObserver {
     /// line is #442's own PR, built on top of this seam once it lands.
     fn warning(&self, _message: &str) {}
 
-    /// An isolated child run's own write (`use`, lane I; decomposition,
-    /// lane L2) -- `core/use.py::_child_on_write`/`_grafted_snapshot`'s
-    /// own seam: on every child write, the run's own live-state reader
-    /// republishes the whole-run snapshot with *snapshot* (the child's
-    /// own current, `prime`-rooted state -- never the parent's)
-    /// mirrored under *node_path* (the `use`/decomposition effect's own
-    /// absolute path in the parent document, `Frame::effect_path`'s own
-    /// output), composing to any depth because *snapshot* always
-    /// arrives as this call's own argument rather than being read back
-    /// off any store -- a nested child's own graft call lands at its
-    /// own, deeper *node_path* independently of this one.
+    /// An isolated child run's own root, registered once -- `use`,
+    /// lane I; decomposition, lane L2. Unlike the per-write push this
+    /// hook used to be (issue #662), the child's own live [`crate::
+    /// NodeRef`] is handed over exactly once, right before the child's
+    /// own execution starts (before it could have written anything),
+    /// and the run's own live-state reader reads it lazily, straight
+    /// off the still-running child's own tree, every time it actually
+    /// publishes -- the same lazy-pull pattern [`RunObserver::
+    /// register_tree_branches`] already uses for a tree's own
+    /// branches, so a snapshot is never taken more often than a
+    /// `--live-state` mirror's own publish interval, however often the
+    /// child itself writes (the #472 bound this hook must keep: a long
+    /// loop inside a `use` child still calls [`RunObserver::write`]
+    /// once per leaf write, but that call takes no snapshot of its own
+    /// any more at all). *child_root* mirrors under *node_path* (the
+    /// `use`/decomposition effect's own absolute path in the parent
+    /// document, `Frame::effect_path`'s own output), composing to any
+    /// depth because *node_path* always arrives as this call's own
+    /// argument rather than being derived here -- a nested child's own
+    /// register call lands at its own, deeper *node_path*
+    /// independently of this one. A retried attempt that creates a
+    /// fresh child [`crate::Store`] calls this again at the same
+    /// *node_path*, replacing the previous attempt's own root.
     ///
     /// Default no-op, like every other hook here; only the run wiring's
     /// own live-state mirror (`electricity` (lib), `src/live_state.rs`)
     /// implements it for real. [`RunObserver::clear_graft`] removes a
-    /// path this call grafted once the child's own real output merges
-    /// into the parent for good -- a later snapshot no longer needs
-    /// (or should show) the overlay at all.
-    fn graft_child_write(&self, _node_path: &EffectPath, _snapshot: &Value) {}
+    /// path this call registered once the child's own real output
+    /// merges into the parent for good -- a later snapshot no longer
+    /// needs (or should show) the overlay at all.
+    fn register_child_graft(&self, _node_path: &EffectPath, _child_root: &NodeRef) {}
 
-    /// *node_path* no longer needs [`RunObserver::graft_child_write`]'s
+    /// *node_path* no longer needs [`RunObserver::register_child_graft`]'s
     /// own overlay -- the child it named has finished (merged for real,
     /// or failed) and a later snapshot reads its own now-final state
     /// directly. A no-op for a path that was never grafted (or already
     /// cleared), same as every other hook's own tolerant default here.
     fn clear_graft(&self, _node_path: &EffectPath) {}
 
-    /// Whether this observer's own [`RunObserver::graft_child_write`]
-    /// is ever actually consumed -- `false` by default, so a caller
-    /// that would otherwise take a [`crate::Store::saved`] snapshot
-    /// (an `O(size of the tree so far)` recursive clone) purely to hand
-    /// it to a `graft_child_write` nobody reads never has to pay for
-    /// that snapshot at all (`exec::use_`'s own `ChildObserver::write`,
-    /// lane I's review of PR #472: a long loop inside a `use`
-    /// child used to pay one such snapshot per child write regardless
-    /// of `--live-state`). `electricity` (lib)'s own `Observer` is the
-    /// only implementation that ever returns `true`, and only when a
-    /// `--live-state` mirror is actually running.
-    fn wants_child_snapshots(&self) -> bool {
-        false
-    }
-
     /// A `flow: tree` dynamic/loop is about to dispatch *branches* --
     /// every branch's own [`NodeRef`], in index order, at *node_path*
-    /// (issue #465, the overlay design #462's `graft_child_write`
-    /// already established for a `use` child). Unlike a `use` child
-    /// (its own separate [`crate::Store`], reachable only by taking a
-    /// snapshot and pushing it through [`RunObserver::graft_child_write`]
-    /// on every write), a tree branch's own node lives in *this* run's
+    /// (issue #465, the overlay design #462's `register_child_graft`
+    /// already established for a `use` child, and issue #662 then
+    /// brought in line with it). Unlike a `use` child
+    /// (its own separate [`crate::Store`], reachable only through the
+    /// root [`NodeRef`] [`RunObserver::register_child_graft`] hands
+    /// over once), a tree branch's own node lives in *this* run's
     /// single store -- holding the [`NodeRef`] costs nothing per write,
     /// so there is no push call here at all; a live-state mirror reads
     /// each branch's own current snapshot straight off the live tree,
@@ -214,7 +212,7 @@ mod tests {
         observer.dispatch(&path, 3, 2);
         observer.write();
         observer.warning("a run-time warning with no effect of its own");
-        observer.graft_child_write(&path, &Value::None);
+        observer.register_child_graft(&path, &crate::store::new_node());
         observer.clear_graft(&path);
         observer.record_totals(&Value::None);
         observer.register_tree_branches(&path, &[]);
