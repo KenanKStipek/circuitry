@@ -5,7 +5,6 @@ one attempt ran.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from dataclasses import dataclass
 
 import pytest
@@ -34,6 +33,20 @@ class _MockAdapter:
 
 def _mock_adapter() -> _MockAdapter:
     return _MockAdapter()
+
+
+@dataclass
+class _AlwaysRetryable503:
+    """Every attempt gets the same retryable 503 -- never a decode/schema
+    failure, so an exhausted pass raises the wrapped "All adapter
+    attempts failed: ..." text, not a bare per-attempt one."""
+
+    name: str = "primary"
+
+    def generate(self, *, model: str, prompt: str, timeout_seconds: int = 120):
+        raise AdapterCallError(
+            "primary unavailable", retry_info=RetryInfo(retryable=True, status=503)
+        )
 
 
 @dataclass
@@ -87,6 +100,15 @@ def test_attempts_absent_when_only_one_attempt_ran(monkeypatch: pytest.MonkeyPat
 
     assert "attempts" not in store.state["prime"]["task"]["meta"]
     assert "retries_used" not in store.state["prime"]["task"]["meta"]
+
+    # The presence rule cuts both ways: a run that *did* retry carries the
+    # key the single-attempt run above lacks, exactly when retries_used
+    # does too -- not vacuously true for every run.
+    store2 = Store({})
+    DynamicRuntime(root, adapter=_ScriptedAdapter(), model="m").execute(store=store2)
+    meta2 = store2.state["prime"]["task"]["meta"]
+    assert "attempts" in meta2
+    assert "retries_used" in meta2
 
 
 def test_attempts_retried_on_a_503_then_a_schema_mismatch_then_succeeds(
@@ -210,25 +232,110 @@ def test_attempts_live_published_before_the_backoff_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Each entry is written and published as its attempt ends and
-    another follows, before the backoff wait."""
-    seen: list[int] = []
+    another follows, before the backoff wait -- checked from inside the
+    backoff stub itself, so a write that happened only *after* the wait
+    (which this test's own sleep never actually performs) can't pass by
+    accident."""
+    seen_before_sleep: list[int] = []
+    store = Store({})
 
     def _sleep(seconds: float) -> None:
-        seen.append(seconds)
+        meta = store.state.get("prime", {}).get("task", {}).get("meta") or {}
+        seen_before_sleep.append(len(meta.get("attempts", [])))
 
     _patch_sleep(monkeypatch, _sleep)
 
-    published: list[dict] = []
     root = compile_orchestration(orch=_json_retry_orch(max_attempts=3), root_name="prime")
-    store = Store({}, on_write=lambda state: published.append(deepcopy(state)))
     adapter = _ScriptedAdapter()
 
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
 
-    # By the time the run ends, at least one published snapshot already
-    # shows the first attempt recorded while fewer than all three had run.
-    assert any(
-        "attempts" in (snap.get("prime", {}).get("task", {}).get("meta") or {})
-        and len(snap["prime"]["task"]["meta"]["attempts"]) < 3
-        for snap in published
-    )
+    # Sleep is called once before attempt 1 (after attempt 0 already has
+    # its own entry) and once before attempt 2 (after attempt 1's too) --
+    # by the time either wait starts, meta.attempts already holds exactly
+    # the attempts that finished so far, never the one about to start.
+    assert seen_before_sleep == [1, 2]
+
+
+def test_attempts_last_entry_repeats_the_node_on_a_chain_exhausted_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A pass that exhausts its own retries on an ordinary (not
+    decode/schema) chain failure ends with the wrapped "All adapter
+    attempts failed: ..." text in meta.error, never the bare per-attempt
+    failure its own fallback_attempts holds -- the last attempts entry
+    must show that same wrapped text, and null tokens, like the node's
+    own (#668)."""
+    _patch_sleep(monkeypatch, lambda s: None)
+    root = compile_orchestration(orch=_json_retry_orch(max_attempts=2), root_name="prime")
+    store = Store({})
+
+    with pytest.raises(RuntimeError):
+        DynamicRuntime(root, adapter=_AlwaysRetryable503(), model="m").execute(store=store)
+
+    node = store.state["prime"]["task"]
+    meta = node["meta"]
+    assert meta["error"].startswith("All adapter attempts failed:")
+    assert meta["tokens_sent"] is None
+    assert meta["tokens_received"] is None
+
+    attempts = meta["attempts"]
+    assert len(attempts) == 2
+    last = attempts[-1]
+    assert last["error"] == meta["error"]
+    assert last["tokens_sent"] is None
+    assert last["tokens_received"] is None
+    assert last["completed_at"] == meta["completed_at"]
+    # The bare per-attempt failure is still readable inside the entry's
+    # own fallback_attempts, just not promoted to the entry's own error.
+    assert "primary unavailable" in last["fallback_attempts"][-1]["error"]
+
+
+def test_attempts_an_attempt_that_fails_before_its_own_chain_gets_its_own_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A later pass's own error -- a timeout_ms reference that stops
+    resolving between attempts, say -- never reaches the fallback chain
+    at all. It still gets an entry of its own: the earlier attempt's own
+    entry is never re-dated to stand in for it (#668)."""
+    import circuitry.core.prompt as prompt_mod
+
+    _patch_sleep(monkeypatch, lambda s: None)
+    orch = _json_retry_orch(max_attempts=2)
+    orch["effects"][0]["on_error"] = "continue"
+    root = compile_orchestration(orch=orch, root_name="prime")
+    store = Store({})
+    adapter = _AlwaysRetryable503()
+
+    original_resolve = prompt_mod.resolve_timeout_ms
+    resolve_calls = {"n": 0}
+
+    def flaky_resolve(timeout_ms, ctx, *, effect_label):
+        resolve_calls["n"] += 1
+        if resolve_calls["n"] == 2:
+            raise ValueError("timeout_ms reference vanished")
+        return original_resolve(timeout_ms, ctx, effect_label=effect_label)
+
+    monkeypatch.setattr(prompt_mod, "resolve_timeout_ms", flaky_resolve)
+
+    DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
+
+    node = store.state["prime"]["task"]
+    meta = node["meta"]
+    assert meta["retries_used"] == 1
+    attempts = meta["attempts"]
+    assert len(attempts) == 2
+
+    first = attempts[0]
+    assert "primary unavailable" in first["error"]
+
+    second = attempts[1]
+    assert second["error"] == meta["error"]
+    assert "timeout_ms reference vanished" in second["error"]
+    assert second["value"] is None
+    assert second["fallback_attempts"] == []
+    assert second["tokens_sent"] is None
+    assert second["tokens_received"] is None
+    # Never re-dated: the first attempt's own completed_at is untouched.
+    assert first["completed_at"] != second["completed_at"]
+    assert meta["fallback_attempts"] == []

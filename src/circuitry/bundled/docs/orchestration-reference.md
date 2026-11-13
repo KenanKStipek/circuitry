@@ -1581,12 +1581,15 @@ Then each effect type's own extra keys, in this order:
 - Reset at the start of every pass, same as `expect` and `retries_used` — a reused node (an
   unnamed loop's next pass, `--state` carryover) never shows an earlier pass's attempts.
 - **Doesn't change run totals.** A prompt's own `meta.tokens_sent_total`/`tokens_received_total`
-  already sum every attempt's spend, retried or not, exactly as before `meta.attempts` existed
-  — the entries just make that spend readable per attempt, they don't add to it. A tool's
-  `expect: {mode: model}` check spends its own tokens on every attempt, including one that is
-  later retried; those are not summed into any run total on either engine, before or after this
-  change — `meta.expect.tokens_sent`/`tokens_received` on the deciding attempt's own entry (and
-  on the node itself) is the only record of them.
+  already sum every attempt's spend, retried or not — the entries just make that spend readable
+  per attempt, they don't add to it. A tool's `expect: {mode: model}` check spends its own
+  tokens on every attempt, including one that is later retried; those never reach
+  `last_run.totals` on either engine. Each attempt's own `expect.tokens_sent`/`tokens_received`
+  is readable inside that attempt's own `meta.attempts` entry; the deciding attempt's is also
+  on the node's own `meta.expect`, which a `dynamic`'s own token sum (`core/dynamic.py`'s
+  `_sum_tokens`) does walk — so a parent `dynamic`'s total counts the deciding attempt's
+  `expect` spend but not an earlier, retried attempt's, which `meta.expect` no longer holds
+  once a later attempt overwrites it.
 - **No size cap.** A prompt's own entry repeats that attempt's whole decoded reply in `value`
   (and, inside `fallback_attempts`, a losing attempt's `raw_reply`, already capped the way the
   top-level field is) — a document sending many large prompts through a few retries keeps every

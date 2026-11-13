@@ -1123,7 +1123,12 @@ class PromptRuntime:
                     self.cb_error(line)
                 else:
                     _console.print(line)
-            meta["fallback_attempts"] = attempts_meta
+            # Stale if this attempt raised before its own fallback chain
+            # ran at all (an unresolved timeout_ms reference between
+            # attempts, say) -- attempts_meta would still hold a prior
+            # attempt's chain in that case, which this attempt never made.
+            attempt_reached_chain = len(retry_attempts) > _attempt
+            meta["fallback_attempts"] = attempts_meta if attempt_reached_chain else []
             meta["fallback_recovered"] = False
             meta["error"] = redact(str(e))
             meta.update(final_fields)
@@ -1135,10 +1140,37 @@ class PromptRuntime:
             # above 0".
             if _attempt > 0:
                 meta["retries_used"] = _attempt
-                # Resynced to the completed_at just set above, which lands
-                # a little later than the one the failing attempt recorded
-                # for itself inside the loop (#668).
-                retry_attempts[-1]["completed_at"] = meta["completed_at"]
+                if not attempt_reached_chain:
+                    # This attempt never reached its own fallback chain (an
+                    # unresolved timeout_ms reference between attempts, say)
+                    # -- it gets an entry of its own rather than re-dating
+                    # an earlier attempt's.
+                    retry_attempts.append(
+                        _attempt_entry(
+                            created_at=attempt_started_at,
+                            completed_at=meta["completed_at"],
+                            value=None,
+                            error=meta["error"],
+                            fallback_attempts=[],
+                            tokens_sent=None,
+                            tokens_received=None,
+                        )
+                    )
+                else:
+                    # Resynced to the node's own deciding fields, which land
+                    # a little later than what the failing attempt recorded
+                    # for itself inside the loop (#668): completed_at, and
+                    # error — a chain-exhaustion failure's entry held only
+                    # that attempt's own last fallback error, not the
+                    # wrapped "All adapter attempts failed: ..." text
+                    # meta.error shows. Tokens follow meta's own
+                    # null-on-failure fields, not the last fallback try's
+                    # usage, which is still readable inside this entry's own
+                    # fallback_attempts.
+                    retry_attempts[-1]["completed_at"] = meta["completed_at"]
+                    retry_attempts[-1]["error"] = meta["error"]
+                    retry_attempts[-1]["tokens_sent"] = meta["tokens_sent"]
+                    retry_attempts[-1]["tokens_received"] = meta["tokens_received"]
                 _write_attempts(meta, retry_attempts)
             if self.defn.on_error in ("skip", "continue"):
                 # A reused node (an unnamed loop's prior pass, a resume)

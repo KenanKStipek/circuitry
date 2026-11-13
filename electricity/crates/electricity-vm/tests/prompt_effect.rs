@@ -661,6 +661,17 @@ async fn attempts_kept_on_continue_after_retries_exhausted() {
             .all(|a| get(as_dict(a), "error") != Some(&Value::None))
     );
     assert_eq!(get(meta, "retries_used"), Some(&Value::from(1i64)));
+
+    // The last entry repeats the node's own deciding fields (#668):
+    // the wrapped "All adapter attempts failed: ..." text `meta.error`
+    // shows, not the bare per-attempt chain failure `fallback_attempts`
+    // holds inside it, and null tokens, like the node's own.
+    let last = as_dict(&attempts[1]);
+    assert_eq!(get(last, "error"), get(meta, "error"));
+    assert_eq!(get(meta, "tokens_sent"), Some(&Value::None));
+    assert_eq!(get(meta, "tokens_received"), Some(&Value::None));
+    assert_eq!(get(last, "tokens_sent"), Some(&Value::None));
+    assert_eq!(get(last, "tokens_received"), Some(&Value::None));
 }
 
 /// `meta.attempts` (#668): cleared at the start of every pass, so a

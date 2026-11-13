@@ -5,7 +5,6 @@ one attempt ran.
 
 from __future__ import annotations
 
-from copy import deepcopy
 from unittest.mock import MagicMock
 
 import pytest
@@ -42,6 +41,26 @@ def test_attempts_absent_when_only_one_attempt_ran(monkeypatch: pytest.MonkeyPat
 
     assert "attempts" not in store.state["x"]["meta"]
     assert "retries_used" not in store.state["x"]["meta"]
+
+    # The presence rule cuts both ways: a run that *did* retry carries the
+    # key the single-attempt run above lacks, exactly when retries_used
+    # does too -- not vacuously true for every run.
+    missing_result = ToolResult(value={}, raw={}, stdout="", stderr="", exit_code=0)
+    present_result = ToolResult(value={"ok": True}, raw={}, stdout="", stderr="", exit_code=0)
+    plugin2 = MagicMock()
+    plugin2.execute.side_effect = [missing_result, present_result]
+    _patch_plugin(monkeypatch, plugin2)
+    defn2 = ToolDefinition(
+        name="y",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
+        expect=ExpectDef(mode="cel", expr="value.ok == true"),
+    )
+    store2 = _make_store()
+    ToolRuntime(defn2).execute(store=store2, ctx={})
+    assert "attempts" in store2.state["y"]["meta"]
+    assert "retries_used" in store2.state["y"]["meta"]
 
 
 def test_attempts_tool_passes_on_third_attempt_expect_driven(
@@ -203,13 +222,28 @@ def test_attempts_is_reset_on_a_reused_node(monkeypatch: pytest.MonkeyPatch) -> 
 def test_attempts_live_published_before_the_backoff_wait(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Each entry is written and published as its attempt ends and
+    another follows, before the backoff wait -- checked from inside the
+    backoff stub itself, so a write that happened only *after* the wait
+    (which this test's own sleep never actually performs) can't pass by
+    accident."""
     missing_result = ToolResult(value={}, raw={}, stdout="", stderr="", exit_code=0)
     present_result = ToolResult(value={"prompt_id": "abc"}, raw={}, stdout="", stderr="", exit_code=0)
     plugin = MagicMock()
     plugin.execute.side_effect = [missing_result, missing_result, present_result]
-    _patch_plugin(monkeypatch, plugin)
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", lambda **kw: plugin)
 
-    published: list[dict] = []
+    seen_before_sleep: list[int] = []
+    store = _make_store()
+
+    def _sleep(seconds: float) -> None:
+        meta = store.state.get("x", {}).get("meta") or {}
+        seen_before_sleep.append(len(meta.get("attempts", [])))
+
+    from circuitry.core.cancellation import get_token
+
+    monkeypatch.setattr(get_token(), "sleep_or_raise", _sleep)
+
     defn = ToolDefinition(
         name="x",
         provider="shell",
@@ -217,11 +251,39 @@ def test_attempts_live_published_before_the_backoff_wait(
         retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
         expect=ExpectDef(mode="cel", expr="has(value.prompt_id)"),
     )
-    store = Store({}, on_write=lambda state: published.append(deepcopy(state)))
     ToolRuntime(defn).execute(store=store, ctx={})
 
-    assert any(
-        "attempts" in (snap.get("x", {}).get("meta") or {})
-        and len(snap["x"]["meta"]["attempts"]) < 3
-        for snap in published
+    # Sleep is called once before attempt 1 (after attempt 0 already has
+    # its own entry) and once before attempt 2 (after attempt 1's too).
+    assert seen_before_sleep == [1, 2]
+
+
+def test_attempts_tool_passes_on_third_attempt_exit_code_driven_via_ok_false(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A process tool's nonzero exit, with no ``allow_nonzero``, fails the
+    attempt itself (``ok`` is ``False``) rather than needing an ``expect:``
+    to notice -- the failed entry still carries that attempt's own
+    ``exit_code``."""
+    failing = ToolResult(value="out", raw={}, stdout="", stderr="boom", exit_code=1, ok=False)
+    succeeding = ToolResult(value="out", raw={}, stdout="", stderr="", exit_code=0, ok=True)
+    plugin = MagicMock()
+    plugin.execute.side_effect = [failing, failing, succeeding]
+    _patch_plugin(monkeypatch, plugin)
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        retries=RetryPolicyDef(max_attempts=3, backoff_ms=10),
     )
+    store = _make_store()
+    ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["x"]["meta"]
+    assert meta["retries_used"] == 2
+    attempts = meta["attempts"]
+    assert len(attempts) == 3
+    assert [a["exit_code"] for a in attempts] == [1, 1, 0]
+    assert attempts[0]["error"] is not None
+    assert attempts[2]["error"] is None

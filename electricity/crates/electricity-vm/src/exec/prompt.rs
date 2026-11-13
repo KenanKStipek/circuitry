@@ -918,6 +918,7 @@ fn finish_failure(
     effect_path: &EffectPath,
     instance: InstanceId,
     observer: &dyn RunObserver,
+    attempt_started_at: Value,
     attempts_meta: Vec<Value>,
     attempt_index: u32,
     message: String,
@@ -933,7 +934,9 @@ fn finish_failure(
     // every other call site's `attempts_meta` is either empty (no
     // attempt ever ran) or a stale earlier pass's chain (a
     // timeout-resolve, limiter, or allowlist failure on a retry pass),
-    // and that pass's error is not an attempt failure at all.
+    // and that pass's error is not an attempt failure at all -- the
+    // same reason this attempt gets no fallback_attempts of its own
+    // below (#668).
     let final_fields = if from_last_attempt {
         attempts_meta.last().and_then(Value::as_dict).map(|dict| {
             (
@@ -948,7 +951,11 @@ fn finish_failure(
         store,
         meta_node,
         "fallback_attempts",
-        Value::List(attempts_meta),
+        Value::List(if from_last_attempt {
+            attempts_meta
+        } else {
+            Vec::new()
+        }),
     );
     set_leaf(store, meta_node, "fallback_recovered", Value::Bool(false));
     let redacted = redact_str(&message);
@@ -970,11 +977,36 @@ fn finish_failure(
             "retries_used",
             Value::from(i64::from(attempt_index)),
         );
-        // Resynced to the completed_at just set above, which lands a
-        // little later than the one the failing attempt recorded for
-        // itself in the loop (issue #668).
-        if let Some(last) = recorded_attempts.last_mut().and_then(Value::as_dict_mut) {
-            last.insert(key("completed_at"), completed_at);
+        if from_last_attempt {
+            // Resynced to the node's own deciding fields, which land a
+            // little later than what the failing attempt recorded for
+            // itself in the loop (#668): completed_at, and error -- a
+            // chain-exhaustion failure's entry held only that attempt's
+            // own last fallback error, not the wrapped "All adapter
+            // attempts failed: ..." text `message` wraps it in. Tokens
+            // follow meta's own null-on-failure fields, not the last
+            // fallback try's usage, still readable inside this entry's
+            // own fallback_attempts.
+            if let Some(last) = recorded_attempts.last_mut().and_then(Value::as_dict_mut) {
+                last.insert(key("completed_at"), completed_at);
+                last.insert(key("error"), Value::Str(redacted.clone()));
+                last.insert(key("tokens_sent"), Value::None);
+                last.insert(key("tokens_received"), Value::None);
+            }
+        } else {
+            // This attempt never reached its own fallback chain (an
+            // unresolved timeout_ms reference, a limiter error, or an
+            // allowlist denial between attempts) -- it gets an entry of
+            // its own rather than re-dating an earlier attempt's.
+            recorded_attempts.push(attempt_entry(
+                attempt_started_at,
+                completed_at,
+                Value::None,
+                Some(redacted.clone()),
+                Vec::new(),
+                Value::None,
+                Value::None,
+            ));
         }
         write_attempts(store, meta_node, &recorded_attempts);
     }
@@ -1287,6 +1319,7 @@ pub(crate) async fn execute_prompt(
                 &effect_path,
                 instance,
                 observer,
+                Value::None,
                 Vec::new(),
                 0,
                 message,
@@ -1343,6 +1376,7 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    Value::None,
                     Vec::new(),
                     0,
                     crate::decompose::failure_text(name, reason, &error),
@@ -1377,6 +1411,7 @@ pub(crate) async fn execute_prompt(
                 &effect_path,
                 instance,
                 observer,
+                Value::None,
                 Vec::new(),
                 0,
                 message,
@@ -1408,6 +1443,7 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    Value::None,
                     Vec::new(),
                     0,
                     err.to_string(),
@@ -1435,6 +1471,7 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    Value::None,
                     Vec::new(),
                     0,
                     message,
@@ -1510,6 +1547,7 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    attempt_started_at,
                     attempts_meta_outer,
                     attempt_index,
                     message,
@@ -1554,6 +1592,7 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    attempt_started_at,
                     attempts_meta_outer,
                     attempt_index,
                     limiter_err.to_string(),
@@ -1601,6 +1640,7 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    attempt_started_at,
                     attempts_meta_outer,
                     attempt_index,
                     message,
@@ -1762,6 +1802,10 @@ pub(crate) async fn execute_prompt(
                         &effect_path,
                         instance,
                         observer,
+                        // Unused: from_last_attempt (true) only ever
+                        // resyncs the entry recorded_attempts already
+                        // carries for this attempt, never appends one.
+                        Value::None,
                         attempts_meta_outer,
                         attempt_index,
                         message,
@@ -2228,19 +2272,51 @@ mod tests {
             &EffectPath::root(),
             0,
             &NullObserver,
+            Value::Str("attempt-1-start".to_string()),
             vec![stale_attempt.clone()],
             1,
             "timeout_ms reference vanished".to_string(),
             electricity_tools::PyExc::ValueError,
             electricity_tools::ErrorCause::None,
             false,
-            Vec::new(),
+            vec![
+                AttemptEntry {
+                    adapter: "scripted".to_string(),
+                    model: "m".to_string(),
+                    status: "failed",
+                    error: Some("pass 0 failure".to_string()),
+                    tokens_sent: None,
+                    tokens_received: None,
+                    error_code: None,
+                    http_status: None,
+                    raw_reply: None,
+                }
+                .into_value(),
+            ],
         )
         .unwrap();
         let meta = store.snapshot(&meta_node);
         let dict = meta.as_dict().unwrap();
         assert_eq!(dict.get(&key("error_code")), None);
         assert_eq!(dict.get(&key("http_status")), None);
+        // Not the attempts-exhausted call site, so no chain of its own --
+        // this attempt (index 1) gets its own entry appended, not the
+        // earlier attempt's (index 0) re-dated (#668).
+        let attempts = dict.get(&key("attempts")).and_then(Value::as_list).unwrap();
+        assert_eq!(attempts.len(), 2);
+        let second = attempts[1].as_dict().unwrap();
+        assert_eq!(
+            second.get(&key("created_at")),
+            Some(&Value::Str("attempt-1-start".to_string()))
+        );
+        assert_eq!(
+            second.get(&key("error")),
+            Some(&Value::Str("timeout_ms reference vanished".to_string()))
+        );
+        assert_eq!(
+            second.get(&key("fallback_attempts")),
+            Some(&Value::List(Vec::new()))
+        );
 
         // The attempts-exhausted call site: the same chain, now read as
         // this pass's own attempts that actually ended the effect.
@@ -2255,6 +2331,7 @@ mod tests {
             &EffectPath::root(),
             0,
             &NullObserver,
+            Value::None,
             vec![stale_attempt],
             0,
             "All adapter attempts failed".to_string(),

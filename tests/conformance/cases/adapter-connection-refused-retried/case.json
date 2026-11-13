@@ -23,7 +23,7 @@
     },
     {
       "location": "prime.greeting.meta.attempts.1.error",
-      "pattern": "OpenAI-compatible request failed \\(curl exit 7\\) model='m' url=http://127\\.0\\.0\\.1:1/chat/completions: .*?"
+      "pattern": "All adapter attempts failed: \\[\\{'adapter': 'lmstudio', 'model': 'm', 'status': 'failed', 'error': \\\"OpenAI-compatible request failed \\(curl exit 7\\) model='m' url=http://127\\.0\\.0\\.1:1/chat/completions: .*?\\\".*"
     },
     {
       "location": "prime.greeting.meta.attempts.1.fallback_attempts.0.error",

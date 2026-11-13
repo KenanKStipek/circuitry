@@ -1254,14 +1254,18 @@ entry: `created_at`, `completed_at`, `value`, `error`, `fallback_attempts`
 lives inside each of those, not at the entry's own top level), `tokens_sent`
 and `tokens_received`; a prompt has no `expect` to carry. Neither entry
 changes a run's own totals: a prompt's `tokens_sent_total`/
-`tokens_received_total` already summed every attempt before `meta.attempts`
-existed; a tool's `expect: {mode: model}` check spends tokens on an
-attempt that is later retried, and those still don't reach any run total
-on either engine -- the retried attempt's own `meta.attempts` entry is the
-only record of them. No size cap: a prompt's own entry repeats that
-attempt's whole reply. `runtime.state.prompt_sent` shapes only
-`meta.prompt_sent` itself, never a `meta.attempts` entry's `value`. Ported
-in `electricity-vm::exec::tool`/`exec::prompt` the same way.
+`tokens_received_total` already sum every attempt's spend, retried or
+not. A tool's `expect: {mode: model}` check spends tokens on every
+attempt, including one that is later retried; those never reach
+`last_run.totals` on either engine. Each attempt's own `expect.tokens_sent`/
+`tokens_received` is readable inside that attempt's own `meta.attempts`
+entry; the deciding attempt's is also on the node's own `meta.expect`,
+which a parent `dynamic`'s own token sum does walk, so it counts the
+deciding attempt's `expect` spend but not an earlier, retried attempt's.
+No size cap: a prompt's own entry repeats that attempt's whole reply.
+`runtime.state.prompt_sent` shapes only `meta.prompt_sent` itself, never
+a `meta.attempts` entry's `value`. Ported in
+`electricity-vm::exec::tool`/`exec::prompt` the same way.
 
 **Confirmed live node** (full-namespace mode):
 ```json

@@ -2070,28 +2070,15 @@ pub async fn execute_tool<R: ParamsCtx>(
                 observer.write();
                 continue;
             }
-            // Set on failure too (#421), same as success below -- absent,
-            // not 0, when the first attempt is also the last.
-            if attempt_index > 0 {
-                set_leaf(
-                    store,
-                    &meta_node,
-                    "retries_used",
-                    Value::from(i64::from(attempt_index)),
-                );
-                write_attempts(store, &meta_node, &retry_attempts);
-            }
-            if matches!(op.on_error, OnError::Skip | OnError::Continue) {
-                set_leaf(store, &effect_node, "value", Value::None);
-            }
             // `core/tool.py`'s own exception-handler rewrite (`tool.py:
             // 1104-1111`): a raised failure (or a result that failed
             // `expect:`) never reached this attempt's own `Ok(result)`
             // branch above, so the per-attempt reset at the top of this
             // loop already popped `tokens_sent_total`/`.received_total`
             // from `meta` -- carried forward from an earlier attempt that
-            // did report usage, they are written back here so the final
-            // failure still shows the pass's own total, same as cof.
+            // did report usage, they are written back here, before
+            // `retries_used`/`meta.attempts` below, so `attempts` stays
+            // the last key of `meta`, same order cof keeps.
             if let Some(sent) = total_tokens_sent {
                 set_leaf(store, &meta_node, "tokens_sent_total", Value::from(sent));
             }
@@ -2105,6 +2092,20 @@ pub async fn execute_tool<R: ParamsCtx>(
             }
             if total_tokens_sent.is_some() || total_tokens_received.is_some() {
                 observer.record_totals(&store.snapshot(&meta_node));
+            }
+            // Set on failure too (#421), same as success below -- absent,
+            // not 0, when the first attempt is also the last.
+            if attempt_index > 0 {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "retries_used",
+                    Value::from(i64::from(attempt_index)),
+                );
+                write_attempts(store, &meta_node, &retry_attempts);
+            }
+            if matches!(op.on_error, OnError::Skip | OnError::Continue) {
+                set_leaf(store, &effect_node, "value", Value::None);
             }
             observer.effect_complete(
                 &effect_path,
@@ -4294,6 +4295,10 @@ mod tests {
         }
     }
 
+    /// Issue #668: the token totals an earlier, token-reporting attempt
+    /// left behind are restored before `retries_used`/`meta.attempts`
+    /// are written, not after -- `attempts` must stay the last key of
+    /// `meta` on this path too, same as on the success path.
     #[tokio::test]
     async fn a_raised_failure_after_an_earlier_successful_attempt_still_carries_its_tokens_total() {
         let mut tool = tool_op(IndexMap::new());
@@ -4349,6 +4354,7 @@ mod tests {
             meta.get(&Value::from("tokens_received_total")),
             Some(&Value::from(7))
         );
+        assert_eq!(meta.keys().last(), Some(&Value::from("attempts")));
     }
 
     #[tokio::test]
