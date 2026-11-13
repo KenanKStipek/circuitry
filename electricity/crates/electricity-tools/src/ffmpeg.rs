@@ -245,42 +245,43 @@ impl ToolPlugin for FfmpegPlugin {
             env_set: Vec::new(),
         };
 
-        let completed = match process::run_tracked(&cmd, &opts, call.token, call.on_live).await {
-            Ok(completed) => completed,
-            Err(ProcError::NotFound(_)) => {
-                return Err(ToolError {
-                    py_class: PyExc::RuntimeError,
-                    message: "ffmpeg is not installed or not on PATH. Install ffmpeg, or set \
+        let completed =
+            match process::run_tracked(&cmd, &opts, call.token, call.on_live, None, None).await {
+                Ok(completed) => completed,
+                Err(ProcError::NotFound(_)) => {
+                    return Err(ToolError {
+                        py_class: PyExc::RuntimeError,
+                        message: "ffmpeg is not installed or not on PATH. Install ffmpeg, or set \
                               runtime.plugins.ffmpeg.binary."
-                        .to_string(),
-                    cause: ErrorCause::None,
-                });
-            }
-            Err(ProcError::Timeout { .. }) => {
-                return Err(ToolError {
-                    py_class: PyExc::RuntimeError,
-                    message: format!("ffmpeg timed out after {}s", call.timeout_seconds),
-                    cause: ErrorCause::None,
-                });
-            }
-            Err(ProcError::Decode(message)) => {
-                return Err(ToolError {
-                    py_class: PyExc::UnicodeDecodeError,
-                    message,
-                    cause: ErrorCause::None,
-                });
-            }
-            Err(ProcError::Cancelled) => {
-                return Err(ToolError::message("cancelled"));
-            }
-            Err(ProcError::Other { py_class, message }) => {
-                return Err(ToolError {
-                    py_class,
-                    message,
-                    cause: ErrorCause::None,
-                });
-            }
-        };
+                            .to_string(),
+                        cause: ErrorCause::None,
+                    });
+                }
+                Err(ProcError::Timeout { .. }) => {
+                    return Err(ToolError {
+                        py_class: PyExc::RuntimeError,
+                        message: format!("ffmpeg timed out after {}s", call.timeout_seconds),
+                        cause: ErrorCause::None,
+                    });
+                }
+                Err(ProcError::Decode(message)) => {
+                    return Err(ToolError {
+                        py_class: PyExc::UnicodeDecodeError,
+                        message,
+                        cause: ErrorCause::None,
+                    });
+                }
+                Err(ProcError::Cancelled) => {
+                    return Err(ToolError::message("cancelled"));
+                }
+                Err(ProcError::Other { py_class, message }) => {
+                    return Err(ToolError {
+                        py_class,
+                        message,
+                        cause: ErrorCause::None,
+                    });
+                }
+            };
 
         if completed.exit_code != 0 {
             let cmd_str = cmd
@@ -312,6 +313,7 @@ impl ToolPlugin for FfmpegPlugin {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            cost_usd: None,
         })
     }
 
@@ -357,6 +359,9 @@ mod tests {
             secret_headers: &[],
             scrub: None,
             on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
             limited: false,
             confine_to: None,
         }

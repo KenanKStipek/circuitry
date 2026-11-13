@@ -190,7 +190,7 @@ pub(crate) fn merged_env(
 /// `plugins/_subprocess.py::_expand_and_validate` -- `~` expansion plus
 /// the absolute/executable validation; returns `(resolved_path, None)`
 /// when it's fine to run, else `(resolved_path, Some(reason))`.
-fn expand_and_validate(path_str: &str) -> (String, Option<&'static str>) {
+pub(crate) fn expand_and_validate(path_str: &str) -> (String, Option<&'static str>) {
     let expanded = expand_user(path_str);
     let path = Path::new(&expanded);
     if !path.is_absolute() {
@@ -379,7 +379,7 @@ pub(crate) async fn run_binary(
         env_set: Vec::new(),
     };
 
-    let completed = match process::run_tracked(&cmd, &opts, token, on_live).await {
+    let completed = match process::run_tracked(&cmd, &opts, token, on_live, None, None).await {
         Ok(completed) => completed,
         Err(ProcError::NotFound(_)) => {
             return Err(ToolError {
@@ -452,6 +452,7 @@ pub(crate) async fn run_binary(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        cost_usd: None,
     })
 }
 
@@ -672,6 +673,7 @@ mod tests {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            cost_usd: None,
         }
     }
 

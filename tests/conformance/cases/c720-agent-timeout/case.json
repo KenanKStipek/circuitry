@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #720: the agent tool times out mid-session",
+  "description": "`params.session` names an existing session, so the session already has an id when its only turn times out: the effect ends `ok: false` with `meta.raw.session_id`/`transcript`(`null`, no turn completed)/`timed_out: true`, absorbed by `on_error: continue`. The fake ignores SIGTERM and sleeps until the engine kills its whole process group.",
+  "engines": ["python", "electricity"],
+  "cli_args": ["-e", "work_dir=__CASE_DIR__"],
+  "expect": "success",
+  "timeout_seconds": 20
+}
