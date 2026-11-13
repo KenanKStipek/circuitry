@@ -1080,6 +1080,10 @@ def test_resume_and_last_together_are_mutually_exclusive_on_both_engines(
     assert result.stdout.strip() == "Error: --resume and --last are mutually exclusive."
 
 
+def _stash_path(home_dir: Path) -> Path:
+    return home_dir / ".config" / "circuitry" / "last-run.json"
+
+
 @pytest.mark.parametrize("engine", ENGINES)
 def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
     tmp_path: Path, electricity_binary: Path, engine: str,
@@ -1087,7 +1091,12 @@ def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
     """issue #760's own ruling: `--resume last` resumes from the loaded
     `--out` file's own `input.*`, never replaying the stash's `-e`
     values on top of it -- unlike plain `--last`, which replays the
-    whole prior invocation."""
+    whole prior invocation. The stash's own `env_vars` is rewritten
+    between the two runs below (to a different value, then to one with a
+    redacted secret) so this can't pass merely because the stashed and
+    loaded values happen to agree -- a build that *did* replay the
+    stash's `-e` on top would either see the rewritten value or refuse
+    outright on the redacted one, and this asserts neither happens."""
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     case_dir = tmp_path / "case"
@@ -1099,6 +1108,12 @@ def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
     )
     assert first.returncode == 1, (engine, first.stdout, first.stderr)
 
+    stash_path = _stash_path(home_dir)
+    stash = json.loads(stash_path.read_text(encoding="utf-8"))
+    assert stash["env_vars"] == ["unused=original"], stash
+    stash["env_vars"] = ["unused=changed"]
+    stash_path.write_text(json.dumps(stash), encoding="utf-8")
+
     resumed = _run(
         engine, electricity_binary, case_dir, home_dir,
         ["orchestration.yml", "--config", "config.json", "--resume", "last"],
@@ -1106,15 +1121,26 @@ def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
     assert resumed.returncode == 1, (engine, resumed.stdout, resumed.stderr)
     resumed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
     # The loaded state's own `input.unused` survives from the first run
-    # (the saved file already carries it); nothing from the stash's own
-    # `env_vars` is replayed a second time on top -- there is no second
-    # `-e` on this invocation at all for it to come from.
+    # (the saved file already carries it); the stash's own rewritten
+    # `env_vars` is never replayed on top of it.
     assert resumed_state["input"]["unused"] == "original"
 
+    # A redacted secret in the stash's `env_vars` refuses plain `--last`
+    # (`test_last_with_a_redacted_secret_refuses_to_replay_on_both_engines`)
+    # but must not refuse `--resume last`, which never reads `env_vars` at
+    # all -- confirming the skip above isn't an artifact of an unrelated
+    # refusal silently winning instead.
+    stash = json.loads(stash_path.read_text(encoding="utf-8"))
+    stash["env_vars"] = ["OPENAI_API_KEY=***REDACTED***"]
+    stash_path.write_text(json.dumps(stash), encoding="utf-8")
 
-
-def _stash_path(home_dir: Path) -> Path:
-    return home_dir / ".config" / "circuitry" / "last-run.json"
+    resumed_again = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert resumed_again.returncode == 1, (engine, resumed_again.stdout, resumed_again.stderr)
+    resumed_again_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert resumed_again_state["input"]["unused"] == "original"
 
 
 #: A document with a declared input and one step whose own `uuid` output
