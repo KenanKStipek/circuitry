@@ -60,7 +60,6 @@ use crate::params::{
     ParamsCtx, RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params,
     render_params_json,
 };
-#[cfg(test)]
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
@@ -489,6 +488,63 @@ fn set_leaf(store: &crate::Store, node: &crate::NodeRef, key: &str, value: Value
     store.set_leaf(node, Value::Str(key.to_string()), value);
 }
 
+/// *node*'s own *key*, materialized (`Value::None` when absent) --
+/// `core/tool.py`'s own plain `meta.get(key)` reads, for building a
+/// `meta.attempts` entry -- `exec::use_::read_key`'s own counterpart.
+fn read_key(store: &crate::Store, node: &crate::NodeRef, key: &str) -> Value {
+    let slot = node.borrow().get(&Value::Str(key.to_string())).cloned();
+    match slot {
+        None => Value::None,
+        Some(Slot::Value(v)) => v,
+        Some(Slot::Node(child)) => store.snapshot(&child),
+    }
+}
+
+fn has_key(node: &crate::NodeRef, key: &str) -> bool {
+    node.borrow().contains_key(&Value::Str(key.to_string()))
+}
+
+/// One `meta.attempts` entry for a tool -- `core/tool.py::_attempt_entry`'s
+/// counterpart. `exit_code`/`status_code` are included only when this
+/// attempt's own `meta` carries them -- today, every tool sets
+/// `exit_code` (`None` for a non-process plugin) and only the
+/// HTTP-family plugins ever set `status_code`.
+fn attempt_entry(
+    store: &crate::Store,
+    meta_node: &crate::NodeRef,
+    created_at: Value,
+    completed_at: Value,
+    value: Value,
+    error: Option<String>,
+) -> Value {
+    let mut entry = Dict::new();
+    entry.insert(Value::from("created_at"), created_at);
+    entry.insert(Value::from("completed_at"), completed_at);
+    entry.insert(Value::from("value"), value);
+    entry.insert(
+        Value::from("error"),
+        error.map(Value::Str).unwrap_or(Value::None),
+    );
+    entry.insert(Value::from("expect"), read_key(store, meta_node, "expect"));
+    if has_key(meta_node, "exit_code") {
+        entry.insert(Value::from("exit_code"), read_key(store, meta_node, "exit_code"));
+    }
+    if has_key(meta_node, "status_code") {
+        entry.insert(
+            Value::from("status_code"),
+            read_key(store, meta_node, "status_code"),
+        );
+    }
+    Value::Dict(entry)
+}
+
+/// `core/tool.py::_write_attempts` -- `meta.attempts`, always written as
+/// `meta`'s last key -- same contract as `exec::use_::write_attempts`.
+fn write_attempts(store: &crate::Store, meta_node: &crate::NodeRef, attempts: &[Value]) {
+    pop_leaf(meta_node, "attempts");
+    set_leaf(store, meta_node, "attempts", Value::List(attempts.to_vec()));
+}
+
 /// Everything rendering a tool's `params`/`params_json`/top-level
 /// `prompt`/`model` (`core/tool.py::ToolRuntime.execute`'s own render
 /// block, up to and including `rendered = {**top_level, **params}`) can
@@ -587,6 +643,10 @@ pub async fn execute_tool<R: ParamsCtx>(
     let meta_node = store
         .ensure_dict(&effect_node, Value::Str("meta".to_string()))
         .map_err(|err| VmError::tool(err.to_string()))?;
+    // Cleared here, once per pass, not per attempt -- a pass that ends
+    // up making only one attempt must not keep a reused node's earlier
+    // pass's meta.attempts around (#668).
+    pop_leaf(&meta_node, "attempts");
 
     // `store.fire_effect_start(self.defn.name, node)` -- before
     // `require_tool`, so a denial below leaves this call's own
@@ -604,6 +664,10 @@ pub async fn execute_tool<R: ParamsCtx>(
     }
 
     let mut next_delay_ms = base_backoff_ms;
+    // Every attempt this pass makes, oldest first (#668) -- written to
+    // meta.attempts only once more than one attempt has run, exactly
+    // when meta.retries_used is also set.
+    let mut retry_attempts: Vec<Value> = Vec::new();
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -618,8 +682,9 @@ pub async fn execute_tool<R: ParamsCtx>(
         // The per-attempt `meta` reset, in Python's own order. `created_at`
         // is set only on this pass's first attempt (#421): the start of a
         // retried tool's final attempt is not when it started.
+        let attempt_started_at = now_iso();
         if attempt_index == 0 {
-            set_leaf(store, &meta_node, "created_at", now_iso());
+            set_leaf(store, &meta_node, "created_at", attempt_started_at.clone());
         }
         set_leaf(store, &meta_node, "completed_at", Value::None);
         set_leaf(
@@ -678,6 +743,12 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `timeout_ms: {from: ...}` with no usable value is never
         // retried -- a retry reads the same state.
         let mut timeout_unresolved = false;
+        // This attempt's own `meta.attempts` entry value (#668): `None`
+        // unless dispatch actually reached a result -- the effect
+        // node's own `value` leaf isn't reset per attempt, so reading
+        // it back here on an early failure could show a reused node's
+        // earlier pass.
+        let mut entry_value = Value::None;
 
         match render_tool_call(
             name,
@@ -856,6 +927,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                     Err(err) => failure = Some(err),
                                     Ok(result) => {
                                         let value_for_expect = result.value.clone();
+                                        entry_value = value_for_expect.clone();
                                         set_leaf(store, &effect_node, "value", result.value);
                                         match result.stdout {
                                             // `runtime.state.parsed_stdout: drop`
@@ -1164,7 +1236,8 @@ pub async fn execute_tool<R: ParamsCtx>(
             }
         }
 
-        set_leaf(store, &meta_node, "completed_at", now_iso());
+        let completed_at = now_iso();
+        set_leaf(store, &meta_node, "completed_at", completed_at.clone());
 
         if let Some(failure) = failure {
             set_leaf(
@@ -1173,6 +1246,14 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "error",
                 Value::Str(failure.message.clone()),
             );
+            retry_attempts.push(attempt_entry(
+                store,
+                &meta_node,
+                attempt_started_at.clone(),
+                completed_at.clone(),
+                entry_value.clone(),
+                Some(failure.message.clone()),
+            ));
             let is_last_attempt = attempt_index + 1 >= max_attempts;
             // `core/tool.py::ToolRuntime._is_retryable_failure` -- every
             // non-HTTP-family provider (every provider this crate can
@@ -1206,6 +1287,10 @@ pub async fn execute_tool<R: ParamsCtx>(
                     attempt_index,
                     base_backoff_ms,
                 );
+                // The finished attempts, readable (and on --live-state)
+                // before the next one starts (#668).
+                write_attempts(store, &meta_node, &retry_attempts);
+                observer.write();
                 continue;
             }
             // Set on failure too (#421), same as success below -- absent,
@@ -1217,6 +1302,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                     "retries_used",
                     Value::from(i64::from(attempt_index)),
                 );
+                write_attempts(store, &meta_node, &retry_attempts);
             }
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
@@ -1239,6 +1325,14 @@ pub async fn execute_tool<R: ParamsCtx>(
             return Ok(());
         }
 
+        retry_attempts.push(attempt_entry(
+            store,
+            &meta_node,
+            attempt_started_at,
+            completed_at,
+            entry_value,
+            None,
+        ));
         if attempt_index > 0 {
             set_leaf(
                 store,
@@ -1246,6 +1340,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "retries_used",
                 Value::from(i64::from(attempt_index)),
             );
+            write_attempts(store, &meta_node, &retry_attempts);
         }
         observer.effect_complete(
             &effect_path,

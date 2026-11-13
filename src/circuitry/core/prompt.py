@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import logging
@@ -122,6 +123,39 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     if isinstance(exc, (AnswerParseError, SchemaValidationError)):
         return RetryInfo(retryable=True)
     return classify_exception(exc)
+
+
+def _attempt_entry(
+    *,
+    created_at: str,
+    completed_at: str,
+    value: Any,
+    error: str | None,
+    fallback_attempts: list[dict[str, Any]],
+    tokens_sent: int | None,
+    tokens_received: int | None,
+) -> dict[str, Any]:
+    """One ``meta.attempts`` entry for a prompt: ``core.use._attempt_entry``'s
+    counterpart, with a prompt's own per-attempt fields in place of a use
+    effect's child-run ones. A prompt has no ``expect`` to carry (see
+    :class:`PromptDefinition`), unlike ``tool``'s own entry.
+    """
+    return {
+        "created_at": created_at,
+        "completed_at": completed_at,
+        "value": copy.deepcopy(value),
+        "error": error,
+        "fallback_attempts": copy.deepcopy(fallback_attempts),
+        "tokens_sent": tokens_sent,
+        "tokens_received": tokens_received,
+    }
+
+
+def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    """``meta.attempts``, always written as the last key of *meta* -- same
+    contract as ``core.use._write_attempts``."""
+    meta.pop("attempts", None)
+    meta["attempts"] = list(attempts)
 
 
 class _PromptSpinner:
@@ -357,13 +391,28 @@ class PromptRuntime:
                   tokens_sent, tokens_received,
                   tokens_sent_total, tokens_received_total, error, dry_run,
                   fallback_attempts, fallback_recovered, retries_used?,
-                  complexity?, assets?, finish_reason?, warnings?, cost_usd?}
+                  complexity?, assets?, finish_reason?, warnings?, cost_usd?,
+                  attempts?}
 
     ``meta.created_at`` is the start of this pass's first attempt, not reset
     on a retry. ``meta.retries_used`` is set on both a successful and a
     failed outcome, to the index of the attempt that decided the outcome;
     it's absent, not 0, when the first attempt is also the last (#421) —
     same rule as a tool effect (core.tool.ToolRuntime).
+
+    ``meta.attempts`` is present exactly when ``meta.retries_used`` is: one
+    entry per attempt this pass made, oldest first, the last entry
+    repeating the fields that decided the outcome. Each entry carries its
+    own ``created_at``, ``completed_at``, ``value``, ``error``,
+    ``fallback_attempts`` (that attempt's own provider tries — a #660
+    ``error_code``/``http_status`` lives inside each of those, not at the
+    entry's own top level), ``tokens_sent`` and ``tokens_received``. It is
+    cleared at the start of every pass, so a reused node never shows an
+    earlier pass's attempts, and it is always the last key of ``meta``. A
+    prompt has no ``expect`` to carry, unlike a tool or use effect's own
+    entry (core.tool.ToolRuntime, core.use.UseRuntime). The token totals
+    below already include every attempt recorded here — ``meta.attempts``
+    adds no new spend, just a readable history of it.
 
     ``assets`` (one ``{kind, ref, size?, sha256?, media_type?}`` per image
     sent — never the bytes), ``finish_reason`` (when the provider reports
@@ -562,6 +611,10 @@ class PromptRuntime:
         meta.pop("retries_used", None)
         meta.pop("decomposition", None)
         meta.pop("answer", None)
+        # Cleared here, once per pass, not per attempt -- a pass that ends
+        # up making only one attempt must not keep a reused node's earlier
+        # pass's meta.attempts around (#668).
+        meta.pop("attempts", None)
         # Written only when they have content, so clear what an earlier
         # iteration of an unnamed loop (same store) left behind.
         for key in (
@@ -641,6 +694,12 @@ class PromptRuntime:
         attempts_meta: list[dict[str, Any]] = []
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        # Every attempt this pass makes, oldest first (#668) -- written to
+        # meta.attempts only once more than one attempt has run, exactly
+        # when meta.retries_used is also set. Named apart from `attempts`
+        # (the adapter/model fallback chain `_build_attempts` returns,
+        # below) -- the two are unrelated lists of the same generic word.
+        retry_attempts: list[dict[str, Any]] = []
         # Holds the retry loop's own index once it starts, so the except
         # block below can report retries_used even when the raise came from
         # inside the loop (0 if the failure happened before the loop ever
@@ -733,6 +792,8 @@ class PromptRuntime:
                         else:
                             _console.print(retry_line)
 
+                attempt_started_at = _now_iso()
+
                 # Per attempt, from the state this attempt sees (#564). A
                 # reference that can't resolve fails the effect outright
                 # instead of retrying: a retry reads the same state.
@@ -812,6 +873,20 @@ class PromptRuntime:
                     if _attempt > 0:
                         meta["retries_used"] = _attempt
 
+                    retry_attempts.append(
+                        _attempt_entry(
+                            created_at=attempt_started_at,
+                            completed_at=meta["completed_at"],
+                            value=node["value"],
+                            error=None,
+                            fallback_attempts=attempts_meta,
+                            tokens_sent=res.tokens_sent,
+                            tokens_received=res.tokens_received,
+                        )
+                    )
+                    if _attempt > 0:
+                        _write_attempts(meta, retry_attempts)
+
                     if self.verbose:
                         elapsed = time.monotonic() - t0
                         suffix = _elapsed_str(elapsed)
@@ -846,6 +921,26 @@ class PromptRuntime:
                 # the fallback chain's own ordering already decided which
                 # failure gets the final word on this pass.
                 retry_info = _retry_info_for(generation_error)
+                # generation_error is never None here: the branch above
+                # already returned on `generation_error is None and res is
+                # not None`, so reaching this point means the pass's whole
+                # fallback chain failed.
+                last_fallback = attempts_meta[-1] if attempts_meta else None
+                retry_attempts.append(
+                    _attempt_entry(
+                        created_at=attempt_started_at,
+                        completed_at=_now_iso(),
+                        value=None,
+                        error=redact(str(generation_error)),
+                        fallback_attempts=attempts_meta,
+                        tokens_sent=(
+                            last_fallback.get("tokens_sent") if last_fallback else None
+                        ),
+                        tokens_received=(
+                            last_fallback.get("tokens_received") if last_fallback else None
+                        ),
+                    )
+                )
                 if not retry_info.retryable or _attempt >= max_attempts - 1:
                     last_status = attempts_meta[-1]["status"] if attempts_meta else ""
                     if generation_error is not None and last_status in (
@@ -879,6 +974,11 @@ class PromptRuntime:
                         self.cb_error(line)
                     else:
                         _console.print(line)
+                # The finished attempts, readable (and on --live-state)
+                # before the next one starts (#668) -- another attempt
+                # always follows past this point, whatever `_attempt` is.
+                _write_attempts(meta, retry_attempts)
+                store.publish()
                 next_delay_ms = next_backoff_delay_ms(
                     retry_info, attempt_index=_attempt, base_ms=backoff_ms
                 )
@@ -907,6 +1007,11 @@ class PromptRuntime:
             # above 0".
             if _attempt > 0:
                 meta["retries_used"] = _attempt
+                # Resynced to the completed_at just set above, which lands
+                # a little later than the one the failing attempt recorded
+                # for itself inside the loop (#668).
+                retry_attempts[-1]["completed_at"] = meta["completed_at"]
+                _write_attempts(meta, retry_attempts)
             if self.defn.on_error in ("skip", "continue"):
                 # A reused node (an unnamed loop's prior pass, a resume)
                 # must not let that pass's value survive next to this
