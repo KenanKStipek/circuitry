@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #723",
+  "description": "The `cel` tool's value for a plain boolean expression -- one acceptance item of #723's own list (booleans, lists, maps and a timestamp).",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

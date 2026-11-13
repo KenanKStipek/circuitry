@@ -168,6 +168,28 @@ pub struct PromptOp {
     pub retries: Option<RetryPolicy>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `split.budget_tokens`, when the effect's own `split:` block sets it
+    /// (issue #672/#682): outranks `runtime.complexity.splitting.models`/
+    /// `max_input_tokens`, and splits even when the runtime switch is off.
+    pub split_budget_tokens: Option<i64>,
+    /// `split.enabled` (issue #682): `Some(false)` always opts this effect
+    /// out, even with the runtime switch on; `Some(true)`/`None` follow
+    /// the runtime switch (`split_budget_tokens` above still splits
+    /// regardless, Python's own precedence).
+    pub split_enabled: Option<bool>,
+    /// `split.max_parts` (issue #682): overrides `runtime.complexity.
+    /// splitting.max_parts` for this effect's own widest fan-out.
+    pub split_max_parts: Option<i64>,
+    /// `split.separator` (issue #682): the native `join` merge's own
+    /// joiner for a `text` prompt, overriding the default blank line.
+    pub split_separator: Option<String>,
+    /// `split.merge.template` (issue #682): a reduce prompt's own Mustache
+    /// template, `parts` bound to the collected part values -- required
+    /// for any `prompt_type` the native `join`/`concat` rule doesn't
+    /// cover. Forwarded onto both generated prompts unrewritten (every
+    /// level rewrites its own copy against its own loop's collected
+    /// value).
+    pub split_merge_template: Option<String>,
 }
 
 /// `ToolDefinition`, minus `name`/`on_error`/`enabled`.
@@ -187,11 +209,35 @@ pub struct ToolOp {
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `http`'s own literal `params.headers` entries whose value is a
+    /// `{secret: <name>, prefix?: <text>}` reference (issue #725), by
+    /// header name -- extracted once, at compile time, from the
+    /// document's own literal `params.headers` only (never from
+    /// `params_json`, which the compiler's own placement check refuses
+    /// to carry one in at all). Empty for every provider but `http`,
+    /// and for `http` whenever its own `headers` names no secret.
+    pub secret_headers: IndexMap<String, crate::secrets::SecretRef>,
     /// `ToolDefinition.prompt_file`: an `agent` effect's `params.prompt` of
     /// `{file: {from: <state path>}, within: <dir>}` (issue #591), compiled
     /// for parity with `cof check`; `prompt` is then absent from `params`.
-    /// electricity refuses the cof-only `agent` plugin, so nothing reads it.
+    /// `electricity_tools::agent::AgentPlugin` reads it, once per dispatch,
+    /// strictly before `params_json` is rendered (issue #720).
     pub prompt_file: Option<DispatchFile>,
+    /// `ToolDefinition.limited`: true for a tool effect compiled from a
+    /// document not run by path (a `use`-nested child, a reflector or
+    /// decomposition plan, stdin, an SDK string). An `http` effect on a
+    /// limited document may never name `save_to`/`within`
+    /// (`core/tool.py::reject_limited_save_to`'s own check, ported), whether
+    /// from its literal `params`, a rendered `params_json` overlay, or a
+    /// profile that switched the provider to `http`, checked at dispatch
+    /// against the fully rendered params. The `systemone` provider's file
+    /// access is confined by this too.
+    pub limited: bool,
+    /// `ToolDefinition.confine_to`: the project a limited `systemone`
+    /// effect's `within` must stay inside, from the document's own
+    /// `confinement_root`; `None` when not limited, or when a limited
+    /// document has no project of its own.
+    pub confine_to: Option<String>,
 }
 
 /// `UseDefinition.path`/`.orchestration`/`.inline` — exactly one present
@@ -207,6 +253,23 @@ pub enum UseSource {
     Inline(TemplateText),
 }
 
+/// `core/resume.py::ResumeMode` -- a `use`'s or a `dynamic`'s own
+/// `resume:` (#590), carried into the compiled IR (issue #727) so
+/// `--resume` can tell a saved node that did not finish without error
+/// apart: `Continue` (the default) reuses it -- a `use`'s own finished
+/// child record, when one is saved (`runtime.state.record_children`),
+/// or a `dynamic` continuing inside its own unfinished scope; `Restart`
+/// drops whatever was saved and runs fresh, like a first attempt.
+/// `UseOp::resume_mode` carries a `use`'s own value; `Op::resume_mode`
+/// carries a `dynamic`'s (every other `NodeKind` leaves it at
+/// `Continue`, never read).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Default)]
+pub enum ResumeMode {
+    #[default]
+    Continue,
+    Restart,
+}
+
 /// `UseDefinition`, minus `name`/`on_error`/`enabled`.
 #[derive(Debug, Clone, Serialize)]
 pub struct UseOp {
@@ -215,6 +278,8 @@ pub struct UseOp {
     /// by `path:` gets this trust; electricity has no library, so no child is
     /// ever limited by being resolved through one.
     pub parent_trusted: bool,
+    /// `UseDefinition.resume` (#590/#727): `continue` or `restart`.
+    pub resume_mode: ResumeMode,
     pub source: UseSource,
     pub inputs: Option<ParamNode>,
     /// `outputs`, already normalized (DESIGN.md §4 step 3) to a name ->

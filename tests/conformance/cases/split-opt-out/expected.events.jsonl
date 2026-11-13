@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-11-10T03:33:31.771Z","ev":"run_start","run_id":"d4917920-76c1-44a4-88f9-a55160f46865","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":15864}
+{"v":1,"seq":1,"ts":"2026-11-10T03:33:31.773Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-10T03:33:31.773Z","ev":"start","id":1,"path":"prime.big"}
+{"v":1,"seq":3,"ts":"2026-11-10T03:33:31.775Z","ev":"end","id":1,"path":"prime.big","ok":true,"ms":2}
+{"v":1,"seq":4,"ts":"2026-11-10T03:33:31.775Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":5,"ts":"2026-11-10T03:33:31.775Z","ev":"run_end","ok":true}

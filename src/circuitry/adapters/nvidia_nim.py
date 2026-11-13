@@ -34,11 +34,14 @@ class NvidiaNimAdapter:
     # to "" via runtime.adapters.nvidia-nim.api_key_env in config.json.
     api_key_env: str = "NIM_API_KEY"
 
+    streams: bool = True
+
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
             api_key_env=self.api_key_env,
             default_model=self.default_model,
+            streams=self.streams,
         )
 
     def generate(

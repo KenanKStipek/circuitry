@@ -127,7 +127,9 @@ def test_generate_with_mocked_transport_passes_conformance(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = build_adapter(adapter_name=name, runtime={})
+    adapter = build_adapter(
+        adapter_name=name, runtime={"adapters": {name: {"stream": False}}}
+    )
     result = adapter.generate(model="any-model", prompt="ping")
 
     assert result.text == f"hi from {name}"
@@ -176,7 +178,9 @@ def test_self_hosted_generate_succeeds_without_api_key(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = build_adapter(adapter_name="vllm", runtime={})
+    adapter = build_adapter(
+        adapter_name="vllm", runtime={"adapters": {"vllm": {"stream": False}}}
+    )
     result = adapter.generate(model="my-local-model", prompt="ping")
     assert result.text == "local-llm"
     assert "Authorization" not in captured["headers"]
@@ -206,6 +210,7 @@ def test_nvidia_nim_can_disable_auth_via_runtime_override(
                 "nvidia-nim": {
                     "api_key_env": "",
                     "base_url": "http://localhost:8000/v1",
+                    "stream": False,
                 }
             }
         },

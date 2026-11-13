@@ -284,6 +284,14 @@ mod tests {
             config: &Value::None,
             token: &token,
             armed: false,
+            secret_headers: &[],
+            scrub: None,
+            on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
+            limited: false,
+            confine_to: None,
         };
         tool.execute(params, &call).await
     }

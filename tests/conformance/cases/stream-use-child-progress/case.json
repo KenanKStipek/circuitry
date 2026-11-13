@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #674: a streamed prompt inside a use child fires progress namespaced under the parent",
+  "description": "A reply's `chunks` delivers each piece as one delta from inside a `use` child; the resulting `progress` line carries the parent's own path (`prime.sub.greeting`), the same way the child's `start`/`end` events already do.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

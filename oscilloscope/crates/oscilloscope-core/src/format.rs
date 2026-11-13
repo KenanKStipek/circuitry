@@ -46,6 +46,58 @@ pub fn format_duration(secs: f64) -> String {
     format!("{}d{:02}h", hours_total / 24, hours_total % 24)
 }
 
+/// A Signal chart's own second mark (issue #734): every second
+/// shown, never a raw count past a minute -- `0s`/`0.5s` (a decimal
+/// only when `secs` itself isn't a whole second, the same as
+/// `format_duration` already shows under a minute), `13m33s` from a
+/// minute, `1h02m03s` from an hour, with the hour count never
+/// padded or rolled into a further day unit the way
+/// `format_duration` does. Rounds `secs` to whole seconds once,
+/// directly, the same "never round an already-rounded value again"
+/// rule `format_duration` follows.
+pub fn format_signal_elapsed(secs: f64) -> String {
+    let secs = secs.max(0.0);
+    let tenths = (secs * 10.0).round() as u64;
+    if tenths < 600 {
+        return if tenths % 10 == 0 {
+            format!("{}s", tenths / 10)
+        } else {
+            format!("{}.{}s", tenths / 10, tenths % 10)
+        };
+    }
+    format_signal_elapsed_minutes_and_up(secs)
+}
+
+/// The Combined Totals' own `Peak … at` (issue #734): the same
+/// `MMmSSs`/`HhMMmSSs` text from a minute on, but under a minute it
+/// always keeps its own decimal (`3.0s`, `at 0.5s`), the reading
+/// Peak has always shown -- unlike the second marks, which drop the
+/// decimal on a whole second.
+pub fn format_signal_elapsed_with_decimal(secs: f64) -> String {
+    let secs = secs.max(0.0);
+    let tenths = (secs * 10.0).round() as u64;
+    if tenths < 600 {
+        return format!("{}.{}s", tenths / 10, tenths % 10);
+    }
+    format_signal_elapsed_minutes_and_up(secs)
+}
+
+/// The minute-and-up tail both of the above share: rounds `secs` to
+/// whole seconds once, directly, the same "never round an
+/// already-rounded value again" rule `format_duration` follows.
+fn format_signal_elapsed_minutes_and_up(secs: f64) -> String {
+    let total_seconds = secs.round() as u64;
+    if total_seconds < 3600 {
+        let minutes = total_seconds / 60;
+        let seconds = total_seconds % 60;
+        return format!("{minutes}m{seconds:02}s");
+    }
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    format!("{hours}h{minutes:02}m{seconds:02}s")
+}
+
 /// One unit's own value, formatted by the "below 100: one decimal,
 /// 100 or more: no decimal" rule -- `None` means the rounded value
 /// crossed 1000 in this unit and belongs one unit up instead (a
@@ -69,30 +121,92 @@ fn format_unit_value(value: f64) -> Option<String> {
     }
 }
 
-/// `369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`, `412 kt`. Rounding carries
-/// into the next unit (999,960 tokens -> `1.0 Mt`, not `1000 kt`).
-pub fn format_tokens(n: u64) -> String {
-    const UNITS: [(f64, &str); 3] = [(1e9, "Gt"), (1e6, "Mt"), (1e3, "kt")];
+/// Letters for 1,000-token scaling (issue #715), shared by every
+/// count that carries a unit (`kt`/`Mt`/`Gt`/`Tt`, [`format_tokens`])
+/// and by the arrows' own unit-less form (`k`/`M`/`G`/`T`,
+/// [`format_tokens_arrow`]) -- lower `k` for kilo, as SI has it,
+/// upper for the rest.
+const TOKEN_SCALE: [(f64, &str); 4] = [(1e12, "T"), (1e9, "G"), (1e6, "M"), (1e3, "k")];
+
+/// The value and scale letter both [`format_tokens`] and
+/// [`format_tokens_arrow`] print, so the two can never round or
+/// carry differently -- an empty letter means `n` is under 1,000
+/// and prints plain.
+fn scale_tokens(n: u64) -> (String, &'static str) {
     let value = n as f64;
-    for (i, &(scale, suffix)) in UNITS.iter().enumerate() {
+    for (i, &(scale, letter)) in TOKEN_SCALE.iter().enumerate() {
         if value < scale {
             continue;
         }
-        match format_unit_value(value / scale) {
-            Some(formatted) => return format!("{formatted} {suffix}"),
-            None => {
-                // Carried past this unit's own top -- one unit up
-                // from here always exists when this branch can be
-                // reached (`i == 0`, Gt, never overflows `u64` into
-                // a fourth unit at any token count worth showing).
-                let (up_scale, up_suffix) = UNITS[i.saturating_sub(1)];
-                let up = format_unit_value(value / up_scale)
-                    .unwrap_or_else(|| format!("{:.0}", value / up_scale));
-                return format!("{up} {up_suffix}");
-            }
+        if let Some(formatted) = format_unit_value(value / scale) {
+            return (formatted, letter);
         }
+        // Carried past this unit's own top -- one unit up from here
+        // always exists when this branch can be reached (`i == 0`,
+        // `Tt`, which no real token count ever reaches: it would
+        // take over a quadrillion tokens).
+        let (up_scale, up_letter) = TOKEN_SCALE[i.saturating_sub(1)];
+        let up = format_unit_value(value / up_scale)
+            .unwrap_or_else(|| format!("{:.0}", value / up_scale));
+        return (up, up_letter);
     }
-    format!("{n} t")
+    (n.to_string(), "")
+}
+
+/// `369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`, `412 kt`, `1.0 Tt`.
+/// Rounding carries into the next unit (999,960 tokens -> `1.0 Mt`,
+/// not `1000 kt`).
+pub fn format_tokens(n: u64) -> String {
+    let (value, letter) = scale_tokens(n);
+    if letter.is_empty() {
+        format!("{value} t")
+    } else {
+        format!("{value} {letter}t")
+    }
+}
+
+/// The arrows' own unit-less form (issue #715, `design/tui-design.md`
+/// §3.5's "Arrows carry no unit"): `212`, `1.2k`, `35.4M`, `1.2G` --
+/// the same scale and rounding as [`format_tokens`], just without
+/// its trailing ` t`/` kt`/... unit.
+pub fn format_tokens_arrow(n: u64) -> String {
+    let (value, letter) = scale_tokens(n);
+    format!("{value}{letter}")
+}
+
+/// `41k`, `200k`, `900` -- the agent block's own compact context
+/// figure (issue #703: `ctx 41k`, `/200k`), rounded to the nearest
+/// thousand once `n` reaches one; below that, the plain number with
+/// no suffix at all, since a context window never runs that small
+/// in practice but a count of zero or a few tokens must still read
+/// as itself, not as `0k`.
+pub fn format_tokens_k(n: u64) -> String {
+    if n >= 1000 {
+        format!("{}k", (n as f64 / 1000.0).round() as u64)
+    } else {
+        n.to_string()
+    }
+}
+
+/// The step, in seconds, between a Signal chart's own second marks
+/// (issue #734) -- the smallest of `1, 2, 5, 10, 30, 60, 300, 600,
+/// 1800, 3600` wide enough that two consecutive marks' own labels
+/// (`format_signal_elapsed`'s own text, at its widest for the
+/// farthest mark this row will ever draw) never run into each
+/// other at `cols_per_second` columns per second -- tried in
+/// increasing order since a finer step always reads better once it
+/// fits. `max_elapsed_s` is the farthest mark's own time, not the
+/// one about to be drawn: a label only grows wider as the run goes
+/// on, so the step has to fit the widest one the row will ever show,
+/// not just the current one, or a later, wider label would overlap
+/// a step chosen for an earlier, narrower one.
+pub fn signal_mark_step_s(cols_per_second: u64, max_elapsed_s: f64) -> u64 {
+    let label_len = format_signal_elapsed(max_elapsed_s).chars().count() as u64;
+    const CANDIDATES: [u64; 10] = [1, 2, 5, 10, 30, 60, 300, 600, 1800, 3600];
+    CANDIDATES
+        .into_iter()
+        .find(|&step| step * cols_per_second.max(1) > label_len)
+        .unwrap_or(3600)
 }
 
 /// A store's own share of a total, as a percentage (issue #641):
@@ -106,6 +220,21 @@ pub fn format_share_pct(share_pct: f64) -> String {
     } else {
         format!("{share_pct:.0}%")
     }
+}
+
+/// A real dotted path, relative to `ancestor_path`, as a " › "-joined
+/// breadcrumb (`reviews › iter_1 › review`) -- the Store screen's own
+/// table row label (relative to the whole run, issue #695) and the
+/// Signal's own step breadcrumb (`screens::signal_breadcrumb`), both
+/// built by calling this with a different `ancestor_path` rather than
+/// a second, possibly-diverging copy of the stripping rule. `path`
+/// unchanged if it doesn't actually start with `ancestor_path` (never
+/// expected, since every path this is called with always descends
+/// from the tree it was read out of).
+pub fn path_breadcrumb_relative_to(path: &str, ancestor_path: &str) -> String {
+    let prefix = format!("{ancestor_path}.");
+    let relative = path.strip_prefix(prefix.as_str()).unwrap_or(path);
+    relative.replace('.', " \u{203a} ")
 }
 
 /// Resolves a UTC instant to a local calendar time (DESIGN.md's
@@ -131,51 +260,6 @@ impl ClockZone for chrono::FixedOffset {
 pub fn format_clock_time(ts: &str, zone: &dyn ClockZone) -> Option<String> {
     let parsed = chrono::DateTime::parse_from_rfc3339(ts).ok()?;
     let utc = parsed.with_timezone(&chrono::Utc);
-    Some(zone.local(utc).format("%H:%M:%S").to_string())
-}
-
-/// The Time screen's own clock axis: the round tick interval, in
-/// seconds, that keeps labels about `target_columns` columns apart
-/// over `span_s` spread across `width` columns -- the smallest of a
-/// single candidate list (1, 2, 5, 10, 15 or 30 seconds; 1, 2, 5, 10,
-/// 15 or 30 minutes; 1, 2, 3, 4, 6, 12 or 24 hours) that keeps ticks
-/// at least that far apart; beyond a day, the smallest whole number
-/// of days that still does. Spacing alone picks the candidate -- a
-/// short span still chosen sub-minute even when a round minute also
-/// exists inside it. Only a whole number of hours that divides a day
-/// evenly is ever offered: a 5h, 7h or 9h tick would land on a
-/// different local clock time every day, and drift further across a
-/// daylight-saving change -- `time::next_round_local_time` is what
-/// then keeps each one on its own local midnight, including across
-/// such a change and into a further whole day.
-pub fn clock_tick_seconds(span_s: f64, width: usize, target_columns: usize) -> f64 {
-    const CANDIDATES_S: [f64; 12] = [
-        1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0, 900.0, 1800.0,
-    ];
-    const HOUR_DIVISORS_S: [f64; 7] = [3600.0, 7200.0, 10800.0, 14400.0, 21600.0, 43200.0, 86400.0];
-    let width = width.max(1) as f64;
-    let seconds_per_column = (span_s.max(0.0) / width).max(f64::MIN_POSITIVE);
-    let target_columns = target_columns.max(1) as f64;
-    for candidate in CANDIDATES_S.into_iter().chain(HOUR_DIVISORS_S) {
-        if candidate / seconds_per_column >= target_columns {
-            return candidate;
-        }
-    }
-    let days = (target_columns * seconds_per_column / 86400.0)
-        .ceil()
-        .max(1.0);
-    days * 86400.0
-}
-
-/// The midpoint between `start_ts` and `end_ts`, formatted the same
-/// way [`format_clock_time`] formats either end (the Cost screen's
-/// own chart axis, DESIGN.md: "a clock axis from the run's start to
-/// now") -- `None` when either timestamp fails to parse.
-pub fn midpoint_clock_time(start_ts: &str, end_ts: &str, zone: &dyn ClockZone) -> Option<String> {
-    let start = chrono::DateTime::parse_from_rfc3339(start_ts).ok()?;
-    let end = chrono::DateTime::parse_from_rfc3339(end_ts).ok()?;
-    let mid = start + (end - start) / 2;
-    let utc = mid.with_timezone(&chrono::Utc);
     Some(zone.local(utc).format("%H:%M:%S").to_string())
 }
 
@@ -311,45 +395,38 @@ mod tests {
         assert_eq!(format_tokens(1_000), "1.0 kt");
         assert_eq!(format_tokens(1_000_000), "1.0 Mt");
         assert_eq!(format_tokens(1_000_000_000), "1.0 Gt");
+        assert_eq!(format_tokens(1_000_000_000_000), "1.0 Tt");
     }
 
     #[test]
-    fn clock_tick_picks_the_smallest_candidate_that_keeps_ticks_apart() {
-        // 80 columns is this crate's own typical timeline width.
-        assert_eq!(clock_tick_seconds(30.0, 80, 10), 5.0);
-        assert_eq!(clock_tick_seconds(120.0, 80, 10), 15.0);
-        assert_eq!(clock_tick_seconds(600.0, 80, 10), 120.0);
-        assert_eq!(clock_tick_seconds(1_200.0, 80, 10), 300.0);
-        assert_eq!(clock_tick_seconds(2_400.0, 80, 10), 300.0);
-        assert_eq!(clock_tick_seconds(3_600.0, 80, 10), 600.0);
-        assert_eq!(clock_tick_seconds(7_200.0, 80, 10), 900.0);
-        assert_eq!(clock_tick_seconds(14_400.0, 80, 10), 1800.0);
-        assert_eq!(clock_tick_seconds(21_600.0, 80, 10), 3600.0);
+    fn tokens_scale_into_tt() {
+        assert_eq!(format_tokens(2_100_000_000_000), "2.1 Tt");
+        assert_eq!(format_tokens(142_000_000_000_000), "142 Tt");
     }
 
     #[test]
-    fn clock_tick_falls_back_to_whole_hours_past_the_longest_candidate() {
-        // A 48h span over just 20 columns needs ticks far enough
-        // apart that even hourly ticks aren't enough on their own --
-        // the fallback rounds up to the next whole hour that is.
-        let tick = clock_tick_seconds(48.0 * 3600.0, 20, 10);
-        assert_eq!(tick % 3600.0, 0.0);
-        let seconds_per_column = 48.0 * 3600.0 / 20.0;
-        assert!(tick / seconds_per_column >= 10.0);
+    fn tokens_tt_carries_from_gt() {
+        assert_eq!(format_tokens(999_960_000_000), "1.0 Tt");
+    }
+
+    /// Issue #715's own arrow examples: no unit at all below 1,000,
+    /// then the same scale and rounding as `format_tokens` with a
+    /// one-letter suffix and no space.
+    #[test]
+    fn arrow_tokens_carry_no_unit() {
+        assert_eq!(format_tokens_arrow(212), "212");
+        assert_eq!(format_tokens_arrow(3), "3");
+        assert_eq!(format_tokens_arrow(1_200), "1.2k");
+        assert_eq!(format_tokens_arrow(56), "56");
+        assert_eq!(format_tokens_arrow(35_400_000), "35.4M");
+        assert_eq!(format_tokens_arrow(203_000), "203k");
+        assert_eq!(format_tokens_arrow(1_200_000_000), "1.2G");
+        assert_eq!(format_tokens_arrow(98_800), "98.8k");
     }
 
     #[test]
-    fn clock_tick_keeps_labels_about_target_columns_apart_at_any_width() {
-        for width in [20, 40, 80, 120] {
-            for span_s in [30.0, 300.0, 3_600.0, 21_600.0] {
-                let tick = clock_tick_seconds(span_s, width, 10);
-                let seconds_per_column = span_s / width as f64;
-                assert!(
-                    tick / seconds_per_column >= 10.0,
-                    "tick {tick} too tight at width {width}, span {span_s}"
-                );
-            }
-        }
+    fn arrow_tokens_carry_into_the_next_unit() {
+        assert_eq!(format_tokens_arrow(999_960), "1.0M");
     }
 
     #[test]
@@ -376,21 +453,64 @@ mod tests {
         assert_eq!(format_clock_time("not a timestamp", &utc), None);
     }
 
+    /// Issue #734's own pinned boundaries: `0`, `59`, `59.5`, `60`,
+    /// `3599` and `3600` seconds.
     #[test]
-    fn midpoint_clock_time_halves_the_span() {
-        let utc = chrono::FixedOffset::east_opt(0).unwrap();
-        assert_eq!(
-            midpoint_clock_time("2026-10-08T11:00:00Z", "2026-10-08T12:00:00Z", &utc).unwrap(),
-            "11:30:00"
-        );
+    fn signal_elapsed_pinned_boundaries() {
+        assert_eq!(format_signal_elapsed(0.0), "0s");
+        assert_eq!(format_signal_elapsed(59.0), "59s");
+        assert_eq!(format_signal_elapsed(59.5), "59.5s");
+        assert_eq!(format_signal_elapsed(60.0), "1m00s");
+        assert_eq!(format_signal_elapsed(3599.0), "59m59s");
+        assert_eq!(format_signal_elapsed(3600.0), "1h00m00s");
     }
 
     #[test]
-    fn midpoint_clock_time_rejects_unparseable_timestamps() {
-        let utc = chrono::FixedOffset::east_opt(0).unwrap();
-        assert_eq!(
-            midpoint_clock_time("not a timestamp", "2026-10-08T12:00:00Z", &utc),
-            None
-        );
+    fn signal_elapsed_keeps_a_decimal_under_a_minute_only_when_fractional() {
+        assert_eq!(format_signal_elapsed(0.5), "0.5s");
+        assert_eq!(format_signal_elapsed(42.0), "42s");
+    }
+
+    #[test]
+    fn signal_elapsed_past_an_hour_always_shows_its_own_seconds() {
+        assert_eq!(format_signal_elapsed(3723.0), "1h02m03s");
+    }
+
+    /// Peak's own reading (#734): a decimal under
+    /// a minute even on a whole second, unlike the plain second
+    /// marks above -- the same boundaries, `0`, `59`, `59.5`, `60`,
+    /// `3599` and `3600` seconds.
+    #[test]
+    fn signal_elapsed_with_decimal_pinned_boundaries() {
+        assert_eq!(format_signal_elapsed_with_decimal(0.0), "0.0s");
+        assert_eq!(format_signal_elapsed_with_decimal(59.0), "59.0s");
+        assert_eq!(format_signal_elapsed_with_decimal(59.5), "59.5s");
+        assert_eq!(format_signal_elapsed_with_decimal(60.0), "1m00s");
+        assert_eq!(format_signal_elapsed_with_decimal(3599.0), "59m59s");
+        assert_eq!(format_signal_elapsed_with_decimal(3600.0), "1h00m00s");
+    }
+
+    /// At the default 100 ms per column (ten columns a second), an
+    /// 8-cell label like `1h02m03s` still fits a mark every second
+    /// -- the example #734 gives.
+    #[test]
+    fn signal_mark_step_fits_every_second_at_100ms_per_column() {
+        assert_eq!(signal_mark_step_s(10, 3723.0), 1);
+    }
+
+    /// A one-second-per-column zoom can't fit even a short label
+    /// (`16s`) every second, so the step widens to the next
+    /// candidate that does.
+    #[test]
+    fn signal_mark_step_widens_at_a_coarse_zoom() {
+        assert_eq!(signal_mark_step_s(1, 16.0), 5);
+    }
+
+    /// A long elapsed time's own wider label (`100h00m00s`, ten
+    /// cells) still resolves to a step that fits it, never panics
+    /// or loops forever.
+    #[test]
+    fn signal_mark_step_widens_further_for_a_very_long_run() {
+        assert_eq!(signal_mark_step_s(1, 360_000.0), 30);
     }
 }

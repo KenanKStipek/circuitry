@@ -1,0 +1,51 @@
+#!/usr/bin/env python3
+"""A fake `claude` for c720-agent-claude-result-valid (issue #720): reads
+the prompt from stdin, really writes a valid result file, and reports a
+session id, usage and a final cost -- no repair turn should ever run.
+
+Writes the file directly rather than through a scripted `tool_use`/
+`tool_result` pair: cof's own `agent_live.py::LiveTracker._end_tool`
+times a Claude Code tool call from wall-clock elapsed time (the real
+protocol carries no duration of its own), so `meta.raw.tool_counts`'s
+`ms` is genuinely non-deterministic on cof itself -- a case this suite
+compares byte-for-byte avoids exercising it rather than committing a
+flaky expectation.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+sys.stdin.read()  # the prompt text itself never reaches this case's own state
+
+scratch_dir = os.path.join(os.getcwd(), "scratch")
+os.makedirs(scratch_dir, exist_ok=True)
+with open(os.path.join(scratch_dir, "result.json"), "w", encoding="utf-8") as handle:
+    json.dump({"summary": "did the thing", "tests_pass": True}, handle)
+
+events = [
+    {"type": "system", "subtype": "init", "session_id": "sess-c720-claude", "model": "claude-fake"},
+    {
+        "type": "assistant",
+        "message": {
+            "id": "m1",
+            "model": "claude-fake",
+            "usage": {"input_tokens": 12, "output_tokens": 5},
+            "content": [{"type": "text", "text": "done"}],
+        },
+    },
+    {
+        "type": "result",
+        "subtype": "success",
+        "is_error": False,
+        "result": "done",
+        "session_id": "sess-c720-claude",
+        "total_cost_usd": 0.02,
+        "usage": {"input_tokens": 12, "output_tokens": 5},
+        "num_turns": 1,
+    },
+]
+for event in events:
+    sys.stdout.write(json.dumps(event) + "\n")

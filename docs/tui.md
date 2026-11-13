@@ -223,6 +223,13 @@ whatever its source — bundled, folder or github — the same as `cof run
    string — parity with `cof run --model`. Enter on an empty box gives
    the dropdown back.
 
+   Four more dropdowns — Scoring, Routing, Decomposition, Splitting — are
+   tri-state (`— default` / `on` / `off`), the same switches
+   `cof run --scoring/--routing/--decompose/--split` flip: left on
+   `— default` a launch resolves exactly as configured; picking `on`/`off`
+   maps to the matching `RunRequest` override. See [Complexity
+   Configuration](./complexity-config.md) for what each switch does.
+
 `Tab` belongs to view navigation, so `Enter` is what walks the form: it moves
 to the next field and, from the last one, lands on Launch. `Ctrl-N` / `Ctrl-B`
 walk the whole setup pane — picker, generated inputs, adapter, model, Launch —
@@ -473,7 +480,7 @@ misreport the file.
 (`circuitry.cli.last_run` owns that file for both). The replay goes through
 the same `RunSession` the Run view launches, with the stashed orchestration,
 `-e` inputs, adapter/model overrides, profile, the `scoring`/`routing`/
-`decompose` overrides, and `--dry-run`; it publishes into the store, so the
+`decompose`/`split` overrides, and `--dry-run`; it publishes into the store, so the
 tree fills in as it goes. The `-e` merge with a stashed `--state` file uses
 the same `apply_inline_overrides` the CLI does, so an override lands under
 `input` (not the root) when the state file is already namespaced —

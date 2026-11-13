@@ -151,6 +151,86 @@ effects:
     assert len(start_ids) == len(set(start_ids))
 
 
+def _trivial_orch(tmp_path: Path) -> Path:
+    orch = tmp_path / "trivial.yml"
+    orch.write_text(
+        """
+effects:
+  - type: tool
+    name: noop
+    provider: shell
+    params:
+      command: bash
+      args: ["-c", "exit 0"]
+      allowed_commands: ["bash"]
+""".lstrip("\n"),
+        encoding="utf-8",
+    )
+    return orch
+
+
+def test_run_start_names_the_config_file_given_on_the_command_line(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(json.dumps({}), encoding="utf-8")
+    orch = _trivial_orch(tmp_path)
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(
+        orch,
+        out_path=out_path,
+        events_path=events_path,
+        extra_args=["--config", str(config_path)],
+    )
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    run_start = _events(events_path)[0]
+    assert run_start["ev"] == "run_start"
+    assert run_start["config"] == "config.json"
+
+
+def test_run_start_names_no_config_file_as_null(tmp_path: Path) -> None:
+    orch = _trivial_orch(tmp_path)
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(orch, out_path=out_path, events_path=events_path)
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    run_start = _events(events_path)[0]
+    assert run_start["ev"] == "run_start"
+    assert run_start["config"] is None
+
+
+def test_run_start_names_only_the_config_files_own_file_name(tmp_path: Path) -> None:
+    """A `--config` naming a file under a subdirectory writes only that
+    file's own name, the same form `orchestration` already uses -- never
+    the directory, since that would differ between two runs of the exact
+    same config file from two different cwds."""
+    config_dir = tmp_path / "some" / "dir"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "config.json"
+    config_path.write_text(json.dumps({}), encoding="utf-8")
+    orch = _trivial_orch(tmp_path)
+    out_path = tmp_path / "out.json"
+    events_path = tmp_path / "events.jsonl"
+
+    proc = _run_cof(
+        orch,
+        out_path=out_path,
+        events_path=events_path,
+        extra_args=["--config", str(config_path)],
+    )
+    stdout, stderr = _communicate(proc, timeout=20.0, label="waiting for the run to finish")
+
+    assert proc.returncode == 0, (stdout, stderr)
+    run_start = _events(events_path)[0]
+    assert run_start["ev"] == "run_start"
+    assert run_start["config"] == "config.json"
+
+
 def test_tree_dynamic_max_concurrency_dispatch_carries_both_numbers(
     tmp_path: Path,
 ) -> None:
@@ -765,6 +845,8 @@ effects:
 
     out_path = tmp_path / "out.json"
     events_path = tmp_path / "events.jsonl"
+    config_path = tmp_path / "config.json"
+    config_path.write_text("{}", encoding="utf-8")
     runner = CliRunner()
     result = runner.invoke(
         app,
@@ -775,6 +857,8 @@ effects:
             str(out_path),
             "--events",
             str(events_path),
+            "--config",
+            str(config_path),
             "--allow-capabilities",
             "shell",
         ],
@@ -783,6 +867,7 @@ effects:
 
     events = _events(events_path)
     assert events[0]["ev"] == "run_start"
+    assert events[0]["config"] == "config.json"
     assert events[-1]["ev"] == "run_end"
     assert events[-1]["ok"] is True
     start = next(e for e in events if e["ev"] == "start" and e["path"] == "prime.step")

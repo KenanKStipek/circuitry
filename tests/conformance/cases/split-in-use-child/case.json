@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 6: a prompt inside a use child splits correctly, with the right paths",
+  "description": "A path use child's own over-budget prompt splits under the child's own namespaced node (prime.child.big), its parts under prime.child.big.parts.iter_N.map -- the generated plan's own isolated child nests normally one level inside the use child's own namespace. runtime.state.record_children keeps the parts visible on the final state.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

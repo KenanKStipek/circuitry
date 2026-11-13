@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #598/#725 (a secret is only honoured from a document run by path)",
+  "description": "A `use: inline` child is generated, never trusted (runtime-semantics.md's own Quirk Q3 context): its own `http` header naming a secret fails to compile with the same text a library entry or a generated plan gets, on both engines.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

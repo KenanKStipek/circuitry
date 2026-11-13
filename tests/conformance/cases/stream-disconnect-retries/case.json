@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #674: a mid-stream disconnect retries like any other dropped connection",
+  "description": "The mock server closes the connection after two NDJSON deltas, before the `done: true` line; the attempt fails (curl's premature-EOF exit, classified retryable the same as a dropped connection) and the retry's fresh request gets a complete reply.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

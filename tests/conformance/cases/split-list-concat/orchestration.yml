@@ -1,0 +1,12 @@
+name: split-list-concat
+adapter: scripted
+model: m
+interface:
+  inputs:
+    items: {type: array, required: true}
+effects:
+  - type: prompt
+    name: big
+    prompt_type: array
+    schema: {type: array, items: {type: string}}
+    template: "{{{input.items}}}"

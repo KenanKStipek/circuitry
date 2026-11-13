@@ -130,20 +130,15 @@ fn breadcrumb_eligible(row: &Row) -> bool {
 }
 
 /// [`breadcrumb_eligible`]'s own rule, decomposed to its two actual
-/// inputs (a [`RowKind`] and a [`StatusKind`]) -- shared with
-/// `treemap`'s own by-store chain folding (issue #632), which folds
-/// [`crate::treemap::TreemapNode`]s rather than [`Row`]s and so has
-/// no whole `Row` of its own to pass in.
-pub(crate) fn kind_breadcrumb_eligible(kind: RowKind, status: StatusKind) -> bool {
+/// inputs (a [`RowKind`] and a [`StatusKind`]).
+fn kind_breadcrumb_eligible(kind: RowKind, status: StatusKind) -> bool {
     kind != RowKind::Root
         && kind != RowKind::QuickSteps
         && kind != RowKind::Loop
         // Issue #635: a named `if`'s own row carries the Flow screen's
         // `◆` decision glyph and condition text -- folding it into a
         // breadcrumb (`gate › chosen`) would hide the decision
-        // entirely, not just abbreviate it. Shared with the Cost
-        // treemap's own chain folding (`treemap.rs`), so its
-        // `gate › chosen` tile splits into `gate` and `chosen` too.
+        // entirely, not just abbreviate it.
         && kind != RowKind::If
         && status != StatusKind::Pending
 }

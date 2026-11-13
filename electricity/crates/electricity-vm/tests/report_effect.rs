@@ -29,6 +29,7 @@ fn report_leaf(path: EffectPath, name: Option<&str>, message: &str) -> Op {
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -68,7 +69,7 @@ async fn a_decomposition_plans_report_reaches_the_parent_observer_namespaced() {
     let decomposing_node_path = root_path().push_name("decomposed");
     let plan_frame = Frame::root().nested(&decomposing_node_path);
 
-    run_isolated(
+    let (_, result) = run_isolated(
         &plan_program,
         Value::None,
         &plan_frame,
@@ -76,8 +77,8 @@ async fn a_decomposition_plans_report_reaches_the_parent_observer_namespaced() {
         &observer,
         &token,
     )
-    .await
-    .expect("an isolated plan with two reports must succeed");
+    .await;
+    result.expect("an isolated plan with two reports must succeed");
 
     let reports: Vec<(String, String, String)> = observer
         .events()

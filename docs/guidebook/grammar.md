@@ -66,11 +66,14 @@ Prompt ::= { type: 'prompt', name: NAME,
              assets?: Asset*, retries?: Retry,
              timeout_ms?: INT | {from: PATH, default?: INT}, deterministic?: BOOL,
              group?: STRING,                             — names a runtime.concurrency_groups key; leaf only
+             split?: Split,                              — size trigger for decomposition, see below
              on_error?: OnError, description?: STRING }
 
 Message ::= { role: 'system'|'user'|'assistant'|'tool', content: STRING }
 Asset   ::= { kind: STRING, ref: STRING }
 Retry   ::= { max_attempts?: INT≥1, backoff_ms?: INT }
+Split   ::= { enabled?: BOOL, budget_tokens?: INT≥1, max_parts?: INT≥2,
+              separator?: STRING, merge?: { template: TEMPLATE } }
 ```
 
 ### Dynamic — named container → `prime.<name>.<child>.value`
@@ -186,6 +189,10 @@ Complexity ::= { scoring?:       { enabled?: BOOL, weights?: MAP, keywords?: MAP
                  routing?:       { enabled?: BOOL, respect_explicit?: BOOL,
                                    bands?: Band+ },      — ordered; final band omits max (catch-all, required)
                  decomposition?: { enabled?: BOOL, threshold?: NUMBER, max_chunks?: INT,
-                                   max_depth?: INT, on_failure?: 'route_up'|'fail' } }
+                                   max_depth?: INT, on_failure?: 'route_up'|'fail' },
+                 splitting?:     { enabled?: BOOL, max_input_tokens?: INT≥1, models?: MAP,
+                                   max_parts?: INT≥2, max_depth?: INT≥0,
+                                   max_concurrency?: INT≥1, on_failure?: 'run_as_is'|'fail' } }
+                                                          — splitting needs no scoring prerequisite
 Band       ::= { name: STRING, max?: NUMBER, model: STRING }   — max inclusive; models are opaque strings
 ```

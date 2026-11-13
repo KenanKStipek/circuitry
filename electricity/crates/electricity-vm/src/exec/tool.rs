@@ -56,6 +56,8 @@
 //!   it here would only check against data (a capability ceiling) this
 //!   crate's own `RunContext` doesn't carry yet.
 
+mod live;
+
 use crate::params::{
     ParamsCtx, RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params,
     render_params_json,
@@ -63,7 +65,7 @@ use crate::params::{
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
-use electricity_tools::{ToolCall, ToolRegistry};
+use electricity_tools::{ToolCall, ToolRegistry, ToolResult};
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 
@@ -151,6 +153,7 @@ pub fn resolve_plugin<'a>(
 /// `Err` is the resolved plugin's own raised
 /// [`electricity_tools::ToolError`], unchanged. [`execute_tool`] is the
 /// one place this crate ever turns it into a [`VmError::Raised`].
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tool(
     plugin: &ResolvedPlugin<'_>,
     provider: &str,
@@ -159,6 +162,14 @@ pub async fn run_tool(
     timeout_seconds: u32,
     token: &CancellationToken,
     armed: bool,
+    secret_headers: &[String],
+    scrub: Option<&dyn Fn(&str) -> String>,
+    on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)>,
+    on_agent_live: Option<&dyn Fn(electricity_value::Value)>,
+    agent_attempt: u32,
+    agent_earlier_attempts: Option<(Option<i64>, Option<i64>)>,
+    limited: bool,
+    confine_to: Option<&str>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
     let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
@@ -167,6 +178,14 @@ pub async fn run_tool(
         config: &config,
         token,
         armed,
+        secret_headers,
+        scrub,
+        on_live,
+        on_agent_live,
+        agent_attempt,
+        agent_earlier_attempts,
+        limited,
+        confine_to,
     };
     plugin.as_dyn().execute(params, &call).await
 }
@@ -176,6 +195,10 @@ const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
 
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
+
+/// `plugins/http.py::_LIMITED_SAVE_TO`.
+const LIMITED_SAVE_TO: &str = "only a document run by path may save a response to a file (a \
+     limited document, a library entry or a generated plan cannot)";
 
 /// `core/tool.py::_HTTP_FAMILY_PROVIDERS` -- a local copy, not a call
 /// into `crate::retry`'s own private `is_http_family_provider` (issue
@@ -189,7 +212,10 @@ const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 /// `crate::retry::is_tool_failure_retryable` already keeps for any
 /// non-HTTP-family provider.
 fn http_family_provider(provider: &str) -> bool {
-    matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
+    matches!(
+        provider,
+        "http" | "web_fetch" | "webhook" | "linear" | "systemone"
+    )
 }
 
 /// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
@@ -416,6 +442,135 @@ fn reject_params_json_override(overlay: &Dict) -> Result<(), String> {
     ))
 }
 
+/// `plugins/systemone.py::reject_overlay_within` -- `params_json` is
+/// rendered at run time and can carry generated content, so it never
+/// sets `within`: only a document's own literal params do. Checked for
+/// `http` and `systemone` only, the same two providers `within` ever
+/// applies to.
+fn reject_overlay_within(overlay: &Dict) -> Result<(), String> {
+    if overlay.contains_key(&Value::Str("within".to_string())) {
+        return Err(
+            "params_json must not set 'within': it is only honoured from a \
+             document's literal params block."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// `plugins/agent.py::reject_overlay_prompt` -- `params_json` is rendered
+/// at run time and can carry generated content, so it never supplies
+/// `prompt` as `{file: {from: ...}, within: ...}` (a trust boundary, like
+/// `systemone`'s `within`), and never replaces a `prompt` the document
+/// reads from a file (*prompt_from_file*).
+fn reject_overlay_prompt(overlay: &Dict, prompt_from_file: bool) -> Result<(), String> {
+    let Some(value) = overlay.get(&Value::Str("prompt".to_string())) else {
+        return Ok(());
+    };
+    if electricity_compiler::prompt_files::is_dispatch_file(value) {
+        return Err(
+            "params_json must not set params.prompt to {file: {from: <state path>}, \
+             within: <dir>}: a prompt file is only honoured from a document's literal \
+             params block."
+                .to_string(),
+        );
+    }
+    if prompt_from_file {
+        return Err(
+            "params_json must not set params.prompt: this effect reads params.prompt \
+             from a file ({file: {from: <state path>}, within: <dir>}), which \
+             params_json cannot replace."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
+/// One `agent` effect's own `params.prompt` of `{file: {from: <state
+/// path>}, within: <dir>}` (issue #591), read once before the first
+/// attempt (`resolve_agent_prompt_file`'s own caller caches this): the
+/// text sent to the session, the `{file, within}` form `meta.
+/// params_rendered.prompt` keeps instead of the text, and the `meta.
+/// template_files` record.
+struct AgentPromptFile {
+    text: String,
+    form: Dict,
+    record: Dict,
+}
+
+fn resolve_agent_prompt_file<R: ParamsCtx>(
+    source: &electricity_bytecode::DispatchFile,
+    ctx: &R,
+    tool_name: &str,
+) -> Result<AgentPromptFile, String> {
+    let raw_path = ctx.resolve_from(&source.path_from);
+    let within_value = source
+        .within_from
+        .as_deref()
+        .and_then(|path| ctx.resolve_from(path));
+    let read = electricity_compiler::prompt_files::read_dispatch_file(
+        source,
+        raw_path.as_ref(),
+        within_value.as_ref(),
+        "params.prompt",
+        &format!("Tool effect '{tool_name}'"),
+    )?;
+    let mut form = Dict::new();
+    form.insert(
+        Value::Str("file".to_string()),
+        Value::Str(read.path.clone()),
+    );
+    form.insert(
+        Value::Str("within".to_string()),
+        Value::Str(read.within.clone()),
+    );
+    let mut record = Dict::new();
+    record.insert(
+        Value::Str("field".to_string()),
+        Value::Str("params.prompt".to_string()),
+    );
+    record.insert(Value::Str("path".to_string()), Value::Str(read.path));
+    record.insert(Value::Str("sha256".to_string()), Value::Str(read.sha256));
+    record.insert(
+        Value::Str("chars".to_string()),
+        Value::from(read.chars as i64),
+    );
+    Ok(AgentPromptFile {
+        text: read.text,
+        form,
+        record,
+    })
+}
+
+/// `plugins/http.py::reject_limited_save_to` -- a limited document's
+/// `http` effect never saves a file, whatever supplied `save_to` or
+/// `within` (`params_json`, or a profile that switched the provider to
+/// `http`), checked against the fully rendered params at dispatch.
+fn reject_limited_save_to(params: &Dict) -> Result<(), String> {
+    for key in ["save_to", "within"] {
+        if params.contains_key(&Value::Str(key.to_string())) {
+            return Err(format!("HttpPlugin: params['{key}']: {LIMITED_SAVE_TO}."));
+        }
+    }
+    Ok(())
+}
+
+/// `core/tool.py::_scrub_result` (issue #725): *result* with every
+/// secret this dispatch resolved replaced by its placeholder, wherever
+/// the plugin's own output echoes it.
+fn scrub_result(
+    secrets: &electricity_tools::secrets::SecretValues,
+    result: ToolResult,
+) -> ToolResult {
+    ToolResult {
+        value: secrets.scrub(&result.value),
+        raw: secrets.scrub(&result.raw),
+        stdout: result.stdout.as_deref().map(|s| secrets.scrub_str(s)),
+        stderr: result.stderr.as_deref().map(|s| secrets.scrub_str(s)),
+        ..result
+    }
+}
+
 /// `core/tool.py::_capped_raw` -- redacts *raw*, JSON-round-trips it
 /// (`core/tool.py`'s own docstring: callers serialize state with plain
 /// `json.dumps`, so a raw value only `default=str` can encode must
@@ -574,6 +729,19 @@ fn render_tool_call<R: ParamsCtx>(
         rendered.insert(Value::Str("model".to_string()), Value::Str(model.clone()));
     }
 
+    // A `cel` effect's own params are literal (#723): `electricity-compiler::
+    // compile::params::build_cel_params` already parsed and scope-checked
+    // `expr` as written, so they are never rendered -- no `{from: ...}` read,
+    // no Mustache render, never set by `params_json` (`build_cel_params`
+    // rejects that at compile time, so `tool.params_json` is always `None`
+    // here). `dict(self.defn.params)` in `core/tool.py::ToolRuntime.execute`.
+    if let ParamNode::Literal(Value::Dict(literal)) = &tool.params {
+        for (key, value) in literal {
+            rendered.insert(key.clone(), value.clone());
+        }
+        return Ok(rendered);
+    }
+
     reject_security_sensitive_literal(tool_params_map(&tool.params))?;
     let mut params = render_params(
         name,
@@ -587,12 +755,245 @@ fn render_tool_call<R: ParamsCtx>(
         let overlay = render_params_json(&params_json.source, ctx, declared_prompts, effect_names)
             .map_err(|err: RenderParamsJsonError| err.to_string())?;
         reject_params_json_override(&overlay)?;
+        let normalized_provider =
+            electricity_value::pycompat::py_strip(&tool.provider).to_lowercase();
+        if normalized_provider == "systemone" || normalized_provider == "http" {
+            reject_overlay_within(&overlay)?;
+        }
+        if normalized_provider == "agent" {
+            reject_overlay_prompt(&overlay, tool.prompt_file.is_some())?;
+        }
         params = deep_merge_params(params, overlay);
+    }
+    if tool.limited
+        && electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http"
+    {
+        reject_limited_save_to(&params)?;
     }
     for (key, value) in params {
         rendered.insert(key, value);
     }
     Ok(rendered)
+}
+
+/// The `cel` tool's own dispatch (#723): `plugins/cel.py::CelPlugin.
+/// evaluate`, called by `core/tool.py::ToolRuntime.execute` directly
+/// (`isinstance(plugin, CelPlugin)`) instead of through `plugin.execute`
+/// -- *rendered* is this effect's own literal params
+/// ([`render_tool_call`]'s own cel branch above), *ctx* the same live
+/// scope an `if`/`while` CEL condition at this position would see
+/// ([`ParamsCtx::cel_state`], the same narrowed read an `if`/`while`
+/// CEL condition at this position gets). No I/O, no capability, no
+/// plugin registry.
+fn evaluate_cel_tool<R: ParamsCtx>(
+    rendered: &Value,
+    ctx: &R,
+) -> Result<ToolResult, electricity_tools::ToolError> {
+    let dict = rendered.as_dict();
+    let expr = dict
+        .and_then(|d| d.get(&Value::Str("expr".to_string())))
+        .and_then(Value::as_str)
+        .expect("build_cel_params guarantees params.expr is a non-empty string");
+    let strict = matches!(
+        dict.and_then(|d| d.get(&Value::Str("strict".to_string()))),
+        Some(Value::Bool(true))
+    );
+    let state = ctx.cel_state(expr);
+    // `core/cel_eval.py::evaluate_cel_value` raises `CelEvaluationError` for
+    // every evaluation failure, including a strict unset path and a result
+    // with no JSON form; the schema mismatch below is a plain `ValueError`
+    // (`plugins/cel.py::CelPlugin.evaluate`).
+    let value = electricity_cel::evaluate_value(expr, &state, strict).map_err(|err| {
+        electricity_tools::ToolError {
+            py_class: electricity_tools::PyExc::CelEvaluationError,
+            message: err.to_string(),
+            cause: electricity_tools::ErrorCause::None,
+        }
+    })?;
+    if let Some(Value::Dict(_)) = dict.and_then(|d| d.get(&Value::Str("schema".to_string()))) {
+        let schema = dict
+            .and_then(|d| d.get(&Value::Str("schema".to_string())))
+            .expect("just matched Some(Value::Dict(_)) above");
+        match electricity_schema::cel_schema_errors(schema, &value) {
+            electricity_schema::SchemaErrorList::Valid => {}
+            electricity_schema::SchemaErrorList::Invalid(errors) => {
+                return Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message: format!(
+                        "cel: the result does not match params.schema: {}",
+                        errors.join("; ")
+                    ),
+                    cause: electricity_tools::ErrorCause::None,
+                });
+            }
+            electricity_schema::SchemaErrorList::SchemaError(message) => {
+                return Err(electricity_tools::ToolError {
+                    py_class: electricity_tools::PyExc::ValueError,
+                    message,
+                    cause: electricity_tools::ErrorCause::None,
+                });
+            }
+        }
+    }
+    let mut raw = Dict::new();
+    raw.insert(Value::Str("expr".to_string()), Value::Str(expr.to_string()));
+    Ok(ToolResult::new(value, Value::Dict(raw)))
+}
+
+/// `core/tool.py::ToolRuntime._secret_headers` (issue #725): which of
+/// *compiled*'s literal `params.headers` references are actually
+/// present in *rendered*'s own `headers`, by header name -- the
+/// detection half only, no resolution (cof's own split: `_secret_headers`
+/// never calls `dispatch_secrets.resolve`, so `meta.params_rendered` can
+/// already show the placeholder before any resolution is attempted,
+/// below). Runs for every `http` dispatch, not only when *compiled* is
+/// non-empty: `headers` can still name a `{secret: ...}`-shaped value
+/// some other way (`params_json`, a list of pairs instead of a
+/// mapping), which is always an error. `Ok(None)` when `headers` names
+/// no secret at all (the common case, including every non-`http` tool,
+/// whose `compiled` is always empty); `Err` when a header's rendered
+/// value looks like a reference but isn't honoured -- a mapping's value
+/// that doesn't match a literal one at the same header name exactly, or
+/// any secret-shaped value reached through a list of pairs instead of a
+/// mapping at all.
+fn find_secret_headers(
+    name: &str,
+    compiled: &IndexMap<String, electricity_bytecode::secrets::SecretRef>,
+    rendered: &Value,
+) -> Result<
+    Option<IndexMap<String, electricity_bytecode::secrets::SecretRef>>,
+    electricity_tools::ToolError,
+> {
+    let headers_value = rendered
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("headers".to_string())));
+    let is_dict = matches!(headers_value, Some(Value::Dict(_)));
+    let pairs: Vec<(Value, Value)> = match headers_value {
+        Some(Value::Dict(headers)) => headers
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
+        Some(Value::List(items)) => items
+            .iter()
+            .filter_map(|item| match item {
+                Value::List(pair) if pair.len() == 2 => Some((pair[0].clone(), pair[1].clone())),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let mut found: IndexMap<String, electricity_bytecode::secrets::SecretRef> = IndexMap::new();
+    for (key, value) in &pairs {
+        if !electricity_bytecode::secrets::has_secret_key(value) {
+            continue;
+        }
+        let header_name = key.py_str();
+        let rendered_ref = electricity_bytecode::secrets::secret_ref(value);
+        let compiled_ref = compiled.get(&header_name);
+        if !is_dict || rendered_ref.is_none() || compiled_ref != rendered_ref.as_ref() {
+            return Err(electricity_tools::ToolError::message(format!(
+                "Tool effect '{name}' params.headers.{header_name}: a {{secret: ...}} \
+                 value is honoured only when the document writes it in params.headers \
+                 itself."
+            )));
+        }
+        found.insert(
+            header_name,
+            compiled_ref
+                .cloned()
+                .expect("compiled_ref == rendered_ref.as_ref(), checked above"),
+        );
+    }
+    if found.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(found))
+}
+
+/// The second half of [`find_secret_headers`]'s own split: actually
+/// resolves *detected*'s references (caching each in *secrets* for the
+/// rest of this dispatch), replacing their values in *headers* --
+/// *rendered*'s own `headers`, already known to be a mapping (the only
+/// shape [`find_secret_headers`] ever returns `Some` for).
+async fn resolve_detected_headers(
+    headers: &Dict,
+    detected: &IndexMap<String, electricity_bytecode::secrets::SecretRef>,
+    runtime_config: &Value,
+    token: &CancellationToken,
+    secrets: &mut electricity_tools::secrets::SecretValues,
+) -> Result<Dict, electricity_tools::ToolError> {
+    let mut new_headers = headers.clone();
+    for (header_name, secret_ref) in detected {
+        let resolved = secrets
+            .resolve(&secret_ref.name, &secret_ref.prefix, runtime_config, token)
+            .await?;
+        new_headers.insert(Value::Str(header_name.clone()), Value::Str(resolved));
+    }
+    Ok(new_headers)
+}
+
+/// `core/tool.py::ToolRuntime._runtime_with_env_secrets` (issue #725):
+/// *runtime_config* with every `{secret: ...}` value of this provider's
+/// own `runtime.plugins.<name>.env` resolved, caching each in *secrets*.
+/// `Ok(None)` (use *runtime_config* unchanged) whenever that `env` names
+/// no secret at all -- true for every provider that reads no host `env`
+/// override, and for one that does but whose `env` is plain strings.
+async fn resolve_env_secrets(
+    provider: &str,
+    runtime_config: &Value,
+    token: &CancellationToken,
+    secrets: &mut electricity_tools::secrets::SecretValues,
+) -> Result<Option<Value>, electricity_tools::ToolError> {
+    let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
+    let Some(plugins) = runtime_config
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("plugins".to_string())))
+        .and_then(Value::as_dict)
+    else {
+        return Ok(None);
+    };
+    let Some(Value::Dict(cfg)) = plugins.get(&Value::Str(normalized.clone())) else {
+        return Ok(None);
+    };
+    let Some(Value::Dict(env)) = cfg.get(&Value::Str("env".to_string())) else {
+        return Ok(None);
+    };
+    for (var, value) in env {
+        if let Some(problem) = electricity_bytecode::secrets::secret_ref_error(value)
+            .filter(|_| electricity_bytecode::secrets::has_secret_key(value))
+        {
+            return Err(electricity_tools::ToolError::message(format!(
+                "runtime.plugins.{normalized}.env.{}: {problem}.",
+                var.py_str()
+            )));
+        }
+    }
+    let refs: Vec<(Value, electricity_bytecode::secrets::SecretRef)> = env
+        .iter()
+        .filter_map(|(var, value)| {
+            electricity_bytecode::secrets::secret_ref(value).map(|r| (var.clone(), r))
+        })
+        .collect();
+    if refs.is_empty() {
+        return Ok(None);
+    }
+    let mut new_env = env.clone();
+    for (var, secret_ref) in refs {
+        let resolved = secrets
+            .resolve(&secret_ref.name, &secret_ref.prefix, runtime_config, token)
+            .await?;
+        new_env.insert(var, Value::Str(resolved));
+    }
+    let mut new_cfg = cfg.clone();
+    new_cfg.insert(Value::Str("env".to_string()), Value::Dict(new_env));
+    let mut new_plugins = plugins.clone();
+    new_plugins.insert(Value::Str(normalized), Value::Dict(new_cfg));
+    let mut new_runtime = runtime_config
+        .as_dict()
+        .cloned()
+        .expect("checked Some(Dict) above via plugins lookup");
+    new_runtime.insert(Value::Str("plugins".to_string()), Value::Dict(new_plugins));
+    Ok(Some(Value::Dict(new_runtime)))
 }
 
 /// A single `tool` effect's own owning entry point -- a close port of
@@ -663,11 +1064,30 @@ pub async fn execute_tool<R: ParamsCtx>(
         return Err(VmError::tool(denial));
     }
 
+    // The secrets this pass resolved (issue #725): resolved once, at
+    // dispatch, and scrubbed out of everything the plugin returns or
+    // raises -- one `SecretValues` for this whole effect dispatch, not
+    // per attempt, so a retried attempt reuses the same cached value
+    // rather than resolving (and risking a different answer from) a
+    // `command` secret twice.
+    let mut dispatch_secrets = electricity_tools::secrets::SecretValues::new();
     let mut next_delay_ms = base_backoff_ms;
-    // Every attempt this pass makes, oldest first (#668) -- written to
-    // meta.attempts only once more than one attempt has run, exactly
-    // when meta.retries_used is also set.
-    let mut retry_attempts: Vec<Value> = Vec::new();
+    // `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`
+    // locals (issue #724): accumulated across every attempt of this
+    // pass, written to `meta.tokens_sent_total`/`.tokens_received_total`
+    // whenever a plugin result carries a token count -- `systemone` is
+    // the only provider that ever does.
+    let mut total_tokens_sent: Option<i64> = None;
+    let mut total_tokens_received: Option<i64> = None;
+    // Issue #720: an `agent` effect's `params.prompt` of `{file: {from:
+    // <state path>}, within: <dir>}` (issue #591) is read once, before
+    // the first attempt -- a retry and the session's own repair turn use
+    // that same text (`core/tool.py:871-879`'s own `attempt_index == 0`
+    // guard, ported as a cache filled on the first attempt and reused by
+    // every later one, rather than re-checking an index each time).
+    let is_agent_provider =
+        electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "agent";
+    let mut agent_prompt_file: Option<Result<AgentPromptFile, String>> = None;
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -702,8 +1122,14 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "raw");
         pop_leaf(&meta_node, "expect");
         pop_leaf(&meta_node, "retries_used");
+        pop_leaf(&meta_node, "tokens_sent");
+        pop_leaf(&meta_node, "tokens_received");
+        pop_leaf(&meta_node, "tokens_sent_total");
+        pop_leaf(&meta_node, "tokens_received_total");
+        pop_leaf(&meta_node, "cost_usd");
         pop_leaf(&meta_node, "stdout_chars");
         pop_leaf(&meta_node, "stdout_sha256");
+        pop_leaf(&meta_node, "template_files");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
         // Published the moment a fresh attempt's own `meta` is visible,
         // the same way `--live-state` would catch up with Python's own
@@ -729,6 +1155,19 @@ pub async fn execute_tool<R: ParamsCtx>(
         // set on an `ok: false` returned result -- never a raised
         // failure or a failed `expect:` (issue #485's own ruling).
         let mut retry_after_for_backoff: Option<String> = None;
+        // Issue #724: this attempt's own `result.tokens_sent`/
+        // `.tokens_received`, threaded past the big `match` below the
+        // same way -- written to `meta.tokens_sent`/`.tokens_received`
+        // only once this attempt is the one that decided the pass's
+        // outcome (the tail end below, success only).
+        let mut attempt_tokens_sent: Option<i64> = None;
+        let mut attempt_tokens_received: Option<i64> = None;
+        // Issue #720: `agent`'s own `cost_usd`, written to `meta.cost_usd`
+        // only once this attempt is the one that decided the pass's
+        // outcome -- the same "attempt, not total" rule `tokens_sent`/
+        // `tokens_received` (not their own `_total` siblings) already
+        // follow; `agent` is the only provider that ever reports one.
+        let mut attempt_cost_usd: Option<f64> = None;
         // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
         // `expect:` check, raised or not, overriding whatever this
         // provider's own HTTP-family status/cause classification would
@@ -743,37 +1182,195 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `timeout_ms: {from: ...}` with no usable value is never
         // retried -- a retry reads the same state.
         let mut timeout_unresolved = false;
-        // This attempt's own `meta.attempts` entry value (#668): `None`
-        // unless dispatch actually reached a result -- the effect
-        // node's own `value` leaf isn't reset per attempt, so reading
-        // it back here on an early failure could show a reused node's
-        // earlier pass.
-        let mut entry_value = Value::None;
+        // `core/tool.py`'s own `secret_unresolved` (issue #725): a
+        // secret that failed to resolve, or a header that looks like a
+        // reference but isn't the document's own literal one, is never
+        // retried -- a retry would hit the same failure.
+        let mut secret_unresolved = false;
+        // Issue #720 (#591): a prompt file that could not be read is
+        // never retried either -- a retry reads the same file; read
+        // strictly *before* `render_tool_call` so a failure here --
+        // like Python's own `core/tool.py:871-879`, outside its own
+        // params-render `try` entirely -- never reaches params
+        // rendering at all, and so never writes `meta.params_rendered`/
+        // `.template_files` for this attempt (`c591-agent-prompt-file`'s
+        // own `missing_file`/`outside_within`/`not_utf8` effects pin
+        // this: `meta` stops at `waiting_for`, with neither key).
+        let mut prompt_file_unread = false;
+        if is_agent_provider && attempt_index == 0 {
+            if let Some(source) = &tool.prompt_file {
+                agent_prompt_file = Some(resolve_agent_prompt_file(source, ctx, name));
+            }
+        }
+        if let Some(Err(message)) = &agent_prompt_file {
+            prompt_file_unread = true;
+            failure = Some(electricity_tools::ToolError::message(message.clone()));
+        }
 
-        match render_tool_call(
-            name,
-            tool,
-            ctx,
-            run_ctx.declared_prompts,
-            run_ctx.effect_names,
-        ) {
-            Err(message) => {
+        let render_result = if failure.is_some() {
+            None
+        } else {
+            Some(render_tool_call(
+                name,
+                tool,
+                ctx,
+                run_ctx.declared_prompts,
+                run_ctx.effect_names,
+            ))
+        };
+        match render_result {
+            None => {}
+            Some(Err(message)) => {
                 failure = Some(electricity_tools::ToolError::message(message));
             }
-            Ok(rendered) => {
+            Some(Ok(mut rendered)) => {
+                let mut agent_prompt_record: Option<Dict> = None;
+                if let Some(Ok(resolved)) = &agent_prompt_file {
+                    rendered.insert(
+                        Value::Str("prompt".to_string()),
+                        Value::Dict(resolved.form.clone()),
+                    );
+                    agent_prompt_record = Some(resolved.record.clone());
+                }
                 let rendered_value = Value::Dict(rendered);
-                set_leaf(
-                    store,
-                    &meta_node,
-                    "params_rendered",
-                    electricity_redaction::redact(rendered_value.clone()),
-                );
+                let is_http =
+                    electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http";
+
+                // Issue #725: which of an `http` effect's literal
+                // `params.headers` secret reference(s) are present this
+                // attempt (and validated against whatever `params_json`
+                // may have changed about `headers` since compile time) --
+                // detection only, so the placeholder below can be written
+                // into `meta.params_rendered` before any resolution is
+                // even attempted, matching cof's own ordering.
+                let detected_headers = if is_http {
+                    find_secret_headers(name, &tool.secret_headers, &rendered_value)
+                } else {
+                    Ok(None)
+                };
+                if let Err(err) = &detected_headers {
+                    secret_unresolved = true;
+                    failure = Some(err.clone());
+                }
+
+                // `plugin_params` in `core/tool.py`: the headers a resolved
+                // secret actually dispatches with; `rendered_value` itself
+                // (and therefore `meta.params_rendered`) keeps the
+                // placeholder-shaped reference, never the real value.
+                let mut dispatch_value = rendered_value.clone();
+                // Issue #720: the dispatched `params.prompt` is the file's
+                // real text; `rendered_value` (and so `meta.params_rendered`)
+                // already carries the `{file, within}` form instead, inserted
+                // above -- the same split `dispatch_secrets`' own resolved
+                // headers use below.
+                if let Some(Ok(resolved)) = &agent_prompt_file {
+                    if let Value::Dict(dict) = &mut dispatch_value {
+                        dict.insert(
+                            Value::Str("prompt".to_string()),
+                            Value::Str(resolved.text.clone()),
+                        );
+                    }
+                }
+                let mut params_rendered_record =
+                    electricity_redaction::redact(rendered_value.clone());
+                if let Ok(Some(detected)) = &detected_headers {
+                    if let Value::Dict(record) = &mut params_rendered_record {
+                        if let Some(Value::Dict(headers_record)) =
+                            record.get_mut(&Value::Str("headers".to_string()))
+                        {
+                            for (header_name, secret_ref) in detected {
+                                headers_record.insert(
+                                    Value::Str(header_name.clone()),
+                                    Value::Str(secret_ref.placeholder()),
+                                );
+                            }
+                        }
+                    }
+                }
+                set_leaf(store, &meta_node, "params_rendered", params_rendered_record);
+                if let Some(record) = agent_prompt_record {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "template_files",
+                        Value::List(vec![Value::Dict(record)]),
+                    );
+                }
+
+                // The actual resolution, only once detection succeeded --
+                // a value that fails to resolve (the Keychain, a command
+                // or an environment variable) never reaches the plugin,
+                // but the placeholder above is already written.
+                let mut secret_header_names: Vec<String> = Vec::new();
+                if failure.is_none() {
+                    if let Ok(Some(detected)) = &detected_headers {
+                        let headers_dict = rendered_value
+                            .as_dict()
+                            .and_then(|d| d.get(&Value::Str("headers".to_string())))
+                            .and_then(Value::as_dict)
+                            .expect("find_secret_headers only returns Some when headers is a Dict");
+                        match resolve_detected_headers(
+                            headers_dict,
+                            detected,
+                            run_ctx.runtime_config,
+                            token,
+                            &mut dispatch_secrets,
+                        )
+                        .await
+                        {
+                            Ok(new_headers) => {
+                                // The (lower-cased) header names a secret
+                                // actually resolved this attempt --
+                                // `HttpPlugin`'s own redirect default and
+                                // cross-origin header-stripping set
+                                // (`ToolCall::secret_headers`).
+                                secret_header_names =
+                                    detected.keys().map(|key| key.to_lowercase()).collect();
+                                if let Value::Dict(dict) = &mut dispatch_value {
+                                    dict.insert(
+                                        Value::Str("headers".to_string()),
+                                        Value::Dict(new_headers),
+                                    );
+                                }
+                            }
+                            Err(err) => {
+                                secret_unresolved = true;
+                                failure = Some(err);
+                            }
+                        }
+                    }
+                }
+
+                // Issue #725: this provider's own `runtime.plugins.<name>.
+                // env` secret reference(s), resolved the same way, for
+                // every provider (not just `http`) and every attempt (a
+                // retry may read a different host env override, though
+                // never a different *document*).
+                let env_secret_result = if failure.is_none() {
+                    resolve_env_secrets(
+                        &tool.provider,
+                        run_ctx.runtime_config,
+                        token,
+                        &mut dispatch_secrets,
+                    )
+                    .await
+                } else {
+                    Ok(None)
+                };
+                if let Err(err) = &env_secret_result {
+                    secret_unresolved = true;
+                    failure = Some(err.clone());
+                }
+                let effective_runtime_config: Value = match &env_secret_result {
+                    Ok(Some(modified)) => modified.clone(),
+                    _ => run_ctx.runtime_config.clone(),
+                };
 
                 // This attempt's own timeout budget, read after the params
                 // render and before the plugin is built, as in Python
                 // (issue #564).
                 let timeout_result =
-                    resolve_timeout_seconds(tool, name, ctx, run_ctx.runtime_config);
+                    resolve_timeout_seconds(tool, name, ctx, &effective_runtime_config);
                 timeout_unresolved = timeout_result.is_err();
                 let timeout_seconds = timeout_result.clone().unwrap_or_default();
 
@@ -783,15 +1380,23 @@ pub async fn execute_tool<R: ParamsCtx>(
                 // resolved here, outside the acquire `select!` below, so
                 // a per-plugin config error fails this attempt at once,
                 // never waiting for (and then releasing unused) a
-                // concurrency slot (PR #454).
-                let plugin_result = match timeout_result {
-                    Err(message) => Err(electricity_tools::ToolError {
-                        py_class: electricity_tools::PyExc::ValueError,
-                        message,
-                        cause: electricity_tools::ErrorCause::None,
-                    }),
-                    Ok(_) => {
-                        resolve_plugin(run_ctx.registry, &tool.provider, run_ctx.runtime_config)
+                // concurrency slot (PR #454). A secret that already
+                // failed to resolve above skips straight to that same
+                // failure, never reaching `resolve_plugin` at all.
+                let plugin_result = if let Some(err) = &failure {
+                    Err(err.clone())
+                } else {
+                    match timeout_result {
+                        Err(message) => Err(electricity_tools::ToolError {
+                            py_class: electricity_tools::PyExc::ValueError,
+                            message,
+                            cause: electricity_tools::ErrorCause::None,
+                        }),
+                        Ok(_) => resolve_plugin(
+                            run_ctx.registry,
+                            &tool.provider,
+                            &effective_runtime_config,
+                        ),
                     }
                 };
                 match plugin_result {
@@ -862,19 +1467,125 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 // cancellation check once a dispatched call has
                                 // actually returned, only before the next attempt.
                                 //
+                                let normalized_provider =
+                                    electricity_value::pycompat::py_strip(&tool.provider)
+                                        .to_lowercase();
+                                let is_cel = normalized_provider == "cel";
+                                let is_agent = normalized_provider == "agent";
+                                let live_state = live::publishes_live(&normalized_provider)
+                                    .then(live::LiveToolState::new);
+                                if let Some(state) = &live_state {
+                                    set_leaf(store, &meta_node, "live", state.empty_snapshot());
+                                    observer.write();
+                                }
+                                let on_live_closure = live_state.as_ref().map(|state| {
+                                    |mut tail: electricity_tools::process::LiveTail| {
+                                        // A tail can carry anything the process
+                                        // printed, a resolved env secret included,
+                                        // so it is scrubbed the way cof's own
+                                        // `_on_live` scrubs it (#741, #725).
+                                        if !dispatch_secrets.is_empty() {
+                                            tail.stdout_tail = dispatch_secrets.scrub_live_tail(
+                                                &dispatch_secrets.scrub_str(&tail.stdout_tail),
+                                            );
+                                            tail.stderr_tail = dispatch_secrets.scrub_live_tail(
+                                                &dispatch_secrets.scrub_str(&tail.stderr_tail),
+                                            );
+                                        }
+                                        set_leaf(store, &meta_node, "live", state.snapshot(tail));
+                                        observer.write();
+                                    }
+                                });
+                                let on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)> =
+                                    on_live_closure.as_ref().map(|f| f as _);
+                                // Issue #720 (#636's own `meta.live`, built
+                                // entirely by `AgentPlugin::execute` itself
+                                // through `agent_live::LiveTracker`) -- this
+                                // closure is just the write, same `set_leaf`/
+                                // `observer.write()` pair `on_live_closure`
+                                // above uses for a process-backed tool.
+                                let on_agent_live_closure = is_agent.then_some(|value: Value| {
+                                    set_leaf(store, &meta_node, "live", value);
+                                    observer.write();
+                                });
+                                let on_agent_live: Option<&dyn Fn(Value)> =
+                                    on_agent_live_closure.as_ref().map(|f| f as _);
+                                struct ClearLiveOnDrop<'a> {
+                                    meta_node: &'a crate::NodeRef,
+                                    observer: &'a dyn RunObserver,
+                                }
+                                impl Drop for ClearLiveOnDrop<'_> {
+                                    fn drop(&mut self) {
+                                        pop_leaf(self.meta_node, "live");
+                                        self.observer.write();
+                                    }
+                                }
+                                let _clear_live =
+                                    (live_state.is_some() || is_agent).then(|| ClearLiveOnDrop {
+                                        meta_node: &meta_node,
+                                        observer,
+                                    });
+                                // Issue #725: an http dispatch's own error
+                                // excerpt is scrubbed before it is cut, so
+                                // no part of a secret survives the cut
+                                // (`plugins/http.py::HttpPlugin.execute`'s
+                                // own `scrub_secrets`).
+                                let scrub_closure = |s: &str| dispatch_secrets.scrub_str(s);
+                                let scrub: Option<&dyn Fn(&str) -> String> =
+                                    if is_http { Some(&scrub_closure) } else { None };
                                 let dispatch = tokio::select! {
                                     biased;
-                                    result = run_tool(
-                                        &resolved,
-                                        &tool.provider,
-                                        rendered_value,
-                                        run_ctx.runtime_config,
-                                        timeout_seconds,
-                                        token,
-                                        run_ctx.armed,
-                                    ) => Some(result),
+                                    result = async {
+                                        if is_cel {
+                                            evaluate_cel_tool(&dispatch_value, ctx)
+                                        } else {
+                                            run_tool(
+                                                &resolved,
+                                                &tool.provider,
+                                                dispatch_value,
+                                                &effective_runtime_config,
+                                                timeout_seconds,
+                                                token,
+                                                run_ctx.armed,
+                                                &secret_header_names,
+                                                scrub,
+                                                on_live,
+                                                on_agent_live,
+                                                attempt_index + 1,
+                                                (attempt_index > 0)
+                                                    .then_some((total_tokens_sent, total_tokens_received)),
+                                                tool.limited,
+                                                tool.confine_to.as_deref(),
+                                            ).await
+                                        }
+                                    } => Some(result),
                                     () = token.cancelled() => None,
                                 };
+                                // `meta.live` is removed before this
+                                // attempt's own result/error is written, so
+                                // the final node is byte-identical to a run
+                                // with no live publishing at all (#741) --
+                                // explicit, not merely left for this
+                                // scope's own end, so it happens before the
+                                // result-handling code below writes this
+                                // attempt's own final meta values. For an
+                                // agent effect specifically, a cancelled
+                                // attempt is the one exception: `plugins/
+                                // agent.py`'s own `except Exception` never
+                                // catches the interrupt, so cof's own
+                                // `meta.live` survives in final state as
+                                // the one surviving record of that
+                                // attempt's session and transcript -- the
+                                // guard is forgotten rather than dropped so
+                                // its own `Drop` impl never runs.
+                                let is_cancelled_outcome = dispatch.is_none()
+                                    || (token.is_set()
+                                        && matches!(&dispatch, Some(Err(err)) if err.message == "cancelled"));
+                                if is_agent && is_cancelled_outcome {
+                                    std::mem::forget(_clear_live);
+                                } else {
+                                    drop(_clear_live);
+                                }
                                 // Released before this attempt's own backoff
                                 // sleep (and before a model-mode `expect:` would
                                 // run, if M0-H ever dispatched one) -- a
@@ -926,6 +1637,15 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 match dispatch {
                                     Err(err) => failure = Some(err),
                                     Ok(result) => {
+                                        // Issue #725: every secret this dispatch
+                                        // resolved, replaced wherever the
+                                        // plugin's own result echoes it, before
+                                        // any of it is written to the store.
+                                        let result = if dispatch_secrets.is_empty() {
+                                            result
+                                        } else {
+                                            scrub_result(&dispatch_secrets, result)
+                                        };
                                         let value_for_expect = result.value.clone();
                                         entry_value = value_for_expect.clone();
                                         set_leaf(store, &effect_node, "value", result.value);
@@ -1048,6 +1768,35 @@ pub async fn execute_tool<R: ParamsCtx>(
                                             set_leaf(store, &meta_node, "binary", binary);
                                         }
                                         set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+                                        // Issue #724: spent whether this attempt
+                                        // succeeds or not -- an earlier, failed
+                                        // attempt's usage still counts toward this
+                                        // pass's total.
+                                        attempt_tokens_sent = result.tokens_sent;
+                                        attempt_tokens_received = result.tokens_received;
+                                        attempt_cost_usd = result.cost_usd;
+                                        if let Some(sent) = result.tokens_sent {
+                                            total_tokens_sent =
+                                                Some(total_tokens_sent.unwrap_or(0) + sent);
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_sent_total",
+                                                Value::from(total_tokens_sent.expect("just set")),
+                                            );
+                                        }
+                                        if let Some(received) = result.tokens_received {
+                                            total_tokens_received =
+                                                Some(total_tokens_received.unwrap_or(0) + received);
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_received_total",
+                                                Value::from(
+                                                    total_tokens_received.expect("just set"),
+                                                ),
+                                            );
+                                        }
 
                                         if !result.ok {
                                             let message = result
@@ -1240,6 +1989,19 @@ pub async fn execute_tool<R: ParamsCtx>(
         set_leaf(store, &meta_node, "completed_at", completed_at.clone());
 
         if let Some(failure) = failure {
+            // Issue #725: a raised failure echoing a secret (its own
+            // text, or a server's error body `http_error_excerpt`
+            // folded in) never carries the value into `meta.error`
+            // either -- a new message text, so no cause/traceback
+            // carries it.
+            let failure = if dispatch_secrets.is_empty() {
+                failure
+            } else {
+                electricity_tools::ToolError {
+                    message: dispatch_secrets.scrub_str(&failure.message),
+                    ..failure
+                }
+            };
             set_leaf(
                 store,
                 &meta_node,
@@ -1264,6 +2026,8 @@ pub async fn execute_tool<R: ParamsCtx>(
             // failure -- never for a failed `expect:`, which is always
             // retryable regardless of provider (`expect_failed` above).
             let retryable = !timeout_unresolved
+                && !secret_unresolved
+                && !prompt_file_unread
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
                     http_status_for_retry,
@@ -1307,6 +2071,28 @@ pub async fn execute_tool<R: ParamsCtx>(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
+            // `core/tool.py`'s own exception-handler rewrite (`tool.py:
+            // 1104-1111`): a raised failure (or a result that failed
+            // `expect:`) never reached this attempt's own `Ok(result)`
+            // branch above, so the per-attempt reset at the top of this
+            // loop already popped `tokens_sent_total`/`.received_total`
+            // from `meta` -- carried forward from an earlier attempt that
+            // did report usage, they are written back here so the final
+            // failure still shows the pass's own total, same as cof.
+            if let Some(sent) = total_tokens_sent {
+                set_leaf(store, &meta_node, "tokens_sent_total", Value::from(sent));
+            }
+            if let Some(received) = total_tokens_received {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "tokens_received_total",
+                    Value::from(received),
+                );
+            }
+            if total_tokens_sent.is_some() || total_tokens_received.is_some() {
+                observer.record_totals(&store.snapshot(&meta_node));
+            }
             observer.effect_complete(
                 &effect_path,
                 instance,
@@ -1341,6 +2127,29 @@ pub async fn execute_tool<R: ParamsCtx>(
                 Value::from(i64::from(attempt_index)),
             );
             write_attempts(store, &meta_node, &retry_attempts);
+        }
+        // Issue #724: the attempt that decided this pass's own outcome --
+        // unlike `tokens_sent_total`/`tokens_received_total` above, only
+        // ever written once the attempt actually succeeds. `record_totals`
+        // is only called here when this provider actually reported a
+        // token count (`systemone` is the only one that ever does) --
+        // every other tool's own success stays exactly as it was before,
+        // with no new `Totals` event, matching this crate's own pinned
+        // call counts for a loop/if's own model-mode condition.
+        let reported_tokens = attempt_tokens_sent.is_some()
+            || attempt_tokens_received.is_some()
+            || attempt_cost_usd.is_some();
+        if let Some(sent) = attempt_tokens_sent {
+            set_leaf(store, &meta_node, "tokens_sent", Value::from(sent));
+        }
+        if let Some(received) = attempt_tokens_received {
+            set_leaf(store, &meta_node, "tokens_received", Value::from(received));
+        }
+        if let Some(cost) = attempt_cost_usd {
+            set_leaf(store, &meta_node, "cost_usd", Value::Float(cost));
+        }
+        if reported_tokens {
+            observer.record_totals(&store.snapshot(&meta_node));
         }
         observer.effect_complete(
             &effect_path,
@@ -1395,6 +2204,14 @@ mod tests {
             300,
             &token,
             false,
+            &[],
+            None,
+            None,
+            None,
+            1,
+            None,
+            false,
+            None,
         )
         .await
         .unwrap_err();
@@ -1417,6 +2234,14 @@ mod tests {
             300,
             &token,
             false,
+            &[],
+            None,
+            None,
+            None,
+            1,
+            None,
+            false,
+            None,
         )
         .await
         .unwrap_err();
@@ -1438,7 +2263,10 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -1452,6 +2280,7 @@ mod tests {
             on_error,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -1582,6 +2411,136 @@ mod tests {
             meta.get(&Value::from("provider")),
             Some(&Value::from("json"))
         );
+    }
+
+    #[tokio::test]
+    async fn a_process_backed_tool_publishes_meta_live_while_running_and_clears_it_after() {
+        struct FakeLiveTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for FakeLiveTool {
+            fn name(&self) -> &str {
+                "shell"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                let on_live = call.on_live.expect("shell always gets an on_live callback");
+                on_live(electricity_tools::process::LiveTail {
+                    stdout_tail: "hi".to_string(),
+                    stderr_tail: String::new(),
+                    stdout_bytes: 2,
+                    stderr_bytes: 0,
+                });
+                Ok(electricity_tools::ToolResult::new(
+                    Value::from("ok"),
+                    Value::None,
+                ))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "shell".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(FakeLiveTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let root = snapshot.as_dict().unwrap();
+        let node = root.get(&Value::from("fetch")).unwrap().as_dict().unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        // `meta.live` is gone from the final node (#741): the
+        // plugin above did publish one while it ran, but it must never
+        // survive into this attempt's own final write.
+        assert!(meta.get(&Value::from("live")).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_provider_outside_the_live_set_never_gets_an_on_live_callback() {
+        struct AssertNoLiveTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for AssertNoLiveTool {
+            fn name(&self) -> &str {
+                "http"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                assert!(call.on_live.is_none());
+                Ok(electricity_tools::ToolResult::new(Value::None, Value::None))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "http".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(AssertNoLiveTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]
@@ -1820,6 +2779,174 @@ mod tests {
             err.to_string(),
             "params_json must not set ['allowed_commands']: security-sensitive \
              settings are only honoured from a document's literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn params_json_setting_within_on_an_http_effect_is_refused_even_rendered_from_state() {
+        // Issue #726: `within`/`save_to` is only ever honoured from the
+        // document's own literal `params`, never a `params_json` overlay --
+        // including one whose raw text is a template that only becomes the
+        // JSON object `{"within": ...}` once rendered, from a prior
+        // effect's own state, which the compiler's own literal-JSON sniff
+        // at compile time can never see.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("url"), template("http://127.0.0.1:1/"));
+        let mut tool = tool_op(params);
+        tool.provider = "http".to_string();
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{{{prime.payload.value}}}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        let mut prime = Dict::new();
+        let mut payload = Dict::new();
+        payload.insert(
+            Value::from("value"),
+            Value::from("{\"within\": \"/etc/circuitry-test-725\"}"),
+        );
+        prime.insert(Value::from("payload"), Value::Dict(payload));
+        let mut ctx = Dict::new();
+        ctx.insert(Value::from("prime"), Value::Dict(prime));
+        let ctx = Value::Dict(ctx);
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &ctx,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn params_json_setting_within_on_a_systemone_effect_is_refused() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("model"), template("m"));
+        params.insert(Value::from("state"), template("s"));
+        let mut tool = tool_op(params);
+        tool.provider = "systemone".to_string();
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{\"within\": \"/tmp\"}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_limited_documents_rendered_params_json_naming_save_to_is_refused() {
+        // Issue #726: a limited document's `http` effect never saves a
+        // file -- `ToolOp::limited`, checked against the fully merged,
+        // rendered params, catches a `save_to` a templated `params_json`
+        // only introduces once rendered, which neither the compiler's
+        // literal-params check (nothing in this effect's own literal
+        // `params` ever names `save_to`) nor its literal-JSON `params_json`
+        // sniff (a raw template, not literal JSON, at compile time) can see.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("url"), template("http://127.0.0.1:1/"));
+        let mut tool = tool_op(params);
+        tool.provider = "http".to_string();
+        tool.limited = true;
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{{{prime.payload.value}}}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        let mut prime = Dict::new();
+        let mut payload = Dict::new();
+        payload.insert(
+            Value::from("value"),
+            Value::from("{\"save_to\": \"evil.bin\"}"),
+        );
+        prime.insert(Value::from("payload"), Value::Dict(payload));
+        let mut ctx = Dict::new();
+        ctx.insert(Value::from("prime"), Value::Dict(prime));
+        let ctx = Value::Dict(ctx);
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &ctx,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "HttpPlugin: params['save_to']: only a document run by path may save a \
+             response to a file (a limited document, a library entry or a generated \
+             plan cannot)."
         );
     }
 
@@ -3102,6 +4229,110 @@ mod tests {
         assert_eq!(message, "no reply from the server");
     }
 
+    /// A test-only [`electricity_tools::ToolPlugin`] that reports tokens
+    /// on a successful first attempt, then raises on every attempt
+    /// after -- `core/tool.py`'s own exception-handler rewrite
+    /// (`tool.py:1104-1111`, issue #724): the pass's own final failure
+    /// still carries the earlier attempt's own total.
+    struct TokensThenRaisingTool {
+        calls: std::cell::Cell<u32>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for TokensThenRaisingTool {
+        fn name(&self) -> &str {
+            "tokens_then_raising"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            let call = self.calls.get();
+            self.calls.set(call + 1);
+            if call == 0 {
+                let mut result =
+                    electricity_tools::ToolResult::new(Value::None, Value::Dict(Dict::new()));
+                result.ok = false;
+                result.stderr = Some("tokens_then_raising: attempt 0 failed".to_string());
+                result.tokens_sent = Some(5);
+                result.tokens_received = Some(7);
+                return Ok(result);
+            }
+            Err(electricity_tools::ToolError {
+                py_class: electricity_tools::PyExc::ValueError,
+                message: "no reply from the server".to_string(),
+                cause: electricity_tools::ErrorCause::NoReply,
+            })
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_raised_failure_after_an_earlier_successful_attempt_still_carries_its_tokens_total() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "tokens_then_raising".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(TokensThenRaisingTool {
+            calls: std::cell::Cell::new(0),
+        }));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("tokens_sent_total")),
+            Some(&Value::from(5))
+        );
+        assert_eq!(
+            meta.get(&Value::from("tokens_received_total")),
+            Some(&Value::from(7))
+        );
+    }
+
     #[tokio::test]
     async fn a_huge_raw_value_is_capped_through_execute_tools_own_wiring() {
         // The real `json` tool's own `ToolResult.raw` is always a tiny
@@ -3904,6 +5135,153 @@ mod tests {
         assert_eq!(
             meta.get(&Value::from("retries_used")),
             Some(&Value::from(1i64))
+        );
+    }
+
+    fn cel_params(pairs: Vec<(&str, Value)>) -> Dict {
+        let mut dict = Dict::new();
+        for (key, value) in pairs {
+            dict.insert(Value::Str(key.to_string()), value);
+        }
+        dict
+    }
+
+    fn cel_tool_op(params: Dict) -> ToolOp {
+        ToolOp {
+            provider: "cel".to_string(),
+            params: ParamNode::Literal(Value::Dict(params)),
+            params_json: None,
+            prompt: None,
+            model: None,
+            timeout_ms: None,
+            retries: electricity_bytecode::RetryPolicy::default(),
+            expect: None,
+            description: None,
+            group: None,
+            secret_headers: IndexMap::new(),
+            prompt_file: None,
+            limited: false,
+            confine_to: None,
+        }
+    }
+
+    async fn run_cel(ctx: &Value, params: Dict) -> IndexMap<Value, Value> {
+        let tool = cel_tool_op(params);
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(ToolOp {
+                    provider: tool.provider.clone(),
+                    params: tool.params.clone(),
+                    params_json: None,
+                    prompt: None,
+                    model: None,
+                    timeout_ms: None,
+                    retries: electricity_bytecode::RetryPolicy::default(),
+                    expect: None,
+                    description: None,
+                    group: None,
+                    secret_headers: IndexMap::new(),
+                    prompt_file: None,
+                    limited: false,
+                    confine_to: None,
+                }),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            ctx,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+        let snapshot = store.snapshot(&store.root);
+        snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn cel_sets_value_and_raw_from_the_enclosing_scope() {
+        let mut input = Dict::new();
+        input.insert(Value::from("a"), Value::from(1i64));
+        let mut state = Dict::new();
+        state.insert(Value::from("input"), Value::Dict(input));
+        let ctx = Value::Dict(state);
+
+        let params = cel_params(vec![("expr", Value::from("state.input.a == 1"))]);
+        let node = run_cel(&ctx, params).await;
+        assert_eq!(node.get(&Value::from("value")), Some(&Value::from(true)));
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        let raw = meta.get(&Value::from("raw")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            raw.get(&Value::from("expr")),
+            Some(&Value::from("state.input.a == 1"))
+        );
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+    }
+
+    #[tokio::test]
+    async fn cel_an_unset_path_is_null_without_strict() {
+        let ctx = Value::Dict(Dict::new());
+        let params = cel_params(vec![("expr", Value::from("state.prime.missing.value"))]);
+        let node = run_cel(&ctx, params).await;
+        assert_eq!(node.get(&Value::from("value")), Some(&Value::None));
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(meta.get(&Value::from("error")), Some(&Value::None));
+    }
+
+    #[tokio::test]
+    async fn cel_an_unset_path_fails_under_strict() {
+        let ctx = Value::Dict(Dict::new());
+        let params = cel_params(vec![
+            ("expr", Value::from("state.prime.missing.value")),
+            ("strict", Value::from(true)),
+        ]);
+        let node = run_cel(&ctx, params).await;
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from(
+                "CEL expression 'state.prime.missing.value' reads unset state path \
+                 'state.prime.missing.value' and is marked strict."
+            ))
+        );
+    }
+
+    #[tokio::test]
+    async fn cel_a_schema_mismatch_fails_naming_the_path() {
+        let ctx = Value::Dict(Dict::new());
+        let mut schema = Dict::new();
+        schema.insert(Value::from("type"), Value::from("number"));
+        let params = cel_params(vec![
+            ("expr", Value::from("'not a number'")),
+            ("schema", Value::Dict(schema)),
+        ]);
+        let node = run_cel(&ctx, params).await;
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("error")),
+            Some(&Value::from(
+                "cel: the result does not match params.schema: (root): 'not a number' is not of type 'number'"
+            ))
         );
     }
 }

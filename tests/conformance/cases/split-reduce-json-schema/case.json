@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #682: a reduce-mode plan whose source prompt carries a schema",
+  "description": "prompt_type: object with a schema and split.merge.template: the generated map and merge prompts both copy the source's own schema, params and inputs verbatim (#672's _copy_source_fields), the same object reference on both -- so the plan's own meta.decomposition.yaml carries the YAML anchor/alias PyYAML emits for every one of those shared containers, not only split.merge.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

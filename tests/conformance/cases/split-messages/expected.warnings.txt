@@ -1,0 +1,2 @@
+WARNING: prompt 'map': adapter 'scripted' ignored: messages (roles flattened into one prompt)
+WARNING: prompt 'map': adapter 'scripted' ignored: messages (roles flattened into one prompt)

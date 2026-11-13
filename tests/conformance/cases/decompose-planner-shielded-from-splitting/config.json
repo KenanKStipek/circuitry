@@ -1,0 +1,12 @@
+{
+  "runtime": {
+    "complexity": {
+      "scoring": {"enabled": true},
+      "decomposition": {"enabled": true, "threshold": 10, "max_depth": 1, "max_chunks": 5},
+      "splitting": {"enabled": true, "max_input_tokens": 500, "on_failure": "fail"}
+    },
+    "adapters": {
+      "scripted": {"replies_file": "scripted-replies.yaml"}
+    }
+  }
+}

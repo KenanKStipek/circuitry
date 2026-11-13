@@ -5,10 +5,12 @@ import hashlib
 import json
 import logging
 import math
+import threading
 import time
-from collections.abc import Callable, Sequence
-from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from collections.abc import Callable, Iterator, Sequence
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, replace
+from dataclasses import field as _dataclass_field
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -23,11 +25,13 @@ from ..adapters.base import (
     TRUNCATED_FINISH_REASONS,
     ChatMessage,
     GenerateOptions,
+    GenerateProgress,
     GenerateResult,
     ImageInput,
     call_generate,
 )
 from ..adapters.factory import configured_timeout_seconds
+from ..agent_live import LivePublisher
 from ..allowlist_gate import AllowlistError, allowed_adapters, require_adapter
 from ..cli.redaction import redact
 from ..output import console as _console
@@ -72,6 +76,15 @@ class SchemaValidationError(ValueError):
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+#: ``meta.live``'s own clock (#674), captured as a direct reference rather
+#: than calling ``_now_iso()`` by name: a test that monkeypatches the
+#: module attribute ``_now_iso`` to script a short, fixed sequence of
+#: timestamps for ``created_at``/``completed_at`` (see
+#: ``tests/core/test_prompt_retry_classification.py``) must not have its
+#: sequence consumed by ``meta.live``'s own, much more frequent writes.
+_live_now_iso = _now_iso
 
 
 def _elapsed_str(seconds: float) -> str:
@@ -125,37 +138,64 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     return classify_exception(exc)
 
 
-def _attempt_entry(
-    *,
-    created_at: str,
-    completed_at: str,
-    value: Any,
-    error: str | None,
-    fallback_attempts: list[dict[str, Any]],
-    tokens_sent: int | None,
-    tokens_received: int | None,
-) -> dict[str, Any]:
-    """One ``meta.attempts`` entry for a prompt: ``core.use._attempt_entry``'s
-    counterpart, with a prompt's own per-attempt fields in place of a use
-    effect's child-run ones. A prompt has no ``expect`` to carry (see
-    :class:`PromptDefinition`), unlike ``tool``'s own entry.
+@dataclass
+class _LiveAttemptState:
+    """One attempt's running ``meta.live`` figures (#674), updated from
+    whichever thread the streaming adapter's own reader thread calls
+    ``on_progress`` from — never the thread running :meth:`PromptRuntime.execute`
+    itself. Protected by ``lock`` for exactly that reason.
     """
-    return {
-        "created_at": created_at,
-        "completed_at": completed_at,
-        "value": copy.deepcopy(value),
-        "error": error,
-        "fallback_attempts": copy.deepcopy(fallback_attempts),
-        "tokens_sent": tokens_sent,
-        "tokens_received": tokens_received,
-    }
 
+    lock: threading.Lock = _dataclass_field(default_factory=threading.Lock)
+    started_at: str = _dataclass_field(default_factory=_live_now_iso)
+    first_token_at: str | None = None
+    first_token_monotonic: float | None = None
+    tokens_sent: int | None = None
+    tokens_received: int | None = None
+    tokens_received_estimate: int = 0
+    chars_received: int = 0
 
-def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
-    """``meta.attempts``, always written as the last key of *meta* -- same
-    contract as ``core.use._write_attempts``."""
-    meta.pop("attempts", None)
-    meta["attempts"] = list(attempts)
+    def tokens_per_second(self) -> float | None:
+        # Below two deltas, or within 500ms of the first one, the estimate
+        # is dividing a tiny count by noise (scheduling jitter, clock
+        # resolution), giving a wildly inflated rate rather than a useful
+        # figure.
+        if self.first_token_monotonic is None or self.tokens_received_estimate < 2:
+            return None
+        elapsed = time.monotonic() - self.first_token_monotonic
+        if elapsed < 0.5:
+            return None
+        return self.tokens_received_estimate / elapsed
+
+    def apply(self, progress: GenerateProgress) -> None:
+        if progress.delta_chars > 0:
+            self.chars_received += progress.delta_chars
+            self.tokens_received_estimate += progress.delta_count
+            if self.first_token_at is None:
+                self.first_token_at = _live_now_iso()
+                self.first_token_monotonic = time.monotonic()
+        if progress.tokens_sent is not None:
+            self.tokens_sent = progress.tokens_sent
+        if progress.tokens_received is not None:
+            self.tokens_received = progress.tokens_received
+
+    def snapshot(self, *, attempt: int, adapter: str, model: str, streaming: bool, tokens_sent_estimate: int) -> dict[str, Any]:
+        return {
+            "v": 1,
+            "attempt": attempt,
+            "adapter": adapter,
+            "model": model,
+            "started_at": self.started_at,
+            "updated_at": _live_now_iso(),
+            "streaming": streaming,
+            "first_token_at": self.first_token_at,
+            "tokens_sent": self.tokens_sent,
+            "tokens_sent_estimate": tokens_sent_estimate,
+            "tokens_received": self.tokens_received,
+            "tokens_received_estimate": self.tokens_received_estimate,
+            "chars_received": self.chars_received,
+            "tokens_per_second": self.tokens_per_second(),
+        }
 
 
 class _PromptSpinner:
@@ -312,6 +352,33 @@ class RetryPolicyDef:
 
 
 @dataclass(frozen=True)
+class SplitMergeDef:
+    """``split.merge`` — a reduce prompt's own template (see
+    :mod:`circuitry.core.decompose`'s size trigger)."""
+
+    template: str
+
+
+@dataclass(frozen=True)
+class SplitDef:
+    """``split`` on a ``prompt`` effect — the size trigger's per-effect overlay.
+
+    Every field is optional and, when unset, defers to
+    ``runtime.complexity.splitting``: ``enabled: False`` always opts the
+    effect out regardless of the runtime switch; ``enabled`` left unset (the
+    common case) means "follow the runtime switch"; ``budget_tokens`` set
+    (with ``enabled`` unset or ``True``) splits even when the runtime switch
+    is off.
+    """
+
+    enabled: bool | None = None
+    budget_tokens: int | None = None
+    max_parts: int | None = None
+    separator: str | None = None
+    merge: SplitMergeDef | None = None
+
+
+@dataclass(frozen=True)
 class PromptDefinition:
     """
     A Prompt is the atomic execution unit in Circuitry.
@@ -379,6 +446,11 @@ class PromptDefinition:
     # configured. A prompt effect is a leaf, so this is where a slot is
     # actually held; see #274.
     group: str | None = None
+
+    # The size trigger's per-effect overlay (#672). None (the default): the
+    # runtime's own runtime.complexity.splitting switch and defaults apply
+    # unmodified.
+    split: SplitDef | None = None
 
 
 class PromptRuntime:
@@ -475,13 +547,19 @@ class PromptRuntime:
 
     ``decomposition`` is the other conditional key, and unlike ``complexity``
     it is written *at* dispatch, because it records a dispatch decision: it
-    appears only when ``runtime.complexity.decomposition`` is enabled and this
-    effect's score strictly exceeded the threshold. It carries the attempt's
-    whole story — ``{decomposed, outcome, reason, score, threshold, depth,
-    max_depth, plan?, chunk_count?, yaml?, result_path?, fallback_model?,
-    error?}`` — whether the effect was actually replaced by the planned
-    fan-out (``value`` then holds the child's merged result), routed up to a
-    more capable model, run as-is, or failed under ``on_failure: fail``. See
+    appears when either trigger acts — the size trigger (the estimated input
+    strictly exceeds a configured budget) or the score trigger
+    (``runtime.complexity.decomposition`` is enabled and this effect's score
+    strictly exceeded the threshold), size checked first. ``trigger``
+    (``"score"``/``"size"``) is the one key that tells the two apart; both
+    share ``{decomposed, trigger, outcome, reason, depth, max_depth,
+    chunk_count?, yaml?, result_path?, error?}``. The score trigger adds
+    ``{score, threshold, plan?, fallback_model?}``; the size trigger adds
+    ``{estimated_tokens, budget, merge?, split?}`` and never sets
+    ``fallback_model`` (there is no route-up for size). Whichever trigger
+    acted, the effect was either actually replaced by the fan-out (``value``
+    then holds the child's merged result), routed up to a more capable model
+    (score only), run as-is, or failed under ``on_failure: fail``. See
     :mod:`circuitry.core.decompose`.
     """
 
@@ -625,6 +703,11 @@ class PromptRuntime:
             "template_files",
             "error_code",
             "http_status",
+            # A stale `live` from a killed run (#674) must not survive a
+            # `--resume` pass that never reaches `_live_attempt` at all
+            # (dry run, decomposition, an early failure) -- the same
+            # leftover `tool.py` pops for the agent tool's own `meta.live`.
+            "live",
         ):
             meta.pop(key, None)
         meta["waiting_for"] = None
@@ -720,6 +803,7 @@ class PromptRuntime:
                 ctx=effective_ctx,
                 complexity=complexity,
                 prompt_sent=prompt_sent,
+                resolved_model=resolved_model,
             )
             if decomposition is not None:
                 meta["decomposition"] = decomposition.meta
@@ -729,9 +813,14 @@ class PromptRuntime:
                     if self.verbose:
                         elapsed = time.monotonic() - t0
                         chunk_count = decomposition.meta.get("chunk_count")
+                        verb = (
+                            f"split · {chunk_count} parts"
+                            if decomposition.meta.get("trigger") == "size"
+                            else f"decomposed · {chunk_count} chunks"
+                        )
                         line = (
                             f"{indent}[ok]✓[/ok] [cyan]◆[/cyan] {self.display_name}"
-                            f" [dim]decomposed · {chunk_count} chunks"
+                            f" [dim]{verb}"
                             f" | {_elapsed_str(elapsed)}[/dim]"
                         )
                         if self.cb_done is not None:
@@ -776,6 +865,10 @@ class PromptRuntime:
             attempts = self._build_attempts(default_model=dispatch_model)
 
             next_delay_ms = backoff_ms
+            # Numbers meta.live.attempt across every (adapter, model) this
+            # execution tries, retries included -- never reset per pass
+            # (#674).
+            live_attempt_index = 0
             for _attempt in range(max_attempts):
                 if _attempt > 0:
                     # Cancellation-aware, not a bare time.sleep — see
@@ -830,7 +923,7 @@ class PromptRuntime:
                     else nullcontext()
                 )
                 with concurrency_cm, live_cm, model_call(store, self.defn.name):
-                    res, decoded_value, attempts_meta, generation_error = (
+                    res, decoded_value, attempts_meta, generation_error, live_attempt_index = (
                         self._generate_with_fallbacks(
                             prompt=prompt_sent,
                             attempts=attempts,
@@ -838,6 +931,8 @@ class PromptRuntime:
                             options=options,
                             meta=meta,
                             option_warnings=option_warnings,
+                            store=store,
+                            attempt_index=live_attempt_index,
                         )
                     )
 
@@ -1189,22 +1284,21 @@ class PromptRuntime:
         ctx: dict[str, Any],
         complexity: dict[str, Any] | None,
         prompt_sent: str,
+        resolved_model: str,
     ) -> Any:
         """Attempt runtime decomposition, or ``None`` when it does not apply.
 
-        Decomposition reads the score already recorded in the pre-dispatch
-        meta block — no score (scoring off, or scoring failed) means nothing
-        to compare against the threshold, so the effect runs untouched. The
-        heavy lifting, and every failure-semantics decision, lives in
-        :mod:`circuitry.core.decompose`; the returned result only tells this
-        runtime which of its three postures to take (write the merged value,
-        raise, or dispatch — possibly on a fallback model).
+        The size trigger runs first, measuring *prompt_sent* against a token
+        budget — it needs no score at all. The (pre-existing) score trigger
+        reads the score already recorded in the pre-dispatch meta block — no
+        score (scoring off, or scoring failed) means nothing to compare
+        against the threshold, so that trigger never fires. The heavy
+        lifting, and every failure-semantics decision for both triggers,
+        lives in :mod:`circuitry.core.decompose`; the returned result only
+        tells this runtime which of its three postures to take (write the
+        merged value, raise, or dispatch — possibly on a fallback model).
         """
-        if complexity is None:
-            return None
-        score = complexity.get("score")
-        if not isinstance(score, (int, float)):
-            return None
+        score = complexity.get("score") if complexity is not None else None
 
         from .decompose import maybe_decompose
 
@@ -1213,14 +1307,22 @@ class PromptRuntime:
             store=store,
             node=node,
             ctx=ctx,
-            score=float(score),
+            score=float(score) if isinstance(score, (int, float)) else None,
             # The raw template keeps its {{...}} references so the emitted
             # document can re-declare them as inputs; a messages-based prompt
             # has no single template, so the materialized (already-rendered,
             # self-contained) prompt stands in.
             source_template=self.defn.template or prompt_sent,
+            prompt_sent=prompt_sent,
             adapter=self.adapter,
+            # The run's default model, unchanged from before #672 — what an
+            # isolated child/planner dispatches on when a chunk/part names no
+            # model of its own. `resolved_model` (this effect's own already-
+            # resolved model, router included) is passed separately, read
+            # only by the size trigger's budget lookup
+            # (`runtime.complexity.splitting.models.<resolved model>`).
             model=self.model,
+            resolved_model=resolved_model,
             runtime_config=self.runtime_config,
             timeout_seconds=self.timeout_seconds,
             verbose=self.verbose,
@@ -1398,6 +1500,123 @@ class PromptRuntime:
             logger.warning("prompt %r: %s", self.defn.name, warning)
             meta.setdefault("warnings", []).append(warning)
 
+    @contextmanager
+    def _live_attempt(
+        self,
+        *,
+        store: Store,
+        attempt_index: int,
+        adapter: Any,
+        adapter_name: str,
+        model_name: str,
+        prompt: str,
+        options: GenerateOptions,
+    ) -> Iterator[GenerateOptions]:
+        """Publish ``meta.live`` for one attempt (#674): written when this
+        attempt starts, updated from the adapter's own ``on_progress``
+        calls (through :class:`~circuitry.agent_live.LivePublisher`'s usual
+        once-a-second coalescing), and removed on every exit — success,
+        failure or cancellation alike.
+
+        Yields the ``GenerateOptions`` the caller should actually dispatch
+        with: unchanged when *adapter* does not stream, or carrying an
+        ``on_progress`` wired to this attempt's own live record when it
+        does. ``--events``' own ``progress`` line (``Store.fire_progress``)
+        is fired from here too, synchronously, on whichever thread calls
+        ``on_progress`` -- never through ``LivePublisher``'s own background
+        thread, whose ``update`` only ever overwrites a pending snapshot
+        rather than queuing one: routing the line through it as well would
+        make which delta's figures actually get published (and whether a
+        fast burst of deltas produces one line or several) depend on when
+        that thread happens to wake up, never deterministic. It is never
+        fired for a zero-``delta_chars`` progress call (Anthropic's own
+        ``message_start``, which only ever reports ``tokens_sent``) or on
+        this method's own start/clear writes.
+        """
+        from .complexity import _estimate_tokens
+
+        name = self.defn.name
+        # `is True`, not `bool(...)`: a test double built from a bare
+        # `MagicMock()` auto-creates a truthy `.streams` attribute on any
+        # access, which `bool()` would read as streaming -- the same
+        # reason `adapter_accepts_images` compares this way (#674).
+        streaming = getattr(adapter, "streams", False) is True
+        tokens_sent_estimate = _estimate_tokens(prompt)
+        live_state = _LiveAttemptState()
+        # Captured once, right now, on this method's own calling thread --
+        # the effect's dispatch thread, which already called
+        # `fire_effect_start` before this attempt began -- so every
+        # `progress` line this attempt fires later (from the adapter's own
+        # reader thread) carries the instance that was actually open when
+        # this attempt started, never one a same-path concurrent `start`
+        # (an unnamed tree-flow loop sharing one compiled path) has since
+        # moved a path-keyed lookup on to.
+        captured_instance = store.resolve_open_instance(name)
+
+        def _snapshot_locked() -> dict[str, Any]:
+            """Caller already holds ``live_state.lock``."""
+            return live_state.snapshot(
+                attempt=attempt_index,
+                adapter=adapter_name,
+                model=model_name,
+                streaming=streaming,
+                tokens_sent_estimate=tokens_sent_estimate,
+            )
+
+        def _snapshot() -> dict[str, Any]:
+            with live_state.lock:
+                return _snapshot_locked()
+
+        # Only a streaming adapter ever calls `on_progress`, so a
+        # non-streaming one has nothing for `LivePublisher`'s own writer
+        # thread to do beyond the one write below and the clearing write
+        # in `finally` -- skip spawning it at all.
+        publisher = LivePublisher(lambda snapshot: store.set(f"{name}.meta.live", snapshot)) if streaming else None
+
+        progress_lock = threading.Lock()
+        last_progress_fired_at: list[float | None] = [None]
+
+        def _on_progress(progress: GenerateProgress) -> None:
+            with live_state.lock:
+                live_state.apply(progress)
+                snapshot = _snapshot_locked()
+            assert publisher is not None  # only wired when `streaming`
+            publisher.update(snapshot)
+            if progress.delta_chars <= 0:
+                return
+            now = time.monotonic()
+            with progress_lock:
+                last_fired = last_progress_fired_at[0]
+                if last_fired is not None and now - last_fired < 1.0:
+                    return
+                last_progress_fired_at[0] = now
+            store.fire_progress(
+                name,
+                {
+                    "tokens_received_estimate": snapshot["tokens_received_estimate"],
+                    "chars_received": snapshot["chars_received"],
+                    "tokens_sent": snapshot["tokens_sent"],
+                    "tokens_sent_estimate": snapshot["tokens_sent_estimate"],
+                    # Neither of these is part of the `progress` line
+                    # itself -- `cli.events.EventLog.on_progress` reads
+                    # `_instance` in place of its own fresh lookup (the
+                    # capture above), and `attempt` only to reset
+                    # `first_token_ms` on a new attempt, since one
+                    # `start`/`end` pair covers every retry of a prompt.
+                    "_instance": captured_instance,
+                    "attempt": attempt_index,
+                },
+            )
+
+        store.set(f"{name}.meta.live", _snapshot())
+        live_options = replace(options, on_progress=_on_progress) if streaming else options
+        try:
+            yield live_options
+        finally:
+            if publisher is not None:
+                publisher.close()
+            store.unset(f"{name}.meta.live")
+
     def _generate_with_fallbacks(
         self,
         *,
@@ -1407,10 +1626,13 @@ class PromptRuntime:
         option_warnings: list[str],
         timeout_ms: int | None = None,
         options: GenerateOptions | None = None,
-    ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None]:
+        store: Store,
+        attempt_index: int = 0,
+    ) -> tuple[GenerateResult | None, Any, list[dict[str, Any]], Exception | None, int]:
         """Try each ``(adapter, model)`` in order; the first reply that both
         the adapter call and decoding/schema validation accept wins:
-        ``(result, decoded value, attempt log, the last error if none did)``.
+        ``(result, decoded value, attempt log, the last error if none did,
+        the next attempt index)``.
 
         A reply a provider actually returned but this effect can't use — an
         unreadable boolean/number, or JSON that fails its schema — is treated
@@ -1431,20 +1653,36 @@ class PromptRuntime:
         the installed allowlist is a denial, not a transient failure, and
         must not silently fall through to the next adapter in the chain
         (often the run default).
+
+        ``attempt_index`` numbers ``meta.live.attempt`` across every
+        ``(adapter, model)`` this call tries, continuing from wherever the
+        last pass (an earlier retry) left off — the returned index is what
+        the next retry's own call starts from, so the count runs across the
+        whole execution rather than resetting per pass (#674).
         """
         attempts_meta: list[dict[str, Any]] = []
         last_error: Exception | None = None
+        options = options or GenerateOptions()
 
         for adapter_name, model_name in attempts:
             try:
                 adapter = self._resolve_adapter(adapter_name)
-                res = call_generate(
-                    adapter,
-                    model=model_name,
+                with self._live_attempt(
+                    store=store,
+                    attempt_index=attempt_index,
+                    adapter=adapter,
+                    adapter_name=adapter_name,
+                    model_name=model_name,
                     prompt=prompt,
-                    timeout_seconds=self._attempt_timeout_seconds(adapter_name, timeout_ms),
                     options=options,
-                )
+                ) as live_options:
+                    res = call_generate(
+                        adapter,
+                        model=model_name,
+                        prompt=prompt,
+                        timeout_seconds=self._attempt_timeout_seconds(adapter_name, timeout_ms),
+                        options=live_options,
+                    )
             except AllowlistError:
                 # A security boundary, not a dispatch failure: an adapter
                 # outside the installed allowlist must fail this effect
@@ -1454,6 +1692,7 @@ class PromptRuntime:
                 # the chain (often the run default) instead of refusing.
                 raise
             except Exception as e:
+                attempt_index += 1
                 last_error = e
                 attempts_meta.append(
                     {
@@ -1470,6 +1709,7 @@ class PromptRuntime:
                     }
                 )
                 continue
+            attempt_index += 1
 
             # Before decoding: a reply cut off mid-JSON fails to parse, and
             # the truncation warning is what explains it.
@@ -1501,9 +1741,9 @@ class PromptRuntime:
                     "tokens_received": res.tokens_received,
                 }
             )
-            return (res, decoded_value, attempts_meta, None)
+            return (res, decoded_value, attempts_meta, None, attempt_index)
 
-        return (None, None, attempts_meta, last_error)
+        return (None, None, attempts_meta, last_error, attempt_index)
 
     def _decode_and_validate(self, res: GenerateResult, *, meta: dict[str, Any]) -> Any:
         """Decode ``res.text`` per ``prompt_type`` and validate it against

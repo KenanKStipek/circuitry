@@ -30,7 +30,7 @@ import re
 import subprocess
 import tempfile
 import urllib.parse
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from .core.cancellation import run_tracked
@@ -315,7 +315,8 @@ def _strip_retry_after_marker(text: str) -> str:
 
 
 def _run_curl_posix(
-    cmd: list[str], config_bytes: bytes, data: str | None
+    cmd: list[str], config_bytes: bytes, data: str | None,
+    *, on_line: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """POSIX: the config travels through a pipe this process creates and
     keeps open just long enough for curl to read it via ``--config
@@ -329,13 +330,15 @@ def _run_curl_posix(
             [*cmd, "--config", f"/dev/fd/{read_fd}"],
             input=data,
             pass_fds=(read_fd,),
+            on_line=on_line,
         )
     finally:
         os.close(read_fd)
 
 
 def _run_curl_windows(
-    cmd: list[str], config_bytes: bytes, data: str | None
+    cmd: list[str], config_bytes: bytes, data: str | None,
+    *, on_line: Callable[[str], None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Windows: `Popen` rejects a non-empty ``pass_fds`` and there's no
     ``/dev/fd``, so the config is written to a file in the per-user temp
@@ -345,9 +348,46 @@ def _run_curl_windows(
     try:
         with os.fdopen(fd, "wb") as config_file:
             config_file.write(config_bytes)
-        return run_tracked([*cmd, "--config", path], input=data)
+        return run_tracked([*cmd, "--config", path], input=data, on_line=on_line)
     finally:
         os.remove(path)
+
+
+def _build_config_and_cmd(
+    *,
+    url: str,
+    headers: Mapping[str, str] | Sequence[tuple[str, str]],
+    data: str | None,
+    timeout_seconds: int,
+    extra_args: Sequence[str] = (),
+) -> tuple[bytes, list[str]]:
+    """``(config_bytes, cmd)`` shared by :func:`run_curl` and
+    :func:`run_curl_streaming`: the same ``--config`` file content, the
+    same base flags, the same Retry-After write-out marker and the same
+    ``--data-binary @-`` decision. ``extra_args`` (``--no-buffer`` for the
+    streaming caller) is appended last, after the write-out flag."""
+    header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
+    config_bytes = _curl_config_file(url, header_items).encode()
+    if len(config_bytes) > _MAX_CONFIG_BYTES:
+        raise ValueError(
+            f"url + headers are {len(config_bytes)} bytes, over the "
+            f"{_MAX_CONFIG_BYTES}-byte limit for a single curl --config write"
+        )
+    cmd = [
+        "curl",
+        "-q",
+        "--silent",
+        "--show-error",
+        "--fail-with-body",
+        "--max-time",
+        str(int(timeout_seconds)),
+    ]
+    if _curl_supports_retry_after_header():
+        cmd += ["--write-out", _RETRY_AFTER_WRITE_OUT_FORMAT]
+    if data is not None:
+        cmd += ["--data-binary", "@-"]
+    cmd += list(extra_args)
+    return config_bytes, cmd
 
 
 def run_curl(
@@ -373,27 +413,45 @@ def run_curl(
     raise ``FileNotFoundError`` if curl is not on PATH — callers translate that
     into their own error.
     """
-    header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
-    config_bytes = _curl_config_file(url, header_items).encode()
-    if len(config_bytes) > _MAX_CONFIG_BYTES:
-        raise ValueError(
-            f"url + headers are {len(config_bytes)} bytes, over the "
-            f"{_MAX_CONFIG_BYTES}-byte limit for a single curl --config write"
-        )
-    cmd = [
-        "curl",
-        "-q",
-        "--silent",
-        "--show-error",
-        "--fail-with-body",
-        "--max-time",
-        str(int(timeout_seconds)),
-    ]
-    if _curl_supports_retry_after_header():
-        cmd += ["--write-out", _RETRY_AFTER_WRITE_OUT_FORMAT]
-    if data is not None:
-        cmd += ["--data-binary", "@-"]
-
+    config_bytes, cmd = _build_config_and_cmd(
+        url=url, headers=headers, data=data, timeout_seconds=timeout_seconds
+    )
     if os.name == "nt":
         return _run_curl_windows(cmd, config_bytes, data)
     return _run_curl_posix(cmd, config_bytes, data)
+
+
+def run_curl_streaming(
+    *,
+    url: str,
+    headers: Mapping[str, str] | Sequence[tuple[str, str]] = (),
+    data: str | None = None,
+    timeout_seconds: int,
+    on_line: Callable[[str], None],
+) -> subprocess.CompletedProcess[str]:
+    """Like :func:`run_curl`, but calls ``on_line`` with each line of the
+    response body as curl writes it, rather than only once the whole call
+    is done.
+
+    Everything :func:`run_curl` guarantees still holds: ``-q`` first, the
+    URL/headers off argv via the same ``--config`` plumbing, the body (if
+    any) on stdin, the Retry-After write-out marker and credential masking,
+    and the same :func:`~circuitry.core.cancellation.run_tracked`
+    registration — a cancelled run or a timed-out call kills this curl
+    exactly as it kills a non-streaming one. ``--no-buffer`` is added so
+    curl flushes each chunk to stdout as it arrives rather than waiting for
+    its own output buffer to fill. The returned ``CompletedProcess`` carries
+    the complete joined stdout, the same ``returncode``/``stderr`` a failed
+    call would have without streaming, so :func:`curl_failure_message` on a
+    failure needs no special casing.
+    """
+    config_bytes, cmd = _build_config_and_cmd(
+        url=url,
+        headers=headers,
+        data=data,
+        timeout_seconds=timeout_seconds,
+        extra_args=("--no-buffer",),
+    )
+    if os.name == "nt":
+        return _run_curl_windows(cmd, config_bytes, data, on_line=on_line)
+    return _run_curl_posix(cmd, config_bytes, data, on_line=on_line)

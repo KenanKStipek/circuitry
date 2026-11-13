@@ -29,6 +29,12 @@ pub struct RunSpec {
     pub config: Option<PathBuf>,
     pub sets: Vec<String>,
     pub run_dir: PathBuf,
+    /// `osi <doc> --label TEXT` (issue #752), passed through to
+    /// whichever engine runs this: literal text that wins over the
+    /// document's own `label:` template. `None` with no `--label`
+    /// given at all -- `osi watch` never sets this, since it never
+    /// launches anything.
+    pub label: Option<String>,
 }
 
 impl RunSpec {
@@ -69,6 +75,14 @@ pub struct EngineCaps {
     /// real, since M0-H added both flags together and an older build
     /// has neither.
     pub live_state: bool,
+    /// `--label` (issue #752), detected the same way as `events` --
+    /// an older `cof`/`electricity` built before the engines took
+    /// `--label` doesn't have it. `RunSpec::label` is always osi's own
+    /// display fallback regardless (`names::display_name`'s own
+    /// `label_hint`), so a run against an engine with no `--label`
+    /// still shows its label in osi, it just never reaches the
+    /// engine, nor `run_start`/state at all.
+    pub label: bool,
     /// Set when the `--help` probe itself couldn't find the binary at
     /// all (M4): lets a caller skip the "this cof has no --events"
     /// notice in that case, which otherwise printed -- wrongly --
@@ -111,23 +125,59 @@ impl std::error::Error for EngineError {}
 /// which a plain `.contains("--events")` never matches, so detection
 /// silently read every such run as "this binary has no --events" and
 /// fell back to running it with the live-state file only.
-fn strip_ansi_escapes(text: &str) -> String {
+pub(crate) fn strip_ansi_escapes(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
-        if c == '\u{1b}' && chars.peek() == Some(&'[') {
-            chars.next();
-            while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?') {
-                chars.next();
-            }
-            while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
-                chars.next();
-            }
-            if matches!(chars.peek(), Some(c) if ('@'..='~').contains(c)) {
-                chars.next();
-            }
-        } else {
+        if c != '\u{1b}' {
             out.push(c);
+            continue;
+        }
+        match chars.peek() {
+            Some('[') => {
+                chars.next();
+                while matches!(chars.peek(), Some(c) if c.is_ascii_digit() || *c == ';' || *c == '?')
+                {
+                    chars.next();
+                }
+                while matches!(chars.peek(), Some(c) if (' '..='/').contains(c)) {
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some(c) if ('@'..='~').contains(c)) {
+                    chars.next();
+                }
+            }
+            // OSC (`]`) and the three string-shaped controls (DCS
+            // `P`, PM `^`, APC `_`) all carry a body of their own
+            // (issue #752's "escape sequences are dropped": a
+            // terminal title set with `\x1b]0;title\x07` must drop
+            // `title` too, not just the two control bytes around
+            // it) -- swallowed up to its own terminator, either a
+            // bare BEL or the two-byte ST (`ESC \`), whichever comes
+            // first; a stream missing its own terminator altogether
+            // runs to the end of `text` with nothing surviving
+            // either.
+            Some(']') | Some('P') | Some('^') | Some('_') => {
+                chars.next();
+                loop {
+                    match chars.next() {
+                        None => break,
+                        Some('\u{7}') => break,
+                        Some('\u{1b}') if chars.peek() == Some(&'\\') => {
+                            chars.next();
+                            break;
+                        }
+                        Some(_) => continue,
+                    }
+                }
+            }
+            // Every other two-byte escape (cursor save/restore,
+            // charset selection, ...) -- just the one byte after
+            // `ESC` itself, dropped along with it.
+            Some(_) => {
+                chars.next();
+            }
+            None => {}
         }
     }
     out
@@ -282,18 +332,21 @@ impl CofEngine {
         cmd.process_group(0);
         let outcome = run_probe(cmd, timeout, signals);
         let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        let (events, timed_out) = match outcome {
-            Ok(ProbeOutcome::Completed { stdout, stderr }) => {
-                (help_mentions(&stdout, &stderr, "--events"), false)
-            }
-            Ok(ProbeOutcome::TimedOut) => (false, true),
-            Err(_) => (false, false),
+        let (events, label, timed_out) = match outcome {
+            Ok(ProbeOutcome::Completed { stdout, stderr }) => (
+                help_mentions(&stdout, &stderr, "--events"),
+                help_mentions(&stdout, &stderr, "--label"),
+                false,
+            ),
+            Ok(ProbeOutcome::TimedOut) => (false, false, true),
+            Err(_) => (false, false, false),
         };
         CofEngine {
             binary,
             caps: EngineCaps {
                 events,
                 live_state: true,
+                label,
                 missing,
                 timed_out,
             },
@@ -328,6 +381,11 @@ impl Engine for CofEngine {
         cmd.arg("--out").arg(spec.out_path());
         if self.caps.events {
             cmd.arg("--events").arg(spec.events_path());
+        }
+        if self.caps.label {
+            if let Some(label) = &spec.label {
+                cmd.arg("--label").arg(label);
+            }
         }
         for kv in &spec.sets {
             cmd.arg("-e").arg(kv);
@@ -382,20 +440,22 @@ impl ElectricityEngine {
         cmd.process_group(0);
         let outcome = run_probe(cmd, PROBE_TIMEOUT, signals);
         let missing = matches!(&outcome, Err(e) if e.kind() == std::io::ErrorKind::NotFound);
-        let (events, live_state, timed_out) = match outcome {
+        let (events, live_state, label, timed_out) = match outcome {
             Ok(ProbeOutcome::Completed { stdout, stderr }) => (
                 help_mentions(&stdout, &stderr, "--events"),
                 help_mentions(&stdout, &stderr, "--live-state"),
+                help_mentions(&stdout, &stderr, "--label"),
                 false,
             ),
-            Ok(ProbeOutcome::TimedOut) => (false, false, true),
-            Err(_) => (false, false, false),
+            Ok(ProbeOutcome::TimedOut) => (false, false, false, true),
+            Err(_) => (false, false, false, false),
         };
         ElectricityEngine {
             binary,
             caps: EngineCaps {
                 events,
                 live_state,
+                label,
                 missing,
                 timed_out,
             },
@@ -430,6 +490,11 @@ impl Engine for ElectricityEngine {
         cmd.arg(config).arg(&spec.orchestration);
         for kv in &spec.sets {
             cmd.arg("-e").arg(kv);
+        }
+        if self.caps.label {
+            if let Some(label) = &spec.label {
+                cmd.arg("--label").arg(label);
+            }
         }
         cmd.arg("--out").arg(spec.out_path());
         if self.caps.events {
@@ -503,6 +568,7 @@ mod tests {
             EngineCaps {
                 events: true,
                 live_state: true,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -512,6 +578,7 @@ mod tests {
             config: None,
             sets: vec!["k=v".to_string()],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -526,12 +593,80 @@ mod tests {
     }
 
     #[test]
+    fn cof_command_includes_label_when_given() {
+        let engine = CofEngine::with_caps(
+            "cof",
+            EngineCaps {
+                label: true,
+                ..EngineCaps::default()
+            },
+        );
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let label_idx = args.iter().position(|a| a == "--label").expect("--label");
+        assert_eq!(args[label_idx + 1], "ticket 42");
+    }
+
+    #[test]
+    fn cof_command_omits_label_when_none() {
+        let engine = CofEngine::with_caps(
+            "cof",
+            EngineCaps {
+                label: true,
+                ..EngineCaps::default()
+            },
+        );
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: None,
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--label".to_string()));
+    }
+
+    #[test]
+    fn cof_command_omits_label_when_the_engine_does_not_support_it() {
+        let engine = CofEngine::with_caps("cof", EngineCaps::default());
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--label".to_string()));
+    }
+
+    #[test]
     fn cof_command_omits_events_when_unsupported() {
         let engine = CofEngine::with_caps(
             "cof",
             EngineCaps {
                 events: false,
                 live_state: true,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -541,6 +676,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -558,6 +694,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         assert!(matches!(
             engine.command(&spec),
@@ -573,6 +710,7 @@ mod tests {
             config: Some(PathBuf::from("config.json")),
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -590,6 +728,7 @@ mod tests {
             EngineCaps {
                 events: true,
                 live_state: true,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -599,6 +738,7 @@ mod tests {
             config: Some(PathBuf::from("config.json")),
             sets: vec!["k=v".to_string()],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -625,12 +765,56 @@ mod tests {
     }
 
     #[test]
+    fn electricity_command_includes_label_when_given() {
+        let engine = ElectricityEngine::with_caps(
+            "electricity",
+            EngineCaps {
+                label: true,
+                ..EngineCaps::default()
+            },
+        );
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: Some(PathBuf::from("config.json")),
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let label_idx = args.iter().position(|a| a == "--label").expect("--label");
+        assert_eq!(args[label_idx + 1], "ticket 42");
+    }
+
+    #[test]
+    fn electricity_command_omits_label_when_the_engine_does_not_support_it() {
+        let engine = ElectricityEngine::new("electricity");
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: Some(PathBuf::from("config.json")),
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--label".to_string()));
+    }
+
+    #[test]
     fn electricity_command_omits_events_and_live_state_when_unsupported() {
         let engine = ElectricityEngine::with_caps(
             "electricity",
             EngineCaps {
                 events: false,
                 live_state: false,
+                label: true,
                 missing: false,
                 timed_out: false,
             },
@@ -640,6 +824,7 @@ mod tests {
             config: Some(PathBuf::from("config.json")),
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd

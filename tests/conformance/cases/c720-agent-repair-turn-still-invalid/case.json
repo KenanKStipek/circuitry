@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #720: the agent tool's result_file repair turn, still invalid after",
+  "description": "The fake always writes a result missing `tests_pass`, on both the first turn and the repair turn: the effect fails naming the schema errors, with `on_error: continue` absorbing it so the run still succeeds; `meta.raw.repair_turn` is `true` and `meta.raw.session_id`/`transcript` are still present.",
+  "engines": ["python", "electricity"],
+  "cli_args": ["-e", "work_dir=__CASE_DIR__"],
+  "expect": "success"
+}

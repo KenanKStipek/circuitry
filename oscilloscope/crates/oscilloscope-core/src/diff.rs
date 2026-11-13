@@ -237,8 +237,8 @@ fn result_summary(node: &NodeMeta) -> String {
             .unwrap_or(0);
         return format!(
             "↑{} ↓{}",
-            crate::format::format_tokens(tokens_sent),
-            crate::format::format_tokens(received)
+            crate::format::format_tokens_arrow(tokens_sent),
+            crate::format::format_tokens_arrow(received)
         );
     }
     "ok".to_string()
@@ -475,6 +475,27 @@ pub struct Differ {
     /// whether or not the event has arrived by then (it hasn't, or
     /// `report_paths` would already have made it `report_only` above).
     held_once: BTreeSet<String>,
+    /// The run id a `run_start` event announced, kept only so
+    /// [`Differ::finish`] can name the run in the exit summary
+    /// (issue #717) the same way the `■ run started` line already
+    /// does -- `diff_event`'s own `Event::RunStart` arm is the only
+    /// thing that ever sets it.
+    run_id: Option<String>,
+    /// The run's own label (issue #752), kept the same way `run_id`
+    /// is (`diff_event`'s own `Event::RunStart` arm, cleaned there)
+    /// so [`Differ::finish`] can show it in the exit summary --
+    /// `names::display_name` already falls back to the generated
+    /// name with `None` here.
+    run_label: Option<String>,
+    /// `osi <doc> --label TEXT`'s own cleaned value (issue #752), set
+    /// once by whichever caller actually launched this run, right
+    /// after [`Differ::new`] -- [`Differ::finish`]'s own fallback
+    /// below `run_label` and the state file's `runtime.last_run.
+    /// label`, so the exit summary still shows a labelled run's
+    /// label even when the engine failed before ever writing a
+    /// `run_start` event. `None` for every caller with nothing of
+    /// its own to fall back to.
+    label_hint: Option<String>,
 }
 
 impl Differ {
@@ -490,7 +511,18 @@ impl Differ {
             pending_ends: Vec::new(),
             report_paths: BTreeSet::new(),
             held_once: BTreeSet::new(),
+            run_id: None,
+            run_label: None,
+            label_hint: None,
         }
+    }
+
+    /// Sets [`Differ::label_hint`] (issue #752) -- called once, by
+    /// whichever caller actually launched this run, from `osi <doc>
+    /// --label TEXT`'s own already-[`crate::names::clean_label`]'d
+    /// value. A no-op with `None` (no `--label` given).
+    pub fn set_label_hint(&mut self, hint: Option<String>) {
+        self.label_hint = hint;
     }
 
     /// Records the latest polled state for [`Differ::diff_event`]'s
@@ -770,12 +802,22 @@ impl Differ {
                     path: Some(path.clone()),
                 }]
             }
-            Event::RunStart { ts, run_id, .. } => vec![LogLine {
-                ts: Some(ts.clone()),
-                text: format!("■ run started  {run_id}"),
-                kind: LogKind::RunStart,
-                path: None,
-            }],
+            Event::RunStart {
+                ts, run_id, label, ..
+            } => {
+                self.run_id = Some(run_id.clone());
+                self.run_label = label.as_deref().and_then(crate::names::clean_label);
+                vec![LogLine {
+                    ts: Some(ts.clone()),
+                    text: format!(
+                        "■ run started  {}  {run_id}",
+                        crate::names::display_name(self.run_label.as_deref(), Some(run_id))
+                            .expect("a run id implies a name")
+                    ),
+                    kind: LogKind::RunStart,
+                    path: None,
+                }]
+            }
             Event::RunEnd { .. } => Vec::new(),
             _ => Vec::new(),
         }
@@ -847,9 +889,40 @@ impl Differ {
             .pointer("/runtime/last_run/completed_at")
             .and_then(Value::as_str)
             .map(str::to_string);
+        // `self.run_id` is only ever set by a `run_start` event; an
+        // events-less watch (`osi watch` of a bare `state.live.json`)
+        // never sends one, so the exit summary falls back to the
+        // state's own `_run_id`, the same fallback the header already
+        // uses for its own name.
+        let run_id = self.run_id.clone().or_else(|| {
+            state
+                .get("_run_id")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        });
+        // The same fallback order as `run_id` just above, plus one
+        // more step `run_id` has no equivalent of: a label from this
+        // run's own `run_start` event, else `osi watch`'s own
+        // `runtime.last_run.label` with no `--events` stream at all,
+        // else `osi <doc> --label TEXT`'s own hint, so a run whose
+        // engine failed before ever writing a `run_start` still
+        // reports its own label in the exit summary.
+        let label = self
+            .run_label
+            .clone()
+            .or_else(|| {
+                state
+                    .pointer("/runtime/last_run/label")
+                    .and_then(Value::as_str)
+                    .and_then(crate::names::clean_label)
+            })
+            .or_else(|| self.label_hint.clone());
+        let name_prefix = crate::names::display_name(label.as_deref(), run_id.as_deref())
+            .map(|name| format!("{name}  "))
+            .unwrap_or_default();
         Some(LogLine {
             ts: run_ts,
-            text: format!("■ run {status_text}{totals_text}"),
+            text: format!("■ run {name_prefix}{status_text}{totals_text}"),
             kind: LogKind::RunEnd,
             path: None,
         })
@@ -1274,6 +1347,8 @@ mod tests {
             run_id: "abc123".to_string(),
             pid: Some(1),
             engine: None,
+            config: None,
+            label: None,
         };
         let model = RunModel::new();
         let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
@@ -1281,7 +1356,7 @@ mod tests {
             lines,
             vec![LogLine {
                 ts: Some("t".to_string()),
-                text: "■ run started  abc123".to_string(),
+                text: "■ run started  high-zebra  abc123".to_string(),
                 kind: LogKind::RunStart,
                 path: None,
             }]
@@ -1333,12 +1408,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -1553,17 +1630,22 @@ mod tests {
                                 description: None,
                                 group: None,
                                 prompt_file: None,
+                                limited: false,
+                                secret_headers: indexmap::IndexMap::new(),
+                                confine_to: None,
                             },
                         ))),
                         on_error: OnError::Continue,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -1617,17 +1699,22 @@ mod tests {
                                 description: None,
                                 group: None,
                                 prompt_file: None,
+                                limited: false,
+                                secret_headers: indexmap::IndexMap::new(),
+                                confine_to: None,
                             },
                         ))),
                         on_error: OnError::Skip,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2078,6 +2165,120 @@ mod tests {
         });
         let line = differ.finish(&ended, None).expect("a summary line");
         assert!(line.text.starts_with("■ run ok"), "{line:?}");
+    }
+
+    #[test]
+    fn diff_event_shows_a_run_starts_own_label_instead_of_the_generated_name() {
+        let mut differ = Differ::new();
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        };
+        let model = RunModel::new();
+        let lines = differ.diff_event(&event, &PlanTree::empty(), &model);
+        assert_eq!(
+            lines,
+            vec![LogLine {
+                ts: Some("t".to_string()),
+                text: "■ run started  ticket 42  abc123".to_string(),
+                kind: LogKind::RunStart,
+                path: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn finish_names_the_run_from_its_own_run_start_label() {
+        let mut differ = Differ::new();
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        };
+        let model = RunModel::new();
+        differ.diff_event(&event, &PlanTree::empty(), &model);
+        let ended = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run ticket 42  ok", "{line:?}");
+    }
+
+    #[test]
+    fn finish_names_the_run_from_state_label_with_no_events_at_all() {
+        // The same `osi watch`-with-no-`--events` fallback as
+        // `finish_names_the_run_from_state_run_id_with_no_events_at_all`,
+        // for a label instead of a run id.
+        let mut differ = Differ::new();
+        let ended = json!({
+            "_run_id": "936ff268-5f52-479a-887f-fda1a47dae63",
+            "runtime": {"last_run": {"completed_at": "t9", "label": "ticket 42"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run ticket 42  ok", "{line:?}");
+    }
+
+    #[test]
+    fn finish_names_the_run_from_state_run_id_with_no_events_at_all() {
+        // `osi watch` of a bare `state.live.json` never sends a
+        // `run_start` event, so `Differ::run_id` stays `None` --
+        // the exit summary still names the run from the state's own
+        // `_run_id`, the same fallback the header already uses.
+        let mut differ = Differ::new();
+        let ended = json!({
+            "_run_id": "936ff268-5f52-479a-887f-fda1a47dae63",
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        let name = crate::names::run_name("936ff268-5f52-479a-887f-fda1a47dae63");
+        assert_eq!(line.text, format!("■ run {name}  ok"), "{line:?}");
+    }
+
+    #[test]
+    fn finish_names_the_run_from_the_label_hint_with_no_run_start_or_state_label() {
+        // The engine failed before ever writing a `run_start` event
+        // (no `run_id` here either) -- `osi <doc> --label TEXT`'s own
+        // hint still names the run in the exit summary.
+        let mut differ = Differ::new();
+        differ.set_label_hint(Some("ticket 42".to_string()));
+        let ended = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run ticket 42  ok", "{line:?}");
+    }
+
+    #[test]
+    fn finish_prefers_run_start_label_over_the_hint() {
+        let mut differ = Differ::new();
+        differ.set_label_hint(Some("hint".to_string()));
+        let event = Event::RunStart {
+            ts: "t".to_string(),
+            run_id: "abc123".to_string(),
+            pid: Some(1),
+            engine: None,
+            config: None,
+            label: Some("from run_start".to_string()),
+        };
+        let model = RunModel::new();
+        differ.diff_event(&event, &PlanTree::empty(), &model);
+        let ended = json!({
+            "runtime": {"last_run": {"completed_at": "t9"}},
+            "prime": {"value": true, "meta": {"completed_at": "t9", "error": null}}
+        });
+        let line = differ.finish(&ended, None).expect("a summary line");
+        assert_eq!(line.text, "■ run from run_start  ok", "{line:?}");
     }
 
     #[test]
@@ -2712,16 +2913,21 @@ mod tests {
                             description: None,
                             group: None,
                             prompt_file: None,
+                            limited: false,
+                            secret_headers: indexmap::IndexMap::new(),
+                            confine_to: None,
                         }))),
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2881,7 +3087,7 @@ mod tests {
 
         let settled = differ.settle_pending_ends(Instant::now());
         assert_eq!(settled.len(), 1);
-        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert_eq!(settled[0].ts.as_deref(), Some("t1"));
         assert!(!differ.has_pending_ends());
     }
@@ -2943,7 +3149,7 @@ mod tests {
 
         let settled = differ.settle_pending_ends(Instant::now());
         assert_eq!(settled.len(), 1);
-        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(settled[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert!(!differ.has_pending_ends());
     }
 
@@ -2995,7 +3201,7 @@ mod tests {
             &model,
         );
         assert_eq!(end.len(), 1, "{end:?}");
-        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert!(!differ.has_pending_ends());
     }
 
@@ -3076,7 +3282,7 @@ mod tests {
             &model,
         );
         assert_eq!(end.len(), 1, "{end:?}");
-        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 t ↓5 t");
+        assert_eq!(end[0].text, "✓ prime.ask  0.1s  ↑3 ↓5");
         assert!(!differ.has_pending_ends());
     }
 
@@ -3120,7 +3326,7 @@ mod tests {
         );
         assert_eq!(end.len(), 1);
         assert!(
-            end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 t ↓5 t"),
+            end[0].text.starts_with("✓ prime.ask  0.1s  ↑3 ↓5"),
             "{end:?}"
         );
         assert!(!differ.has_pending_ends());

@@ -1,0 +1,13 @@
+name: c-http-params-json-within-templated
+effects:
+  - type: tool
+    name: payload
+    provider: json
+    params: {mode: stringify, input: {within: /etc/circuitry-test-725}}
+  - type: tool
+    name: call
+    provider: http
+    on_error: continue
+    params:
+      url: http://127.0.0.1:1/
+    params_json: "{{{prime.payload.value}}}"

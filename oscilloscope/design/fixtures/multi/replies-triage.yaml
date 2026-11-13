@@ -1,0 +1,14 @@
+prime.kind:
+  - {text: "Bug.", tokens_sent: 212, tokens_received: 3}
+prime.gate.reply:
+  - {text: "Thanks for the report. We will fix 1h30m parsing in the next release.", tokens_sent: 348, tokens_received: 41}
+prime.reply:
+  - {text: "Thanks for the report.", tokens_sent: 348, tokens_received: 41}
+prime.drafts.iter_0.draft:
+  - {text: "Cats nap in sunbeams and judge you quietly.", tokens_sent: 118, tokens_received: 12}
+prime.drafts.iter_1.draft:
+  - {text: "Dogs greet the mail carrier like a long-lost friend.", tokens_sent: 118, tokens_received: 13}
+prime.drafts.iter_2.draft:
+  - {text: "Birds trade songs across the fence at dawn.", tokens_sent: 118, tokens_received: 11}
+prime.summary:
+  - {text: "Three animal sentences, one issue triaged as a bug.", tokens_sent: 402, tokens_received: 14}

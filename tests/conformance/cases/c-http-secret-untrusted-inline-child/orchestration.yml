@@ -1,0 +1,12 @@
+name: c-http-secret-untrusted-inline-child
+effects:
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: tool
+          name: call
+          provider: http
+          params:
+            url: http://127.0.0.1:1/
+            headers: {Authorization: {secret: api, prefix: "Bearer "}}

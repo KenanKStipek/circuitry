@@ -129,11 +129,15 @@ mod tests {
                 expect: None,
                 description: None,
                 group: group.map(|s| s.to_string()),
+                secret_headers: IndexMap::new(),
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -157,10 +161,16 @@ mod tests {
                 retries: None,
                 description: None,
                 group: group.map(|s| s.to_string()),
+                split_budget_tokens: None,
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -176,6 +186,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: IndexMap::new(),
             effect_names: BTreeSet::new(),
@@ -268,6 +279,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let loop_op = Op {
             path: EffectPath::root().push_name("loop1"),
@@ -292,6 +304,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = root_with(vec![loop_op]);
         let errors = unknown_group_errors(&program, &BTreeSet::new());

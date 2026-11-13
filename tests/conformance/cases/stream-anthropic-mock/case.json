@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #674: anthropic streams by default",
+  "description": "anthropic's default `stream: true` request against a mock HTTP server answering with `message_start`/`content_block_delta`/`message_delta`/`message_stop` events; `message_start`'s own `usage.input_tokens` arrives before any text, and the assembled reply/tokens/stop_reason equal what a non-streamed body would give.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {
+    "ANTHROPIC_API_KEY": "circuitry-test-fake-anthropic-key"
+  }
+}

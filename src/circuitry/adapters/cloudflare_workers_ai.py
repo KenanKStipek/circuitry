@@ -38,12 +38,15 @@ class CloudflareWorkersAIAdapter:
     account_id: str = ""
     default_model: str = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
 
+    streams: bool = True
+
     def _cfg(self) -> OpenAICompatibleConfig:
         account_id = self.account_id or os.environ.get("CF_ACCOUNT_ID", "")
         return OpenAICompatibleConfig(
             base_url=_resolve_base_url(self.base_url, account_id),
             api_key_env="CF_API_TOKEN",
             default_model=self.default_model,
+            streams=self.streams,
         )
 
     def generate(

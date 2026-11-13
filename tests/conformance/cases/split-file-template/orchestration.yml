@@ -1,0 +1,9 @@
+name: split-file-template
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: big
+    template:
+      file: {from: input.prompt_file}
+      within: {from: input.work_dir}

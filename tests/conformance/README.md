@@ -40,7 +40,7 @@ cases/<name>/
 | `engines` | `["python"]`, `["electricity"]`, or both — which runner(s) run this case |
 | `expect` | `"success"` or `"failure"` |
 | `cli_args` | extra argv appended after `--out <path>`, e.g. `["-e", "x=5"]` -- a `__MOCK_HTTP_PORT__` substring in any element is replaced with the mock server's real port, see "Mock HTTP server" below, and a `__CASE_DIR__` substring with the case directory's absolute path (the expected state carries it as `<CASE_DIR>`) |
-| `config` | filename (relative to the case dir) to pass as `--config`, or omitted |
+| `config` | filename (relative to the case dir) to pass as `--config`, or omitted -- a `__CASE_DIR__` substring anywhere in its content is replaced with the case directory's absolute path (same placeholder as `cli_args`), for a setting like `runtime.plugins.<name>.binary` that must be absolute and can't be committed with one |
 | `also_pretty` | success cases only — also capture `--out --pretty` (used by C23) |
 | `error_compare` | failure cases only — `"exact"` (Circuitry's own message, byte-for-byte) or `"location"` (a third-party library's message — CEL, YAML/JSON parse errors, JSON Schema — compared only for failing at the same place with a non-empty message, per §12) |
 | `location_pattern` | failure cases with `error_compare: "location"` — a regex both messages must match, with the same captured text, e.g. `"effects\\[\\d+\\]\\.name"` |
@@ -159,6 +159,14 @@ matched by lookup):
       Content-Type: application/json
     body: '{"greeting": "hi"}'
 ```
+
+A response may also set `delay_ms` (sleep before answering), `body_base64`
+(a non-UTF-8 body, instead of `body`), `close_without_response` (close the
+connection before sending any status line at all), or
+`truncate_after_bytes` (#674: close the connection after writing only this
+many bytes of `body`, with the headers still advertising the *full*
+length — a mid-stream disconnect, for a streamed model reply that drops
+partway through).
 
 `harness.mock_http_server(case_dir, metadata)` is a context manager both
 runners and the generator use identically: it starts the server (owned
@@ -368,7 +376,14 @@ order on the two engines (cof's real OS threads vs. electricity's
 single-threaded cooperative scheduler) — comparing their absolute values
 would assert an implementation detail neither engine commits to. What *is*
 checked: both streams open with `run_start` and close with `run_end`
-(compared directly); every path's own `start`/`dispatch`/`end` appear in a
+(compared directly, with one exception: `run_start`'s own `config` field is
+compared exactly only when `case.json` names a `config` -- both engines get
+that same name, except a case run against the mock server, which gets
+`materialized-<config>` on both engines instead. A case that names none
+gives `cof` nothing (it writes `null`) but still has to give electricity's
+required config argument *something* (the runner's own placeholder config),
+so that side accepts either `null` or the placeholder's name, never a third
+value); every path's own `start`/`dispatch`/`end` appear in a
 container-before-child, child-before-container order; each path's own
 list of events (grouped by `path`) is compared *in stream order*, not as a
 multiset — a path's own events have exactly one valid order in M0-H

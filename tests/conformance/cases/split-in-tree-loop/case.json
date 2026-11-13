@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 6: a prompt inside a tree loop splits correctly, with the right paths",
+  "description": "A loop (flow: tree) runs the same over-budget prompt once per side; each pass's own split lands under its own prime.per.iter_N.big node, independent of the other.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

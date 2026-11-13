@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`gh issue view <n> --json ... --jq ...` with `parse: json` -- the same `GenericSubprocessTool` machinery `awk`/`shell` already exercise, resolved through the case's own `fakes/` directory instead of a real `gh` binary or account.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

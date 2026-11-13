@@ -317,6 +317,7 @@ async fn dispatch(
         path,
         timeout_seconds,
         token,
+        on_progress: None,
     };
     let options = GenerateOptions::default();
     tokio::select! {

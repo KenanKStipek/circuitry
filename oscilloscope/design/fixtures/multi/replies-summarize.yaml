@@ -1,0 +1,6 @@
+prime.outline:
+  - {text: "1. Goals 2. Engines 3. Events 4. Screens 5. History", tokens_sent: 3120, tokens_received: 36}
+prime.summary:
+  - {text: "osi launches an orchestration on cof or electricity and shows it running.", tokens_sent: 3160, tokens_received: 58}
+prime.final:
+  - {text: "osi runs an orchestration and shows it live.", tokens_sent: 640, tokens_received: 22}

@@ -76,6 +76,14 @@ pub(crate) async fn execute_loop(
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
+    // `cof run --resume` (issue #727): a named loop in chain flow
+    // (every `while`, or an `each` not running `flow: tree`) resumes
+    // at its first unfinished pass -- `core/loop.py::LoopRuntime.
+    // resume`. An unnamed loop, a tree-flow `each`, and every pass
+    // beyond the one actually resumed all rerun whole regardless of
+    // this flag (this crate's own `resume_from`/`resume_pass`
+    // computation below).
+    resume_active: bool,
     token: &CancellationToken,
 ) -> Result<(), VmError> {
     let loop_name = op.name.as_deref();
@@ -116,6 +124,71 @@ pub(crate) async fn execute_loop(
         .filter_map(|o| o.name.clone().map(Value::Str))
         .collect();
 
+    // `cof run --resume` (issue #727): `core/loop.py::LoopRuntime.
+    // execute`'s own `resume_from`/`resume_pass` computation -- eligible
+    // only for a named loop in chain flow (every `while`, or an `each`
+    // not running `flow: tree`). `resume_from` is the count of leading
+    // passes `meta.completed_passes` (this loop's own authoritative
+    // record, read before `write_loop_meta_start` above ever touches
+    // it) already covers, contiguous from `iter_0`; `resume_pass` is
+    // that same index when its own `iter_<N>` node was saved (#573) --
+    // it continues inside its body instead of running fresh.
+    let resume_eligible = resume_active
+        && is_named
+        && matches!(
+            (spec, flow),
+            (LoopSpec::While(_), _) | (LoopSpec::Each { .. }, LoopFlow::Chain)
+        );
+    let mut resume_from: u32 = 0;
+    let mut resume_pass: Option<u32> = None;
+    let mut resume_prefix_records: Vec<Value> = Vec::new();
+    let mut resume_prev_writes: Option<IndexMap<Value, Slot>> = None;
+    if resume_eligible {
+        let meta = meta.as_ref().expect("resume_eligible implies is_named");
+        let node = node.as_ref().expect("resume_eligible implies is_named");
+        let prior_completed: Vec<u32> = match store.peek(meta, &key("completed_passes")) {
+            Some(Slot::Value(Value::List(ref items))) => items
+                .iter()
+                .filter_map(|v| match v {
+                    Value::Int(electricity_value::IntValue::Small(n)) => u32::try_from(*n).ok(),
+                    _ => None,
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+        let prior_set: HashSet<u32> = prior_completed.into_iter().collect();
+        let mut idx = 0u32;
+        while prior_set.contains(&idx) {
+            resume_from = idx + 1;
+            idx += 1;
+        }
+        if resume_from > 0 {
+            let kept_record = {
+                let mut m = IndexMap::new();
+                m.insert(
+                    key("executed_effects"),
+                    Value::List(body_ops.iter().map(kept_body_effect_record).collect()),
+                );
+                m.insert(key("count"), Value::from(body_ops.len() as i64));
+                Value::Dict(m)
+            };
+            for _ in 0..resume_from {
+                resume_prefix_records.push(kept_record.clone());
+            }
+            if let Ok(Some(last_iter)) =
+                store.child(node, &key(&format!("iter_{}", resume_from - 1)))
+            {
+                resume_prev_writes = Some(local_writes_of(&last_iter, &HashSet::new(), &own_names));
+            }
+        }
+        if matches!(
+            store.peek(node, &key(&format!("iter_{resume_from}"))),
+            Some(Slot::Node(_))
+        ) {
+            resume_pass = Some(resume_from);
+        }
+    }
+
     // S8 (M1 gate seam round 2): `Region::Loop` carries no `LoopId` of
     // its own -- the compiler puts the placeholder on the first body
     // op's own path, right after this loop's own path segments
@@ -140,6 +213,16 @@ pub(crate) async fn execute_loop(
 
     let t0 = Instant::now();
     let mut state = RunState::new();
+    for record in resume_prefix_records {
+        state.iterations_effects.push(record);
+    }
+    for i in 0..resume_from {
+        state.completed_indices.push(i);
+    }
+    if resume_from > 0 {
+        state.iteration_count = resume_from;
+        state.last_completed = Some(resume_from - 1);
+    }
 
     let outcome: Result<(), VmError> = run_loop_body(
         op,
@@ -164,6 +247,9 @@ pub(crate) async fn execute_loop(
         token,
         t0,
         &mut state,
+        resume_from,
+        resume_pass,
+        resume_prev_writes,
     )
     .await;
 
@@ -502,6 +588,9 @@ async fn run_loop_body<'a>(
     token: &'a CancellationToken,
     t0: Instant,
     state: &mut RunState,
+    resume_from: u32,
+    resume_pass: Option<u32>,
+    resume_prev_writes: Option<IndexMap<Value, Slot>>,
 ) -> Result<(), VmError> {
     let on_error = op.on_error;
     match spec {
@@ -587,6 +676,9 @@ async fn run_loop_body<'a>(
                             token,
                             t0,
                             state,
+                            resume_from,
+                            resume_pass,
+                            resume_prev_writes,
                         )
                         .await
                     }
@@ -616,6 +708,9 @@ async fn run_loop_body<'a>(
                 token,
                 t0,
                 state,
+                resume_from,
+                resume_pass,
+                resume_prev_writes,
             )
             .await
         }
@@ -986,6 +1081,26 @@ fn body_effect_record(op: &Op) -> Value {
     Value::Dict(m)
 }
 
+/// `core/loop.py::LoopRuntime.execute`'s own fabricated `kept_record`
+/// entry (issue #727): `{"type": ..., "name": ...}` for a pass
+/// `--resume` keeps without rerunning -- deliberately never
+/// [`body_effect_record`] (no `disabled` key, regardless of *op*'s own
+/// `enabled`): cof's own kept record never looks at it either, since
+/// the saved pass already ran under whatever `enabled` meant at the
+/// time.
+fn kept_body_effect_record(op: &Op) -> Value {
+    let mut m = IndexMap::new();
+    m.insert(key("type"), Value::from(op.python_type_name()));
+    m.insert(
+        key("name"),
+        match &op.name {
+            Some(n) => Value::from(n.as_str()),
+            None => Value::None,
+        },
+    );
+    Value::Dict(m)
+}
+
 /// `core/loop.py::LoopRuntime._execute_body` -- runs *body_ops* once,
 /// in order, against *write_node*, rebuilding the within-pass overlay
 /// after every step. Returns this pass's own `{"executed_effects": [...],
@@ -1006,10 +1121,17 @@ async fn execute_body<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
+    // `cof run --resume` (#573): whether *this* pass continues inside
+    // its own saved body -- `core/loop.py::LoopRuntime._execute_body`'s
+    // own `resume` parameter, true for exactly the one pass
+    // `resume_pass` names (its caller's own job), positional within
+    // this one pass the same way a chain/branch's own skip is.
+    resume_active: bool,
 ) -> Result<(Value, IndexMap<Value, Slot>), VmError> {
     if token.is_set() {
         return Err(VmError::Cancelled);
     }
+    let mut resume_active = resume_active;
     let mut executed: Vec<Value> = Vec::with_capacity(body_ops.len());
     let mut step_chain: CtxChain = pass_chain.clone();
     for child_op in body_ops {
@@ -1025,10 +1147,14 @@ async fn execute_body<'a>(
             run_ctx,
             observer,
             token,
+            resume_active,
         )
         .await
         {
-            Ok(()) => {
+            Ok(outcome) => {
+                if outcome == super::ExecOutcome::Ran {
+                    resume_active = false;
+                }
                 executed.push(body_effect_record(child_op));
                 let local = local_writes_of(write_node, baseline, own_names);
                 step_chain = if local.is_empty() {
@@ -1079,19 +1205,29 @@ async fn run_each_chain<'a>(
     token: &'a CancellationToken,
     t0: Instant,
     state: &mut RunState,
+    resume_from: u32,
+    resume_pass: Option<u32>,
+    resume_prev_writes: Option<IndexMap<Value, Slot>>,
 ) -> Result<(), VmError> {
     let total = collection.len() as u32;
     if let Some(m) = meta {
         store.set_leaf(
             m,
             key("progress"),
-            loop_progress(0, Some(total), t0.elapsed().as_secs_f64()),
+            loop_progress(resume_from, Some(total), t0.elapsed().as_secs_f64()),
         );
     }
-    let mut prev_writes: Option<IndexMap<Value, Slot>> = None;
+    let mut prev_writes: Option<IndexMap<Value, Slot>> = resume_prev_writes;
 
     for (idx_usize, item) in collection.iter().enumerate() {
         let idx = idx_usize as u32;
+        // `cof run --resume`: every pass before `resume_from` already
+        // ran, per the caller's own `meta.completed_passes` record --
+        // the caller already seeded `state` for them; this loop's own
+        // job starts at the first unfinished one.
+        if idx < resume_from {
+            continue;
+        }
         if let Some(cap) = max_iterations {
             if idx >= cap {
                 state.termination_reason = "max_iterations_reached".to_string();
@@ -1141,6 +1277,7 @@ async fn run_each_chain<'a>(
             run_ctx,
             observer,
             token,
+            Some(idx) == resume_pass,
         )
         .await
         {
@@ -1308,6 +1445,10 @@ async fn run_each_tree<'a>(
                 .with_display_depth(
                     crate::complexity::depth::branch_or_body_ambient(frame.display_depth()),
                 );
+                // A tree-flow `each` pass never resumes granularly
+                // (this module's own doc comment, and `execute_loop`'s
+                // own `resume_eligible` check, which excludes it) --
+                // always `false`, regardless of the ambient run.
                 let result = execute_body(
                     body_ops,
                     store,
@@ -1319,6 +1460,7 @@ async fn run_each_tree<'a>(
                     run_ctx,
                     observer,
                     token,
+                    false,
                 )
                 .await;
                 observer.write();
@@ -1460,10 +1602,13 @@ async fn run_while<'a>(
     token: &'a CancellationToken,
     t0: Instant,
     state: &mut RunState,
+    resume_from: u32,
+    resume_pass: Option<u32>,
+    resume_prev_writes: Option<IndexMap<Value, Slot>>,
 ) -> Result<(), VmError> {
-    let mut iteration_count: u32 = 0;
-    let mut last_writes: IndexMap<Value, Slot> = IndexMap::new();
-    let mut prev_writes: Option<IndexMap<Value, Slot>> = None;
+    let mut iteration_count: u32 = resume_from;
+    let mut last_writes: IndexMap<Value, Slot> = resume_prev_writes.clone().unwrap_or_default();
+    let mut prev_writes: Option<IndexMap<Value, Slot>> = resume_prev_writes;
     // `_model_tokens_sent_total`/`_model_tokens_received_total`
     // (`core/loop.py::LoopRuntime.__init__`'s own doc comment) --
     // local to this one `run_while` call, so a fresh `execute_loop`
@@ -1488,7 +1633,12 @@ async fn run_while<'a>(
             }
         }
 
-        let should_continue = if iteration_count < min_iterations {
+        // `cof run --resume` (#573): the one pass `resume_pass` names
+        // runs without asking its condition again -- the condition
+        // held when the saved pass started.
+        let should_continue = if Some(iteration_count) == resume_pass
+            || iteration_count < min_iterations
+        {
             true
         } else {
             if token.is_set() {
@@ -1663,6 +1813,7 @@ async fn run_while<'a>(
             run_ctx,
             observer,
             token,
+            Some(iteration_count) == resume_pass,
         )
         .await
         {

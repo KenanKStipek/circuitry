@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #723",
+  "description": "A `cel` tool's `expr` must be written literally -- a `{from: ...}` reference is refused before the run, the same way `cof check` refuses it.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

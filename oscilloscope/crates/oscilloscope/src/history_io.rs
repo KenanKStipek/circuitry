@@ -37,24 +37,31 @@ pub fn resolve_history_dir(no_history_flag: bool) -> Option<PathBuf> {
     )
 }
 
-/// `osi <doc>`'s own document key (issue #649's `document (absolute
-/// path)`): the orchestration argument `osi` was actually given,
-/// made absolute -- `canonicalize` when the file still exists (the
+/// Makes `path` absolute -- `canonicalize` when it still exists (the
 /// common case, and the one that also resolves symlinks so two
-/// different paths to the same file key to the same history), else a
-/// plain `cwd`-joined fallback so a run that somehow still succeeds
-/// after its own document vanished mid-run still gets a usable key.
-pub fn resolve_run_document_path(orchestration: &Path) -> String {
-    let resolved = std::fs::canonicalize(orchestration).unwrap_or_else(|_| {
-        if orchestration.is_absolute() {
-            orchestration.to_path_buf()
+/// different paths to the same file resolve the same way), else a
+/// plain `cwd`-joined fallback so a path that vanished (the document
+/// mid-run, a run directory not yet created) still resolves to
+/// *something* usable. Shared by [`resolve_run_document_path`] (issue
+/// #649) and the registry's own absolute `orchestration`/`config`/
+/// `run_dir`.
+pub(crate) fn absolute_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| {
+        if path.is_absolute() {
+            path.to_path_buf()
         } else {
             std::env::current_dir()
-                .map(|cwd| cwd.join(orchestration))
-                .unwrap_or_else(|_| orchestration.to_path_buf())
+                .map(|cwd| cwd.join(path))
+                .unwrap_or_else(|_| path.to_path_buf())
         }
-    });
-    resolved.to_string_lossy().into_owned()
+    })
+}
+
+/// `osi <doc>`'s own document key (issue #649's `document (absolute
+/// path)`): the orchestration argument `osi` was actually given,
+/// made absolute.
+pub fn resolve_run_document_path(orchestration: &Path) -> String {
+    absolute_path(orchestration).to_string_lossy().into_owned()
 }
 
 /// `osi watch`'s own document key: an absolute `runtime.last_run.
@@ -118,6 +125,14 @@ pub struct HistoryHandle {
     /// even if a later state write would have resolved differently.
     document_settled: std::cell::Cell<bool>,
     warned_no_document: std::cell::Cell<bool>,
+    /// The config path as given, recorded in the history record
+    /// exactly as given -- never resolved further, and never the
+    /// config's own contents.
+    config: Option<String>,
+    /// This run's own, already-absolute run directory -- lets
+    /// "Recent Runs" open a finished run read-only once the
+    /// registry entry for it is long gone.
+    run_dir: Option<String>,
     records: RefCell<Option<Vec<HistoryRecord>>>,
     stats: RefCell<Option<(Option<String>, DocumentStats)>>,
     /// A notice [`Self::ensure_document`] has, but hasn't printed yet
@@ -132,14 +147,23 @@ pub struct HistoryHandle {
 
 impl HistoryHandle {
     /// `osi <doc>`: the document is already known, so there is
-    /// nothing left to resolve lazily.
-    pub fn for_run(dir: Option<PathBuf>, document: String) -> Self {
+    /// nothing left to resolve lazily. `config` is as given on the
+    /// command line (`None` for a run with none); `run_dir` is
+    /// already absolute.
+    pub fn for_run(
+        dir: Option<PathBuf>,
+        document: String,
+        config: Option<String>,
+        run_dir: Option<String>,
+    ) -> Self {
         HistoryHandle {
             dir,
             document: RefCell::new(Some(document)),
             watch_plan_fallback: None,
             document_settled: std::cell::Cell::new(true),
             warned_no_document: std::cell::Cell::new(false),
+            config,
+            run_dir,
             records: RefCell::new(None),
             stats: RefCell::new(None),
             pending_notices: RefCell::new(Vec::new()),
@@ -147,14 +171,23 @@ impl HistoryHandle {
     }
 
     /// `osi watch`: the document is resolved lazily, from the first
-    /// live-state write that names one (issue #649).
-    pub fn for_watch(dir: Option<PathBuf>, plan_fallback: Option<PathBuf>) -> Self {
+    /// live-state write that names one (issue #649). `config` is
+    /// `--config`, as given; `run_dir` is the watch's own, already
+    /// absolute run directory.
+    pub fn for_watch(
+        dir: Option<PathBuf>,
+        plan_fallback: Option<PathBuf>,
+        config: Option<String>,
+        run_dir: Option<String>,
+    ) -> Self {
         HistoryHandle {
             dir,
             document: RefCell::new(None),
             watch_plan_fallback: plan_fallback,
             document_settled: std::cell::Cell::new(false),
             warned_no_document: std::cell::Cell::new(false),
+            config,
+            run_dir,
             records: RefCell::new(None),
             stats: RefCell::new(None),
             pending_notices: RefCell::new(Vec::new()),
@@ -227,10 +260,15 @@ impl HistoryHandle {
         // before preflight runs), which would otherwise offset this
         // run's own figures from every recorded one by however long
         // that takes.
+        // Before the run has even started (issue #678's Starting
+        // state: no `run_start` event yet either), the ETA is "if it
+        // started right now" -- `now` itself, rather than bailing
+        // out with no anchor at all to measure elapsed time from.
         let eta_start_ts = state
             .pointer("/runtime/last_run/started_at")
             .and_then(serde_json::Value::as_str)
-            .or(run_start_ts)?;
+            .or(run_start_ts)
+            .unwrap_or(now);
         let current_hash = state
             .pointer("/runtime/last_run/document_hash")
             .and_then(serde_json::Value::as_str);
@@ -265,7 +303,24 @@ impl HistoryHandle {
         if !oscilloscope_core::model::run_ended(state) {
             return;
         }
-        let Some(record) = history::build_record(&document, engine, state, model, plan) else {
+        // `self.config` as given (`--config`, or whatever the
+        // registry/process-arguments fallback resolved to at attach
+        // time) -- else the
+        // engine's own `run_start.config` (issue A), known by now
+        // even for a run `attach_discovered_run` first found with
+        // neither (the live-state-in-cwd source): this is the one
+        // point a finished run's history is actually written, well
+        // after its own events have had a chance to name one.
+        let config = self.config.as_deref().or_else(|| model.run_start_config());
+        let Some(record) = history::build_record(
+            &document,
+            config,
+            self.run_dir.as_deref(),
+            engine,
+            state,
+            model,
+            plan,
+        ) else {
             return;
         };
         if let Err(err) = history::append_record(dir, &document, &record) {
@@ -308,6 +363,7 @@ pub fn apply_history_eta(
     header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
     header.history_vs_usual_s = eta.vs_usual_s;
     header.history_usual_total_s = eta.usual_total_s;
+    header.history_usual_total_tokens = stats.whole_run.and_then(|r| r.tokens_p50);
     // Issue #649's "history: N of 3 runs": `stats.same_hash_ok_count`
     // is the real count at any count, including the very first ok
     // run (`0`) -- `eta` itself only carries a whole-run ETA once
@@ -363,8 +419,11 @@ mod tests {
             v: history::FORMAT_VERSION,
             run_id: "run-1".to_string(),
             document: document.clone(),
+            config: None,
+            run_dir: None,
             document_hash: Some("h1".to_string()),
             engine: Some("cof".to_string()),
+            label: None,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             ended_at: "2026-01-01T00:01:00Z".to_string(),
             outcome: history::Outcome::Ok,
@@ -377,7 +436,8 @@ mod tests {
         };
         history::append_record(history_dir.path(), &document, &record).unwrap();
 
-        let handle = HistoryHandle::for_run(Some(history_dir.path().to_path_buf()), document);
+        let handle =
+            HistoryHandle::for_run(Some(history_dir.path().to_path_buf()), document, None, None);
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = serde_json::json!({

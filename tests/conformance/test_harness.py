@@ -620,6 +620,34 @@ def test_materialize_config_substitutes_mock_port(tmp_path: Path) -> None:
     assert data["runtime"]["adapters"]["lmstudio"]["base_url"] == "http://127.0.0.1:54321/v1"
 
 
+def test_materialize_config_substitutes_the_case_directory(tmp_path: Path) -> None:
+    # Issue #722: `runtime.plugins.gh.binary` must be absolute, so a case
+    # needs the real case directory's own path, not a relative one it
+    # could otherwise commit.
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "config.json").write_text(
+        json.dumps(
+            {"runtime": {"plugins": {"gh": {"binary": f"{harness.CASE_DIR_PLACEHOLDER}/fakes/gh"}}}}
+        ),
+        encoding="utf-8",
+    )
+    materialized = harness.materialize_config(case_dir, "config.json", tmp_dir=tmp_path)
+    data = json.loads(materialized.read_text(encoding="utf-8"))
+    assert data["runtime"]["plugins"]["gh"]["binary"] == f"{case_dir}/fakes/gh"
+
+
+def test_config_needs_materializing_detects_the_case_dir_placeholder(tmp_path: Path) -> None:
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    (case_dir / "plain.json").write_text("{}", encoding="utf-8")
+    (case_dir / "needs-it.json").write_text(
+        json.dumps({"a": harness.CASE_DIR_PLACEHOLDER}), encoding="utf-8"
+    )
+    assert not harness.config_needs_materializing(case_dir, "plain.json")
+    assert harness.config_needs_materializing(case_dir, "needs-it.json")
+
+
 def test_unused_scripted_reply_fails_the_case(tmp_path: Path) -> None:
     """Issue #450's acceptance criterion: a deliberately unused scripted
     reply fails a case on the Python side. Runs a real `cof run` subprocess

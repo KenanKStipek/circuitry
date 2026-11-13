@@ -1,0 +1,11 @@
+{
+  "runtime": {
+    "state": {"record_children": true},
+    "complexity": {
+      "splitting": {"enabled": true, "max_input_tokens": 15, "max_depth": 3}
+    },
+    "adapters": {
+      "scripted": {"replies_file": "scripted-replies.yaml"}
+    }
+  }
+}

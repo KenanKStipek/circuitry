@@ -33,7 +33,16 @@ sha2 = "0.10"
 # throwaway file for `compile`'s existing `Some(path)` branch to read
 # (electricity::check_options takes a path, never a parsed value).
 tempfile = "3"
+# `plan::static_tool_command` reads a tool's own compiled `params`
+# (`ParamNode`/`Value`) directly, to show its command before any run
+# at all (issue #678's Starting state).
+electricity-value = { path = "../../../electricity/crates/electricity-value" }
+# names::display_width/truncate_display_width (issue #752): a label
+# is cut in columns by display cells (CJK/emoji count 2), never a
+# byte or char count -- already in the workspace's own lockfile as
+# ratatui's own transitive dependency, so this adds no new crate to
+# the build.
+unicode-width = "0.2"
 
 [dev-dependencies]
-electricity-value = { path = "../../../electricity/crates/electricity-value" }
 insta = "1"

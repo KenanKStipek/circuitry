@@ -983,6 +983,91 @@ pub fn validate_prompt_schema(
     })
 }
 
+/// Whether *schema* itself is a well-formed JSON Schema, with no instance
+/// involved -- `jsonschema.validators.validator_for(schema).check_schema
+/// (schema)`'s own structural check, the compile-time half of
+/// [`validate_prompt_schema_impl`]'s own early branches (its `find_
+/// invalid_pattern` call and the `jsonschema` crate's own `build` step,
+/// on whichever of the fully-supported/crate-fallback branches applies),
+/// with the instance evaluation that follows them left out: there is no
+/// instance yet to evaluate against. `None` means *schema* is well formed;
+/// `Some` carries the same text `jsonschema.SchemaError` would.
+///
+/// Used by the `cel` tool's own compile-time equivalent of `plugins/
+/// cel.py::static_param_errors`'s `check_schema` call -- unlike
+/// [`cel_schema_errors`], which never reports a malformed schema because
+/// by the time a `cel` effect's own schema check runs, `cof check`
+/// already refused one this function would reject.
+pub fn schema_well_formedness_error(schema: &electricity_value::Value) -> Option<String> {
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .stack_size(VALIDATION_THREAD_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                engine::set_stack_guard(VALIDATION_THREAD_STACK_GUARD_BYTES);
+                schema_well_formedness_error_impl(schema)
+            });
+        match spawned {
+            Ok(handle) => handle.join().unwrap(),
+            Err(_) => {
+                engine::set_stack_guard(FALLBACK_STACK_GUARD_BYTES);
+                schema_well_formedness_error_impl(schema)
+            }
+        }
+    })
+}
+
+fn schema_well_formedness_error_impl(schema: &electricity_value::Value) -> Option<String> {
+    engine::take_recursion_exceeded();
+    engine::take_python_exception();
+    engine::clear_pattern_cache();
+    engine::clear_fully_supported_cache();
+
+    if let Some(message) = engine::find_invalid_pattern(schema) {
+        return Some(message);
+    }
+
+    let fully_supported =
+        is_2020_12_or_unset(schema) && engine::schema_is_fully_supported(schema, schema);
+    let result = if engine::recursion_exceeded_peek() {
+        None
+    } else if fully_supported {
+        let probe_json = schema_json_for_well_formedness_probe(schema);
+        let probe_error = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&probe_json)
+            .err();
+        match probe_error {
+            Some(err)
+                if !matches!(
+                    err.kind,
+                    jsonschema::error::ValidationErrorKind::Referencing(_)
+                        | jsonschema::error::ValidationErrorKind::Format { .. }
+                ) =>
+            {
+                Some(err.to_string())
+            }
+            _ => None,
+        }
+    } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
+        Some("maximum recursion depth exceeded while calling a Python object".to_string())
+    } else {
+        let schema_json = value_to_json(schema);
+        jsonschema::options()
+            .should_validate_formats(false)
+            .build(&schema_json)
+            .err()
+            .map(|err| err.to_string())
+    };
+
+    if engine::take_recursion_exceeded() {
+        return Some("maximum recursion depth exceeded while calling a Python object".to_string());
+    }
+    if let Some(message) = engine::take_python_exception() {
+        return Some(message);
+    }
+    result
+}
+
 fn validate_prompt_schema_impl(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
@@ -1181,6 +1266,223 @@ fn validate_prompt_schema_impl(
         return PromptSchemaCheck::SchemaError(message);
     }
     result
+}
+
+/// How many mismatches [`cel_schema_errors`] quotes before summarising the
+/// rest -- `plugins/cel.py`'s own `_MAX_QUOTED_ERRORS`.
+const CEL_SCHEMA_ERROR_CAP: usize = 5;
+
+/// [`cel_schema_errors`]'s/[`result_schema_errors`]'s own result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaErrorList {
+    Valid,
+    /// Already formatted and ordered exactly like `plugins/cel.py::
+    /// schema_errors`'s own return value (shared by `plugins/agent.py::
+    /// _read_result`, whose own list comprehension and cap are the same
+    /// shape with a different cap) -- each entry `"{path}: {message}"`,
+    /// sorted by instance path, with a trailing `"... and N more"` summary
+    /// once there are more entries than the caller's own cap.
+    Invalid(Vec<String>),
+    SchemaError(String),
+}
+
+/// Every way *instance* does not match *schema*, in `plugins/cel.py::
+/// schema_errors`'s own words and order -- the `cel` tool's own schema
+/// check (issue #723): `f"{'/'.join(str(part) for part in error.
+/// absolute_path) or '(root)'}: {error.message}"`, for every error
+/// `jsonschema.iter_errors` yields (not just the single best match
+/// [`validate_prompt_schema`] picks), sorted by `list(error.absolute_path)`
+/// and capped at [`CEL_SCHEMA_ERROR_CAP`].
+///
+/// Also reports [`SchemaErrorList::SchemaError`] for *schema* itself being
+/// malformed, the same two checks [`schema_well_formedness_error`] makes
+/// (`find_invalid_pattern`, then the well-formedness probe on the
+/// fully-supported path) -- in practice a `cel` effect's own `schema:`
+/// has already passed `build_cel_params`'s own compile-time call to that
+/// function (`cof check`'s equivalent of `jsonschema.validators.
+/// validator_for(schema).check_schema(schema)`, `plugins/cel.py::
+/// static_param_errors`), so this runtime path rarely finds one, but it
+/// is not assumed unreachable. A pathological `$ref` chain is still a
+/// genuine runtime concern regardless (`validate_prompt_schema`'s own
+/// doc comment), so this still runs on the same dedicated, large-stack
+/// thread that guards against it.
+pub fn cel_schema_errors(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> SchemaErrorList {
+    schema_errors(schema, instance, CEL_SCHEMA_ERROR_CAP)
+}
+
+/// How many mismatches [`result_schema_errors`] quotes before summarising
+/// the rest -- `plugins/agent.py`'s own `_MAX_QUOTED_ERRORS`.
+const RESULT_SCHEMA_ERROR_CAP: usize = 20;
+
+/// An `agent` effect's own `result_schema` check (issue #720):
+/// `plugins/agent.py::_read_result`'s own `jsonschema.iter_errors` list,
+/// in the same words, order and cap-then-summarise shape
+/// [`cel_schema_errors`] already gives the `cel` tool's `schema:` check,
+/// just with `plugins/agent.py`'s own, wider cap
+/// ([`RESULT_SCHEMA_ERROR_CAP`], 20 rather than 5).
+pub fn result_schema_errors(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> SchemaErrorList {
+    schema_errors(schema, instance, RESULT_SCHEMA_ERROR_CAP)
+}
+
+fn schema_errors(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+    cap: usize,
+) -> SchemaErrorList {
+    std::thread::scope(|scope| {
+        let spawned = std::thread::Builder::new()
+            .stack_size(VALIDATION_THREAD_STACK_BYTES)
+            .spawn_scoped(scope, move || {
+                engine::set_stack_guard(VALIDATION_THREAD_STACK_GUARD_BYTES);
+                schema_errors_impl(schema, instance, cap)
+            });
+        match spawned {
+            Ok(handle) => handle.join().unwrap(),
+            Err(_) => {
+                engine::set_stack_guard(FALLBACK_STACK_GUARD_BYTES);
+                schema_errors_impl(schema, instance, cap)
+            }
+        }
+    })
+}
+
+/// *path* in `plugins/cel.py::schema_errors`'s own words:
+/// `'/'.join(str(part) for part in error.absolute_path) or '(root)'`.
+fn cel_path_string(path: &[engine::PathSegment]) -> String {
+    if path.is_empty() {
+        return "(root)".to_string();
+    }
+    path.iter()
+        .map(|segment| match segment {
+            engine::PathSegment::Key(s) => s.clone(),
+            engine::PathSegment::Index(i) => i.to_string(),
+            engine::PathSegment::NonStringKey(v) => v.py_str(),
+        })
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The crate-fallback path's own instance path, as [`engine::PathSegment`]s
+/// -- parsed back out of the `jsonschema` crate's escaped JSON-pointer
+/// text so [`engine::compare_paths`]/[`cel_path_string`] can treat both
+/// branches below identically. A purely-numeric segment becomes an
+/// [`engine::PathSegment::Index`] (an array position, the only way the
+/// crate's own `Location` ever produces one) -- the one case this can
+/// disagree with Python's own `error.path`, which carries a real `int`
+/// instead of guessing from text, is a schema whose own `properties` key
+/// is itself all-digits, never produced by this engine's own primary
+/// (2020-12) path above, which builds its path from [`engine::PathSegment`]
+/// directly rather than through this reconstruction at all.
+fn cel_path_segments(pointer: &str) -> Vec<engine::PathSegment> {
+    pointer_segments(pointer)
+        .map(unescape_json_pointer_segment)
+        .map(|segment| match segment.parse::<usize>() {
+            Ok(index) if index.to_string() == segment => engine::PathSegment::Index(index),
+            _ => engine::PathSegment::Key(segment),
+        })
+        .collect()
+}
+
+fn schema_errors_impl(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+    cap: usize,
+) -> SchemaErrorList {
+    engine::take_recursion_exceeded();
+    engine::take_python_exception();
+    engine::clear_pattern_cache();
+    engine::clear_fully_supported_cache();
+
+    let mut messages: Vec<(Vec<engine::PathSegment>, String)> = Vec::new();
+    let mut schema_error: Option<String> = engine::find_invalid_pattern(schema);
+
+    let fully_supported = schema_error.is_none()
+        && is_2020_12_or_unset(schema)
+        && engine::schema_is_fully_supported(schema, schema);
+
+    if schema_error.is_some() {
+        // Handled uniformly below.
+    } else if engine::recursion_exceeded_peek() {
+        // Handled uniformly below by `take_recursion_exceeded`, matching
+        // `validate_prompt_schema_impl`'s own short-circuit.
+    } else if fully_supported {
+        let probe_json = schema_json_for_well_formedness_probe(schema);
+        let probe_error = jsonschema::options()
+            .should_validate_formats(false)
+            .build(&probe_json)
+            .err();
+        match probe_error {
+            Some(err)
+                if !matches!(
+                    err.kind,
+                    jsonschema::error::ValidationErrorKind::Referencing(_)
+                        | jsonschema::error::ValidationErrorKind::Format { .. }
+                ) =>
+            {
+                schema_error = Some(err.to_string());
+            }
+            _ => {
+                let mut violations = Vec::new();
+                engine::evaluate(schema, instance, schema, &[], &[], &mut violations);
+                for violation in &violations {
+                    messages.push((violation.path.clone(), engine::render(violation)));
+                }
+            }
+        }
+    } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
+        schema_error =
+            Some("maximum recursion depth exceeded while calling a Python object".to_string());
+    } else {
+        let schema_json = value_to_json(schema);
+        match jsonschema::options()
+            .should_validate_formats(false)
+            .build(&schema_json)
+        {
+            Err(err) => schema_error = Some(err.to_string()),
+            Ok(validator) => {
+                let instance_json = value_to_json(instance);
+                for err in validator.iter_errors(&instance_json) {
+                    let path = cel_path_segments(err.instance_path.as_str());
+                    let message = python_message::python_message(&err, &schema_json)
+                        .unwrap_or_else(|| err.to_string());
+                    messages.push((path, message));
+                }
+            }
+        }
+    }
+
+    if engine::take_recursion_exceeded() {
+        return SchemaErrorList::SchemaError(
+            "maximum recursion depth exceeded while calling a Python object".to_string(),
+        );
+    }
+    if let Some(message) = engine::take_python_exception() {
+        return SchemaErrorList::SchemaError(message);
+    }
+    if let Some(message) = schema_error {
+        return SchemaErrorList::SchemaError(message);
+    }
+
+    if messages.is_empty() {
+        return SchemaErrorList::Valid;
+    }
+    messages.sort_by(|a, b| engine::compare_paths(&a.0, &b.0));
+    let total = messages.len();
+    let mut rendered: Vec<String> = messages
+        .into_iter()
+        .take(cap)
+        .map(|(path, message)| format!("{}: {}", cel_path_string(&path), message))
+        .collect();
+    if total > cap {
+        rendered.push(format!("... and {} more", total - cap));
+    }
+    SchemaErrorList::Invalid(rendered)
 }
 
 /// The exact `$schema` URIs Python's own `jsonschema.validators._META_SCHEMAS`
@@ -1900,6 +2202,79 @@ mod prompt_schema_tests {
             check(schema, json!("anything")),
             PromptSchemaCheck::SchemaError(_)
         ));
+    }
+}
+
+#[cfg(test)]
+mod cel_schema_errors_tests {
+    use super::{SchemaErrorList, cel_schema_errors, value_from_json};
+    use serde_json::json;
+
+    fn check(schema: serde_json::Value, instance: serde_json::Value) -> SchemaErrorList {
+        cel_schema_errors(&value_from_json(&schema), &value_from_json(&instance))
+    }
+
+    #[test]
+    fn a_matching_instance_is_valid() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert_eq!(check(schema, json!({"a": 1})), SchemaErrorList::Valid);
+    }
+
+    #[test]
+    fn a_missing_required_property_names_the_root_path() {
+        let schema = json!({"type": "object", "required": ["a"]});
+        assert_eq!(
+            check(schema, json!({})),
+            SchemaErrorList::Invalid(vec!["(root): 'a' is a required property".to_string()])
+        );
+    }
+
+    #[test]
+    fn every_mismatch_is_named_sorted_by_path() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"}
+            }
+        });
+        assert_eq!(
+            check(schema, json!({"a": 1, "b": 2})),
+            SchemaErrorList::Invalid(vec![
+                "a: 1 is not of type 'string'".to_string(),
+                "b: 2 is not of type 'string'".to_string(),
+            ])
+        );
+    }
+
+    #[test]
+    fn an_array_index_is_a_bare_number_not_bracketed() {
+        let schema = json!({"items": {"type": "string"}});
+        assert_eq!(
+            check(schema, json!(["ok", 1])),
+            SchemaErrorList::Invalid(vec!["1: 1 is not of type 'string'".to_string()])
+        );
+    }
+
+    #[test]
+    fn more_than_the_cap_is_summarised() {
+        let schema = json!({
+            "type": "object",
+            "properties": {
+                "a": {"type": "string"},
+                "b": {"type": "string"},
+                "c": {"type": "string"},
+                "d": {"type": "string"},
+                "e": {"type": "string"},
+                "f": {"type": "string"}
+            }
+        });
+        let instance = json!({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1});
+        let SchemaErrorList::Invalid(errors) = check(schema, instance) else {
+            panic!("expected Invalid");
+        };
+        assert_eq!(errors.len(), 6);
+        assert_eq!(errors[5], "... and 1 more");
     }
 }
 

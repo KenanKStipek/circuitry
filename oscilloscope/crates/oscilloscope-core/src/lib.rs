@@ -9,9 +9,10 @@
 //! (`ratatui`) lands in O-2, in the `oscilloscope` binary crate only.
 
 pub mod changes;
+pub mod combined;
 pub mod config_discovery;
-pub mod cost;
 pub mod diff;
+pub mod discovery;
 pub mod engine;
 pub mod flow;
 pub mod fold;
@@ -20,11 +21,16 @@ pub mod history;
 pub mod icon;
 pub mod layout;
 pub mod model;
+pub mod multi;
+pub mod names;
 pub mod observe;
 pub mod plan;
+pub mod rail;
+pub mod registry;
 pub mod render;
 pub mod screens;
+pub mod select;
+pub mod store;
+pub mod summary;
 pub mod supervise;
-pub mod time;
 pub mod transcript;
-pub mod treemap;

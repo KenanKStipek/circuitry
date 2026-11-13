@@ -1,0 +1,12 @@
+name: c752-label-use-child-ignored
+label: "parent label"
+effects:
+  - type: use
+    name: child_use
+    inline: |
+      label: "child label should never surface"
+      effects:
+        - type: tool
+          name: ct
+          provider: json
+          params: {mode: stringify, input: {x: 1}}

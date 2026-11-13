@@ -110,18 +110,33 @@ fn spawn(home: &TempHome, config: &Path, doc: &Path, extra_args: &[&str]) -> Tes
     TestChild { child }
 }
 
-/// Same readiness probe as `signals.rs`'s own `wait_until_running`:
-/// `--live-state`'s first write happens well after signals are armed
-/// but before `execute_root` ever starts, so its existence is firm
-/// evidence the signal handler is already installed.
-fn wait_until_running(home: &TempHome) {
+/// Waits until the run's `--live-state` shows every step in `paths`
+/// (dotted, from the state root) with a `meta.created_at`, so a signal
+/// sent next lands while those steps run. The file merely existing is
+/// not enough here: its first write happens before `execute_root`
+/// starts, so a signal sent then can arrive before the loop is reached
+/// at all, and the loop then has nothing to record.
+fn wait_until_started(home: &TempHome, paths: &[&str]) {
     let path = live_state_path(home);
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    while !path.exists() {
+    loop {
+        let started = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|state| {
+                paths.iter().all(|dotted| {
+                    let node = dotted.split('.').fold(&state, |node, key| &node[key]);
+                    node["meta"]["created_at"].is_string()
+                })
+            });
+        if started {
+            return;
+        }
         if std::time::Instant::now() >= deadline {
             panic!(
-                "electricity never wrote its own first --live-state at {} within 10s",
-                path.display()
+                "{} never showed {paths:?} running within 10s: {}",
+                path.display(),
+                fs::read_to_string(&path).unwrap_or_default()
             );
         }
         std::thread::sleep(Duration::from_millis(10));
@@ -168,7 +183,7 @@ fn sigint_mid_chain_loop_pass_exits_130_runs_finally_and_starts_no_new_pass() {
     let doc = home.write("doc.yml", CHAIN_SLEEP_LOOP_DOC);
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
-    wait_until_running(&home);
+    wait_until_started(&home, &["prime.shots.iter_0.step"]);
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
@@ -258,7 +273,10 @@ fn sigint_mid_tree_loop_dispatch_exits_130_runs_finally_and_never_starts_the_que
     let doc = home.write("doc.yml", TREE_SLEEP_LOOP_DOC);
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
-    wait_until_running(&home);
+    wait_until_started(
+        &home,
+        &["prime.shots.iter_0.step", "prime.shots.iter_1.step"],
+    );
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))

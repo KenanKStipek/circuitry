@@ -1,0 +1,13 @@
+name: split-mapping-reduce
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: object, required: true}
+effects:
+  - type: prompt
+    name: big
+    split:
+      merge:
+        template: "Combine: {{#parts}}<{{.}}>{{/parts}}"
+    template: "{{{input.doc}}}"

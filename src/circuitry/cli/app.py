@@ -16,6 +16,7 @@ from rich.panel import Panel
 from rich.table import Table
 from typer.core import TyperGroup
 
+from ..core.label import clean_label
 from ..core.prompt_compose import document_content_digest
 from ..core.resume import _legacy_document_sha256
 from ..core.saved_state import dumps_saved_state
@@ -203,6 +204,20 @@ _LAST_RUN_PATH = LAST_RUN_PATH
 
 def _print_header(title: str) -> None:
     console.print(Panel.fit(title, border_style="cyan"))
+
+
+def _label_override_header_line(label: str) -> str | None:
+    """The run header's own ``--label`` line, or ``None`` to print nothing.
+
+    ``--label``'s text is never rendered as a template, but it is still
+    arbitrary user text reaching a Rich ``console.print`` call: cleaned the
+    same way the recorded label is, and escaped so a label like ``"[/x]"``
+    can't be read as closing markup (or any other tag Rich would act on).
+    """
+    cleaned = clean_label(label)
+    if not cleaned:
+        return None
+    return f"[bold]Label (override):[/bold] {escape(cleaned)}"
 
 
 def _write_state_json(*, out: Path, state: dict, pretty: bool) -> None:
@@ -898,12 +913,13 @@ orchestration > environment (CIRCUITRY_ADAPTER/CIRCUITRY_MODEL) > config file
 > defaults. Env vars overlay the config layer, so a flag or profile beats them.
 
 [bold]Complexity switches:[/bold] --scoring/--no-scoring, --routing/--no-routing,
-and --decompose/--no-decompose each override one runtime.complexity.<switch>.enabled
-for this run only, ranking above the orchestration and config the same way
---adapter/--model do. --routing/--decompose still need scoring on (from
---scoring or config) — turning either on without it is the same prerequisite
-error the config path raises. --no-routing also overrides any --profile
-per-effect routing pin, since routing is off for the whole run either way.
+--decompose/--no-decompose, and --split/--no-split each override one
+runtime.complexity.<switch>.enabled for this run only, ranking above the
+orchestration and config the same way --adapter/--model do. --routing/
+--decompose still need scoring on (from --scoring or config) — turning either
+on without it is the same prerequisite error the config path raises; --split
+needs no scoring. --no-routing also overrides any --profile per-effect
+routing pin, since routing is off for the whole run either way.
 Run [bold]cof list[/bold] to see available bundled orchestrations.
 
 [yellow]Note:[/yellow] do not pass secrets via -e KEY=VALUE; use environment
@@ -961,6 +977,19 @@ def run_cmd(
     env_vars: list[str] | None = typer.Option(
         None, "-e",
         help="Inline state variable (KEY=VALUE). Repeatable.",
+    ),
+    label: str | None = typer.Option(
+        None, "--label",
+        help=(
+            "Literal text for this run's label, shown wherever a run's label "
+            "appears (e.g. --events' run_start, runtime.last_run.label). "
+            "Beats the document's own top-level label: template; never "
+            "rendered. Cleaned the same way either way: whitespace collapsed "
+            "to one space, control characters and escape sequences dropped, "
+            "trimmed, and cut at 64 characters; empty after cleaning means no "
+            "label. --resume re-renders the document's label from the same "
+            "inputs unless this is given."
+        ),
     ),
     tail: bool = typer.Option(
         False, "--tail",
@@ -1072,6 +1101,16 @@ def run_cmd(
             "(from this flag or config) when turned on."
         ),
     ),
+    split: bool | None = typer.Option(
+        None, "--split/--no-split",
+        help=(
+            "Force runtime.complexity.splitting on/off for this run. Beats "
+            "--profile and the orchestration/config. Needs no scoring: an "
+            "effect's own split.budget_tokens still splits even with this "
+            "off, and --no-split does not stop it either — only an effect's "
+            "own split.enabled: false opts it out."
+        ),
+    ),
 ):
     if resume and last:
         console.print("[red]Error:[/red] --resume and --last are mutually exclusive.")
@@ -1109,6 +1148,7 @@ def run_cmd(
         live_state = Path(stashed["live_state"]) if stashed.get("live_state") else None
         events = Path(stashed["events"]) if stashed.get("events") else None
         env_vars = stashed.get("env_vars")
+        label = stashed.get("label")
         tail = stashed.get("tail", False)
         skip_preflight = stashed.get("skip_preflight", False)
         # The stash's own value wins when it has one (`cof run` persists it;
@@ -1128,6 +1168,7 @@ def run_cmd(
         scoring = stashed.get("scoring")
         routing = stashed.get("routing")
         decompose = stashed.get("decompose")
+        split = stashed.get("split")
 
         # Refuse to replay if the previous run stashed redacted secrets — the
         # sentinel string would silently flow into the new run as a literal.
@@ -1273,12 +1314,21 @@ def run_cmd(
             console.print(f"[bold]Adapter (override):[/bold] {adapter}")
         if model:
             console.print(f"[bold]Model (override):[/bold] {model}")
-        for label, value in (("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose)):
+        for override_label, value in (
+            ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
+            ("Splitting", split),
+        ):
             if value is not None:
-                console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
+                console.print(
+                    f"[bold]{override_label} (override):[/bold] {'on' if value else 'off'}"
+                )
         console.print(f"[bold]Dry run:[/bold] {dry_run}")
         if resume:
             console.print(f"[bold]Resume:[/bold] {resume}{' (--force)' if force else ''}")
+        if label:
+            header_line = _label_override_header_line(label)
+            if header_line:
+                console.print(header_line)
 
     # Build initial state from --state file + -e overrides, or (--resume)
     # from the resolved resume source + -e overrides (the stashed env_vars,
@@ -1336,6 +1386,7 @@ def run_cmd(
         verbose=verbose,
         show_loop_progress=_show_loop_progress(verbose=verbose, quiet=quiet, json_out=json_out),
         config=cfg,
+        config_path=config,
         live_state_path=live_state,
         events_path=events,
         skip_preflight=skip_preflight,
@@ -1346,6 +1397,8 @@ def run_cmd(
         scoring_override=scoring,
         routing_override=routing,
         decompose_override=decompose,
+        split_override=split,
+        label_override=label,
         effect_start_observer=effect_start_observer,
         report_observer=report_observer,
         decompose_out=decompose_out,
@@ -1414,6 +1467,7 @@ def run_cmd(
             "live_state": str(live_state) if live_state else None,
             "events": str(events) if events else None,
             "env_vars": redact_env_pairs(env_vars),
+            "label": label,
             "tail": tail,
             "skip_preflight": skip_preflight,
             "allow_capabilities": allow_capabilities,
@@ -1426,6 +1480,7 @@ def run_cmd(
             "scoring": scoring,
             "routing": routing,
             "decompose": decompose,
+            "split": split,
             "trust_document": trust_document,
             "remote_library_source": remote_library_source,
         })
@@ -1657,6 +1712,16 @@ def run_library_cmd(
             "(from this flag or config) when turned on."
         ),
     ),
+    split: bool | None = typer.Option(
+        None, "--split/--no-split",
+        help=(
+            "Force runtime.complexity.splitting on/off for this run. Beats "
+            "--profile and the orchestration/config. Needs no scoring: an "
+            "effect's own split.budget_tokens still splits even with this "
+            "off, and --no-split does not stop it either — only an effect's "
+            "own split.enabled: false opts it out."
+        ),
+    ),
 ):
     configure_cli_logging(verbose=verbose)
 
@@ -1714,6 +1779,7 @@ def run_library_cmd(
             console.print(f"[bold]Model (override):[/bold] {model}")
         for label, value in (
             ("Scoring", scoring), ("Routing", routing), ("Decomposition", decompose),
+            ("Splitting", split),
         ):
             if value is not None:
                 console.print(f"[bold]{label} (override):[/bold] {'on' if value else 'off'}")
@@ -1759,6 +1825,7 @@ def run_library_cmd(
         verbose=verbose,
         show_loop_progress=_show_loop_progress(verbose=verbose, quiet=quiet, json_out=json_out),
         config=effective_cfg,
+        config_path=config,
         live_state_path=live_state,
         events_path=events,
         skip_preflight=skip_preflight,
@@ -1768,6 +1835,7 @@ def run_library_cmd(
         scoring_override=scoring,
         routing_override=routing,
         decompose_override=decompose,
+        split_override=split,
         effect_start_observer=effect_start_observer,
         report_observer=report_observer,
         allow_capabilities=_parse_allow_capabilities(allow_capabilities),
@@ -1864,6 +1932,7 @@ def run_library_cmd(
         "scoring": scoring,
         "routing": routing,
         "decompose": decompose,
+        "split": split,
         "trust_document": False,
         # So `cof run --last` can reapply the same adapter/model/runtime/
         # plugin overrides this run used — otherwise a replayed run-library
@@ -2192,6 +2261,32 @@ def _complexity_info_dict(
                 sources.get("complexity.decomposition.on_failure", "default"),
             ),
         },
+        "splitting": {
+            "enabled": _complexity_field(
+                complexity.splitting.enabled,
+                sources.get("complexity.splitting", "default"),
+            ),
+            "max_input_tokens": _complexity_field(
+                complexity.splitting.max_input_tokens,
+                sources.get("complexity.splitting.max_input_tokens", "default"),
+            ),
+            "models": _complexity_field(
+                dict(complexity.splitting.models),
+                sources.get("complexity.splitting.models", "default"),
+            ),
+            "max_parts": _complexity_field(
+                complexity.splitting.max_parts,
+                sources.get("complexity.splitting.max_parts", "default"),
+            ),
+            "max_depth": _complexity_field(
+                complexity.splitting.max_depth,
+                sources.get("complexity.splitting.max_depth", "default"),
+            ),
+            "on_failure": _complexity_field(
+                complexity.splitting.on_failure,
+                sources.get("complexity.splitting.on_failure", "default"),
+            ),
+        },
     }
 
 
@@ -2210,6 +2305,7 @@ def _render_complexity_info(
         ("Scoring", "complexity.scoring", complexity.scoring.enabled),
         ("Routing", "complexity.routing", complexity.routing.enabled),
         ("Decomposition", "complexity.decomposition", complexity.decomposition.enabled),
+        ("Splitting", "complexity.splitting", complexity.splitting.enabled),
     ):
         state = "[green]on[/green]" if enabled else "[dim]off[/dim]"
         switch_table.add_row(label, state, sources.get(key, "default"))
@@ -2257,6 +2353,50 @@ def _render_complexity_info(
         decomp_table.add_row(label, value, sources.get(key, "default"))
     console.print(decomp_table)
 
+    console.print()
+    split_table = Table(title="Splitting", show_header=True, header_style="bold cyan")
+    split_table.add_column("Setting", style="bold")
+    split_table.add_column("Value")
+    split_table.add_column("Source")
+    for label, key, value in (
+        (
+            "Max input tokens",
+            "complexity.splitting.max_input_tokens",
+            str(complexity.splitting.max_input_tokens)
+            if complexity.splitting.max_input_tokens is not None
+            else "—",
+        ),
+        (
+            "Models",
+            "complexity.splitting.models",
+            ", ".join(f"{k}={v}" for k, v in complexity.splitting.models.items()) or "—",
+        ),
+        (
+            "Max parts",
+            "complexity.splitting.max_parts",
+            str(complexity.splitting.max_parts),
+        ),
+        (
+            "Max depth",
+            "complexity.splitting.max_depth",
+            str(complexity.splitting.max_depth),
+        ),
+        (
+            "Max concurrency",
+            "complexity.splitting.max_concurrency",
+            str(complexity.splitting.max_concurrency)
+            if complexity.splitting.max_concurrency is not None
+            else "—",
+        ),
+        (
+            "On failure",
+            "complexity.splitting.on_failure",
+            complexity.splitting.on_failure,
+        ),
+    ):
+        split_table.add_row(label, value, sources.get(key, "default"))
+    console.print(split_table)
+
 
 @app.command("info", help="Show details for a bundled orchestration.")
 def info_cmd(
@@ -2283,6 +2423,10 @@ def info_cmd(
     decompose: bool | None = typer.Option(
         None, "--decompose/--no-decompose",
         help="Preview runtime.complexity.decomposition forced on/off, as `cof run --decompose` would resolve it.",
+    ),
+    split: bool | None = typer.Option(
+        None, "--split/--no-split",
+        help="Preview runtime.complexity.splitting forced on/off, as `cof run --split` would resolve it.",
     ),
 ):
     registry = _library_registry(config)
@@ -2316,6 +2460,7 @@ def info_cmd(
             cli_scoring=scoring,
             cli_routing=routing,
             cli_decompose=decompose,
+            cli_split=split,
             profile=profile_settings,
         )
     except (ProfileError, ValueError) as exc:

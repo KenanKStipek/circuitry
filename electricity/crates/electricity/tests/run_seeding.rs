@@ -64,7 +64,7 @@ async fn run_case(case: &CorpusCase) -> Json {
 
     let out_path = dir.join("expected.out.json");
     let req = RunRequest {
-        config_path,
+        config_path: Some(config_path),
         orchestration_path: doc_path,
         inputs,
         out_path: Some(out_path.clone()),
@@ -72,7 +72,15 @@ async fn run_case(case: &CorpusCase) -> Json {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
+        label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        resume_default_out: None,
+        force: false,
     };
     let token = CancellationToken::new();
     let result = electricity::run_orchestration(&req, &token).await;

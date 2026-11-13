@@ -1,0 +1,10 @@
+name: split-no-split-point-indexed
+adapter: scripted
+model: m
+interface:
+  inputs:
+    items: {type: array, required: true}
+effects:
+  - type: prompt
+    name: big
+    template: "First: {{input.items.0}}\nAll: {{input.items}}"

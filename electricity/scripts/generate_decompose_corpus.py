@@ -560,6 +560,7 @@ def build_failure_cases() -> list[dict[str, Any]]:
     ) -> None:
         base = {
             "decomposed": False,
+            "trigger": "score",
             "score": score,
             "threshold": threshold,
             "depth": depth,
@@ -681,8 +682,10 @@ def build_max_depth_and_success_cases() -> tuple[list[dict[str, Any]], list[dict
                 ctx={},
                 score=score,
                 source_template="Summarize {{input.topic}}",
+                prompt_sent="Summarize {{input.topic}}",
                 adapter=None,
                 model="x",
+                resolved_model="x",
                 runtime_config=runtime_config,
                 timeout_seconds=5,
                 verbose=False,
@@ -831,24 +834,19 @@ def build_seed_state_cases() -> list[dict[str, Any]]:
         store = Store(state={})
         captured: dict[str, Any] = {}
 
-        def fake_run_isolated(
-            orch: Any,
-            *,
-            initial_state: Any,
-            parent_store: Any,
-            node: Any,
-            node_path: Any,
-            adapter: Any,
-            model: Any,
-            runtime_config: Any,
-            timeout_seconds: Any,
-            verbose: Any,
-            display_depth: Any,
+        def fake_build_child_store(
+            initial_state: Any, *, parent_store: Any, node: Any, node_path: Any
         ) -> Store:
             captured["initial_state"] = initial_state
             return Store(state={"prime": {"merge": {"value": "computed"}}})
 
-        with mock.patch("circuitry.core.decompose._run_isolated", fake_run_isolated):
+        def fake_execute_in_store(*args: Any, **kwargs: Any) -> None:
+            return None
+
+        with (
+            mock.patch("circuitry.core.decompose._build_child_store", fake_build_child_store),
+            mock.patch("circuitry.core.decompose._execute_in_store", fake_execute_in_store),
+        ):
             _execute_plan(
                 plan,
                 defn=defn,

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 6: a messages prompt splits, every part keeping the system turn",
+  "description": "A messages-based prompt (system + user) over budget: the user turn's own reference is the split reference, rewritten per part, and the system turn is carried unchanged on every part (counted as fixed text).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

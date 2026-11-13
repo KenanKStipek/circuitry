@@ -11,6 +11,8 @@ use async_trait::async_trait;
 use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
+use sha2::{Digest, Sha256};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 fn get<'a>(params: &'a Value, key: &str) -> Option<&'a Value> {
@@ -61,6 +63,16 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
             cause: ErrorCause::None,
         },
         SendError::Other(text) => runtime_error(text),
+        // Never actually reached through this function: `save_to`'s own
+        // dispatch (the only caller that ever builds a `BodySink`)
+        // intercepts both of these itself, with `plugins/http.py::
+        // _save_body`'s own exact text. Kept here only so this match
+        // stays exhaustive.
+        SendError::BodyOverCap { declared } => runtime_error(match declared {
+            Some(n) => format!("the response body is {n} bytes, over the cap"),
+            None => "the response body is over the cap".to_string(),
+        }),
+        SendError::Sink(text) => runtime_error(text),
     }
 }
 
@@ -792,6 +804,9 @@ struct ParsedRequest {
     parse_mode: String,
     fail_on_error: bool,
     redirects: RedirectMode,
+    /// `params.save_to` (issue #726), already checked: present only
+    /// when the response body is written to a file instead of parsed.
+    save: Option<SaveTarget>,
 }
 
 /// `params.redirects` (`plugins/http.py`'s `REDIRECT_MODES`, issue #598).
@@ -819,9 +834,12 @@ impl RedirectMode {
     }
 }
 
-fn parse_redirects(value: Option<&Value>) -> Result<RedirectMode, ToolError> {
+fn parse_redirects(
+    value: Option<&Value>,
+    default: RedirectMode,
+) -> Result<RedirectMode, ToolError> {
     match value {
-        None | Some(Value::None) => Ok(RedirectMode::Follow),
+        None | Some(Value::None) => Ok(default),
         Some(Value::Str(s)) if s == "follow" => Ok(RedirectMode::Follow),
         Some(Value::Str(s)) if s == "never" => Ok(RedirectMode::Never),
         Some(Value::Str(s)) if s == "strip_auth" => Ok(RedirectMode::StripAuth),
@@ -940,22 +958,8 @@ fn coerce_headers_param(value: Option<&Value>) -> Result<Vec<(Value, Value)>, To
     }
 }
 
-fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
-    // Issue #602: `cof run` saves the body to `save_to`; this build does
-    // not (the run is refused up front for a literal `save_to`; this
-    // catches one `params_json` adds), and never sends the request.
-    if get(params, "save_to").is_some() {
-        return Err(ToolError {
-            py_class: PyExc::RuntimeError,
-            message: format!(
-                "electricity {} {}: an http effect with save_to is not supported until a \
-                 later milestone; use `cof run` instead",
-                env!("CARGO_PKG_VERSION"),
-                electricity_bytecode::PREVIEW_MARKER,
-            ),
-            cause: ErrorCause::None,
-        });
-    }
+fn parse_params(params: &Value, secret_headers: &[String]) -> Result<ParsedRequest, ToolError> {
+    let save = save_target(params)?;
     let url_value = get(params, "url");
     let url = match url_value {
         Some(Value::Str(s)) if !py_strip(s).is_empty() => py_strip(s).to_string(),
@@ -981,7 +985,14 @@ fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
         .to_lowercase();
 
     let fail_on_error = crate::fs::as_bool(get(params, "fail_on_error"), true);
-    let redirects = parse_redirects(get(params, "redirects"))?;
+    // `plugins/http.py`'s own default: `strip_auth` once a header came
+    // from a secret (issue #725), `follow` otherwise.
+    let default_redirects = if secret_headers.is_empty() {
+        RedirectMode::Follow
+    } else {
+        RedirectMode::StripAuth
+    };
+    let redirects = parse_redirects(get(params, "redirects"), default_redirects)?;
 
     let json_body = present(get(params, "json"));
     let raw_body = present(get(params, "body"));
@@ -1033,6 +1044,13 @@ fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
         None
     };
 
+    if save.is_some() && parse_mode != "auto" {
+        return Err(value_error(
+            "HttpPlugin: params['parse'] must be 'auto' (or unset) with params['save_to']: \
+             the body is saved as bytes, never parsed.",
+        ));
+    }
+
     Ok(ParsedRequest {
         url,
         method,
@@ -1041,6 +1059,7 @@ fn parse_params(params: &Value) -> Result<ParsedRequest, ToolError> {
         parse_mode,
         fail_on_error,
         redirects,
+        save,
     })
 }
 
@@ -1084,6 +1103,819 @@ fn parse_body(
     }
 }
 
+// ---------------------------------------------------------------------
+// `save_to` (issue #726).
+// ---------------------------------------------------------------------
+
+/// `plugins/http.py::DEFAULT_SAVE_TO_MAX_BYTES`.
+const DEFAULT_SAVE_TO_MAX_BYTES: u64 = 100 * 1024 * 1024;
+
+/// `core/prompt_files.py::path_is_inside`: *path* is *root* itself or
+/// lies under it. Both are expected already canonicalized by the
+/// caller -- this is a pure component comparison.
+fn path_is_inside(path: &Path, root: &Path) -> bool {
+    path == root || path.starts_with(root)
+}
+
+/// `pathlib.Path.resolve(strict=False)`'s own algorithm, enough of it for
+/// [`save_target`]'s own need: *base* is already absolute and fully
+/// resolved; walks *relative*'s own components onto it, following a
+/// symlink the moment a `Normal` component's own path exists as one
+/// (bounded, the same `ELOOP`-style cap a real filesystem enforces), and
+/// popping on `ParentDir` the same way `resolve()` collapses a lexical
+/// `..` -- even past a component that was never created, so `a/../b`
+/// still lands inside *base* and never touches a literal `a` on disk.
+/// Every component this ever sees is `Normal`/`CurDir`/`ParentDir`
+/// (never `RootDir`/`Prefix`, since *relative* is already checked
+/// non-absolute by the caller).
+fn resolve_existing_prefix(base: &Path, relative: &Path) -> Result<PathBuf, ToolError> {
+    let mut current = base.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(name) => {
+                current.push(name);
+                current = resolve_symlink_chain(current)?;
+            }
+            std::path::Component::ParentDir => {
+                current.pop();
+            }
+            std::path::Component::CurDir => {}
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {
+                unreachable!("save_target already checked relative is not absolute")
+            }
+        }
+    }
+    Ok(current)
+}
+
+/// Follows *path* through every symlink it already is, on disk, right
+/// now -- a component that doesn't exist yet (the common case: a
+/// directory `save_to` is about to create) is returned unchanged, a
+/// `..` or sibling file name intact.
+fn resolve_symlink_chain(path: PathBuf) -> Result<PathBuf, ToolError> {
+    let mut current = path;
+    for _ in 0..40 {
+        match std::fs::symlink_metadata(&current) {
+            Err(_) => return Ok(current),
+            Ok(meta) if meta.file_type().is_symlink() => {
+                let target = std::fs::read_link(&current).map_err(|e| {
+                    runtime_error(format!(
+                        "HttpPlugin: could not read {}: {e}",
+                        current.display()
+                    ))
+                })?;
+                current = if target.is_absolute() {
+                    target
+                } else {
+                    current
+                        .parent()
+                        .expect("symlink_metadata succeeded, so current has a parent")
+                        .join(target)
+                };
+            }
+            Ok(_) => return Ok(current),
+        }
+    }
+    Err(runtime_error(format!(
+        "HttpPlugin: too many levels of symlinks resolving {}.",
+        current.display()
+    )))
+}
+
+/// `plugins/http.py::_SaveTarget` -- *path*'s own directory is not
+/// necessarily created yet; [`make_save_directories`] does that.
+struct SaveTarget {
+    base: PathBuf,
+    path: PathBuf,
+    overwrite: bool,
+    max_bytes: u64,
+}
+
+/// `plugins/http.py::_save_target` -- *params*`['save_to']` as a
+/// checked [`SaveTarget`], or `None` without one. `Err` for every path
+/// this effect may not write, before anything is requested.
+fn save_target(params: &Value) -> Result<Option<SaveTarget>, ToolError> {
+    let Some(raw_value) = get(params, "save_to") else {
+        return Ok(None);
+    };
+    let Value::Str(raw) = raw_value else {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] must be a non-empty relative path, got {}.",
+            raw_value.py_repr()
+        )));
+    };
+    if py_strip(raw).is_empty() {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] must be a non-empty relative path, got {}.",
+            raw_value.py_repr()
+        )));
+    }
+    if raw.contains('\0') {
+        return Err(value_error(
+            "HttpPlugin: params['save_to'] contains a NUL byte.",
+        ));
+    }
+    let relative = Path::new(raw.as_str());
+    if relative.is_absolute() {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] must be a relative path, got {}.",
+            raw_value.py_repr()
+        )));
+    }
+    let within = get(params, "within");
+    let (base, where_text) = match within {
+        None | Some(Value::None) => (
+            std::env::current_dir().map_err(|e| runtime_error(e.to_string()))?,
+            "the working directory".to_string(),
+        ),
+        Some(Value::Str(within_str)) if Path::new(within_str).is_absolute() => {
+            let base = PathBuf::from(within_str);
+            if !base.is_dir() {
+                return Err(value_error(format!(
+                    "HttpPlugin: params['within'] {} is not a directory.",
+                    within_value_repr(within_str)
+                )));
+            }
+            (base, "params['within']".to_string())
+        }
+        Some(other) => {
+            return Err(value_error(format!(
+                "HttpPlugin: params['within'] must be an absolute directory path, got {}.",
+                other.py_repr()
+            )));
+        }
+    };
+    let base = base
+        .canonicalize()
+        .map_err(|e| runtime_error(e.to_string()))?;
+    // `lexical.name in ("", ".", "..")` -- the *literal* final `/`-
+    // delimited segment of `raw`, before `Path`'s own parsing drops a
+    // trailing `.` component the way `Path::file_name` does (`out/.`
+    // would otherwise silently name `out`).
+    let last_segment = raw.trim_end_matches('/').rsplit('/').next().unwrap_or("");
+    if matches!(last_segment, "" | "." | "..") {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] {} does not name a file.",
+            raw_value.py_repr()
+        )));
+    }
+    let file_name = relative
+        .file_name()
+        .expect("the last_segment check above already rejects every case file_name would not");
+    let directory = resolve_existing_prefix(&base, relative.parent().unwrap_or(Path::new("")))?;
+    if !path_is_inside(&directory, &base) {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] {} resolves outside {where_text} ({}).",
+            raw_value.py_repr(),
+            base.display()
+        )));
+    }
+    let path = directory.join(file_name);
+
+    let overwrite = get(params, "overwrite")
+        .map(|v| crate::fs::as_bool(Some(v), false))
+        .unwrap_or(false);
+    if path.is_symlink() {
+        return Err(value_error(format!(
+            "HttpPlugin: params['save_to'] {} is a symlink; it is never replaced.",
+            raw_value.py_repr()
+        )));
+    }
+    if path.exists() {
+        if !path.is_file() {
+            return Err(value_error(format!(
+                "HttpPlugin: params['save_to'] {} exists and is not a regular file.",
+                raw_value.py_repr()
+            )));
+        }
+        if !overwrite {
+            return Err(value_error(format!(
+                "HttpPlugin: params['save_to'] {} already exists; set overwrite: true to \
+                 replace it.",
+                raw_value.py_repr()
+            )));
+        }
+    }
+
+    let max_bytes = match get(params, "max_bytes") {
+        None | Some(Value::None) => DEFAULT_SAVE_TO_MAX_BYTES,
+        Some(value) => positive_int_param(value, "max_bytes")?,
+    };
+
+    Ok(Some(SaveTarget {
+        base,
+        path,
+        overwrite,
+        max_bytes,
+    }))
+}
+
+fn within_value_repr(text: &str) -> String {
+    Value::Str(text.to_string()).py_repr()
+}
+
+/// `params['max_bytes']` as a positive integer, Python's own `int()`
+/// coercion (a numeric string included).
+fn positive_int_param(value: &Value, name: &str) -> Result<u64, ToolError> {
+    // `isinstance(max_bytes, bool)` is checked and rejected *before* the
+    // plain `int` check -- Python's `bool` is an `int` subclass, so
+    // `isinstance(True, int)` alone would otherwise accept it.
+    let as_int = match value {
+        Value::Bool(_) => None,
+        Value::Int(_) => electricity_value::pycompat::py_int(value).ok(),
+        // `max_bytes.strip().isdigit()` -- ASCII digits only, no sign;
+        // `int()`'s own looser grammar (leading `+`/`-`, surrounding
+        // whitespace it would still strip again) never applies here.
+        Value::Str(s) => {
+            let stripped = py_strip(s);
+            if !stripped.is_empty() && stripped.chars().all(|c| c.is_ascii_digit()) {
+                stripped.parse::<i64>().ok()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    match as_int {
+        Some(n) if n > 0 => Ok(n as u64),
+        _ => Err(value_error(format!(
+            "HttpPlugin: params['{name}'] must be a positive integer, got {}.",
+            value.py_repr()
+        ))),
+    }
+}
+
+/// `plugins/http.py::_make_directories` -- creates *target*'s missing
+/// directories one at a time, each checked inside the base once
+/// symlinks are resolved, and returns the last.
+fn make_save_directories(target: &SaveTarget) -> Result<PathBuf, ToolError> {
+    let parent = target
+        .path
+        .parent()
+        .expect("save_target always builds path as directory.join(file_name)");
+    let relative = parent
+        .strip_prefix(&target.base)
+        .expect("save_target builds path under base");
+    let mut current = target.base.clone();
+    for part in relative.components() {
+        current.push(part);
+        if !current.exists() {
+            std::fs::create_dir(&current).map_err(|e| {
+                runtime_error(format!(
+                    "HttpPlugin: could not create {}: {e}",
+                    current.display()
+                ))
+            })?;
+        }
+        current = current
+            .canonicalize()
+            .map_err(|e| runtime_error(e.to_string()))?;
+        if !path_is_inside(&current, &target.base) || !current.is_dir() {
+            return Err(runtime_error(format!(
+                "HttpPlugin: {} is not a directory inside {}; nothing was saved.",
+                current.display(),
+                target.base.display()
+            )));
+        }
+    }
+    if current != *parent {
+        return Err(runtime_error(format!(
+            "HttpPlugin: {} changed during the download; nothing was saved.",
+            parent.display()
+        )));
+    }
+    Ok(current)
+}
+
+struct SavedFile {
+    path: PathBuf,
+    bytes: u64,
+    sha256: String,
+}
+
+/// `plugins/http.py::_save_body`/`_move_into_place` -- *body* is
+/// already fully received (issue #726's own DESIGN.md divergence row:
+/// unlike `cof run`'s own chunked `resp.read(...)` loop, this build's
+/// shared HTTP client always buffers a response in full before this
+/// plugin ever sees it, so the body is written to the temporary file
+/// in one pass rather than streamed off the wire -- `max_bytes` still
+/// caps what ever reaches disk, and a body over it leaves no file
+/// behind, exactly as `cof run`'s own cap does). Written to a
+/// temporary file next to the target first, moved into place only
+/// once complete, so a failure leaves no partial file.
+fn save_response_body(body: &[u8], target: &SaveTarget) -> Result<SavedFile, ToolError> {
+    if body.len() as u64 > target.max_bytes {
+        return Err(runtime_error(format!(
+            "HttpPlugin: the response body is {} bytes, over max_bytes ({}); nothing was saved.",
+            body.len(),
+            target.max_bytes
+        )));
+    }
+    let directory = make_save_directories(target)?;
+    let file_name = target
+        .path
+        .file_name()
+        .expect("save_target always builds path with a file name");
+    let temp_name = format!(
+        ".{}.{:016x}.part",
+        file_name.to_string_lossy(),
+        random_u64()
+    );
+    let temp = directory.join(temp_name);
+    write_temp_file(&temp, body)?;
+    let mut digest = Sha256::new();
+    digest.update(body);
+    let hash = format!("{:x}", digest.finalize());
+    if let Err(err) = move_into_place(&temp, target) {
+        let _ = std::fs::remove_file(&temp);
+        return Err(err);
+    }
+    Ok(SavedFile {
+        path: target.path.clone(),
+        bytes: body.len() as u64,
+        sha256: hash,
+    })
+}
+
+fn random_u64() -> u64 {
+    use std::collections::hash_map::RandomState;
+    use std::hash::{BuildHasher, Hasher};
+    RandomState::new().build_hasher().finish()
+}
+
+#[cfg(unix)]
+fn write_temp_file(temp: &Path, body: &[u8]) -> Result<(), ToolError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o666);
+    options.custom_flags(libc::O_NOFOLLOW);
+    let mut file = options.open(temp).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })?;
+    std::io::Write::write_all(&mut file, body).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })
+}
+
+#[cfg(not(unix))]
+fn write_temp_file(temp: &Path, body: &[u8]) -> Result<(), ToolError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    let mut file = options.open(temp).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })?;
+    std::io::Write::write_all(&mut file, body).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })
+}
+
+/// `plugins/http.py::_move_into_place` -- replacing a regular file
+/// under `overwrite`, and otherwise only where nothing exists yet.
+fn move_into_place(temp: &Path, target: &SaveTarget) -> Result<(), ToolError> {
+    let path = &target.path;
+    if path.is_symlink() || (path.exists() && !path.is_file()) {
+        return Err(runtime_error(format!(
+            "HttpPlugin: {} became a symlink or a directory during the download; nothing was \
+             saved.",
+            path.display()
+        )));
+    }
+    if target.overwrite {
+        std::fs::rename(temp, path).map_err(|e| {
+            runtime_error(format!(
+                "HttpPlugin: could not save {}: {e}",
+                path.display()
+            ))
+        })
+    } else {
+        match std::fs::hard_link(temp, path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Err(runtime_error(format!(
+                "HttpPlugin: {} appeared during the download; nothing was replaced.",
+                path.display()
+            ))),
+            // No hard links here (FAT, exFAT, some network shares):
+            // claim the name exclusively, then replace the placeholder.
+            Err(_) => replace_exclusively(temp, path),
+        }
+    }
+}
+
+#[cfg(unix)]
+fn replace_exclusively(temp: &Path, path: &Path) -> Result<(), ToolError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o666);
+    options.custom_flags(libc::O_NOFOLLOW);
+    options.open(path).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            path.display()
+        ))
+    })?;
+    if let Err(e) = std::fs::rename(temp, path) {
+        let _ = std::fs::remove_file(path);
+        return Err(runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn replace_exclusively(temp: &Path, path: &Path) -> Result<(), ToolError> {
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    options.open(path).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            path.display()
+        ))
+    })?;
+    if let Err(e) = std::fs::rename(temp, path) {
+        let _ = std::fs::remove_file(path);
+        return Err(runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            path.display()
+        )));
+    }
+    Ok(())
+}
+
+/// A temporary file created for one hop's own streamed download --
+/// deleted on `Drop` unless [`TempFileGuard::keep`] disarms it first
+/// (issue #726: every exit from the redirect loop but the one true
+/// 2xx success leaves no file behind, whatever return point it takes).
+struct TempFileGuard(Option<PathBuf>);
+
+impl Drop for TempFileGuard {
+    fn drop(&mut self) {
+        if let Some(path) = self.0.take() {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+}
+
+impl TempFileGuard {
+    fn path(&self) -> Option<&Path> {
+        self.0.as_deref()
+    }
+
+    fn keep(mut self) -> PathBuf {
+        self.0
+            .take()
+            .expect("TempFileGuard::keep called at most once")
+    }
+}
+
+/// Creates a fresh, empty temporary file beside *target*'s own path,
+/// the same naming/open-flags [`write_temp_file`] uses for an
+/// already-complete body -- opened for incremental writes instead.
+#[cfg(unix)]
+fn open_save_temp_file(target: &SaveTarget) -> Result<(PathBuf, std::fs::File), ToolError> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let directory = make_save_directories(target)?;
+    let file_name = target
+        .path
+        .file_name()
+        .expect("save_target always builds path with a file name");
+    let temp_name = format!(
+        ".{}.{:016x}.part",
+        file_name.to_string_lossy(),
+        random_u64()
+    );
+    let temp = directory.join(temp_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true).mode(0o666);
+    options.custom_flags(libc::O_NOFOLLOW);
+    let file = options.open(&temp).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })?;
+    Ok((temp, file))
+}
+
+#[cfg(not(unix))]
+fn open_save_temp_file(target: &SaveTarget) -> Result<(PathBuf, std::fs::File), ToolError> {
+    let directory = make_save_directories(target)?;
+    let file_name = target
+        .path
+        .file_name()
+        .expect("save_target always builds path with a file name");
+    let temp_name = format!(
+        ".{}.{:016x}.part",
+        file_name.to_string_lossy(),
+        random_u64()
+    );
+    let temp = directory.join(temp_name);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    let file = options.open(&temp).map_err(|e| {
+        runtime_error(format!(
+            "HttpPlugin: could not save {}: {e}",
+            temp.display()
+        ))
+    })?;
+    Ok((temp, file))
+}
+
+/// [`send_hop`]'s own success-with-save-to result: the body streamed
+/// straight to *guard*'s own temp file, never collected into memory
+/// (issue #726) -- *bytes*/*sha256* are the digest [`BodySink::write`]
+/// updated per chunk, so [`finalize_streamed_save`] never has to read
+/// the file back just to hash it again.
+struct StreamedSave {
+    guard: TempFileGuard,
+    bytes: u64,
+    sha256: String,
+}
+
+/// `plugins/http.py::_save_body`'s own `RuntimeError`/`ConnectionError`
+/// texts for `send_to_sink`'s own two failure shapes -- *save* is
+/// always `Some` here (the only caller [`send_hop`] ever builds a
+/// [`http_client::BodySink`] for).
+fn save_over_cap_error(declared: Option<usize>, save: &SaveTarget) -> ToolError {
+    let text = match declared {
+        Some(n) => format!(
+            "HttpPlugin: the response body is {n} bytes, over max_bytes ({}); nothing was saved.",
+            save.max_bytes
+        ),
+        None => format!(
+            "HttpPlugin: the response body is over max_bytes ({}); nothing was saved.",
+            save.max_bytes
+        ),
+    };
+    runtime_error(text)
+}
+
+/// One hop's own request/response, streaming straight to a fresh
+/// temporary file when *save* is set (issue #726) instead of
+/// collecting the body into memory at all -- bounded by *save*'s own
+/// `max_bytes`, the same way [`http_client::send_capped`] bounds a
+/// different caller's own cap, but erroring (with [`TempFileGuard`]
+/// deleting whatever was already written) rather than silently
+/// truncating, matching `plugins/http.py::_save_body`'s own
+/// `_SAVE_CHUNK_BYTES` loop. `RawResponse::body` is always empty in
+/// that case; the caller reads the temp file back itself for a
+/// non-2xx error excerpt (bounded the same way -- a documented,
+/// narrow divergence from `cof run`'s own unbounded `exc.read()` on
+/// that path, DESIGN.md §13).
+async fn send_hop(
+    client: &http_client::HttpClient,
+    connect_target: &http_client::ConnectTarget,
+    raw_request: &http_client::RawRequest,
+    timeout: http_client::TimeoutModel,
+    save: Option<&SaveTarget>,
+    original_url: &str,
+) -> Result<(http_client::RawResponse, Option<StreamedSave>), ToolError> {
+    let Some(save) = save else {
+        let response = http_client::send(client, connect_target, raw_request, timeout)
+            .await
+            .map_err(|e| send_error_to_tool_error(e, original_url))?;
+        return Ok((response, None));
+    };
+    let (temp_path, mut file) = open_save_temp_file(save)?;
+    let guard = TempFileGuard(Some(temp_path));
+    let mut digest = Sha256::new();
+    let mut written: u64 = 0;
+    let max_bytes = usize::try_from(save.max_bytes).unwrap_or(usize::MAX);
+    let result = {
+        let mut write = |chunk: &[u8]| -> Result<(), String> {
+            digest.update(chunk);
+            written += chunk.len() as u64;
+            std::io::Write::write_all(&mut file, chunk).map_err(|e| e.to_string())
+        };
+        let sink = http_client::BodySink {
+            max_bytes,
+            write: &mut write,
+        };
+        http_client::send_to_sink(client, connect_target, raw_request, timeout, sink).await
+    };
+    match result {
+        Ok(response) => Ok((
+            response,
+            Some(StreamedSave {
+                guard,
+                bytes: written,
+                sha256: format!("{:x}", digest.finalize()),
+            }),
+        )),
+        Err(http_client::SendError::BodyOverCap { declared }) => {
+            Err(save_over_cap_error(declared, save))
+        }
+        Err(http_client::SendError::Sink(text)) => Err(runtime_error(format!(
+            "HttpPlugin: could not save {}: {text}",
+            guard
+                .path()
+                .map(Path::display)
+                .map(|d| d.to_string())
+                .unwrap_or_default()
+        ))),
+        Err(err) => Err(send_error_to_tool_error(err, original_url)),
+    }
+}
+
+/// The one true 2xx-success return under `params.save_to` streaming
+/// (issue #726): moves [`StreamedSave`]'s own already-written,
+/// already-hashed temp file into place -- the only place this module
+/// ever calls [`TempFileGuard::keep`].
+fn finalize_streamed_save(
+    parsed: &ParsedRequest,
+    original_url: &str,
+    response: http_client::RawResponse,
+    save: &SaveTarget,
+    streamed: StreamedSave,
+) -> Result<ToolResult, ToolError> {
+    let status = response.status;
+    let ok = !(parsed.fail_on_error && status >= 400);
+    let content_type = find_header(&response.headers, "content-type").map(str::to_string);
+    let temp_path = streamed.guard.keep();
+    if let Err(err) = move_into_place(&temp_path, save) {
+        let _ = std::fs::remove_file(&temp_path);
+        return Err(err);
+    }
+    let mut headers_dict = Dict::new();
+    for (k, v) in &response.headers {
+        headers_dict.insert(Value::Str(k.clone()), Value::Str(v.clone()));
+    }
+    let mut raw = Dict::new();
+    raw.insert(
+        Value::Str("status".to_string()),
+        Value::from(i64::from(status)),
+    );
+    raw.insert(Value::Str("headers".to_string()), Value::Dict(headers_dict));
+    raw.insert(
+        Value::Str("url".to_string()),
+        Value::Str(original_url.to_string()),
+    );
+    let mut value = Dict::new();
+    value.insert(
+        Value::Str("path".to_string()),
+        Value::Str(save.path.display().to_string()),
+    );
+    value.insert(
+        Value::Str("bytes".to_string()),
+        Value::from(streamed.bytes as i64),
+    );
+    value.insert(
+        Value::Str("sha256".to_string()),
+        Value::Str(streamed.sha256),
+    );
+    value.insert(
+        Value::Str("content_type".to_string()),
+        content_type.map(Value::Str).unwrap_or(Value::None),
+    );
+    value.insert(
+        Value::Str("status".to_string()),
+        Value::from(i64::from(status)),
+    );
+    Ok(ToolResult {
+        value: Value::Dict(value),
+        raw: Value::Dict(raw),
+        stdout: None,
+        stderr: None,
+        exit_code: None,
+        ok,
+        stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
+        cost_usd: None,
+    })
+}
+
+/// `plugins/http.py::HttpPlugin.execute`'s own `save_to` branch of its
+/// final `ToolResult` -- `value: {path, bytes, sha256, content_type,
+/// status}`, `raw` without a `body` key, and nothing written for a
+/// non-2xx or refused response.
+fn finalize_response_save(
+    parsed: &ParsedRequest,
+    original_url: &str,
+    response: http_client::RawResponse,
+    final_reason: Option<String>,
+    refused: bool,
+    save: &SaveTarget,
+    scrub: Option<&dyn Fn(&str) -> String>,
+) -> Result<ToolResult, ToolError> {
+    let status = response.status;
+    let ok = !(parsed.fail_on_error
+        && (status >= 400
+            || refused
+            || (parsed.redirects == RedirectMode::Never && (300..400).contains(&status))));
+    let content_type = find_header(&response.headers, "content-type").map(str::to_string);
+    let mut stderr = None;
+    let saved = if (200..300).contains(&status) && !refused {
+        Some(save_response_body(&response.body, save)?)
+    } else {
+        let text = String::from_utf8_lossy(&response.body).into_owned();
+        stderr = final_reason.map(|reason| {
+            let base = format!("HTTP {status}: {reason}");
+            // Issue #725: scrubbed *before* the cut, so no part of a
+            // secret survives it (`plugins/http.py::HttpPlugin.execute`).
+            let scrubbed = scrub.map(|f| f(&text)).unwrap_or(text);
+            let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
+            if excerpt.is_empty() {
+                base
+            } else {
+                format!("{base}: {excerpt}")
+            }
+        });
+        None
+    };
+    let mut headers_dict = Dict::new();
+    for (k, v) in &response.headers {
+        headers_dict.insert(Value::Str(k.clone()), Value::Str(v.clone()));
+    }
+    let mut raw = Dict::new();
+    raw.insert(
+        Value::Str("status".to_string()),
+        Value::from(i64::from(status)),
+    );
+    raw.insert(Value::Str("headers".to_string()), Value::Dict(headers_dict));
+    raw.insert(
+        Value::Str("url".to_string()),
+        Value::Str(original_url.to_string()),
+    );
+    let mut value = Dict::new();
+    value.insert(
+        Value::Str("path".to_string()),
+        saved
+            .as_ref()
+            .map(|s| Value::Str(s.path.display().to_string()))
+            .unwrap_or(Value::None),
+    );
+    value.insert(
+        Value::Str("bytes".to_string()),
+        Value::from(saved.as_ref().map(|s| s.bytes as i64).unwrap_or(0)),
+    );
+    value.insert(
+        Value::Str("sha256".to_string()),
+        saved
+            .as_ref()
+            .map(|s| Value::Str(s.sha256.clone()))
+            .unwrap_or(Value::None),
+    );
+    value.insert(
+        Value::Str("content_type".to_string()),
+        content_type.map(Value::Str).unwrap_or(Value::None),
+    );
+    value.insert(
+        Value::Str("status".to_string()),
+        Value::from(i64::from(status)),
+    );
+    Ok(ToolResult {
+        value: Value::Dict(value),
+        raw: Value::Dict(raw),
+        stdout: None,
+        stderr,
+        exit_code: None,
+        ok,
+        stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
+        cost_usd: None,
+    })
+}
+
+/// The one call [`HttpPlugin::execute`]'s own dispatch loop makes at
+/// every return point, [`finalize_response_save`] once `params.save_to`
+/// named a target, [`finalize_response`] otherwise.
+fn build_result(
+    parsed: &ParsedRequest,
+    original_url: &str,
+    response: http_client::RawResponse,
+    final_reason: Option<String>,
+    refused: bool,
+    scrub: Option<&dyn Fn(&str) -> String>,
+) -> Result<ToolResult, ToolError> {
+    match &parsed.save {
+        Some(save) => finalize_response_save(
+            parsed,
+            original_url,
+            response,
+            final_reason,
+            refused,
+            save,
+            scrub,
+        ),
+        None => finalize_response(parsed, original_url, response, final_reason, refused, scrub),
+    }
+}
+
 /// Builds the final [`ToolResult`] from a received response --
 /// *final_reason* is `None` for a 2xx (`stderr: None`), `Some(reason)`
 /// for anything else (4xx/5xx, or an unfollowed/disallowed/looping
@@ -1099,13 +1931,17 @@ fn finalize_response(
     response: http_client::RawResponse,
     final_reason: Option<String>,
     refused: bool,
+    scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<ToolResult, ToolError> {
     let status = response.status;
     let text = String::from_utf8_lossy(&response.body).into_owned();
     let value = parse_body(&parsed.parse_mode, &response.headers, &text)?;
     let stderr = final_reason.map(|reason| {
         let base = format!("HTTP {status}: {reason}");
-        let excerpt = http_error_excerpt(&text, ERROR_EXCERPT_MAX_CHARS);
+        // Issue #725: scrubbed *before* the cut, so no part of a secret
+        // survives it (`plugins/http.py::HttpPlugin.execute`).
+        let scrubbed = scrub.map(|f| f(&text)).unwrap_or_else(|| text.clone());
+        let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
         if excerpt.is_empty() {
             base
         } else {
@@ -1139,6 +1975,9 @@ fn finalize_response(
         exit_code: None,
         ok,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
+        cost_usd: None,
     })
 }
 
@@ -1157,7 +1996,7 @@ fn to_string_pairs(pairs: &[(Value, Value)]) -> Vec<(String, String)> {
 /// always appended, as this function used to, makes a `no_proxy`
 /// entry with no port of its own -- the common case -- never match a
 /// request whose URL also never wrote one).
-fn netloc_host_as_written(netloc: &str) -> &str {
+pub(crate) fn netloc_host_as_written(netloc: &str) -> &str {
     match netloc.rfind('@') {
         Some(idx) => &netloc[idx + 1..],
         None => netloc,
@@ -1268,7 +2107,7 @@ impl ToolPlugin for HttpPlugin {
     }
 
     async fn execute(&self, params: Value, call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
-        let parsed = parse_params(&params)?;
+        let parsed = parse_params(&params, call.secret_headers)?;
         let original_url = parsed.url.clone();
 
         let initial_scheme = match splittype(&parsed.url) {
@@ -1447,15 +2286,22 @@ impl ToolPlugin for HttpPlugin {
                 body: current_body.clone(),
             };
 
-            let send_result =
-                http_client::send(&client, &connect_target, &raw_request, timeout).await;
+            let send_result = send_hop(
+                &client,
+                &connect_target,
+                &raw_request,
+                timeout,
+                parsed.save.as_ref(),
+                &original_url,
+            )
+            .await;
             if call.token.is_set() {
                 return Err(ToolError::message("cancelled".to_string()));
             }
 
-            let response = match send_result {
-                Err(err) => return Err(send_error_to_tool_error(err, &original_url)),
-                Ok(response) => response,
+            let (mut response, streamed) = match send_result {
+                Err(err) => return Err(err),
+                Ok(pair) => pair,
             };
 
             let status = response.status;
@@ -1467,7 +2313,33 @@ impl ToolPlugin for HttpPlugin {
                 if let Some(body_error) = response.body_error.clone() {
                     return Err(send_error_to_tool_error(body_error, &original_url));
                 }
-                return finalize_response(&parsed, &original_url, response, None, false);
+                if let Some(streamed) = streamed {
+                    return finalize_streamed_save(
+                        &parsed,
+                        &original_url,
+                        response,
+                        parsed
+                            .save
+                            .as_ref()
+                            .expect("send_hop only returns Some(StreamedSave) when parsed.save is"),
+                        streamed,
+                    );
+                }
+                return build_result(&parsed, &original_url, response, None, false, call.scrub);
+            }
+            // Not a 2xx success: whatever `send_hop` streamed to a temp
+            // file (if `params.save_to` is set) is read back once here
+            // (bounded already by `save.max_bytes`) so the existing
+            // error-excerpt/redirect logic below can keep reading
+            // `response.body` exactly as it always has; `streamed`'s own
+            // `TempFileGuard` deletes the file at the end of this
+            // iteration regardless of which of the branches below is
+            // taken next (`finalize_streamed_save` above is the only
+            // place that ever keeps one).
+            if let Some(streamed) = &streamed {
+                if let Some(path) = streamed.guard.path() {
+                    response.body = std::fs::read(path).unwrap_or_default();
+                }
             }
 
             if matches!(status, 301 | 302 | 303 | 307 | 308) {
@@ -1480,12 +2352,13 @@ impl ToolPlugin for HttpPlugin {
                     let target_scheme = http_url::urlsplit(&quoted, "").scheme;
                     if !matches!(target_scheme.as_str(), "" | "http" | "https" | "ftp") {
                         let reason = disallowed_redirect_scheme_reason(&response.reason, &quoted);
-                        return finalize_response(
+                        return build_result(
                             &parsed,
                             &original_url,
                             response,
                             Some(reason),
                             false,
+                            call.scrub,
                         );
                     }
                     // `plugins/http.py::_RedirectPolicy.redirect_request`:
@@ -1497,32 +2370,44 @@ impl ToolPlugin for HttpPlugin {
                     {
                         let reason =
                             format!("{}: {}", response.reason, parsed.redirects.refused_note());
-                        return finalize_response(
+                        return build_result(
                             &parsed,
                             &original_url,
                             response,
                             Some(reason),
                             true,
+                            call.scrub,
                         );
                     }
                     if let Some(redirect) = http_client::redirect_policy(&current_method, status) {
                         let repeat_count = visited.get(&quoted).copied().unwrap_or(0);
                         if repeat_count >= MAX_REPEATS || visited.len() >= MAX_REDIRECTIONS {
                             let reason = redirect_loop_reason(&response.reason);
-                            return finalize_response(
+                            return build_result(
                                 &parsed,
                                 &original_url,
                                 response,
                                 Some(reason),
                                 false,
+                                call.scrub,
                             );
                         }
                         *visited.entry(quoted.clone()).or_insert(0) += 1;
                         if parsed.redirects == RedirectMode::StripAuth {
                             let origin = redirect_origin(&current_url);
                             if origin.is_none() || origin != redirect_origin(&quoted) {
-                                current_headers
-                                    .retain(|name, _| !name.eq_ignore_ascii_case("authorization"));
+                                // Issue #725: a header that came from a
+                                // secret is dropped alongside `Authorization`
+                                // on a cross-origin redirect, the same as
+                                // `plugins/http.py::_RedirectPolicy`'s own
+                                // `frozenset({"authorization", *secret_headers})`.
+                                current_headers.retain(|name, _| {
+                                    !name.eq_ignore_ascii_case("authorization")
+                                        && !call
+                                            .secret_headers
+                                            .iter()
+                                            .any(|h| name.eq_ignore_ascii_case(h))
+                                });
                             }
                         }
                         current_url = quoted;
@@ -1535,20 +2420,35 @@ impl ToolPlugin for HttpPlugin {
                         continue;
                     }
                     let reason = response.reason.clone();
-                    return finalize_response(
+                    return build_result(
                         &parsed,
                         &original_url,
                         response,
                         Some(reason),
                         false,
+                        call.scrub,
                     );
                 }
                 let reason = response.reason.clone();
-                return finalize_response(&parsed, &original_url, response, Some(reason), false);
+                return build_result(
+                    &parsed,
+                    &original_url,
+                    response,
+                    Some(reason),
+                    false,
+                    call.scrub,
+                );
             }
 
             let reason = response.reason.clone();
-            return finalize_response(&parsed, &original_url, response, Some(reason), false);
+            return build_result(
+                &parsed,
+                &original_url,
+                response,
+                Some(reason),
+                false,
+                call.scrub,
+            );
         }
     }
 

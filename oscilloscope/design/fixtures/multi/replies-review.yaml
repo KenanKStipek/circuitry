@@ -1,0 +1,12 @@
+prime.plan:
+  - {text: "Review api.py first, then models, cli and tests.", tokens_sent: 530, tokens_received: 28}
+prime.reviews.iter_0.review:
+  - {text: "api.py: missing null check in parse_duration.", tokens_sent: 1420, tokens_received: 95}
+prime.reviews.iter_1.review:
+  - {text: "models.py: fine.", tokens_sent: 1310, tokens_received: 22}
+prime.reviews.iter_2.review:
+  - {text: "cli.py: --events flag lacks help text.", tokens_sent: 1180, tokens_received: 61}
+prime.reviews.iter_3.review:
+  - {text: "tests.py: no test for 1h30m.", tokens_sent: 990, tokens_received: 44}
+prime.verdict:
+  - {text: "Two fixes needed before merge.", tokens_sent: 760, tokens_received: 19}

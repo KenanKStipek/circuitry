@@ -1,0 +1,11 @@
+name: split-models-table
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    model: small-model
+    template: "Summarize: {{input.doc}}"

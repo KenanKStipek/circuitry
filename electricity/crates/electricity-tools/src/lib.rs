@@ -1,14 +1,16 @@
 //! electricity-tools: the `ToolPlugin` trait, the per-attempt plugin
-//! builder, the process API, and electricity's 13 native tool
+//! builder, the process API, and electricity's 16 native tool
 //! providers (DESIGN.md §8.1) -- [`ToolPlugin`] v2, [`ToolCall`],
 //! [`ToolError`], [`PyExc`], [`ErrorCause`], [`ToolResult::validate`],
 //! [`registry::build_plugin`], and one module per provider: [`shell`],
 //! [`awk`], [`imagemagick`], [`ffmpeg`] (lane C, #459/#467); [`fs`],
 //! [`env_vars`], [`hash`], [`uuid`], [`clock`] (lane D1, #460/#464);
 //! [`regex`] (lane D2, #479/#480); [`http`]/[`http_client`] (lane E,
-//! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); plus [`json`]
-//! (issue #449's gate lane) and [`agent_cli`], the shared half
-//! `electricity-adapters`' `claude_code`/`pi` build on (issue #520).
+//! #485/#486); [`validate_yaml`] (lane L2a, #521/#524); [`gh`] (issue
+//! #722); [`cel`] (issue #723); [`systemone`] (issue #724); plus [`json`]
+//! (issue #449's gate lane) and [`agent_cli`],
+//! the shared half `electricity-adapters`' `claude_code`/`pi` build on
+//! (issue #520).
 //!
 //! `#[async_trait]` (not a native `async fn` in a public trait) makes
 //! [`ToolPlugin`] object-safe: a provider is looked up by name at run
@@ -20,13 +22,17 @@ use electricity_value::{CancellationToken, Value};
 use std::collections::HashMap;
 use std::fmt;
 
+pub mod agent;
 pub mod agent_cli;
+pub mod agent_live;
 pub mod awk;
+pub mod cel;
 pub mod clock;
 pub mod env_vars;
 pub mod ffmpeg;
 pub mod fs;
 mod generated;
+pub mod gh;
 pub mod hash;
 pub mod http;
 pub mod http_client;
@@ -42,8 +48,11 @@ pub use electricity_bytecode::plugin_names;
 pub mod process;
 pub mod regex;
 pub mod registry;
+pub mod secrets;
+pub mod service;
 pub mod shell;
 pub mod subprocess_tool;
+pub mod systemone;
 #[cfg(feature = "test-tools")]
 pub mod test_tools;
 pub mod uuid;
@@ -56,8 +65,9 @@ pub mod validate_yaml;
 pub use electricity_value::pycompat::PyExc;
 pub use registry::{build_plugin, supported_names};
 
-/// `plugins/base.py::ToolResult`, field for field.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `plugins/base.py::ToolResult`, field for field. `PartialEq` only, not
+/// `Eq`: `cost_usd` is an `Option<f64>`, which has no total order.
+#[derive(Debug, Clone, PartialEq)]
 pub struct ToolResult {
     pub value: Value,
     /// Always a dict (`core/tool.py`'s own meta.raw convention) -- a
@@ -76,6 +86,27 @@ pub struct ToolResult {
     /// `runtime.state.parsed_stdout: drop` keeps such a `stdout` out of
     /// state (#592).
     pub stdout_parsed: bool,
+    /// `plugins/base.py::ToolResult.tokens_sent`/`.tokens_received` --
+    /// `None` for every provider but `systemone` (issue #724), which
+    /// reports a server's own `usage.input_tokens`/`usage.output_tokens`
+    /// on a successful answer only, never on a returned failure or a
+    /// raised one. `exec/tool.rs` writes these into `meta.tokens_sent`/
+    /// `meta.tokens_received` and the run's own token totals the same
+    /// way a prompt's adapter reply does.
+    pub tokens_sent: Option<i64>,
+    pub tokens_received: Option<i64>,
+    /// `plugins/base.py::ToolResult.cost_usd` -- `None` for every
+    /// provider but `agent` (issue #720), which reports the CLI's own
+    /// running cost figure on every `ToolResult` it returns, `ok: false`
+    /// included (`agent.py`'s own `_Session.result` sets it either way,
+    /// the same total `raw.cost` carries) -- only a turn that raises
+    /// outright, with no `ToolResult` at all, has none. `exec/tool.rs`
+    /// writes this into `meta.cost_usd` the same way a prompt's adapter
+    /// reply does; unlike `tokens_sent`/`tokens_received`, it has no
+    /// `_total` accumulation across a pass's retried attempts (cof's own
+    /// `agent.py`/`core/tool.py` never sum a cost across attempts
+    /// either).
+    pub cost_usd: Option<f64>,
 }
 
 impl ToolResult {
@@ -90,6 +121,9 @@ impl ToolResult {
             exit_code: None,
             ok: true,
             stdout_parsed: false,
+            tokens_sent: None,
+            tokens_received: None,
+            cost_usd: None,
         }
     }
 
@@ -234,11 +268,64 @@ pub struct CheckResult {
 ///   (`core/cancellation.py::run_tracked`'s own doc comment: a child
 ///   only ever gets its own process group while the run is armed)
 ///   reads this, not *token* itself.
+/// - *on_live*: `Some` only for a process-backed tool the caller wants
+///   `meta.live` published for while it runs (#741) --
+///   [`process::run_tracked`]'s own readers call it, already throttled
+///   to at most once a second plus one trailing call after a second of
+///   quiet, with the current tail/byte-count snapshot; the caller
+///   assembles and publishes the actual `meta.live` value. `None` for
+///   every other provider, including the agent CLIs and `http`, which
+///   never call it even when it is `Some`.
 pub struct ToolCall<'a> {
     pub timeout_seconds: u32,
     pub config: &'a Value,
     pub token: &'a CancellationToken,
     pub armed: bool,
+    /// Issue #725: the (lower-cased) names of an `http` effect's own
+    /// `headers` whose value `electricity_vm::exec::tool` resolved from a
+    /// `{secret: ...}` reference, before building this call -- empty for
+    /// every other provider, and for `http` when no header came from a
+    /// secret. `HttpPlugin::execute` reads this for two things only:
+    /// `params.redirects`' own default (`strip_auth` instead of `follow`
+    /// when non-empty), and which headers a followed cross-origin
+    /// redirect strips alongside `Authorization`.
+    pub secret_headers: &'a [String],
+    /// Issue #725: scrubs every secret this dispatch resolved out of a
+    /// string, `electricity_tools::secrets::SecretValues::scrub_str`'s own
+    /// callback -- `None` for every provider but `http`. `HttpPlugin::
+    /// execute` applies it to an error body *before* cutting it to
+    /// `ERROR_EXCERPT_MAX_CHARS`, so no part of a secret survives the cut
+    /// (`plugins/http.py::HttpPlugin.execute`'s own `scrub_secrets`
+    /// parameter).
+    pub scrub: Option<&'a dyn Fn(&str) -> String>,
+    pub on_live: Option<&'a dyn Fn(process::LiveTail)>,
+    /// Issue #720 (#636's own `meta.live` for the `agent` tool): called
+    /// with the already-built `meta.live` [`Value`] snapshot while an
+    /// `agent` effect's session runs. Unlike [`ToolCall::on_live`], which
+    /// hands the caller a raw tail/byte-count and lets it build `meta.live`
+    /// itself, [`crate::agent::AgentPlugin::execute`] builds the whole
+    /// value (`agent_live::LiveTracker`'s own shape) and this is just the
+    /// write -- `None` for every provider but `agent`.
+    pub on_agent_live: Option<&'a dyn Fn(Value)>,
+    /// The attempt number (1-based) this dispatch is on -- only
+    /// `agent`'s own `meta.live.attempt` reads it; every other provider
+    /// ignores it.
+    pub agent_attempt: u32,
+    /// `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`,
+    /// the run's own totals *before* this attempt -- `Some` only once
+    /// `agent_attempt > 1`, the same `attempt_index > 0` gate
+    /// `core/tool.py`'s own call applies; `None` on the first attempt and
+    /// for every other provider. Only `agent`'s own `meta.live.
+    /// earlier_attempts` reads it.
+    pub agent_earlier_attempts: Option<(Option<i64>, Option<i64>)>,
+    /// `ToolDefinition.limited`: true for a tool effect compiled from a
+    /// document not run by path. Only [`crate::systemone::SystemOnePlugin`]
+    /// reads this.
+    pub limited: bool,
+    /// `ToolDefinition.confine_to`: the project a limited `systemone`
+    /// effect's `within` must stay inside; `None` when not limited, or a
+    /// limited document with no project of its own.
+    pub confine_to: Option<&'a str>,
 }
 
 /// DESIGN.md §8.1's shared tool-plugin trait, mirroring `plugins/
@@ -320,6 +407,14 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            secret_headers: &[],
+            scrub: None,
+            on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
+            limited: false,
+            confine_to: None,
         }
     }
 

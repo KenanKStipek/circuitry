@@ -18,6 +18,10 @@ fn isolate_history(cmd: &mut Command, home: &std::path::Path) {
     cmd.env("OSI_HISTORY_DIR", home.join("history"));
     cmd.env_remove("XDG_STATE_HOME");
     cmd.env_remove("OSI_HISTORY");
+    // Issue #698: same discipline for the run registry -- every
+    // bare-`osi` test in this file discovers runs through it.
+    cmd.env("OSI_RUNS_DIR", home.join("runs"));
+    cmd.env_remove("XDG_RUNTIME_DIR");
 }
 
 fn run(args: &[&str]) -> std::process::Output {
@@ -44,11 +48,19 @@ fn a_usage_error_prints_to_stderr_not_stdout() {
 }
 
 #[test]
-fn no_args_prints_the_usage_error_to_stderr() {
+fn no_args_without_a_tty_lists_discovered_runs_on_stdout_and_exits_0() {
+    // No orchestration, and `Command::output()` always pipes stdout
+    // (never a TTY) -- a usage error no longer applies here at all.
+    // `OSI_RUNS_DIR` is isolated
+    // above, but the process scan one of its three sources runs is
+    // deliberately machine-wide (not just this test's own isolated
+    // environment), so this only asserts the exit code and that
+    // nothing goes to stderr -- never that stdout itself is empty,
+    // which a real orchestration already running elsewhere on the
+    // same machine could legitimately make false.
     let out = run(&[]);
-    assert_eq!(out.status.code(), Some(2));
-    assert!(out.stdout.is_empty());
-    assert!(!out.stderr.is_empty());
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stderr.is_empty());
 }
 
 #[test]

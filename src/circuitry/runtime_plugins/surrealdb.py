@@ -56,6 +56,7 @@ import threading
 from typing import Any
 
 from ..preflight import CheckResult
+from ..surrealdb_sdk import open_client, run_query
 from ._sql_persistence import (
     coerce_bool,
     extract_inputs,
@@ -104,7 +105,7 @@ class SurrealdbPlugin:
                 config_environment=getattr(context, "environment", None),
             )
             self._run_id = context.run_id
-            self._client.query(
+            self._query(
                 "CREATE runs CONTENT $data",
                 {
                     "data": {
@@ -142,7 +143,7 @@ class SurrealdbPlugin:
             status = "failed" if error else "success"
             etype = infer_effect_type(meta, effect_result)
             try:
-                self._client.query(
+                self._query(
                     "CREATE effects CONTENT $data",
                     {
                         "data": {
@@ -191,11 +192,22 @@ class SurrealdbPlugin:
 
     # ------------------------------------------------------------------
 
+    def _query(self, sql: str, variables: dict[str, Any] | None = None) -> Any:
+        """Run a statement, executing the builder SDK 3.x hands back for it."""
+        response = (
+            self._client.query(sql, variables)
+            if variables is not None
+            else self._client.query(sql)
+        )
+        return run_query(response)
+
     def _open_client(self, runtime_config: dict[str, Any]) -> Any:
         from surrealdb import Surreal  # type: ignore[import-not-found]
 
         cfg = _resolve_config(runtime_config)
-        client = Surreal(cfg["url"])
+        url = cfg["url"]
+        assert url is not None  # _resolve_config always fills in a default
+        client = open_client(Surreal, url)
         if cfg["token"]:
             client.authenticate(cfg["token"])
         elif cfg["user"] and cfg["password"]:
@@ -210,12 +222,12 @@ class SurrealdbPlugin:
         return client
 
     def _ensure_schema(self) -> None:
-        self._client.query("DEFINE TABLE IF NOT EXISTS runs SCHEMALESS")
-        self._client.query("DEFINE TABLE IF NOT EXISTS effects SCHEMALESS")
-        self._client.query(
+        self._query("DEFINE TABLE IF NOT EXISTS runs SCHEMALESS")
+        self._query("DEFINE TABLE IF NOT EXISTS effects SCHEMALESS")
+        self._query(
             "DEFINE INDEX IF NOT EXISTS idx_runs_run_id ON TABLE runs COLUMNS run_id UNIQUE"
         )
-        self._client.query(
+        self._query(
             "DEFINE INDEX IF NOT EXISTS idx_effects_run_id ON TABLE effects COLUMNS run_id"
         )
 
@@ -239,7 +251,7 @@ class SurrealdbPlugin:
             if self._client is None:
                 return
             try:
-                self._client.query(
+                self._query(
                     "UPDATE runs SET status = $status, ended_at = $ended_at, "
                     "error = $error WHERE run_id = $run_id",
                     {

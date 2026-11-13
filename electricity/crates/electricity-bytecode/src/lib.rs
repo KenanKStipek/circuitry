@@ -91,12 +91,13 @@ pub mod program;
 pub mod refusal;
 pub mod refusal_text;
 pub mod region;
+pub mod secrets;
 pub mod template;
 
 pub use effects::{
     AssetRef, DispatchFile, Message, PromptContent, PromptOp, PromptType, ReflectorOp, ReportLevel,
-    ReportOp, RetryPolicy, Role, RoutingOverride, TimeoutFrom, TimeoutMs, ToolOp, UseOp, UseSource,
-    YieldOp,
+    ReportOp, ResumeMode, RetryPolicy, Role, RoutingOverride, TimeoutFrom, TimeoutMs, ToolOp,
+    UseOp, UseSource, YieldOp,
 };
 pub use op::{LeafKind, NodeKind, OnError, Op, python_type_name};
 pub use param::ParamNode;

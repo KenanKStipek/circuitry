@@ -454,7 +454,9 @@ def test_ollamas_unreachable_hint_names_the_aliass_own_block(
         return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
-    runtime = _runtime(local_ollama={"adapter": "ollama", "base_url": "http://x/v1"})
+    runtime = _runtime(
+        local_ollama={"adapter": "ollama", "base_url": "http://x/v1", "stream": False}
+    )
     adapter = build_adapter(adapter_name="local_ollama", runtime=runtime)
     assert isinstance(adapter, OllamaAdapter)
     with pytest.raises(RuntimeError) as excinfo:
