@@ -170,24 +170,14 @@ fn key_paths(prefix: &str, value: &Value, depth: usize) -> Vec<String> {
     }
 }
 
-/// `cli/effective_settings.py::orchestration_host_setting_warnings`'s
-/// trusted branch (`_applied_host_settings_notice`) -- the only branch
-/// electricity ever reaches, since both [`check_report`] and
-/// [`check_for_run`] always trust the document (DESIGN.md §11) and
-/// never carry a host `plugins`/`enabled_plugins` allowlist of their
-/// own (`cfg or CircuitryConfig()` with `config=None`, Circuitry's own
-/// ground truth for every golden case): the untrusted split
-/// (`_split_orchestration_runtime`/`_split_orchestration_plugins`) and
-/// the ceiling-intersection notice suffix (`_ceiling_intersected_
-/// paths`, always empty here since there is no host `runtime.plugins.
-/// shell.allowed_commands`-style pin to intersect against) are both
-/// unreachable from either surface and are not ported.
-/// `_strip_document_api_key_env` (#669), applied here too: an
-/// `adapters.<name>.api_key_env` in *orch_runtime* is never applied
-/// and never named in the "Applied host settings" notice below --
-/// only its own "ignored" warning names it. Returns the runtime with
-/// every such key removed (so the notice-building loop below never
-/// sees it) and the warnings, in name order.
+/// `_strip_document_api_key_env` (#669): drops a document's
+/// `adapters.<name>.api_key_env` so it is never applied and never
+/// named in [`host_setting_warnings`]'s own "Applied host settings"
+/// notice below -- only this function's own "ignored" warning names
+/// it. Returns the runtime with every such key removed (so the
+/// notice-building loop below never sees it) and the warnings, in
+/// document order (the adapter dict's own iteration order, not
+/// sorted by name).
 fn strip_document_api_key_env_for_notice(
     orch_runtime: Option<&Dict>,
     document_name: &str,
@@ -237,6 +227,18 @@ fn strip_document_api_key_env_for_notice(
     (Some(result), warnings)
 }
 
+/// `cli/effective_settings.py::orchestration_host_setting_warnings`'s
+/// trusted branch (`_applied_host_settings_notice`) -- the only branch
+/// electricity ever reaches, since both [`check_report`] and
+/// [`check_for_run`] always trust the document (DESIGN.md §11) and
+/// never carry a host `plugins`/`enabled_plugins` allowlist of their
+/// own (`cfg or CircuitryConfig()` with `config=None`, Circuitry's own
+/// ground truth for every golden case): the untrusted split
+/// (`_split_orchestration_runtime`/`_split_orchestration_plugins`) and
+/// the ceiling-intersection notice suffix (`_ceiling_intersected_
+/// paths`, always empty here since there is no host `runtime.plugins.
+/// shell.allowed_commands`-style pin to intersect against) are both
+/// unreachable from either surface and are not ported.
 fn host_setting_warnings(document: &Value, document_name: &str) -> Vec<String> {
     let dict = document.as_dict();
     let orch_plugins = dict
@@ -1235,6 +1237,31 @@ mod tests {
         assert_eq!(
             warnings,
             vec!["Applied host settings from doc.yml: runtime.max_concurrency".to_string()]
+        );
+    }
+
+    #[test]
+    fn applied_host_settings_notice_drops_api_key_env_but_keeps_other_keys() {
+        let mut entry = Dict::new();
+        entry.insert(
+            Value::Str("api_key_env".to_string()),
+            Value::from("GATEWAY_TOKEN"),
+        );
+        entry.insert(
+            Value::Str("base_url".to_string()),
+            Value::from("https://gateway.example/v1"),
+        );
+        let mut adapters = Dict::new();
+        adapters.insert(Value::Str("gateway".to_string()), Value::Dict(entry));
+        let doc = runtime_doc(vec![("adapters", Value::Dict(adapters))]);
+        assert_eq!(
+            host_setting_warnings(&doc, "doc.yml"),
+            vec![
+                "Applied host settings from doc.yml: runtime.adapters.gateway.base_url".to_string(),
+                "runtime.adapters.gateway.api_key_env from doc.yml ignored: only config \
+                 chooses which environment variable an adapter's key comes from"
+                    .to_string(),
+            ]
         );
     }
 
