@@ -47,6 +47,7 @@ pub mod process;
 pub mod regex;
 pub mod registry;
 pub mod secrets;
+pub mod service;
 pub mod shell;
 pub mod subprocess_tool;
 pub mod systemone;
