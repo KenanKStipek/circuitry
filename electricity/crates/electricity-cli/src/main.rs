@@ -1158,6 +1158,15 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     let result = runtime.block_on(electricity::run_orchestration_with_config(
         cfg, &req, &token,
     ));
+    // Issue #721's own follow-up: a `service` teardown or stop a
+    // cancelled run's own `select!` dropped mid-flight keeps running
+    // on a task spawned off that drop, tracked for exactly this join --
+    // on the same runtime the run itself used, so its own reactor
+    // (timers, the state directory's lock) keeps driving it forward.
+    // A no-op whenever nothing is outstanding, which is every run that
+    // never touches the `service` tool, or finishes without being cut
+    // short mid-signal.
+    runtime.block_on(electricity::join_pending_teardowns());
 
     // `--out` outranks a loaded profile's own `out:` (DESIGN §6.11,
     // issue #495's own seam on `RunResult::out_path`) -- a profile's

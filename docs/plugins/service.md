@@ -179,3 +179,16 @@ what you rely on, leave `service` out of the `enabled_tools` allowlist.
 POSIX only (macOS, Linux). The leader's start time comes from
 `/proc/<pid>/stat` on Linux and `ps -o lstart=` elsewhere; the boot time
 from `/proc/stat` or `sysctl -n kern.boottime`. `lsof` is optional.
+
+## electricity
+
+`electricity` runs `service` too, over the same record format and the same
+`flock` on `<state_dir>/.lock`: a service `cof run` starts, `electricity run`
+can stop or query, and the other way round. Ownership (the process group id,
+the leader's start time, the boot time) is checked the same way on both
+engines before any signal, and a port held by a process the tool didn't
+start is reported, never signalled, on both. The readiness probe follows
+redirects the same way `cof run`'s own `urllib` opener does, and a `start`
+cancelled (Ctrl-C, SIGTERM) while waiting for `ready` tears the group down
+with the same graceful `SIGTERM`-then-`grace_ms`-then-`SIGKILL` an ordinary
+`stop` uses.
