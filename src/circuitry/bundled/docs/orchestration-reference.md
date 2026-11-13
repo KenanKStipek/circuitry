@@ -1812,6 +1812,41 @@ only after each turn, and `meta.raw` gains `context_tokens`,
 sets none, the model the CLI reports. See
 [`docs/plugins/agent.md`](./plugins/agent.md#live-progress-while-the-session-runs).
 
+#### A running subprocess tool's live output
+
+While `shell`, every plugin built on the shared subprocess helper
+(`awk`, `gh`, `imagemagick`, and the rest), or `ffmpeg` is still running
+— not every plugin that runs a program (`gpg`, `pdf_render`,
+`diff_patch` and `comfyui` don't publish this); not the `agent` tool,
+which has its own `meta.live` above; not `http`, which has no process —
+its node carries:
+
+```json
+{"v": 1, "started_at": "...", "updated_at": "...",
+ "stdout_tail": "...", "stderr_tail": "...", "stdout_bytes": 0, "stderr_bytes": 0}
+```
+
+`stdout_tail`/`stderr_tail` are each the last 20 lines read so far on
+that stream — the current line counts as the last one of them and shows
+as soon as it has been read, even before a newline ends it — cut, by
+dropping whole lines from the front (never a fragment of one), to stay
+within 4 KiB of UTF-8; a single line longer than that is itself cut to
+its own last 4 KiB first. Decoded separately from, and more loosely
+than, the final `meta.stdout`/`meta.stderr` decode, which this feature
+never touches: invalid bytes are replaced (U+FFFD) rather than failing
+the tail. `stdout_bytes`/`stderr_bytes` are the raw bytes read on each
+stream so far, before that decode — not just the tail, and not the
+decoded text's own length. Each tail goes through the same secret
+scrubbing as the rest of the node, plus, for a secret whose resolved
+value spans more than one line, dropping any tail line that still
+carries a whole line of it (the tail's own bound can otherwise keep part
+of a multi-line secret without ever matching it whole). Published
+through `Store.set` at most once a second, the same way the `agent`
+tool's own `meta.live` is, plus one more publish once output stops for a
+second; removed before the node's final write, so a finished node is
+byte-identical to one without this feature. `--events` gains nothing
+from it.
+
 ---
 
 ## Concurrency Limits

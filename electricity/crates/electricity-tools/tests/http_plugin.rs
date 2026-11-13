@@ -30,6 +30,8 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         token,
         armed: false,
         on_live: None,
+        limited: false,
+        confine_to: None,
     }
 }
 

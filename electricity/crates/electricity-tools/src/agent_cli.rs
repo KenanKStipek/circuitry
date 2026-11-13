@@ -766,7 +766,7 @@ fn no_answer_message(name: &str, proc: &process::Completed) -> String {
 /// (that one is `pub(crate)` to its own crate, and this module's own doc
 /// convention, like `process.rs`'s `describe_utf8_error`, is to carry a
 /// small duplicate rather than reach across a lane boundary for it).
-fn py_format_g(x: f64) -> String {
+pub(crate) fn py_format_g(x: f64) -> String {
     if x == 0.0 {
         return if x.is_sign_negative() {
             "-0".to_string()

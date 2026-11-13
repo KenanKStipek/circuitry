@@ -185,6 +185,8 @@ mod tests {
             token: &token,
             armed: false,
             on_live: None,
+            limited: false,
+            confine_to: None,
         };
         UuidPlugin.execute(params, &call).await
     }

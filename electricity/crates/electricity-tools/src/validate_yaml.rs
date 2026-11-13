@@ -174,6 +174,8 @@ impl ToolPlugin for ValidateYamlPlugin {
             exit_code: None,
             ok: true,
             stdout_parsed: false,
+            tokens_sent: None,
+            tokens_received: None,
         })
     }
 
@@ -202,6 +204,8 @@ mod tests {
             token,
             armed: false,
             on_live: None,
+            limited: false,
+            confine_to: None,
         }
     }
 

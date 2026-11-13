@@ -285,6 +285,8 @@ mod tests {
             token: &token,
             armed: false,
             on_live: None,
+            limited: false,
+            confine_to: None,
         };
         tool.execute(params, &call).await
     }

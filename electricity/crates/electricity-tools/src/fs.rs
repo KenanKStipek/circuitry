@@ -898,6 +898,8 @@ mod tests {
             token: &token,
             armed: false,
             on_live: None,
+            limited: false,
+            confine_to: None,
         };
         FsPlugin.execute(params, &call).await
     }

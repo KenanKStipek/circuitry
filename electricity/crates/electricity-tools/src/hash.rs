@@ -233,6 +233,8 @@ mod tests {
             token: &token,
             armed: false,
             on_live: None,
+            limited: false,
+            confine_to: None,
         };
         HashPlugin.execute(params, &call).await
     }

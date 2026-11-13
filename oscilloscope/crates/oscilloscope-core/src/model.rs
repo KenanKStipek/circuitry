@@ -104,7 +104,16 @@ impl AgentLive {
         // `meta.adapter`/`meta.provider` (a node can carry either in any
         // combination with the other, e.g. a fixture setting `adapter`
         // on every node for the Cost screen's own token-bearing rule).
-        if obj.contains_key("adapter") {
+        //
+        // A running subprocess tool's own `meta.live` (issue #741) has
+        // its own `stdout_tail` key, which this shape never carries
+        // either -- excluded the same way, so a `shell`/`awk`/`ffmpeg`
+        // step's own live record never parses as a near-empty
+        // `AgentLive` (which would otherwise make `StepTokensSoFar`
+        // and friends think an ordinary subprocess tool's running step
+        // is a live agent session with no tokens yet, rather than not
+        // one at all).
+        if obj.contains_key("adapter") || obj.contains_key("stdout_tail") {
             return None;
         }
         let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
@@ -231,6 +240,61 @@ impl PromptLive {
             chars_received: u64_field("chars_received"),
             tokens_per_second: obj.get("tokens_per_second").and_then(Value::as_f64),
         })
+    }
+}
+
+/// A running subprocess tool's own `meta.live` (issue #741,
+/// `docs/orchestration-reference.md`'s "A running subprocess tool's
+/// live output" section) -- `shell` and every tool built on
+/// `plugins/_subprocess.py` (not the agent tool, [`AgentLive`], nor
+/// `http`, which has no process). Told apart from both other live
+/// shapes by its own `stdout_tail` key, which neither carries.
+/// Every field is read permissively, the same reason as
+/// [`AgentLive::from_value`]'s: this is read every redraw from a
+/// live, still-being-written process, and a wrong-typed or missing
+/// field must never panic or freeze the display, only leave that one
+/// field empty.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ToolLive {
+    pub started_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub stdout_tail: String,
+    pub stderr_tail: String,
+    pub stdout_bytes: Option<u64>,
+    pub stderr_bytes: Option<u64>,
+}
+
+impl ToolLive {
+    /// `None` for anything that isn't this shape at all -- in
+    /// particular, for the agent tool's own `meta.live` (no
+    /// `stdout_tail` key) and a streamed prompt's (no `stdout_tail`
+    /// either).
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        if !obj.contains_key("stdout_tail") {
+            return None;
+        }
+        let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
+        Some(ToolLive {
+            started_at: str_field("started_at"),
+            updated_at: str_field("updated_at"),
+            stdout_tail: str_field("stdout_tail").unwrap_or_default(),
+            stderr_tail: str_field("stderr_tail").unwrap_or_default(),
+            stdout_bytes: obj.get("stdout_bytes").and_then(Value::as_u64),
+            stderr_bytes: obj.get("stderr_bytes").and_then(Value::as_u64),
+        })
+    }
+
+    /// Issue #741's own heartbeat rule, the same 5-second window as
+    /// [`AgentLive::is_recent`]: a tail whose own `updated_at` is
+    /// within 5 seconds of `now` is still growing right now; once a
+    /// process that would keep writing it is gone, this reads
+    /// `false` within a few seconds of its last write.
+    pub fn is_recent(&self, now: &str) -> bool {
+        let Some(updated_at) = self.updated_at.as_deref() else {
+            return false;
+        };
+        crate::observe::duration_seconds(updated_at, now).is_some_and(|secs| secs.abs() <= 5.0)
     }
 }
 
@@ -468,6 +532,11 @@ pub struct NodeMeta {
     /// a given `meta.live` object parses as at most one of the two,
     /// told apart by its own `adapter` key.
     pub prompt_live: Option<PromptLive>,
+    /// `meta.live` once more, read as a running subprocess tool's own
+    /// live output instead (issue #741) -- mutually exclusive with
+    /// both `live` and `prompt_live` above, told apart by its own
+    /// `stdout_tail` key.
+    pub tool_live: Option<ToolLive>,
     pub value: Value,
     pub meta: Value,
 }
@@ -496,6 +565,7 @@ impl NodeMeta {
             progress_eta_s: meta.pointer("/progress/eta_s").and_then(Value::as_f64),
             live: meta.get("live").and_then(AgentLive::from_value),
             prompt_live: meta.get("live").and_then(PromptLive::from_value),
+            tool_live: meta.get("live").and_then(ToolLive::from_value),
             value: value.clone(),
             meta: meta.clone(),
         }
@@ -3224,6 +3294,8 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
@@ -3514,6 +3586,8 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
@@ -3591,6 +3665,8 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
@@ -3730,6 +3806,8 @@ mod tests {
                                         description: None,
                                         group: None,
                                         prompt_file: None,
+                                        limited: false,
+                                        confine_to: None,
                                     }))),
                                     on_error: OnError::Fail,
                                     labels: None,
@@ -3855,6 +3933,8 @@ mod tests {
                             description: None,
                             group: None,
                             prompt_file: None,
+                            limited: false,
+                            confine_to: None,
                         }))),
                         on_error: OnError::Skip,
                         labels: None,

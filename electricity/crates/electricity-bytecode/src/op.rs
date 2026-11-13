@@ -175,6 +175,8 @@ mod python_type_name_tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))))
             .python_type_name(),
             "ToolDefinition"

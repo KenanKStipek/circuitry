@@ -16,7 +16,7 @@ working as an alias -- runs
 documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `prompt` and `reflector` effects and `finally:` blocks, with the `json`,
 `shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
-`clock`, `regex`, `http`, `validate_yaml`, `cel` and `gh` tool providers, aiming at the
+`clock`, `regex`, `http`, `validate_yaml`, `cel`, `gh` and `systemone` tool providers, aiming at the
 same final state, `--live-state` and `--events` output as `cof run`. A
 top-level `prompts:` map and `{{> name}}` composition run too, in every
 field that reaches them (a tool's `prompt`/`params`/`params_json`, a
@@ -54,9 +54,9 @@ release alongside the Python distributions, marked as a preview.
 
 ## What electricity can't run yet
 
-- **Tool providers.** electricity builds 15 of Circuitry's 76 tool
+- **Tool providers.** electricity builds 16 of Circuitry's 76 tool
   plugins (the list above). A document, or a `use: {path:}` child, naming
-  any of the other 61 is refused before the run starts; a plan compiled
+  any of the other 60 is refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
   absorbs it. A name that isn't one of Circuitry's plugins at all fails

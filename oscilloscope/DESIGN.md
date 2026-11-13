@@ -2558,9 +2558,10 @@ reconstruction that would need (re-truncating `flat`/`rows` to the
 cursor's own timestamp, the way the goldens' own test harness
 truncates a fixture); see "Not yet shipped" below. The Help overlay
 (`?`) is Signal's own dedicated one (`signal_help_lines`), the same
-fixed `2,5,72,18` overlay the Tape's own `Help · Tape` uses, listing
-exactly `←→`, `+/-`, `n`, `⏎` and the globals every key bar shares --
-never the shared, centred overlay Flow and Cost still fall back to.
+fixed `2,5,72,18` overlay the Tape's own `Help · Tape · Key`/`· Keys`
+uses, listing exactly `←→`, `+/-`, `n`, `⏎` and the globals every key
+bar shares, plus its own Key (issue #738) -- never the shared,
+centred overlay Flow and Cost still fall back to.
 
 **Sizes.** 120 columns and up: the trace sits above the Now pane and
 Readings, side by side (roughly 52/48); 80-119: Readings drops, the
@@ -2916,13 +2917,28 @@ blank padding instead, the same at every width; rows read in plan
 order, not real finish order, once a run has ended (finish order would scramble a loop's
 own passes by whichever of two near-simultaneous steps the engine
 happened to write first); and prompt previews are off for the
-Starting, Ended and Failed states. The Help overlay's own six blank
-rows (`design/frames/tape--help--120x30.mock` rows 15-20) are left
-blank here too, rather than given the movement aliases, `/`, `e`,
-`T`, `c` and `f` §4 also names as Tape keys: populating them changes
-over 300 of the frame's own cells at once, the kind of change this
-repository's own goldens ask to be reported rather than allow-listed
-away. For the Signal: a decision row's own trailing suffix (`·
+Starting, Ended and Failed states. The Help overlay (§3.7's glyph/
+line/colour Key, §4's own keyboard shortcuts) sizes its own popup to
+its content, capped at the screen, and splits onto as many pages as
+a small terminal needs (issue #738, also settling #684's own
+frame-locked blank rows), so the close row -- the only hint a second
+page exists -- shows on every page down to 60x24. `?` always opens on the Keys page
+(page `0`, `App::help_page`'s own default), the same order the merged
+page reads in; `←→` moves a free-running
+counter the draw side wraps into whatever range the current page
+count actually is, so pressing it keeps working the same way however
+many pages that turns out to be. The close row names the other page
+when there are exactly two (today's common case: a screen's own Keys
+rows and Key rows each fit one page on their own, but not combined),
+or reads `page N of M` once either needed more than one page to
+itself. When both groups together fit one page (Tape at 120 columns
+and up, every other screen from 80 up), they merge onto it and the
+title carries no page suffix at all. A row whose own meaning
+overflows its column -- not just an overlay narrower than both
+columns together -- gets a full-width line of its own, and so does
+the other pair of that row, so the right column never shifts and
+nothing is cut at the border. For the Signal: a
+decision row's own trailing suffix (`·
 drafts ×2 · 261 t`) names the very next top-level row's own progress
 when that row is an already-active loop -- the design's own prose
 never says a decision's row shows anything about a *different*
@@ -2978,6 +2994,46 @@ band's own `● n run · m wait` reading only makes sense that way; and
 below 100 columns, the design's own prose naming only the Story
 pane's own drop there.
 
+**From the frames, not from the design text: the Key's own contents
+(issue #738).** §3.7 and §4 name the glyphs and keys; which of them
+each screen's own Key page actually lists is read off the frames and
+the renderers, not stated in prose anywhere else, and every symbol is
+drawn in the real style the screen draws it in, never a generic muted
+placeholder. At 120x30 the Tape's own Help has the room to merge every
+key and its Key onto one page; every screen's own Help sizes to its
+content that way, capped at the screen, and otherwise pages between
+its own Keys and Key (and, below either group's own room on its own,
+onto still more pages) with `←→`. `?` always reopens on the default
+page regardless of where a previous Help left off.
+
+Every screen's Key starts from §3.7's shared glyphs it actually draws
+(never `❯`, the Select/All/Store screens' own row cursor -- every
+other screen highlights a row's own background instead) and adds: the
+Tape's own Now band, a loop line's `slots`/`queued` (§3.4's `2 of 2
+Slots Busy · 1 Pass Queued`), breadcrumbs and preview lines (both
+`›`), the token bar, the Totals row's own `↑↓` sent/received arrows,
+the vs-usual column's `+25%`/`below` deviation colours and the `t`
+view's own filled `▓` tick, and a loop's own pass sparkline (`▁`–`█`);
+the Signal's own `┃` Now sweep over the axis's `╌` dashes ahead of
+it, a step's own done/failed/running/ahead marks and a loop station,
+`sent`/`received` above/below the axis, a tool's own bar, the stacked
+columns' own partial cells (`▁`–`█`, `▀`/`▔`), the released tokens'
+own deviation colours, the fixed scale, `■` Run End and `›` in a
+step's own name; the Flow's own station glyphs, ghost lanes' own `·`
+and off-screen `◂`/`▸` markers, folded lanes' own `+N`, the token bar
+at its real unit, `▾` Now and the rail's own `━` position; the
+Store's own tile area, the `check` tile, `… N more`, a running
+container's own accent `●`, a live leaf's own dim (italic in
+`terminal`) style, the Largest table's own `❯` cursor, the status
+line's own `✓`/`✗`/`›` and its own `↑↓` sent/received tokens; and
+Select's, All's and the Combined
+Signal's own `●` running mark (per-run colour on All and the
+Combined Signal, the accent colour alone on Select, which keeps no
+run colour of its own), `—`/`gone`, the shared scale and a run's own
+name -- plus, on Select, Recent Runs' own `✓`/`✗` and `❯` cursor, and
+on the Combined Signal, its own stacked bars, legend swatch and Run
+End mark.
+
 **Not yet shipped.** §2.2's own "the step rows and the Now pane
 follow the cursor's column" (the scrubbed-cursor half of §6.3e's
 own "Keys" above): ←/→ move the cursor, draw it, and drive
@@ -2986,17 +3042,15 @@ Now pane keep showing the run's current state regardless, not the
 state as of that past column. The Totals row's cost figure reads `—` on every
 screen until a run reports one (`meta.cost_usd`,
 `runtime.last_run.totals.cost_usd`); the frames' scripted adapter
-never does, so every frame reads `—` too. The Help overlay's own six
-blank rows stay blank (above, "from the frames, not the design
-text"), and §3.5's own "100–119 columns shorten long titles and
-labels" is not yet given its own title-shortening rule at that
-width specifically -- the detail pane does show there, same as
-120 +, just with whichever title ratatui's own border truncation
-gives a long one. Below three finished runs, the Run End row reads
-`ETA — · no history yet` (§3.5); the Help overlay's own "Tokens"
-legend states the run's own actual unit and, once there have been
-enough runs to pool, the real count pooled, not fixed `50 t`/`3`
-figures.
+never does, so every frame reads `—` too. §3.5's own "100–119 columns
+shorten long titles and labels" is not yet given its own
+title-shortening rule at that width specifically -- the detail pane
+does show there, same as 120 +, just with whichever title ratatui's
+own border truncation gives a long one. Below three finished runs,
+the Run End row reads `ETA — · no history yet` (§3.5); the Key
+page's own `usual` line states the run's own actual unit and, once
+there have been enough runs to pool, the real count pooled, not
+fixed `50 t`/`3` figures.
 
 **Part 5 groundwork (issue #698): the run registry, discovery and
 history's `config`/`run_dir`.** Part 5 of the epic (#677) is the
@@ -3091,10 +3145,9 @@ Select, same as a plain `osi watch`): `q` "quit at once", not
 "confirms if running" (a watch owns no process of its own to ever
 confirm quitting against), and `c` "inert · launched only", not
 "cancel · confirms" (only a run `osi` launched itself can ever be
-cancelled). `signal_help_lines`/`flow_help_lines`/`store_help_lines`
-each take an `is_watch` flag for exactly this; the Tape's own Help
-never showed `c` at all (§4's own frame-locked blank rows), so it
-needs no change.
+cancelled). `signal_help_lines`/`flow_help_lines`/`store_help_lines`/
+`tape_help_lines` each take an `is_watch` flag for exactly this (the
+Tape's own Keys page, issue #738, now lists `c` too).
 
 With no running orchestrations, the empty Select shows where
 discovery looked, and a Recent Runs table built from
@@ -3727,7 +3780,27 @@ itself now, from the same `header.history_step_usual` the Tokens
 line's own "usual" already reads). Once finished, an Exit field and
 `── Output ───`/`── Errors ───` sections follow, each the run's own
 last 20 lines of stdout/stderr -- neither shows before the tool
-finishes, since neither engine publishes one before then. The
+finishes, since neither engine publishes one before then -- except
+for a running subprocess tool's own `meta.live` (issue #741,
+`model::ToolLive`), told apart from the agent tool's own `meta.live`
+shape by its own `stdout_tail` key (the same way `PromptLive`'s own
+`adapter` key tells it apart from the agent's, and now excluded from
+`AgentLive::from_value`'s own permissive parse too, so a subprocess
+tool's running step never reads as a near-empty agent session to
+`StepTokensSoFar` and friends). `NodeMeta` grows a third parse of
+`meta.live`, `tool_live`, alongside `live`/`prompt_live`;
+`FocusDetail::Tool` grows its own `live: Option<Box<ToolLive>>`,
+read the same way `stdout`/`stderr` already are. `tool_output_
+sections` shows `── Output (live) ───`/`── Errors (live) ───`
+sections from `stdout_tail`/`stderr_tail` in place of the finished
+ones while the node has no `stdout`/`stderr` of its own yet, cut to
+the tail's own last-20-lines bound exactly like a finished section
+is cut to 20 under `full: false` (nothing to cut further: the tail
+is never longer than that to begin with); a muted `updated {n} ago`
+line appears directly under the section's own rule, the same
+`format_duration` phrasing a row's own age already uses, once
+`ToolLive::is_recent` (`AgentLive::is_recent`'s same 5-second rule)
+says the tail itself has gone stale. The
 Flow's own simpler Selected pane, out of this issue's scope, keeps
 its exit code in its own existing `produced:` line instead.
 

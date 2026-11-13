@@ -1,0 +1,3 @@
+{
+  "error": "prime.decide: systemone: params.state_file '<CASE_DIR>/outside/secret.json' resolves outside params.within"
+}

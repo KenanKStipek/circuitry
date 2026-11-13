@@ -97,6 +97,8 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         token,
         armed: false,
         on_live: None,
+        limited: false,
+        confine_to: None,
     }
 }
 
@@ -566,6 +568,8 @@ async fn end_to_end_cases_match_cpython() {
             token: &token,
             armed: false,
             on_live: None,
+            limited: false,
+            confine_to: None,
         };
         let result = electricity_tools::http::HttpPlugin
             .execute(dict_params(params_vec), &call_with_timeout)

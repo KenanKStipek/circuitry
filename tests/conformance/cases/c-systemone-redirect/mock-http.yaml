@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 302
+    reason: Found
+    headers:
+      Location: /v1/systemone
+    body: ""

@@ -323,6 +323,16 @@ def build_cases(root: Path) -> list[dict[str, Any]]:
     )
     cases.append(
         resolve_config_case(
+            "circuitry_systemone_url_overlays_the_file_config",
+            root=root,
+            file_text=json.dumps(
+                {"runtime": {"plugins": {"systemone": {"base_url": "http://127.0.0.1:1"}}}}
+            ),
+            env={"CIRCUITRY_SYSTEMONE_URL": "http://127.0.0.1:2"},
+        )
+    )
+    cases.append(
+        resolve_config_case(
             "an_unknown_environment_falls_back_to_dev",
             root=root,
             file_text=json.dumps({"environment": "staging"}),

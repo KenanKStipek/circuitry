@@ -8,7 +8,9 @@ use crate::compile::Ctx;
 use crate::compile::coerce::{get_bool_default, get_truthy, py_int};
 use crate::compile::containers::{check_resume_mode, compile_effects_in_scope, normalize_flow};
 use crate::compile::expect::{compile_expect, compile_retries};
-use crate::compile::params::{build_cel_params, build_tool_params, build_use_inputs};
+use crate::compile::params::{
+    build_cel_params, build_tool_params, build_use_inputs, param_reference,
+};
 use crate::compile::templates::{check_templates, template_text};
 use crate::prompt_files::compile_dispatch_file as compile_dispatch_file_dict;
 use crate::state_ns::validate_reference_path;
@@ -23,6 +25,7 @@ use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 use std::collections::BTreeMap;
 use std::collections::BTreeSet;
+use std::path::Path;
 
 fn leaf_op(path: EffectPath, name: &str, kind: LeafKind, on_error: OnError) -> Op {
     Op {
@@ -564,6 +567,30 @@ pub(crate) fn compile_tool(
     let prompt_text =
         prompt.map(|raw| electricity_bytecode::TemplateText::new(raw, true, Escape::Html));
 
+    // `core/compiler.py::_compile_tool` -- the document's own trust,
+    // whatever the provider (a profile may still switch a tool to
+    // `http` after this). Only `systemone` reads `confine_to`.
+    let trusted = matches!(origin, DocumentOrigin::File { .. });
+    let limited = !trusted;
+    let confine_to = if limited {
+        origin
+            .file_dirs()
+            .map(|(_, confinement_root)| confinement_root.display().to_string())
+    } else {
+        None
+    };
+    if electricity_value::pycompat::py_strip(provider).to_lowercase() == "systemone" {
+        check_systemone_confinement(
+            params,
+            params_json.is_some(),
+            origin.file_dirs().is_some(),
+            limited,
+            confine_to.as_deref(),
+            name,
+            effect_path,
+        )?;
+    }
+
     let op = ToolOp {
         provider: provider.to_string(),
         params: params_node,
@@ -576,8 +603,118 @@ pub(crate) fn compile_tool(
         description,
         group,
         prompt_file,
+        limited,
+        confine_to,
     };
     Ok(leaf_op(path.clone(), name, LeafKind::Tool(op), on_error))
+}
+
+/// `plugins/systemone.py::_OUTSIDE_PROJECT`.
+const OUTSIDE_PROJECT: &str = "must lie inside the document's own project (a document the \
+     caller did not name by path is confined to it)";
+
+/// `plugins/systemone.py::within_param_errors`: a literal `within` must be
+/// an absolute path (no template tag), or `{from: input.<name>}`.
+fn systemone_within_errors(within: &Value) -> Vec<String> {
+    const MUST_BE_LITERAL_OR_INPUT: &str =
+        "params.within must be a literal absolute path or {from: input.<name>}";
+    if let Some(reference) = param_reference(within) {
+        return if prompt_files::is_within_input_path(&reference.path) {
+            Vec::new()
+        } else {
+            vec![MUST_BE_LITERAL_OR_INPUT.to_string()]
+        };
+    }
+    match within {
+        Value::Str(text) => {
+            if text.trim().is_empty() || text.contains("{{") || text.contains("}}") {
+                vec![MUST_BE_LITERAL_OR_INPUT.to_string()]
+            } else if !Path::new(text).is_absolute() {
+                vec![format!(
+                    "params.within must be an absolute path, got {}",
+                    Value::Str(text.clone()).py_repr()
+                )]
+            } else {
+                Vec::new()
+            }
+        }
+        _ => vec![MUST_BE_LITERAL_OR_INPUT.to_string()],
+    }
+}
+
+/// `core/compiler.py::_compile_tool`'s `systemone`-only call into
+/// `plugins/systemone.py::static_param_errors`, narrowed to the checks
+/// that decide what a run can read: a document with no file of its own
+/// cannot name `state_file`/`within` at all; a literal `within` must be
+/// an absolute path or `{from: input.<name>}`; a limited document's
+/// literal `within` must stay inside its own project; `state_file`
+/// requires `within` and vice versa.
+fn check_systemone_confinement(
+    params: &Dict,
+    has_params_json: bool,
+    has_document_file: bool,
+    limited: bool,
+    confine_to: Option<&str>,
+    name: &str,
+    effect_path: &str,
+) -> Result<(), CompileError> {
+    let within_key = Value::Str("within".to_string());
+    let state_file_key = Value::Str("state_file".to_string());
+    let has_within = params.contains_key(&within_key);
+    let has_file = params.contains_key(&state_file_key);
+    let mut errors: Vec<String> = Vec::new();
+
+    if !has_document_file {
+        for (present, key) in [(has_file, "state_file"), (has_within, "within")] {
+            if present {
+                errors.push(format!(
+                    "params.{key}: 'file:' cannot be used here — this document has no file \
+                     of its own (it was generated at run time, or has no path: stdin, an SDK \
+                     string, a 'use: inline' child); give the text in params.state."
+                ));
+            }
+        }
+    }
+
+    if has_within {
+        let within_value = params.get(&within_key).expect("has_within checked above");
+        let within_errors = systemone_within_errors(within_value);
+        let within_ok = within_errors.is_empty();
+        errors.extend(within_errors);
+        if within_ok && limited && param_reference(within_value).is_none() {
+            if let (Value::Str(within_text), Some(confine_to)) = (within_value, confine_to) {
+                let resolved_within = prompt_files::resolve_non_strict(Path::new(within_text));
+                let resolved_root = prompt_files::resolve_non_strict(Path::new(confine_to));
+                if let (Ok(resolved_within), Ok(resolved_root)) = (resolved_within, resolved_root) {
+                    if !prompt_files::path_is_inside(&resolved_within, &resolved_root) {
+                        errors.push(format!("params.within: {OUTSIDE_PROJECT}"));
+                    }
+                }
+            }
+        }
+    }
+
+    if has_file {
+        let state_file_value = params.get(&state_file_key).expect("has_file checked above");
+        let literal_ok = matches!(state_file_value, Value::Str(s) if !s.trim().is_empty());
+        if param_reference(state_file_value).is_none() && !literal_ok {
+            errors.push("params.state_file must be a non-empty path string".to_string());
+        }
+        if !has_within {
+            errors.push("params.state_file requires params.within".to_string());
+        }
+    } else if has_within && !has_params_json {
+        errors.push("params.within only applies to params.state_file".to_string());
+    }
+
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(CompileError(format!(
+            "Tool effect '{name}' (systemone) at '{effect_path}': {}",
+            errors.join("; ")
+        )))
+    }
 }
 
 /// `core/compiler.py::_compile_agent_prompt_file` (issue #591): the `agent`

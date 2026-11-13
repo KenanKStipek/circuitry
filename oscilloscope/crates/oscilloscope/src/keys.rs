@@ -19,6 +19,15 @@ pub enum Pane {
     State,
 }
 
+/// Issue #738: a free-running counter for which page of a screen's
+/// own Help overlay is on display -- `←`/`→` move it without
+/// knowing yet how many pages the current screen, at its current
+/// size, actually split its own Keys and Key rows onto; the draw
+/// side (`help_page_index`) wraps it into range once it knows. `0`
+/// is the default, since the Key (the §3.7 glyph/line/colour
+/// legend) is the content `?` is for and always comes first.
+pub type HelpPage = i64;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Dialog {
     None,
@@ -89,6 +98,11 @@ pub struct App {
     pub errors_only: bool,
     pub filter: Option<String>,
     pub dialog: Dialog,
+    /// Issue #738: which page the Help overlay currently open (or
+    /// last open) shows -- reset to [`HelpPage::default`] every time
+    /// `?` opens it, so a screen never reopens on whichever page a
+    /// previous screen's own Help was left on.
+    pub help_page: HelpPage,
     /// `osi watch`'s own flavour of quitting (§6.3): `q` never needs a
     /// confirm there, since watch owns no engine of its own to cancel
     /// — it only ever detaches.
@@ -313,6 +327,7 @@ impl App {
             errors_only: false,
             filter: None,
             dialog: Dialog::None,
+            help_page: HelpPage::default(),
             is_watch,
             opened_from_select: false,
             quit_when_finished: false,
@@ -787,6 +802,19 @@ impl App {
             // whatever's open where it is, and Help overlaying one
             // screen's own keys is no different.
             Dialog::Help if key.code == KeyCode::Char('T') => Action::CycleTheme,
+            // Issue #738: `←`/`→` move the Help overlay to its
+            // previous/next page rather than closing it -- harmless
+            // on a screen whose own Keys and Key both fit one page
+            // together, which draws the same content wherever this
+            // counter lands.
+            Dialog::Help if key.code == KeyCode::Left => {
+                self.help_page = self.help_page.wrapping_sub(1);
+                Action::None
+            }
+            Dialog::Help if key.code == KeyCode::Right => {
+                self.help_page = self.help_page.wrapping_add(1);
+                Action::None
+            }
             Dialog::Help => {
                 self.dialog = Dialog::None;
                 Action::None
@@ -1150,7 +1178,10 @@ impl App {
                     FullValueField::Value
                 });
             }
-            KeyCode::Char('?') => self.dialog = Dialog::Help,
+            KeyCode::Char('?') => {
+                self.dialog = Dialog::Help;
+                self.help_page = HelpPage::default();
+            }
             KeyCode::Char('c') => {
                 if running {
                     self.dialog = Dialog::ConfirmCancel { quit_after: false };
@@ -2580,6 +2611,63 @@ mod tests {
         assert_eq!(app.dialog, Dialog::Help);
         app.handle_key(key(KeyCode::Char('x')), &visible, &[], false, false, &[]);
         assert_eq!(app.dialog, Dialog::None);
+    }
+
+    #[test]
+    fn left_and_right_page_the_help_without_closing_it() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, 0);
+        app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
+        assert_eq!(
+            app.dialog,
+            Dialog::Help,
+            "→ must leave Help open, unlike every other key"
+        );
+        assert_eq!(app.help_page, 1);
+        app.handle_key(key(KeyCode::Left), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        assert_eq!(app.help_page, 0);
+    }
+
+    /// `help_page` is a free-running counter (issue #738): `←` from
+    /// the default page moves it negative, not back to whatever the
+    /// last page happens to be -- the draw side (`help_page_index`)
+    /// is the one that wraps it into range, once it knows how many
+    /// pages the current screen, at its current size, actually has.
+    #[test]
+    fn left_from_the_default_page_moves_the_counter_negative() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, 0);
+        app.handle_key(key(KeyCode::Left), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        assert_eq!(app.help_page, -1);
+        app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, 0);
+    }
+
+    #[test]
+    fn question_mark_reopens_help_on_its_default_page() {
+        let rows = [row("prime.a", 1, StatusKind::Done)];
+        let visible: Vec<&Row> = rows.iter().collect();
+        let mut app = App::new(false);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        app.handle_key(key(KeyCode::Right), &visible, &[], false, false, &[]);
+        assert_eq!(app.help_page, 1);
+        app.handle_key(key(KeyCode::Char('x')), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::None);
+        app.handle_key(key(KeyCode::Char('?')), &visible, &[], false, false, &[]);
+        assert_eq!(app.dialog, Dialog::Help);
+        assert_eq!(
+            app.help_page,
+            HelpPage::default(),
+            "? must reopen Help on its own default page, not wherever it was left"
+        );
     }
 
     #[test]

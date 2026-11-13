@@ -164,6 +164,8 @@ pub async fn run_tool(
     token: &CancellationToken,
     armed: bool,
     on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)>,
+    limited: bool,
+    confine_to: Option<&str>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
     let normalized = electricity_value::pycompat::py_strip(provider).to_lowercase();
     let config = electricity_tools::registry::plugin_config_slice(runtime_config, &normalized);
@@ -173,6 +175,8 @@ pub async fn run_tool(
         token,
         armed,
         on_live,
+        limited,
+        confine_to,
     };
     plugin.as_dyn().execute(params, &call).await
 }
@@ -195,7 +199,10 @@ const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
 /// `crate::retry::is_tool_failure_retryable` already keeps for any
 /// non-HTTP-family provider.
 fn http_family_provider(provider: &str) -> bool {
-    matches!(provider, "http" | "web_fetch" | "webhook" | "linear")
+    matches!(
+        provider,
+        "http" | "web_fetch" | "webhook" | "linear" | "systemone"
+    )
 }
 
 /// `core/tool.py::ToolRuntime._resolve_timeout_seconds`. *runtime_config*
@@ -422,6 +429,20 @@ fn reject_params_json_override(overlay: &Dict) -> Result<(), String> {
     ))
 }
 
+/// `plugins/systemone.py::reject_overlay_within` -- `params_json` is
+/// built at run time and can carry generated content, so it never sets
+/// `within`: only the document's own literal params do.
+fn reject_overlay_within(overlay: &Dict) -> Result<(), String> {
+    if overlay.contains_key(&Value::Str("within".to_string())) {
+        return Err(
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
+                .to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// `core/tool.py::_capped_raw` -- redacts *raw*, JSON-round-trips it
 /// (`core/tool.py`'s own docstring: callers serialize state with plain
 /// `json.dumps`, so a raw value only `default=str` can encode must
@@ -549,6 +570,9 @@ fn render_tool_call<R: ParamsCtx>(
         let overlay = render_params_json(&params_json.source, ctx, declared_prompts, effect_names)
             .map_err(|err: RenderParamsJsonError| err.to_string())?;
         reject_params_json_override(&overlay)?;
+        if electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "systemone" {
+            reject_overlay_within(&overlay)?;
+        }
         params = deep_merge_params(params, overlay);
     }
     for (key, value) in params {
@@ -686,6 +710,13 @@ pub async fn execute_tool<R: ParamsCtx>(
     }
 
     let mut next_delay_ms = base_backoff_ms;
+    // `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`
+    // locals (issue #724): accumulated across every attempt of this
+    // pass, written to `meta.tokens_sent_total`/`.tokens_received_total`
+    // whenever a plugin result carries a token count -- `systemone` is
+    // the only provider that ever does.
+    let mut total_tokens_sent: Option<i64> = None;
+    let mut total_tokens_received: Option<i64> = None;
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
@@ -719,6 +750,10 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "raw");
         pop_leaf(&meta_node, "expect");
         pop_leaf(&meta_node, "retries_used");
+        pop_leaf(&meta_node, "tokens_sent");
+        pop_leaf(&meta_node, "tokens_received");
+        pop_leaf(&meta_node, "tokens_sent_total");
+        pop_leaf(&meta_node, "tokens_received_total");
         pop_leaf(&meta_node, "stdout_chars");
         pop_leaf(&meta_node, "stdout_sha256");
         set_leaf(store, &meta_node, "waiting_for", Value::None);
@@ -746,6 +781,13 @@ pub async fn execute_tool<R: ParamsCtx>(
         // set on an `ok: false` returned result -- never a raised
         // failure or a failed `expect:` (issue #485's own ruling).
         let mut retry_after_for_backoff: Option<String> = None;
+        // Issue #724: this attempt's own `result.tokens_sent`/
+        // `.tokens_received`, threaded past the big `match` below the
+        // same way -- written to `meta.tokens_sent`/`.tokens_received`
+        // only once this attempt is the one that decided the pass's
+        // outcome (the tail end below, success only).
+        let mut attempt_tokens_sent: Option<i64> = None;
+        let mut attempt_tokens_received: Option<i64> = None;
         // `core/tool.py:838-840`'s own `retryable = True` on *any* failed
         // `expect:` check, raised or not, overriding whatever this
         // provider's own HTTP-family status/cause classification would
@@ -920,6 +962,8 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 token,
                                                 run_ctx.armed,
                                                 on_live,
+                                                tool.limited,
+                                                tool.confine_to.as_deref(),
                                             ).await
                                         }
                                     } => Some(result),
@@ -1106,6 +1150,34 @@ pub async fn execute_tool<R: ParamsCtx>(
                                             set_leaf(store, &meta_node, "binary", binary);
                                         }
                                         set_leaf(store, &meta_node, "raw", capped_raw(result.raw));
+                                        // Issue #724: spent whether this attempt
+                                        // succeeds or not -- an earlier, failed
+                                        // attempt's usage still counts toward this
+                                        // pass's total.
+                                        attempt_tokens_sent = result.tokens_sent;
+                                        attempt_tokens_received = result.tokens_received;
+                                        if let Some(sent) = result.tokens_sent {
+                                            total_tokens_sent =
+                                                Some(total_tokens_sent.unwrap_or(0) + sent);
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_sent_total",
+                                                Value::from(total_tokens_sent.expect("just set")),
+                                            );
+                                        }
+                                        if let Some(received) = result.tokens_received {
+                                            total_tokens_received =
+                                                Some(total_tokens_received.unwrap_or(0) + received);
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_received_total",
+                                                Value::from(
+                                                    total_tokens_received.expect("just set"),
+                                                ),
+                                            );
+                                        }
 
                                         if !result.ok {
                                             let message = result
@@ -1351,6 +1423,28 @@ pub async fn execute_tool<R: ParamsCtx>(
             if matches!(op.on_error, OnError::Skip | OnError::Continue) {
                 set_leaf(store, &effect_node, "value", Value::None);
             }
+            // `core/tool.py`'s own exception-handler rewrite (`tool.py:
+            // 1104-1111`): a raised failure (or a result that failed
+            // `expect:`) never reached this attempt's own `Ok(result)`
+            // branch above, so the per-attempt reset at the top of this
+            // loop already popped `tokens_sent_total`/`.received_total`
+            // from `meta` -- carried forward from an earlier attempt that
+            // did report usage, they are written back here so the final
+            // failure still shows the pass's own total, same as cof.
+            if let Some(sent) = total_tokens_sent {
+                set_leaf(store, &meta_node, "tokens_sent_total", Value::from(sent));
+            }
+            if let Some(received) = total_tokens_received {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "tokens_received_total",
+                    Value::from(received),
+                );
+            }
+            if total_tokens_sent.is_some() || total_tokens_received.is_some() {
+                observer.record_totals(&store.snapshot(&meta_node));
+            }
             observer.effect_complete(
                 &effect_path,
                 instance,
@@ -1376,6 +1470,24 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "retries_used",
                 Value::from(i64::from(attempt_index)),
             );
+        }
+        // Issue #724: the attempt that decided this pass's own outcome --
+        // unlike `tokens_sent_total`/`tokens_received_total` above, only
+        // ever written once the attempt actually succeeds. `record_totals`
+        // is only called here when this provider actually reported a
+        // token count (`systemone` is the only one that ever does) --
+        // every other tool's own success stays exactly as it was before,
+        // with no new `Totals` event, matching this crate's own pinned
+        // call counts for a loop/if's own model-mode condition.
+        let reported_tokens = attempt_tokens_sent.is_some() || attempt_tokens_received.is_some();
+        if let Some(sent) = attempt_tokens_sent {
+            set_leaf(store, &meta_node, "tokens_sent", Value::from(sent));
+        }
+        if let Some(received) = attempt_tokens_received {
+            set_leaf(store, &meta_node, "tokens_received", Value::from(received));
+        }
+        if reported_tokens {
+            observer.record_totals(&store.snapshot(&meta_node));
         }
         observer.effect_complete(
             &effect_path,
@@ -1431,6 +1543,8 @@ mod tests {
             &token,
             false,
             None,
+            false,
+            None,
         )
         .await
         .unwrap_err();
@@ -1452,6 +1566,8 @@ mod tests {
             &Value::None,
             300,
             &token,
+            false,
+            None,
             false,
             None,
         )
@@ -1476,6 +1592,8 @@ mod tests {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -1987,6 +2105,51 @@ mod tests {
             err.to_string(),
             "params_json must not set ['allowed_commands']: security-sensitive \
              settings are only honoured from a document's literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn params_json_setting_within_on_a_systemone_effect_is_refused() {
+        let mut params = IndexMap::new();
+        params.insert(Value::from("model"), template("m"));
+        params.insert(Value::from("state"), template("s"));
+        let mut tool = tool_op(params);
+        tool.provider = "systemone".to_string();
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{\"within\": \"/tmp\"}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = json_registry();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "params_json must not set 'within': it is only honoured from a document's \
+             literal params block."
         );
     }
 
@@ -3269,6 +3432,110 @@ mod tests {
         assert_eq!(message, "no reply from the server");
     }
 
+    /// A test-only [`electricity_tools::ToolPlugin`] that reports tokens
+    /// on a successful first attempt, then raises on every attempt
+    /// after -- `core/tool.py`'s own exception-handler rewrite
+    /// (`tool.py:1104-1111`, issue #724): the pass's own final failure
+    /// still carries the earlier attempt's own total.
+    struct TokensThenRaisingTool {
+        calls: std::cell::Cell<u32>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for TokensThenRaisingTool {
+        fn name(&self) -> &str {
+            "tokens_then_raising"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            let call = self.calls.get();
+            self.calls.set(call + 1);
+            if call == 0 {
+                let mut result =
+                    electricity_tools::ToolResult::new(Value::None, Value::Dict(Dict::new()));
+                result.ok = false;
+                result.stderr = Some("tokens_then_raising: attempt 0 failed".to_string());
+                result.tokens_sent = Some(5);
+                result.tokens_received = Some(7);
+                return Ok(result);
+            }
+            Err(electricity_tools::ToolError {
+                py_class: electricity_tools::PyExc::ValueError,
+                message: "no reply from the server".to_string(),
+                cause: electricity_tools::ErrorCause::NoReply,
+            })
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_raised_failure_after_an_earlier_successful_attempt_still_carries_its_tokens_total() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "tokens_then_raising".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(TokensThenRaisingTool {
+            calls: std::cell::Cell::new(0),
+        }));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert_eq!(
+            meta.get(&Value::from("tokens_sent_total")),
+            Some(&Value::from(5))
+        );
+        assert_eq!(
+            meta.get(&Value::from("tokens_received_total")),
+            Some(&Value::from(7))
+        );
+    }
+
     #[tokio::test]
     async fn a_huge_raw_value_is_capped_through_execute_tools_own_wiring() {
         // The real `json` tool's own `ToolResult.raw` is always a tiny
@@ -4095,6 +4362,8 @@ mod tests {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -4114,6 +4383,8 @@ mod tests {
                     description: None,
                     group: None,
                     prompt_file: None,
+                    limited: false,
+                    confine_to: None,
                 }),
             )),
             ..tool_node(OnError::Continue)

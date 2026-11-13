@@ -1,0 +1,28 @@
+name: c-systemone-group-concurrency
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: tool
+        name: a
+        provider: systemone
+        group: s1
+        params:
+          model: typesafe-1
+          state: "diff a"
+          questions:
+            risky:
+              type: noul
+              instructions: "Does this change risk data loss?"
+      - type: tool
+        name: b
+        provider: systemone
+        group: s1
+        params:
+          model: typesafe-1
+          state: "diff b"
+          questions:
+            risky:
+              type: noul
+              instructions: "Does this change risk data loss?"
