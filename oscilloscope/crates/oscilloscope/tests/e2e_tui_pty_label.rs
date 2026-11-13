@@ -46,19 +46,33 @@ if args[:1] == ["--help"]:
     sys.exit(0)
 
 out = None
+label = ""
 for i, arg in enumerate(args):
     if arg == "--out" and i + 1 < len(args):
         out = args[i + 1]
+    if arg == "--label" and i + 1 < len(args):
+        label = args[i + 1]
 if out is None:
     sys.exit(2)
 
 run_dir = os.path.dirname(out)
-# `__PID__` (literal, never a real engine's own pid shape) stands in
-# for this very process's own pid: the registry's own liveness check
-# (`ps -p <run_start's own pid>`) must see the real subprocess, not a
-# value this test's own setup code could have guessed in advance.
+
+
+def fill(text):
+    # `__PID__` (literal, never a real engine's own pid shape) stands
+    # in for this very process's own pid: the registry's own
+    # liveness check (`ps -p <run_start's own pid>`) must see the
+    # real subprocess, not a value this test's own setup code could
+    # have guessed in advance. `__LABEL__` stands in for whatever
+    # `--label` this process was actually started with (issue #752):
+    # read from this process's own argv, never baked into the fixed
+    # text the test handed over as an environment variable, so
+    # deleting osi's own `--label` pass-through fails this test.
+    return text.replace("__PID__", str(os.getpid())).replace("__LABEL__", label)
+
+
 with open(os.path.join(run_dir, "events.jsonl"), "w") as f:
-    f.write(os.environ["OSI_DOUBLE_EVENTS"].replace("__PID__", str(os.getpid())))
+    f.write(fill(os.environ["OSI_DOUBLE_EVENTS"]))
 with open(os.path.join(run_dir, "state.live.json"), "w") as f:
     f.write(os.environ["OSI_DOUBLE_RUNNING_STATE"])
 
@@ -73,7 +87,7 @@ else:
     sys.exit(0)
 
 with open(os.path.join(run_dir, "events.jsonl"), "w") as f:
-    f.write(os.environ["OSI_DOUBLE_FINAL_EVENTS"].replace("__PID__", str(os.getpid())))
+    f.write(fill(os.environ["OSI_DOUBLE_FINAL_EVENTS"]))
 for path in (os.path.join(run_dir, "state.live.json"), out):
     with open(path, "w") as f:
         f.write(os.environ["OSI_DOUBLE_FINAL_STATE"])
@@ -116,16 +130,17 @@ fn path_with(bin_dir: &Path) -> OsString {
 
 /// A `run_start` event line carrying `label`, plus one finished leaf
 /// -- the "still running" shape this test's own engine double writes
-/// at once.
-fn running_events(run_id: &str, label: &str) -> String {
+/// at once. `label` here is always `__LABEL__` (the engine double's
+/// own placeholder, filled in from its own argv, never from this
+/// text directly) -- see [`ENGINE_DOUBLE_SCRIPT`]'s own `fill`.
+fn running_events(run_id: &str) -> String {
     format!(
         concat!(
             "{{\"v\":1,\"seq\":0,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",",
             "\"run_id\":\"{run_id}\",\"orchestration\":\"do-thing.yml\",\"pid\":__PID__,",
-            "\"engine\":\"electricity 0.1.0\",\"label\":\"{label}\"}}\n",
+            "\"engine\":\"electricity 0.1.0\",\"label\":\"__LABEL__\"}}\n",
         ),
         run_id = run_id,
-        label = label,
     )
 }
 
@@ -137,16 +152,15 @@ fn running_state() -> &'static str {
     )
 }
 
-fn final_events(run_id: &str, label: &str) -> String {
+fn final_events(run_id: &str) -> String {
     format!(
         concat!(
             "{{\"v\":1,\"seq\":0,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",",
             "\"run_id\":\"{run_id}\",\"orchestration\":\"do-thing.yml\",\"pid\":__PID__,",
-            "\"engine\":\"electricity 0.1.0\",\"label\":\"{label}\"}}\n",
+            "\"engine\":\"electricity 0.1.0\",\"label\":\"__LABEL__\"}}\n",
             "{{\"v\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:01Z\",\"ev\":\"run_end\",\"ok\":true}}\n",
         ),
         run_id = run_id,
-        label = label,
     )
 }
 
@@ -199,13 +213,13 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
             ("PATH", path_env.as_os_str()),
             (
                 "OSI_DOUBLE_EVENTS",
-                OsStr::new(&running_events("run-a", "ticket 42")),
+                OsStr::new(&running_events("run-a")),
             ),
             ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
             ("OSI_DOUBLE_FINISH_FILE", finish_file_a.as_os_str()),
             (
                 "OSI_DOUBLE_FINAL_EVENTS",
-                OsStr::new(&final_events("run-a", "ticket 42")),
+                OsStr::new(&final_events("run-a")),
             ),
             ("OSI_DOUBLE_FINAL_STATE", OsStr::new(final_state())),
         ],
@@ -237,7 +251,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
             ("PATH", path_env.as_os_str()),
             (
                 "OSI_DOUBLE_EVENTS",
-                OsStr::new(&running_events("run-b", "ticket seven")),
+                OsStr::new(&running_events("run-b")),
             ),
             ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
             (
@@ -246,7 +260,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
             ),
             (
                 "OSI_DOUBLE_FINAL_EVENTS",
-                OsStr::new(&final_events("run-b", "ticket seven")),
+                OsStr::new(&final_events("run-b")),
             ),
             ("OSI_DOUBLE_FINAL_STATE", OsStr::new(final_state())),
         ],
