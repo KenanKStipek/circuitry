@@ -859,7 +859,7 @@ fn repeat_group_kill(pgid: u32) {
 /// run_binary`). *cwd* is reported as the failing path whenever the
 /// error itself says "not a directory" (a `cwd` naming a plain file);
 /// every other case blames *program*, the executable being spawned.
-fn describe_spawn_error(
+pub(crate) fn describe_spawn_error(
     err: &io::Error,
     program: &str,
     cwd: Option<&std::path::Path>,

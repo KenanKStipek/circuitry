@@ -192,23 +192,47 @@ mod imp {
     }
 
     /// `core/cancellation.py`'s own locale/zone-independent helper env.
+    /// Runs on a dedicated OS thread, never the caller's: every call site
+    /// that can run on the async runtime's own thread (as opposed to a
+    /// `TeardownOnCancel::drop` dedicated thread, which can block freely)
+    /// reaches this through `tokio::task::spawn_blocking`. A `ps`/`lsof`
+    /// that outlives [`HELPER_TIMEOUT`] is killed outright, not merely
+    /// abandoned.
     fn helper(cmd: &[&str]) -> Option<(String, bool)> {
         let owned: Vec<String> = cmd.iter().map(|s| s.to_string()).collect();
         let (tx, rx) = std::sync::mpsc::channel();
+        let (pid_tx, pid_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut command = Command::new(&owned[0]);
             command.args(&owned[1..]);
             command.env("LC_ALL", "C");
             command.env("TZ", "UTC");
             command.stdin(Stdio::null());
-            let _ = tx.send(command.output());
+            command.stdout(Stdio::piped());
+            command.stderr(Stdio::piped());
+            match command.spawn() {
+                Ok(child) => {
+                    let _ = pid_tx.send(child.id());
+                    let _ = tx.send(child.wait_with_output());
+                }
+                Err(e) => {
+                    let _ = tx.send(Err(e));
+                }
+            }
         });
         match rx.recv_timeout(HELPER_TIMEOUT) {
             Ok(Ok(output)) => Some((
                 String::from_utf8_lossy(&output.stdout).into_owned(),
                 output.status.success(),
             )),
-            _ => None,
+            _ => {
+                if let Ok(pid) = pid_rx.try_recv() {
+                    unsafe {
+                        libc::kill(pid as libc::pid_t, libc::SIGKILL);
+                    }
+                }
+                None
+            }
         }
     }
 
@@ -336,6 +360,17 @@ mod imp {
         group_has_running_member(pgid)
     }
 
+    /// [`group_exists`] off the async runtime's own thread (see
+    /// [`helper`]'s own doc comment) -- every call from `wait_ready`'s
+    /// and `terminate_group`'s own poll loops goes through this, not
+    /// the bare sync function, so a slow `ps` never stalls a sibling
+    /// branch dispatched on the same single-threaded runtime.
+    async fn group_exists_nb(pgid: u32) -> bool {
+        tokio::task::spawn_blocking(move || group_exists(pgid))
+            .await
+            .unwrap_or(false)
+    }
+
     struct Ownership {
         ours: bool,
         reason: String,
@@ -407,7 +442,12 @@ mod imp {
         port: i64,
         pid: Option<i64>,
         pgid: Option<i64>,
-        command: Option<String>,
+        /// A plain string (`ps -o command=`) for a foreign process;
+        /// the full argv list for a port claimed by another of our own
+        /// services, copied straight from that service's own record --
+        /// `claims[port].get("command")` on cof's side, a list there
+        /// too.
+        command: Option<Value>,
         cwd: Option<String>,
         service: Option<String>,
     }
@@ -425,7 +465,7 @@ mod imp {
         );
         d.insert(
             Value::from("command"),
-            h.command.clone().map(Value::from).unwrap_or(Value::None),
+            h.command.clone().unwrap_or(Value::None),
         );
         d.insert(
             Value::from("cwd"),
@@ -455,19 +495,28 @@ mod imp {
                  (install lsof to see its pid, command and cwd)",
                 h.port
             ),
-            Some(pid) => format!(
-                "port {} is held by a process this plugin did not start: pid {pid}, \
-                 command {}, cwd {}",
-                h.port,
-                repr_str(h.command.as_deref().unwrap_or("?")),
-                repr_str(h.cwd.as_deref().unwrap_or("?")),
-            ),
+            Some(pid) => {
+                let command_text = match &h.command {
+                    Some(Value::Str(s)) => repr_str(s),
+                    _ => repr_str("?"),
+                };
+                format!(
+                    "port {} is held by a process this plugin did not start: pid {pid}, \
+                     command {command_text}, cwd {}",
+                    h.port,
+                    repr_str(h.cwd.as_deref().unwrap_or("?")),
+                )
+            }
         }
     }
 
     async fn port_accepts(port: u16) -> bool {
         for host in ["127.0.0.1", "::1"] {
-            let addr = format!("{host}:{port}");
+            let addr = if host.contains(':') {
+                format!("[{host}]:{port}")
+            } else {
+                format!("{host}:{port}")
+            };
             if let Ok(Ok(_)) = tokio::time::timeout(
                 Duration::from_millis(500),
                 tokio::net::TcpStream::connect(&addr),
@@ -484,7 +533,8 @@ mod imp {
         let command = helper(&["ps", "-o", "command=", "-p", &pid.to_string()])
             .filter(|(_, ok)| *ok)
             .map(|(out, _)| out.trim().to_string())
-            .filter(|s| !s.is_empty());
+            .filter(|s| !s.is_empty())
+            .map(|s| Value::from(s.as_str()));
         let mut cwd = if is_linux_proc() {
             fs::read_link(format!("/proc/{pid}/cwd"))
                 .ok()
@@ -520,28 +570,37 @@ mod imp {
         }
     }
 
+    /// `plugins/service.py::port_holders`. The `lsof` listing and the
+    /// per-pid `ps`/`lsof` detail queries ([`describe_holder`]) run on
+    /// a dedicated blocking-pool thread (see [`helper`]'s own doc
+    /// comment); only the TCP connect fallback ([`port_accepts`]) is
+    /// genuinely async.
     async fn port_holders(port: i64) -> Vec<Holder> {
         if crate::process::which("lsof").is_some() {
-            if let Some((out, _)) = helper(&[
-                "lsof",
-                "-nP",
-                &format!("-iTCP:{port}"),
-                "-sTCP:LISTEN",
-                "-Fp",
-            ]) {
-                let mut pids: Vec<i64> = out
-                    .lines()
-                    .filter_map(|l| l.strip_prefix('p'))
-                    .filter_map(|s| s.parse::<i64>().ok())
-                    .collect();
-                pids.sort_unstable();
-                pids.dedup();
-                if !pids.is_empty() {
-                    return pids
-                        .into_iter()
-                        .map(|pid| describe_holder(pid, port))
+            let found = tokio::task::spawn_blocking(move || {
+                let mut found = Vec::new();
+                if let Some((out, _)) = helper(&[
+                    "lsof",
+                    "-nP",
+                    &format!("-iTCP:{port}"),
+                    "-sTCP:LISTEN",
+                    "-Fp",
+                ]) {
+                    let mut pids: Vec<i64> = out
+                        .lines()
+                        .filter_map(|l| l.strip_prefix('p'))
+                        .filter_map(|s| s.parse::<i64>().ok())
                         .collect();
+                    pids.sort_unstable();
+                    pids.dedup();
+                    found.extend(pids.into_iter().map(|pid| describe_holder(pid, port)));
                 }
+                found
+            })
+            .await
+            .unwrap_or_default();
+            if !found.is_empty() {
+                return found;
             }
         }
         if port_accepts(port as u16).await {
@@ -860,21 +919,85 @@ mod imp {
         PathBuf::from(raw)
     }
 
+    /// `Path(...).resolve()`: canonicalize the longest existing
+    /// ancestor, then lexically append (and normalize `.`/`..` within)
+    /// whatever doesn't exist yet. Unlike a bare `fs::canonicalize`
+    /// fallback (which gives up and returns the raw, un-resolved path
+    /// the moment the target itself is missing), this still resolves a
+    /// symlinked *ancestor* of a `log`/`cwd` that doesn't exist yet --
+    /// a `log: /tmp/x.log` on macOS (`/tmp` a symlink to `/private/tmp`)
+    /// records `/private/tmp/x.log`, matching Python's own `resolve()`,
+    /// even though `x.log` itself is created only as this very call
+    /// runs.
     fn resolve_path(raw: &Path) -> PathBuf {
         let joined = if raw.is_absolute() {
             raw.to_path_buf()
         } else {
             std::env::current_dir().unwrap_or_default().join(raw)
         };
-        fs::canonicalize(&joined).unwrap_or(joined)
+        let mut existing = joined.clone();
+        let mut suffix: Vec<std::ffi::OsString> = Vec::new();
+        while !existing.exists() {
+            let Some(name) = existing.file_name().map(|n| n.to_os_string()) else {
+                break;
+            };
+            suffix.push(name);
+            let Some(parent) = existing.parent().map(Path::to_path_buf) else {
+                break;
+            };
+            existing = parent;
+        }
+        let mut result = fs::canonicalize(&existing).unwrap_or(existing);
+        for component in suffix.into_iter().rev() {
+            if component == ".." {
+                result.pop();
+            } else if component != "." {
+                result.push(component);
+            }
+        }
+        result
     }
 
     impl ServicePlugin {
+        /// `ServicePlugin._dir` -- `expanduser()` only, deliberately
+        /// never `resolve()`: a relative `state_dir` stays relative to
+        /// the process's own cwd exactly as cof leaves it, and a
+        /// `state_dir` under a symlinked directory (`/tmp` on macOS)
+        /// is never rewritten to its canonical form.
         fn dir(&self) -> PathBuf {
             match &self.state_dir {
-                Some(s) => resolve_path(&expand_user(s)),
+                Some(s) => expand_user(s),
                 None => default_state_dir(),
             }
+        }
+    }
+
+    /// Creates *dir* with mode `0o700` only when this call is the one
+    /// that creates it (`Path.mkdir(mode=0o700, parents=True,
+    /// exist_ok=True)`'s own behaviour: an already-existing directory's
+    /// permissions are left untouched, and any missing *parent* gets
+    /// the process's default mode, not `0o700`).
+    fn ensure_dir(dir: &Path) -> io::Result<()> {
+        match fs::create_dir(dir) {
+            Ok(()) => {
+                let _ = fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+                Ok(())
+            }
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                if let Some(parent) = dir.parent() {
+                    fs::create_dir_all(parent)?;
+                }
+                match fs::create_dir(dir) {
+                    Ok(()) => {
+                        let _ = fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+                        Ok(())
+                    }
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+                    Err(e) => Err(e),
+                }
+            }
+            Err(e) => Err(e),
         }
     }
 
@@ -883,9 +1006,40 @@ mod imp {
     }
 
     impl LockGuard {
-        fn acquire(dir: &Path) -> io::Result<Self> {
-            fs::create_dir_all(dir)?;
-            let _ = fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
+        /// Non-blocking, polled with an async sleep between tries --
+        /// never a plain blocking `LOCK_EX`, which would block
+        /// electricity's own single-threaded dispatch runtime for as
+        /// long as another branch (parallel `start`/`stop` on the same
+        /// state directory) holds the lock, starving every sibling
+        /// branch of that same run, including the one that holds it.
+        async fn acquire(dir: &Path) -> io::Result<Self> {
+            ensure_dir(dir)?;
+            let file = OpenOptions::new()
+                .read(true)
+                .write(true)
+                .create(true)
+                .truncate(false)
+                .mode(0o600)
+                .open(dir.join(".lock"))?;
+            loop {
+                let ret = unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+                if ret == 0 {
+                    return Ok(LockGuard { file });
+                }
+                let err = io::Error::last_os_error();
+                if err.raw_os_error() != Some(libc::EWOULDBLOCK) {
+                    return Err(err);
+                }
+                tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+            }
+        }
+
+        /// A genuinely blocking acquire, for `TeardownOnCancel::drop`'s
+        /// own dedicated OS thread (never the async runtime: `Drop`
+        /// cannot `.await` the non-blocking loop above) -- blocking
+        /// that thread is harmless, since nothing else runs on it.
+        fn acquire_blocking(dir: &Path) -> io::Result<Self> {
+            ensure_dir(dir)?;
             let file = OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -1010,6 +1164,45 @@ mod imp {
         Ok(claims)
     }
 
+    /// [`live_record`] off the async runtime's own thread (see
+    /// [`helper`]'s own doc comment) -- every `start`/`stop`/`status`
+    /// call site uses this, not the bare sync function.
+    async fn live_record_nb(
+        dir: PathBuf,
+        name: String,
+    ) -> Result<(Option<Dict>, Option<String>), ToolError> {
+        tokio::task::spawn_blocking(move || live_record(&dir, &name))
+            .await
+            .map_err(|e| runtime_error(format!("service: internal error: {e}")))?
+    }
+
+    /// [`other_claims`] off the async runtime's own thread (see
+    /// [`helper`]'s own doc comment).
+    async fn other_claims_nb(
+        dir: PathBuf,
+        name: String,
+    ) -> Result<HashMap<i64, Dict>, ToolError> {
+        tokio::task::spawn_blocking(move || other_claims(&dir, &name))
+            .await
+            .map_err(|e| runtime_error(format!("service: internal error: {e}")))?
+    }
+
+    /// [`process_start_time`] off the async runtime's own thread (see
+    /// [`helper`]'s own doc comment).
+    async fn process_start_time_nb(pid: u32) -> Result<Option<String>, ToolError> {
+        tokio::task::spawn_blocking(move || process_start_time(pid))
+            .await
+            .map_err(|e| runtime_error(format!("service: internal error: {e}")))?
+    }
+
+    /// [`boot_time`] off the async runtime's own thread (see
+    /// [`helper`]'s own doc comment).
+    async fn boot_time_nb() -> Result<i64, ToolError> {
+        tokio::task::spawn_blocking(boot_time)
+            .await
+            .map_err(|e| runtime_error(format!("service: internal error: {e}")))?
+    }
+
     fn log_tail(path: &Path, offset: u64) -> String {
         let Ok(mut file) = std::fs::File::open(path) else {
             return String::new();
@@ -1054,17 +1247,13 @@ mod imp {
     /// outright (`electricity_vm::exec::tool`'s own `select!` races
     /// dispatch against the run's cancellation and drops the loser) --
     /// mirrors `process.rs`'s own `KillGroupOnDrop`. Armed only while a
-    /// `start` call has a group of its own still to answer for; its
-    /// `Drop` can only ever be synchronous, so it SIGKILLs at once
-    /// rather than cof's own graceful SIGTERM-then-grace (DESIGN.md
-    /// §13) -- the group is still torn down, just without the grace
-    /// period a true cancellation never gets to finish waiting out
-    /// anyway.
+    /// `start` call has a group of its own still to answer for.
     struct TeardownOnCancel {
         armed: bool,
         pgid: u32,
         dir: PathBuf,
         name: String,
+        grace: Duration,
     }
 
     impl Drop for TeardownOnCancel {
@@ -1072,15 +1261,47 @@ mod imp {
             if !self.armed {
                 return;
             }
-            unsafe {
-                libc::killpg(self.pgid as libc::pid_t, libc::SIGKILL);
-            }
-            drop_record(&self.dir, &self.name);
+            let dir = self.dir.clone();
+            let name = self.name.clone();
+            let pgid = self.pgid;
+            let grace = self.grace;
+            // `Drop` cannot `.await`, so the actual teardown runs on a
+            // dedicated OS thread, never the async runtime -- the same
+            // lock, the same ownership re-check (a restart of this
+            // exact name, racing this very call's own `wait_ready`,
+            // must never have *its* group torn down just because this
+            // call's group shared the old name), and the same graceful
+            // `SIGTERM`-then-`grace_ms`-then-`SIGKILL` cof's own
+            // cancellation path gives a `start` it is tearing down.
+            std::thread::spawn(move || cancel_teardown(&dir, &name, pgid, grace));
         }
     }
 
-    /// `core/cancellation.py::_terminate_group`.
-    async fn terminate_group(pgid: u32, grace: Duration) -> (bool, Option<String>) {
+    /// [`TeardownOnCancel`]'s own cleanup (see its `Drop` impl's own
+    /// comment for why this runs on a dedicated thread).
+    fn cancel_teardown(dir: &Path, name: &str, pgid: u32, grace: Duration) {
+        let Ok(lock) = LockGuard::acquire_blocking(dir) else {
+            return;
+        };
+        let Ok((record, _)) = live_record(dir, name) else {
+            return;
+        };
+        let Some(rec) = record else {
+            return;
+        };
+        let actual = get(&rec, "pgid").and_then(value_as_i64).unwrap_or(-1) as u32;
+        if actual != pgid {
+            return;
+        }
+        drop_record(dir, name);
+        drop(lock);
+        terminate_group_blocking(pgid, grace);
+    }
+
+    /// [`terminate_group`]'s own logic, blocking (`std::thread::sleep`,
+    /// not `tokio::time::sleep`) for [`cancel_teardown`]'s dedicated
+    /// thread, which cannot `.await`.
+    fn terminate_group_blocking(pgid: u32, grace: Duration) -> (bool, Option<String>) {
         let mut sent: Option<String> = None;
         for (sig, wait) in [
             (libc::SIGTERM, grace),
@@ -1095,7 +1316,6 @@ mod imp {
                 if errno == Some(libc::ESRCH) {
                     return (true, sent);
                 }
-                // `EPERM`: only zombies left (macOS), or not ours.
                 return (!group_exists(pgid), sent);
             }
             sent = Some(
@@ -1114,10 +1334,51 @@ mod imp {
                 if Instant::now() >= deadline {
                     break;
                 }
-                tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+                std::thread::sleep(Duration::from_millis(POLL_MS));
             }
         }
         (!group_exists(pgid), sent)
+    }
+
+    /// `core/cancellation.py::_terminate_group`.
+    async fn terminate_group(pgid: u32, grace: Duration) -> (bool, Option<String>) {
+        let mut sent: Option<String> = None;
+        for (sig, wait) in [
+            (libc::SIGTERM, grace),
+            (libc::SIGKILL, Duration::from_secs_f64(SETTLE_SECONDS)),
+        ] {
+            if !group_exists_nb(pgid).await {
+                return (true, sent);
+            }
+            let ret = unsafe { libc::killpg(pgid as libc::pid_t, sig) };
+            if ret != 0 {
+                let errno = io::Error::last_os_error().raw_os_error();
+                if errno == Some(libc::ESRCH) {
+                    return (true, sent);
+                }
+                // `EPERM`: only zombies left (macOS), or not ours.
+                return (!group_exists_nb(pgid).await, sent);
+            }
+            sent = Some(
+                if sig == libc::SIGTERM {
+                    "SIGTERM"
+                } else {
+                    "SIGKILL"
+                }
+                .to_string(),
+            );
+            let deadline = Instant::now() + wait;
+            loop {
+                if !group_exists_nb(pgid).await {
+                    return (true, sent);
+                }
+                if Instant::now() >= deadline {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(POLL_MS)).await;
+            }
+        }
+        (!group_exists_nb(pgid).await, sent)
     }
 
     /// `ServicePlugin._wait_ready`. *exit_rx* is `Some` only for a
@@ -1141,7 +1402,7 @@ mod imp {
                     Err(tokio::sync::oneshot::error::TryRecvError::Closed) => Some(None),
                 },
                 None => {
-                    if !group_exists(pgid) {
+                    if !group_exists_nb(pgid).await {
                         Some(None)
                     } else {
                         None
@@ -1310,6 +1571,7 @@ mod imp {
 
         let state_dir = plugin.dir();
         let lock = LockGuard::acquire(&state_dir)
+            .await
             .map_err(|e| runtime_error(format!("service: cannot lock the state directory: {e}")))?;
 
         let log_path = match get(params, "log") {
@@ -1317,7 +1579,7 @@ mod imp {
             _ => state_dir.join(format!("{name}.log")),
         };
 
-        let (existing, _) = live_record(&state_dir, name)?;
+        let (existing, _) = live_record_nb(state_dir.clone(), name.to_string()).await?;
         let started: bool;
         let record: Dict;
         let mut exit_rx: Option<tokio::sync::oneshot::Receiver<i32>> = None;
@@ -1329,7 +1591,7 @@ mod imp {
             record = existing_record;
             log_offset = 0;
         } else {
-            let claims = other_claims(&state_dir, name)?;
+            let claims = other_claims_nb(state_dir.clone(), name.to_string()).await?;
             let mut holders: Vec<Holder> = Vec::new();
             for port in &ports {
                 if let Some(claim) = claims.get(port) {
@@ -1337,8 +1599,8 @@ mod imp {
                         port: *port,
                         pid: get(claim, "pgid").and_then(value_as_i64),
                         pgid: get(claim, "pgid").and_then(value_as_i64),
-                        command: None,
-                        cwd: None,
+                        command: get(claim, "command").cloned(),
+                        cwd: get(claim, "cwd").and_then(Value::as_str).map(str::to_string),
                         service: get(claim, "name")
                             .and_then(Value::as_str)
                             .map(str::to_string),
@@ -1409,10 +1671,24 @@ mod imp {
             command.stdin(Stdio::null());
             command.stdout(log_file);
             command.stderr(log_file_err);
-            command.process_group(0);
+            // `setsid()`, not merely `setpgid` (`process_group(0)`):
+            // Python's own `start_new_session=True` detaches the child
+            // from any controlling terminal entirely, so it can never
+            // be stopped by `SIGTTOU`/`SIGTTIN` for touching the
+            // inherited tty -- same reasoning as `process.rs`'s own
+            // `new_session` (PR #467).
+            unsafe {
+                command.pre_exec(|| {
+                    if libc::setsid() == -1 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    Ok(())
+                });
+            }
             let mut child = command.spawn().map_err(|e| {
+                let (_, detail) = crate::process::describe_spawn_error(&e, &argv[0], None);
                 runtime_error(format!(
-                    "service {}: cannot start {}: {e}",
+                    "service {}: cannot start {}: {detail}",
                     repr_str(name),
                     repr_str(&argv[0])
                 ))
@@ -1430,17 +1706,17 @@ mod imp {
                 pgid: pid,
                 dir: state_dir.clone(),
                 name: name.to_string(),
+                grace,
             });
 
-            let build = |err: ToolError| -> ToolError { err };
-            let outcome: Result<Dict, ToolError> = (|| {
-                let start_time = process_start_time(pid)?;
+            let outcome: Result<Dict, ToolError> = async {
+                let start_time = process_start_time_nb(pid).await?;
                 let Some(start_time) = start_time else {
                     return Err(runtime_error(format!(
                         "pid {pid} vanished before it could be recorded"
                     )));
                 };
-                let boot = boot_time()?;
+                let boot = boot_time_nb().await?;
                 let mut rec = Dict::new();
                 rec.insert(Value::from("name"), Value::from(name));
                 rec.insert(Value::from("pgid"), Value::from(pid as i64));
@@ -1466,7 +1742,8 @@ mod imp {
                 rec.insert(Value::from("started_at"), Value::from(iso_now()));
                 save_record(&state_dir, &rec)?;
                 Ok(rec)
-            })();
+            }
+            .await;
             match outcome {
                 Ok(rec) => {
                     started = true;
@@ -1477,7 +1754,7 @@ mod imp {
                     if let Some(g) = guard.as_mut() {
                         g.armed = false;
                     }
-                    return Err(build(err));
+                    return Err(err);
                 }
             }
         }
@@ -1559,7 +1836,7 @@ mod imp {
         raw.insert(Value::from("log_tail"), Value::from(tail.as_str()));
 
         Ok(ToolResult {
-            value: Value::Dict(value),
+            value: Value::None,
             raw: Value::Dict(raw),
             stdout: None,
             stderr: Some(message),
@@ -1609,10 +1886,10 @@ mod imp {
         }
         let stopped: Stopped;
         {
-            let lock = LockGuard::acquire(dir).map_err(|e| {
+            let lock = LockGuard::acquire(dir).await.map_err(|e| {
                 runtime_error(format!("service: cannot lock the state directory: {e}"))
             })?;
-            let (mut record, stale) = live_record(dir, name)?;
+            let (mut record, stale) = live_record_nb(dir.to_path_buf(), name.to_string()).await?;
             if let Some(rec) = &record {
                 if let Some(expected) = expected_pgid {
                     let actual = get(rec, "pgid").and_then(value_as_i64).unwrap_or(-1) as u32;
@@ -1709,10 +1986,10 @@ mod imp {
 
     async fn status(dir: &Path, name: &str) -> Result<ToolResult, ToolError> {
         let (record, stale) = {
-            let lock = LockGuard::acquire(dir).map_err(|e| {
+            let lock = LockGuard::acquire(dir).await.map_err(|e| {
                 runtime_error(format!("service: cannot lock the state directory: {e}"))
             })?;
-            let result = live_record(dir, name)?;
+            let result = live_record_nb(dir.to_path_buf(), name.to_string()).await?;
             drop(lock);
             result
         };
