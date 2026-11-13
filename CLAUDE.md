@@ -110,11 +110,11 @@ See `changelog.d/README.md`.
 
 ## Agent workflow
 Work is managed via GitHub issues and done in local agent sessions (Pi).
-The GitHub-hosted agent loop is off: the `dispatch`, `claude`, `finalize` and
-`claude-code-review` workflows (vendored from agent-loop) are disabled in
-Actions, so nothing on GitHub picks up issues, answers `@claude`, or reviews
-PRs. `gh workflow enable <file>` turns one back on. `accept.yml` (a `/accept`
-comment or the `accepted` label merges a green PR) and `rollup.yml` still run.
+There is no GitHub-hosted agent loop: nothing on GitHub picks up issues, answers
+`@claude`, or reviews PRs. Its workflows (`dispatch`, `claude`, `finalize` and
+`claude-code-review`) were removed and remain in the git history. `accept.yml`
+(a `/accept` comment or the `accepted` label merges a green PR) and `rollup.yml`
+still run.
 
 Labels:
 - `ready-for-review` — the issue's PR is done; the owner's turn
