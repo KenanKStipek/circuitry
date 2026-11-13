@@ -71,16 +71,32 @@ def _make_ca_and_server_cert(tmp_path: Path) -> tuple[Path, Path, Path]:
     server_key = tmp_path / "server.key"
     server_csr = tmp_path / "server.csr"
     server_crt = tmp_path / "server.crt"
+    # Both certificates carry the extensions strict X.509 verification
+    # wants (Python 3.13+ turns `VERIFY_X509_STRICT` on in its default
+    # context): a critical CA basicConstraints and keyUsage on the CA, and
+    # an Authority Key Identifier on the server certificate.
+    ca_conf = tmp_path / "ca.conf"
+    ca_conf.write_text(
+        "[req]\ndistinguished_name=req_dn\nx509_extensions=v3_ca\n[req_dn]\n[v3_ca]\n"
+        "basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n"
+        "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid:always\n",
+        encoding="utf-8",
+    )
     san_conf = tmp_path / "san.conf"
     san_conf.write_text(
         "[req]\ndistinguished_name=req\n[san]\n"
-        "subjectAltName=DNS:localhost,IP:127.0.0.1\n",
+        "subjectAltName=DNS:localhost,IP:127.0.0.1\n"
+        "basicConstraints=critical,CA:FALSE\n"
+        "keyUsage=critical,digitalSignature,keyEncipherment\n"
+        "extendedKeyUsage=serverAuth\n"
+        "subjectKeyIdentifier=hash\nauthorityKeyIdentifier=keyid,issuer\n",
         encoding="utf-8",
     )
     _run_openssl(
         [
             "req", "-x509", "-newkey", "rsa:2048", "-keyout", str(ca_key), "-out", str(ca_crt),
             "-days", "2", "-nodes", "-subj", "/CN=circuitry-test-ca-725",
+            "-config", str(ca_conf), "-extensions", "v3_ca",
         ],
         tmp_path,
     )
