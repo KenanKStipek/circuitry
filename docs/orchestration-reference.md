@@ -2256,6 +2256,32 @@ only fails here) is one line, never a dump of CEL's own internal state:
 CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'
 ```
 
+A missing map key, an out-of-range or wrong-type index, indexing a
+non-container, division by zero and modulus by zero are the same one line in
+both engines too — the key or index and the container's type, never the
+container's own contents:
+
+```
+CEL evaluation failed for "state.input.m['zz'] == 1": no such key: 'zz'
+CEL evaluation failed for 'state.input.l[5] == 1': list index out of range: 5
+CEL evaluation failed for 'state.input.n[0] == 1': cannot index an int with an int
+CEL evaluation failed for '1 / 0 == 1': division by zero
+CEL evaluation failed for '1 % 0 == 1': modulus by zero
+```
+
+An expression nested too deeply to parse — deep parenthesisation, a long
+accessor chain — is a compile-time rejection in both engines, named the same
+way as any other check error, never the parser's own dump or the whole
+expression quoted back:
+
+```
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply
+```
+
+The depth at which each engine gives up differs (Python's own recursion
+limit for cof, the `cel` crate's parser for electricity), but the text naming
+it does not.
+
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset read that decides the
 expression's result makes it `False` and logs a warning naming the path.

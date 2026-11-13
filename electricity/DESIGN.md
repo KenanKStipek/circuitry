@@ -1735,12 +1735,15 @@ regardless of which underlying crate is used:
   `while`) — narrow enough that electricity uses one fixed number, the tightest of the three, and
   documents it as such rather than as a genuinely unstable range. The one exception is the
   member-access shape (with no method call in it), where the three contexts disagree by more
-  (610-613) *and* the failure itself is Circuitry's own bare, uncaught `RecursionError` rather
-  than a caught `CelEvaluationError` — confirmed directly: `cof check` on the same file fails
-  identically, so the document never runs at all, and the visible text has neither the usual
-  `"CEL evaluation failed for ..."` wording nor the failing effect's own path, just Python's own
-  exception text, which itself varies with which further recursion the exception's own
-  formatting triggers while escaping. `MAX_ACCESSOR_NESTING_DEPTH` (610) is the tightest of the
+  (610-613) *and* the failure itself was Circuitry's own bare, uncaught `RecursionError` rather
+  than a caught `CelEvaluationError` — confirmed directly: `cof check` on the same file failed
+  identically, so the document never ran at all. Before issue #629, the visible text had neither
+  the usual `"CEL evaluation failed for ..."` wording nor the failing effect's own path, just
+  Python's own exception text, which itself varied with which further recursion the exception's
+  own formatting triggered while escaping; `core/cel_eval.py::_compile` now catches this one
+  `RecursionError` and raises the same one line every other CEL check error uses, framed with the
+  failing effect's own path (`"<location>: expression is nested too deeply"`).
+  `MAX_ACCESSOR_NESTING_DEPTH` (610) is the tightest of the
   three contexts, chosen because that range is real variation, not measurement noise — confirmed
   unchanged when re-measured against a chain that resolves to real data at every level rather
   than an absent/empty one, since the failing mechanism (below) runs before any value is ever
@@ -1754,8 +1757,11 @@ regardless of which underlying crate is used:
   electricity-cel matches the *phase* as well as the boundary for the plain member-access shape:
   a chain with no method call past `MAX_ACCESSOR_NESTING_DEPTH` is rejected at compile time
   (`validate_syntax`, called from `electricity-compiler`'s own document-compile pass), with the
-  bare `"maximum recursion depth exceeded"` text and no effect-path framing — matching the
-  simpler of Circuitry's own two forms, from a top-level `if`. A document using any of the other
+  same one line and the same effect-path framing as cof's own (above) now that both catch it
+  cleanly (issue #629; before it, electricity's own text was the bare `"maximum recursion depth
+  exceeded"` with no effect-path framing at all, and cof's own escaped uncaught) — the depth each
+  engine gives up at still differs (610 here, Python's own recursion limit for cof), only the text
+  naming it does not. A document using any of the other
   five shapes this deep (including a method-call chain, despite failing by the third mechanism
   above) still compiles and starts running in Circuitry, only failing once the effect actually
   evaluates (a runtime `CelEvaluationError`, which `on_error:` can catch) — so those five are
@@ -1783,7 +1789,12 @@ regardless of which underlying crate is used:
   hard-coded internal recursion guard (`max_recursion_depth`, 96) for bracket-type grammar rules,
   which rejects *gracefully* from 96 through at least 50,000 levels, never a crash — so bracket
   nesting in this crate never risks a real stack overflow at all, independent of either pre-scan
-  cap; `0+1+1+...`/`state[0][0]...` chains overflow the same stack, in both debug and `--release`,
+  cap. This guard trips on a shape neither pre-scan cap measures — a long run of grouping parens
+  or calls around a short accessor, say — well before either would reject it; `validate_syntax`
+  and the shared `compile()` helper both recognize its own "Recursion limit of N exceeded"
+  message and reword it the same clean, one-line way as the accessor cap above (issue #629),
+  never the raw parser dump or the whole (deeply nested) expression quoted back.
+  `0+1+1+...`/`state[0][0]...` chains overflow the same stack, in both debug and `--release`,
   between 1,620 and 1,640 terms — a wide margin over `MAX_CHAIN_NESTING_DEPTH` (241) and over
   `MAX_SAFETY_CHAIN_DEPTH` (1,000) alike. Chained unary `!`/`-` and a long `&&`/`||` chain cost
   nothing on electricity's own side, because `cel`'s own grammar collects a run of either into one
