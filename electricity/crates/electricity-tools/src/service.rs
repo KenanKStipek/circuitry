@@ -35,6 +35,9 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
         .and_then(|d| d.get(&Value::Str("state_dir".to_string())))
     {
         None | Some(Value::None) => None,
+        // `state_dir or None` (`plugins/factory.py::_build_service`):
+        // an empty string means the default directory too.
+        Some(Value::Str(s)) if s.is_empty() => None,
         Some(Value::Str(s)) => Some(s.clone()),
         Some(_) => {
             return Err(ToolError {
