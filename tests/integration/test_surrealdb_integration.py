@@ -156,6 +156,18 @@ def test_surrealql_syntax_error_is_actionable(plugin: SurrealDBPlugin) -> None:
     assert "surrealdb" in str(excinfo.value)
 
 
+def test_query_raises_on_a_later_failing_statement(
+    plugin: SurrealDBPlugin, table: str
+) -> None:
+    with pytest.raises(RuntimeError, match="SurrealQL error"):
+        plugin.execute(
+            params={
+                "mode": "query",
+                "query": f"CREATE {table} SET name = 'ada'; THROW 'later statement failed';",
+            }
+        )
+
+
 def test_bad_credentials_are_rejected(
     table: str, monkeypatch: pytest.MonkeyPatch, plugin: SurrealDBPlugin
 ) -> None:

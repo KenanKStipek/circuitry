@@ -17,6 +17,14 @@ a ``select()`` of one record id returns the bare record (``None`` if
 missing) rather than a one-element list, and a ``create()``/``upsert()``/
 ``delete()`` that touches no rows returns ``None`` rather than ``[]``.
 ``run_select`` and ``run_write`` normalise both back to SDK 2.x's shape.
+
+``query_raw()`` is the one method that behaves identically on both majors:
+it always runs eagerly (never a builder) and always hands back
+``{"result": [{"status": ..., "result": ...}, ...], ...}``, one entry per
+SurrealQL statement, without raising for a failed statement itself.
+``run_query_raw`` is built on that shared shape, so the ``query`` mode
+(arbitrary, possibly multi-statement SurrealQL) is driven through it
+instead of through ``query()``.
 """
 
 from __future__ import annotations
@@ -38,13 +46,17 @@ def run(value: Any) -> Any:
 
 
 def run_query(value: Any) -> Any:
-    """Run ``query()``'s builder, and unwrap it to one statement's result.
+    """Run ``query()``'s builder, and unwrap it to the first statement's result.
 
-    SDK 3.x's ``query().execute()`` always returns one entry per SurrealQL
-    statement in the query string; every ``query()`` call in this codebase
-    sends exactly one statement, so this takes that entry -- the same single
-    result SDK 2.x's ``query()`` already returns directly. An SDK 2.x result
-    (never a builder) passes through unchanged.
+    Used only where a single, trusted, fixed SurrealQL statement is run
+    (schema bootstrap and row writes) and a later statement's error could
+    never apply. User-supplied SurrealQL (the ``query`` tool mode) goes
+    through ``run_query_raw`` instead, which checks every statement.
+
+    SDK 3.x's ``query().execute()`` returns one entry per SurrealQL statement
+    in the query string, and this takes the first -- the same single result
+    SDK 2.x's ``query()`` already returns directly. An SDK 2.x result (never
+    a builder) passes through unchanged.
     """
     execute = getattr(value, "execute", None)
     if callable(execute) and not isinstance(value, list | dict):
@@ -79,6 +91,32 @@ def run_write(value: Any) -> Any:
     """
     result = run(value)
     return [] if result is None else result
+
+
+def run_query_raw(response: Any, *, mode: str = "query") -> Any:
+    """Check every statement in a ``query_raw()`` response, raising on the
+    first one that failed; return the first statement's own result otherwise.
+
+    ``query_raw()`` exists on both SDK majors with the identical shape
+    above, so this is the one place a multi-statement SurrealQL string gets
+    the same answer regardless of which major is installed: a failure in
+    *any* statement raises, in statement order, with the same text either
+    way -- SDK 2.x's own ``query()`` only ever checks the first statement
+    and silently drops a later one's error, and SDK 3.x's own
+    ``query().execute()`` raises its own (differently worded) exception for
+    the same case, so neither SDK's own method is used here.
+    """
+    statements = response.get("result") if isinstance(response, dict) else None
+    if not isinstance(statements, list):
+        raise RuntimeError(f"surrealdb {mode}: unexpected response shape: {response!r}")
+    for statement in statements:
+        if isinstance(statement, dict) and str(statement.get("status", "")).upper() == "ERR":
+            detail = statement.get("result") or statement.get("detail") or statement
+            raise RuntimeError(f"surrealdb {mode}: SurrealQL error: {detail}")
+    if not statements:
+        return None
+    first = statements[0]
+    return first.get("result") if isinstance(first, dict) else first
 
 
 def record_target(value: str) -> Any:

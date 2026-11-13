@@ -39,6 +39,9 @@ class FakeSurreal:
     signin_accepts: ClassVar[Callable[[dict[str, str]], bool] | None] = None
     op_error: BaseException | None = None
     op_result: Any = None
+    #: ``query_raw()``'s raw ``{"result": [...]}`` response -- see the real
+    #: SDK's shape in ``circuitry.surrealdb_sdk``'s module docstring.
+    query_raw_result: ClassVar[Any] = None
 
     def __init__(self, url: str) -> None:
         if type(self).connect_error is not None:
@@ -75,6 +78,12 @@ class FakeSurreal:
     def query(self, *args: Any) -> Any:
         return self._op("query", *args)
 
+    def query_raw(self, *args: Any) -> Any:
+        self.calls.append(("query_raw", args))
+        if type(self).op_error is not None:
+            raise type(self).op_error
+        return type(self).query_raw_result
+
     def select(self, target: str) -> Any:
         return self._op("select", target)
 
@@ -100,6 +109,9 @@ def fake_sdk(monkeypatch: pytest.MonkeyPatch) -> type[FakeSurreal]:
     FakeSurreal.signin_accepts = None
     FakeSurreal.op_error = None
     FakeSurreal.op_result = [{"id": "person:1", "name": "ada"}]
+    FakeSurreal.query_raw_result = {
+        "result": [{"status": "OK", "result": [{"id": "person:1", "name": "ada"}]}]
+    }
 
     module = types.ModuleType("surrealdb")
     module.Surreal = FakeSurreal  # type: ignore[attr-defined]
@@ -180,6 +192,9 @@ def fake_builder_sdk(monkeypatch: pytest.MonkeyPatch) -> type[FakeSurrealBuilder
     FakeSurrealBuilderSDK.signin_accepts = None
     FakeSurrealBuilderSDK.op_error = None
     FakeSurrealBuilderSDK.op_result = [{"id": "person:1", "name": "ada"}]
+    FakeSurrealBuilderSDK.query_raw_result = {
+        "result": [{"status": "OK", "result": [{"id": "person:1", "name": "ada"}]}]
+    }
 
     module = types.ModuleType("surrealdb")
     module.Surreal = FakeSurrealBuilderSDK  # type: ignore[attr-defined]
@@ -197,19 +212,20 @@ def fake_builder_sdk(monkeypatch: pytest.MonkeyPatch) -> type[FakeSurrealBuilder
 # ---------------------------------------------------------------------------
 
 
-def test_builder_sdk_query_executes_and_returns_the_result(
+def test_builder_sdk_query_uses_query_raw_not_the_builder(
     fake_builder_sdk: type[FakeSurrealBuilderSDK],
 ) -> None:
-    # `.execute()` on SDK 3.x's query builder returns one entry per
-    # statement; a single `SELECT` sends one statement.
-    fake_builder_sdk.op_result = [[{"name": "ada"}]]
+    # query_raw() runs eagerly on both SDK majors -- query mode never
+    # touches the builder-returning query() method.
+    fake_builder_sdk.query_raw_result = {
+        "result": [{"status": "OK", "result": [{"name": "ada"}]}]
+    }
 
-    result = _plugin().execute(
-        params={"mode": "query", "query": "SELECT * FROM person"}
-    )
+    result = _plugin().execute(params={"mode": "query", "query": "SELECT * FROM person"})
 
     db = fake_builder_sdk.instances[-1]
-    assert ("query", ("SELECT * FROM person",)) in db.calls
+    assert ("query_raw", ("SELECT * FROM person",)) in db.calls
+    assert not any(name == "query" for name, _ in db.calls)
     assert result.value == [{"name": "ada"}]
 
 
@@ -436,7 +452,7 @@ def test_check_token_satisfies_credential_requirement(
 
 
 def test_query_passes_surrealql_and_params(fake_sdk: type[FakeSurreal]) -> None:
-    fake_sdk.op_result = [{"result": [{"name": "ada"}], "status": "OK"}]
+    fake_sdk.query_raw_result = {"result": [{"status": "OK", "result": [{"name": "ada"}]}]}
 
     result = _plugin().execute(
         params={
@@ -447,8 +463,12 @@ def test_query_passes_surrealql_and_params(fake_sdk: type[FakeSurreal]) -> None:
     )
 
     db = fake_sdk.instances[-1]
-    assert ("query", ("SELECT * FROM person WHERE name = $name", {"name": "ada"})) in db.calls
+    assert (
+        "query_raw",
+        ("SELECT * FROM person WHERE name = $name", {"name": "ada"}),
+    ) in db.calls
     assert ("use", ("test_ns", "test_db")) in db.calls
+    assert result.value == [{"name": "ada"}]
     assert result.raw["mode"] == "query"
     assert result.raw["namespace"] == "test_ns"
     assert db.closed is True
@@ -456,7 +476,24 @@ def test_query_passes_surrealql_and_params(fake_sdk: type[FakeSurreal]) -> None:
 
 def test_query_without_params_omits_variables(fake_sdk: type[FakeSurreal]) -> None:
     _plugin().execute(params={"mode": "query", "query": "INFO FOR DB"})
-    assert ("query", ("INFO FOR DB",)) in fake_sdk.instances[-1].calls
+    assert ("query_raw", ("INFO FOR DB",)) in fake_sdk.instances[-1].calls
+
+
+def test_query_raises_when_a_later_statement_fails(fake_sdk: type[FakeSurreal]) -> None:
+    fake_sdk.query_raw_result = {
+        "result": [
+            {"status": "OK", "result": [{"id": "person:1"}]},
+            {"status": "ERR", "result": "Found NONE for field score"},
+        ]
+    }
+
+    with pytest.raises(RuntimeError, match="SurrealQL error: Found NONE"):
+        _plugin().execute(
+            params={
+                "mode": "query",
+                "query": "CREATE person SET id = person:1; UPDATE person SET score = 1;",
+            }
+        )
 
 
 def test_select_create_upsert_delete_dispatch(fake_sdk: type[FakeSurreal]) -> None:
@@ -755,7 +792,9 @@ def test_surrealql_error_raised_from_operation(fake_sdk: type[FakeSurreal]) -> N
 
 
 def test_statement_level_error_status_is_raised(fake_sdk: type[FakeSurreal]) -> None:
-    fake_sdk.op_result = [{"status": "ERR", "result": "Table 'nope' does not exist"}]
+    fake_sdk.query_raw_result = {
+        "result": [{"status": "ERR", "result": "Table 'nope' does not exist"}]
+    }
 
     with pytest.raises(RuntimeError, match="SurrealQL error: Table 'nope' does not exist"):
         _plugin().execute(params={"mode": "query", "query": "SELECT * FROM nope"})

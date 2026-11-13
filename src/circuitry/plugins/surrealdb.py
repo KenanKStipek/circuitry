@@ -16,7 +16,8 @@ Config (``runtime.plugins.surrealdb``):
 Params:
   - ``mode``: ``"query" | "select" | "create" | "upsert" | "delete"``
     (default ``"query"``).
-  - ``query`` (query): SurrealQL string.
+  - ``query`` (query): SurrealQL string, which may hold more than one
+    statement; a failing statement raises, whichever one it is.
   - ``params`` (query, optional): dict of SurrealQL variables.
   - ``target`` (select): table name or record id (``record`` / ``table``
     accepted as aliases).
@@ -39,7 +40,7 @@ from urllib.parse import urlsplit
 
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
-from ..surrealdb_sdk import record_target, run_query, run_select, run_write
+from ..surrealdb_sdk import record_target, run_query_raw, run_select, run_write
 from .base import ToolResult
 
 DEFAULT_URL = "ws://localhost:8000/rpc"
@@ -136,16 +137,6 @@ def _jsonable(value: Any) -> Any:
     return str(value)
 
 
-def _raise_for_statement_errors(mode: str, response: Any) -> None:
-    """SurrealQL statements can fail per-statement without raising."""
-    if not isinstance(response, list):
-        return
-    for entry in response:
-        if isinstance(entry, dict) and str(entry.get("status", "")).upper() == "ERR":
-            detail = entry.get("result") or entry.get("detail") or entry
-            raise RuntimeError(f"surrealdb {mode}: SurrealQL error: {detail}")
-
-
 def _require_str(params: dict[str, Any], keys: tuple[str, ...], *, mode: str) -> str:
     for key in keys:
         value = params.get(key)
@@ -178,8 +169,10 @@ def _build_call(mode: str, params: dict[str, Any]) -> Callable[[Any], Any]:
         vars_dict: dict[str, Any] = dict(variables or {})
 
         def _query(db: Any) -> Any:
-            response = db.query(statement, vars_dict) if vars_dict else db.query(statement)
-            return run_query(response)
+            response = (
+                db.query_raw(statement, vars_dict) if vars_dict else db.query_raw(statement)
+            )
+            return run_query_raw(response, mode="query")
 
         return _query
 
@@ -334,8 +327,6 @@ class SurrealDBPlugin:
                 if _is_connection_error(exc):
                     raise RuntimeError(_unreachable(self.url, exc)) from exc
                 raise RuntimeError(f"surrealdb {mode} failed: {exc}") from exc
-
-            _raise_for_statement_errors(mode, response)
         finally:
             close = getattr(db, "close", None)
             if callable(close):

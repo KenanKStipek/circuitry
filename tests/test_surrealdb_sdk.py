@@ -8,7 +8,14 @@ from typing import Any
 
 import pytest
 
-from circuitry.surrealdb_sdk import record_target, run, run_query, run_select, run_write
+from circuitry.surrealdb_sdk import (
+    record_target,
+    run,
+    run_query,
+    run_query_raw,
+    run_select,
+    run_write,
+)
 
 
 class _FakeStringRecordId:
@@ -115,6 +122,47 @@ def test_run_write_leaves_a_record_or_list_alone() -> None:
 def test_run_write_turns_none_into_an_empty_list() -> None:
     builder = _Builder(result=None)
     assert run_write(builder) == []
+
+
+def test_run_query_raw_returns_the_first_statements_result() -> None:
+    response = {
+        "result": [
+            {"status": "OK", "result": [{"name": "ada"}]},
+            {"status": "OK", "result": [{"name": "grace"}]},
+        ]
+    }
+    assert run_query_raw(response) == [{"name": "ada"}]
+
+
+def test_run_query_raw_returns_none_for_no_statements() -> None:
+    assert run_query_raw({"result": []}) is None
+
+
+def test_run_query_raw_raises_on_the_first_failing_statement() -> None:
+    response = {
+        "result": [
+            {"status": "OK", "result": [{"name": "ada"}]},
+            {"status": "ERR", "result": "Found NONE for field score"},
+        ]
+    }
+    with pytest.raises(RuntimeError, match="SurrealQL error: Found NONE"):
+        run_query_raw(response, mode="query")
+
+
+def test_run_query_raw_raises_on_an_early_failing_statement_even_with_a_later_ok() -> None:
+    response = {
+        "result": [
+            {"status": "ERR", "result": "Parse error"},
+            {"status": "OK", "result": [{"name": "ada"}]},
+        ]
+    }
+    with pytest.raises(RuntimeError, match="SurrealQL error: Parse error"):
+        run_query_raw(response, mode="query")
+
+
+def test_run_query_raw_rejects_an_unexpected_response_shape() -> None:
+    with pytest.raises(RuntimeError, match="unexpected response shape"):
+        run_query_raw({"no_result_key": True})
 
 
 def test_record_target_wraps_a_table_colon_id_string(
