@@ -326,6 +326,8 @@ impl Store {
     /// `cli/runtime_shim.py::_load_state`'s own `link_last_refs` leaves
     /// it for `Store(state, ...)` to use directly.
     pub fn with_resumed_state(value: Value) -> Self {
+        let mut value = value;
+        migrate_legacy_state(&mut value);
         Store {
             root: hydrate_resumed_state(value),
             #[cfg(test)]
@@ -750,6 +752,40 @@ fn is_iter_key(key: &Value) -> bool {
 /// missing, or isn't itself a dict, is left exactly as
 /// [`Store::saved`]'s own doc comment says `link_last_refs` leaves it:
 /// the literal reference value, not an alias.
+/// `core/state_ns.py::migrate_legacy_state` -- wraps every root key of
+/// *value* that isn't `input`/`prime`/`runtime` or `_`-prefixed under a
+/// new `input` key, in place, unless `input` is already present (a
+/// state dict that already carries one is trusted as already
+/// namespaced, and left untouched, making this idempotent). A pre-
+/// namespace state file (or one authored by hand with bare top-level
+/// keys) still resumes the same way `--state` loading it on cof does --
+/// top level only, never recursed into a nested dict.
+fn migrate_legacy_state(value: &mut Value) {
+    let Value::Dict(map) = value else {
+        return;
+    };
+    if map.contains_key(&Value::Str("input".to_string())) {
+        return;
+    }
+    let lifted: Vec<Value> = map
+        .keys()
+        .filter(|key| {
+            let Value::Str(key) = key else {
+                return true;
+            };
+            !matches!(key.as_str(), "prime" | "runtime") && !key.starts_with('_')
+        })
+        .cloned()
+        .collect();
+    let mut input_ns = electricity_value::Dict::new();
+    for key in lifted {
+        if let Some(lifted_value) = map.shift_remove(&key) {
+            input_ns.insert(key, lifted_value);
+        }
+    }
+    map.insert(Value::Str("input".to_string()), Value::Dict(input_ns));
+}
+
 pub fn hydrate_resumed_state(mut value: Value) -> NodeRef {
     // `Value` has a hand-written `Drop` impl (iterative dropping,
     // regardless of depth -- see `exec::live_ctx`'s own identical note),

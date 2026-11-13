@@ -1360,16 +1360,28 @@ pub async fn run_orchestration_with_config(
     // which never checks a hash at all) and skipped entirely by
     // `--force`.
     if req.resume && !req.force {
-        let recorded_hash = match store.peek(
-            &match store.child(&store.root, &Value::Str("runtime".to_string())) {
-                Ok(Some(n)) => n,
-                _ => store.root.clone(),
-            },
-            &Value::Str("last_run".to_string()),
-        ) {
-            Some(electricity_vm::Slot::Node(last_run)) => {
-                match store.peek(&last_run, &Value::Str("document_hash".to_string())) {
-                    Some(electricity_vm::Slot::Value(Value::Str(ref s))) => Some(s.clone()),
+        // `cli/app.py::_resolve_resume_state`'s own `last_run_record =
+        // loaded.get("runtime", {}).get("last_run") if isinstance(...,
+        // dict) else None` -- a missing/non-dict `runtime` means
+        // `recorded_hash` is `None` outright; it never falls back to a
+        // root-level `last_run` the way a plain-state load's own
+        // `hydrate_resumed_state` tolerates for other purposes. An empty
+        // string is `not recorded_hash` too (`if not recorded_hash:`'s
+        // own Python truthiness) -- the same "no document_hash" refusal
+        // as a missing one, never "changed".
+        let recorded_hash = match store.child(&store.root, &Value::Str("runtime".to_string())) {
+            Ok(Some(runtime_node)) => {
+                match store.peek(&runtime_node, &Value::Str("last_run".to_string())) {
+                    Some(electricity_vm::Slot::Node(last_run)) => {
+                        match store.peek(&last_run, &Value::Str("document_hash".to_string())) {
+                            Some(electricity_vm::Slot::Value(Value::Str(ref s)))
+                                if !s.is_empty() =>
+                            {
+                                Some(s.clone())
+                            }
+                            _ => None,
+                        }
+                    }
                     _ => None,
                 }
             }
@@ -1377,10 +1389,10 @@ pub async fn run_orchestration_with_config(
         };
         match recorded_hash {
             None => fail_no_resume_state!(
-                "The saved state to resume from has no runtime.last_run.document_hash -- it \
-                 wasn't written by `cof run`/`electricity run` (or predates this field), so \
-                 there is no way to tell whether this document changed since it ran. Pass \
-                 --force to resume anyway."
+                "The saved state to resume from has no \
+                 runtime.last_run.document_hash \u{2014} it wasn't written by `cof run` (or \
+                 predates this field), so there is no way to tell whether this document \
+                 changed since it ran. Pass --force to resume anyway."
                     .to_string()
             ),
             Some(recorded_hash) => {
@@ -1390,10 +1402,24 @@ pub async fn run_orchestration_with_config(
                     &loaded.confinement_root,
                 )
                 .ok();
-                if current_hash.is_some_and(|current| current != recorded_hash) {
+                let matches = current_hash.as_ref().is_none_or(|current| {
+                    if *current == recorded_hash {
+                        return true;
+                    }
+                    // `core/resume.py::_legacy_document_sha256` fallback
+                    // (pre-#407 algorithm): a state file an older
+                    // release wrote still resumes without --force.
+                    electricity_compiler::legacy_document_sha256(
+                        &loaded.path,
+                        &loaded.document,
+                        &loaded.confinement_root,
+                    )
+                    .is_ok_and(|legacy| legacy == recorded_hash)
+                });
+                if !matches {
                     fail_no_resume_state!(format!(
-                        "{} changed since the run being resumed (content hash differs) -- \
-                         rerun from scratch, or pass --force to resume anyway.",
+                        "{} changed since the run being resumed (content hash differs) \
+                         \u{2014} rerun from scratch, or pass --force to resume anyway.",
                         req.orchestration_path.display()
                     ));
                 }

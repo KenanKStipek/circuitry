@@ -14,7 +14,7 @@
 //! the effect was actually skipped, not merely idempotent.
 
 use electricity::run::RunRequest;
-use electricity_value::Value;
+use electricity_value::{Dict, Value};
 use electricity_vm::CancellationToken;
 use indexmap::IndexMap;
 use std::fs;
@@ -232,6 +232,105 @@ async fn a_use_without_record_children_reruns_its_child_whole() {
 }
 
 #[tokio::test]
+async fn a_use_with_record_children_continues_inside_its_matching_child() {
+    let dir = temp_dir("use-record-children-continue");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"state": {"record_children": true}}}"#,
+    );
+    let child_doc = write(
+        &dir,
+        "child.yml",
+        "effects:\n  - name: inner1\n    type: tool\n    provider: uuid\n  - name: inner2\n    \
+         type: tool\n    provider: uuid\n",
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "effects:\n  - name: step\n    type: use\n    path: {}\n",
+            child_doc.display()
+        ),
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_inner1 = child(at_mut(&mut state, "prime.step.inner1"), "value");
+    let saved_inner2 = child(at_mut(&mut state, "prime.step.inner2"), "value");
+
+    // Interrupted after the child itself finished (both children
+    // recorded under the `use` node, via `record_children`), but
+    // before the `use` node's own meta was marked complete.
+    set(&mut state, "prime.step.meta.completed_at", Value::None);
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.step.inner1"), "value"),
+        saved_inner1,
+        "record_children's own matching record continues inside the child -- inner1 is reused, \
+         not rerun"
+    );
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.step.inner2"), "value"),
+        saved_inner2,
+        "inner2 likewise"
+    );
+}
+
+#[tokio::test]
+async fn a_use_with_resume_restart_always_reruns_its_child_even_when_the_record_matches() {
+    let dir = temp_dir("use-resume-restart");
+    let config = write(
+        &dir,
+        "config.json",
+        r#"{"runtime": {"state": {"record_children": true}}}"#,
+    );
+    let child_doc = write(
+        &dir,
+        "child.yml",
+        "effects:\n  - name: inner\n    type: tool\n    provider: uuid\n",
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "effects:\n  - name: step\n    type: use\n    resume: restart\n    path: {}\n",
+            child_doc.display()
+        ),
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_inner = child(at_mut(&mut state, "prime.step.inner"), "value");
+    set(&mut state, "prime.step.meta.completed_at", Value::None);
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    assert_ne!(
+        child(at_mut(&mut resumed, "prime.step.inner"), "value"),
+        saved_inner,
+        "resume: restart drops a use's saved record and reruns its child fresh, even though \
+         record_children's own record would otherwise match"
+    );
+}
+
+#[tokio::test]
 async fn a_finally_effect_always_reruns_even_if_its_saved_node_finished() {
     let dir = temp_dir("finally");
     let config = write(&dir, "config.json", "{}");
@@ -377,6 +476,178 @@ async fn a_state_file_with_no_document_hash_is_refused_without_force() {
             .contains("no way to tell whether this document changed"),
         "{:?}",
         result.error
+    );
+}
+
+#[tokio::test]
+async fn an_empty_document_hash_is_refused_as_missing_not_changed() {
+    let dir = temp_dir("empty-hash");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    // `cli/app.py::_resolve_resume_state`'s own `if not recorded_hash:`
+    // (Python truthiness) treats an empty string the same as missing --
+    // never the "changed" refusal an empty string would otherwise
+    // mismatch into.
+    set(
+        &mut state,
+        "runtime.last_run.document_hash",
+        Value::Str(String::new()),
+    );
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(result.state.is_none());
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no way to tell whether this document changed"),
+        "{:?}",
+        result.error
+    );
+}
+
+#[tokio::test]
+async fn a_state_file_with_no_runtime_key_never_falls_back_to_a_root_level_last_run() {
+    let dir = temp_dir("no-runtime-key");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+
+    // A root-level `last_run.document_hash` that would mismatch if the
+    // check ever fell back to reading it -- `runtime` itself is removed
+    // entirely, so `cli/app.py`'s own `last_run_record = loaded.get(
+    // "runtime", {}).get("last_run") if isinstance(..., dict) else None`
+    // must see `None`, never this decoy.
+    let mut decoy = Dict::new();
+    decoy.insert(
+        key("document_hash"),
+        Value::Str("not-a-real-hash".to_string()),
+    );
+    let root = state.as_dict_mut().unwrap();
+    root.insert(key("last_run"), Value::Dict(decoy));
+    root.shift_remove(&key("runtime"));
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let result = run(&req).await;
+    assert!(!result.ok);
+    assert!(result.state.is_none());
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("no way to tell whether this document changed"),
+        "a missing runtime key must be refused as \"no document_hash\", never by reading a \
+         root-level last_run decoy: {:?}",
+        result.error
+    );
+}
+
+#[tokio::test]
+async fn a_pre_407_legacy_document_hash_resumes_without_force() {
+    let dir = temp_dir("legacy-hash");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+
+    let loaded = electricity_compiler::prepare_document(
+        &doc,
+        &electricity_compiler::CheckOptions::default(),
+    )
+    .unwrap();
+    let legacy_hash = electricity_compiler::legacy_document_sha256(
+        &loaded.path,
+        &loaded.document,
+        &loaded.confinement_root,
+    )
+    .unwrap();
+    set(
+        &mut state,
+        "runtime.last_run.document_hash",
+        Value::Str(legacy_hash),
+    );
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let result = run(&req).await;
+    assert!(result.ok, "{:?}", result.error);
+}
+
+#[tokio::test]
+async fn a_legacy_root_key_state_file_is_lifted_under_input_on_resume() {
+    let dir = temp_dir("migrate-legacy-state");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "interface:\n  inputs:\n    name: {type: string}\n\
+         effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    );
+
+    let mut first_req = request(config.clone(), doc.clone());
+    first_req
+        .inputs
+        .insert("name".to_string(), "Ada".to_string());
+    let first = run(&first_req).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+
+    // A pre-namespace snapshot: `name` lifted back out to the root,
+    // `input` removed entirely -- `core/state_ns.py::migrate_legacy_
+    // state`'s own "no input key at all" trigger.
+    let name_value = child(at_mut(&mut state, "input"), "name");
+    let root = state.as_dict_mut().unwrap();
+    root.shift_remove(&key("input"));
+    root.insert(key("name"), name_value);
+    let state_path = write_state(&dir, "state.json", &state);
+
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = false; // plain --state, same as cof's own `_load_state`
+
+    let result = run(&req).await;
+    assert!(result.ok, "{:?}", result.error);
+    let mut resumed = result.state.unwrap();
+    assert_eq!(
+        child(at_mut(&mut resumed, "input"), "name"),
+        Value::Str("Ada".to_string()),
+        "a legacy root key is lifted back under 'input' on load, not left at the root"
     );
 }
 

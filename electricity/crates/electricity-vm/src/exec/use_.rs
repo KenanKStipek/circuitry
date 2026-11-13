@@ -154,17 +154,43 @@ fn clear_child_record(node: &NodeRef) {
 /// `core/use.py::_SavedChildRun` (issue #727, #567): what a saved,
 /// unfinished `use` node says about its child's last run -- `--resume`
 /// continues inside the child only when it would run the same document
-/// (`orchestration_sha256`) with the same inputs (Python equality,
-/// since both sides are already the same in-memory [`Value`] type here
-/// -- no JSON round-trip canonicalization needed the way Python's own
-/// `_saved_form` pays for) as the run that left the record; a child
-/// whose output the `use`'s own `expect:` judged false runs from its
-/// start too (reused whole, it would hand the same output to the same
-/// check and fail again on every resume).
+/// (`orchestration_sha256`) with the same inputs, compared through
+/// [`saved_form`] (Python's own `_saved_form`'s equivalent: dict
+/// equality is already order-insensitive on both sides, the same as
+/// Python's own `==`, so the one real gap a JSON round trip closes
+/// here is a `Date`/`DateTime`/`Bytes` value -- recorded as a saved
+/// run's own `meta.inputs` can only ever be a JSON-native `Value`
+/// (loaded back off a JSON `--state` file), but a freshly rendered
+/// literal `inputs:` value, from the document's own YAML 1.1 syntax,
+/// still can be one of those three), as the run that left the record;
+/// a child whose output the `use`'s own `expect:` judged false runs
+/// from its start too (reused whole, it would hand the same output to
+/// the same check and fail again on every resume).
 struct SavedChildRun {
     inputs: Value,
     orchestration_sha256: Value,
     expect_failed: bool,
+}
+
+/// `core/use.py::_saved_form` -- *value* as it would read back from a
+/// JSON `--state` file: every `Date`/`DateTime`/`Bytes` leaf (anywhere
+/// in a `Dict`/`List`, however deep) replaced by the same string
+/// [`electricity_json::writer`]'s own `DefaultStr` mode already writes
+/// for it, everything else untouched. No `sort_keys` step of Python's
+/// own version has anything to do here -- `Value::Dict`'s `PartialEq`
+/// is already order-insensitive, matching Python dict equality.
+fn saved_form(value: &Value) -> Value {
+    match value {
+        Value::Bytes(_) | Value::Date(_) | Value::DateTime(..) => Value::Str(value.py_str()),
+        Value::List(items) => Value::List(items.iter().map(saved_form).collect()),
+        Value::Dict(entries) => Value::Dict(
+            entries
+                .iter()
+                .map(|(k, v)| (k.clone(), saved_form(v)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
 }
 
 impl SavedChildRun {
@@ -175,7 +201,7 @@ impl SavedChildRun {
         if self.orchestration_sha256 != Value::Str(digest.to_string()) {
             return false;
         }
-        self.inputs == Value::Dict(inputs.clone())
+        saved_form(&self.inputs) == saved_form(&Value::Dict(inputs.clone()))
     }
 }
 
@@ -808,13 +834,15 @@ async fn attempt_once<R: ParamsCtx>(
     label: &mut String,
     record_children: bool,
     attempt_children: &mut Option<Value>,
-    // `cof run --resume` (#567): the saved record this attempt may
-    // continue inside, and what it saved about the run that left it --
-    // `None` unless this is the first attempt of a resumed `use` whose
-    // `runtime.state.record_children` left one. Checked against this
-    // attempt's own freshly rendered inputs and the child document's
-    // own digest below, once both are known (`SavedChildRun::matches`).
-    resume_record: Option<(&SavedChildRun, IndexMap<Value, Slot>)>,
+    // `cof run --resume` (#567): what the saved record said about the
+    // run that left it -- `None` unless this is the first attempt of a
+    // resumed `use` whose `runtime.state.record_children` left one.
+    // Not yet taken off *effect_node* (`core/use.py::execute`'s own
+    // `_take_child_record(node)` call happens only after the child's
+    // inputs render and its interface check passes, below -- an error
+    // before that point must leave the saved record in place, since
+    // this attempt never consulted it).
+    resume_record: Option<&SavedChildRun>,
 ) -> Result<(), AttemptProblem> {
     let loaded = load_child(
         name,
@@ -1025,14 +1053,19 @@ async fn attempt_once<R: ParamsCtx>(
         }));
     }
 
-    // `cof run --resume` (#567, #590): the record matches only when
-    // `use_op.resume_mode` is `Continue` (`restart` always drops it,
-    // even on a match) and `SavedChildRun::matches` passes against
-    // this attempt's own freshly rendered inputs and the child's own
-    // digest -- `loaded.digest` is `meta.orchestration_sha256`'s own
-    // value for this run (set just above `attempt_once`'s own
-    // allowlist check).
-    let resume_child = resume_record.and_then(|(saved, taken)| {
+    // `cof run --resume` (#567, #590): taken off *effect_node* only now
+    // that the inputs rendered and the interface check above both
+    // succeeded (`core/use.py::execute`'s own ordering) -- unconditionally,
+    // the same as cof's own `_take_child_record` call, whether or not it
+    // ends up matching; the record is gone from the node either way once
+    // this attempt has reached this point. It matches only when
+    // `use_op.resume_mode` is `Continue` (`restart` always drops it, even
+    // on a match) and `SavedChildRun::matches` passes against this
+    // attempt's own freshly rendered inputs and the child's own digest --
+    // `loaded.digest` is `meta.orchestration_sha256`'s own value for this
+    // run (set just above `attempt_once`'s own allowlist check).
+    let resume_child = resume_record.and_then(|saved| {
+        let taken = take_child_record(effect_node);
         if use_op.resume_mode == ResumeMode::Continue
             && saved.matches(&loaded.digest, &rendered_inputs)
         {
@@ -1523,17 +1556,15 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         let mut attempt_children: Option<Value> = None;
         // `core/use.py`'s own `if saved_child_run is not None and
         // attempt_index == 0`: only the first attempt ever resumes; a
-        // retry reruns the whole child from scratch. Taking the
-        // grafted record off *effect_node* here (not inside
-        // `attempt_once`) means a later attempt that reaches this
-        // point at all has already had it removed by `clear_child_record`
-        // above, so `resume_record` is `None` for every attempt but the
-        // first either way -- this just makes the "only once" rule
-        // explicit rather than incidental.
+        // retry reruns the whole child from scratch -- a later attempt
+        // that reaches this point at all has already had its own
+        // record removed by `clear_child_record` above, so this is
+        // `None` for every attempt but the first either way. Not yet
+        // taken off *effect_node* -- `attempt_once` itself does that,
+        // only once the child's inputs render and its interface check
+        // both succeed (that function's own doc comment).
         let resume_record = if attempt_index == 0 {
-            saved_child_run
-                .as_ref()
-                .map(|saved| (saved, take_child_record(&effect_node)))
+            saved_child_run.as_ref()
         } else {
             None
         };
