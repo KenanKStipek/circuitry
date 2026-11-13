@@ -131,6 +131,12 @@ pub struct HistoryRecord {
     pub document_hash: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub engine: Option<String>,
+    /// This run's own label (issue #752), already [`crate::names::
+    /// clean_label`]'d -- `None` for a run with none, and for every
+    /// record written before this field existed (`#[serde(default)]`,
+    /// format `v` 1, same as `config`/`run_dir`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     pub started_at: String,
     pub ended_at: String,
     pub outcome: Outcome,
@@ -448,6 +454,19 @@ pub fn build_record(
     model: &RunModel,
     plan: &PlanTree,
 ) -> Option<HistoryRecord> {
+    // Issue #752: `run_start`'s own label first, else `runtime.
+    // last_run.label` -- the same fallback order `render::build_
+    // header`'s own `label` field already uses.
+    let label = model
+        .run_start_label()
+        .map(str::to_string)
+        .or_else(|| {
+            state
+                .pointer("/runtime/last_run/label")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .and_then(|raw| crate::names::clean_label(&raw));
     let last_run = state.pointer("/runtime/last_run")?;
     let completed_at = last_run.get("completed_at").and_then(Value::as_str)?;
     if last_run
@@ -514,6 +533,7 @@ pub fn build_record(
         run_dir: run_dir.map(str::to_string),
         document_hash: Some(document_hash),
         engine: engine.map(str::to_string),
+        label,
         started_at,
         ended_at: completed_at.to_string(),
         outcome,
@@ -1358,6 +1378,7 @@ mod tests {
             run_dir: None,
             document_hash: Some(hash.to_string()),
             engine: Some("cof".to_string()),
+            label: None,
             started_at: started_at.to_string(),
             ended_at: started_at.to_string(),
             outcome,
@@ -1788,6 +1809,93 @@ mod tests {
         append_record(dir.path(), "/doc.yml", &rec).unwrap();
         let read_back = read_records(dir.path(), "/doc.yml");
         assert_eq!(read_back, vec![rec]);
+    }
+
+    #[test]
+    fn read_records_round_trips_a_label() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = HistoryRecord {
+            label: Some("ticket 42".to_string()),
+            ..record("r1", "2026-01-01T00:00:00Z", 12.0, Outcome::Ok, "h1")
+        };
+        append_record(dir.path(), "/doc.yml", &rec).unwrap();
+        let read_back = read_records(dir.path(), "/doc.yml");
+        assert_eq!(read_back, vec![rec]);
+    }
+
+    #[test]
+    fn read_records_reads_an_old_line_with_no_label_at_all() {
+        // A line in the format written before `label` existed: no
+        // key for it at all, not even `null` -- the same shape
+        // `read_records_reads_an_old_line_with_neither_config_nor_
+        // run_dir` already covers for `config`/`run_dir`.
+        let dir = tempfile::tempdir().unwrap();
+        ensure_history_dir(dir.path()).unwrap();
+        let file_path = history_file_path(dir.path(), "/doc.yml");
+        let old_line = serde_json::json!({
+            "v": FORMAT_VERSION,
+            "run_id": "r1",
+            "document": "/doc.yml",
+            "document_hash": "h1",
+            "engine": "cof",
+            "started_at": "2026-01-01T00:00:00Z",
+            "ended_at": "2026-01-01T00:00:12Z",
+            "outcome": "ok",
+            "wall_s": 12.0,
+            "effects_run": 1,
+            "tokens_sent": 0,
+            "tokens_received": 0,
+            "steps": {},
+        });
+        std::fs::write(&file_path, format!("{old_line}\n")).unwrap();
+        let read_back = read_records(dir.path(), "/doc.yml");
+        assert_eq!(read_back.len(), 1);
+        assert_eq!(read_back[0].label, None);
+    }
+
+    #[test]
+    fn build_record_reads_the_label_from_run_start() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        });
+        let state = serde_json::json!({
+            "runtime": {"last_run": {
+                "completed_at": "2026-01-01T00:00:12Z",
+                "started_at": "2026-01-01T00:00:00Z",
+                "document_hash": "h1",
+                "run_id": "r1",
+            }},
+            "prime": {"value": true, "meta": {"completed_at": "2026-01-01T00:00:12Z", "error": null}},
+        });
+        let rec = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &plan)
+            .expect("a record");
+        assert_eq!(rec.label, Some("ticket 42".to_string()));
+    }
+
+    #[test]
+    fn build_record_falls_back_to_the_states_own_label_with_no_run_start_event() {
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let state = serde_json::json!({
+            "runtime": {"last_run": {
+                "completed_at": "2026-01-01T00:00:12Z",
+                "started_at": "2026-01-01T00:00:00Z",
+                "document_hash": "h1",
+                "run_id": "r1",
+                "label": "ticket 42",
+            }},
+            "prime": {"value": true, "meta": {"completed_at": "2026-01-01T00:00:12Z", "error": null}},
+        });
+        let rec = build_record("/doc.yml", None, None, Some("cof"), &state, &model, &plan)
+            .expect("a record");
+        assert_eq!(rec.label, Some("ticket 42".to_string()));
     }
 
     #[test]

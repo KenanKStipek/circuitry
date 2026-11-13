@@ -5321,6 +5321,7 @@ mod tests {
             document: "feature-0417.yml".to_string(),
             engine: "cof".to_string(),
             run_id: None,
+            label: None,
             status: RunStatus::Running,
             elapsed_s: 2877.0,
             run_start_ts: Some("2026-10-08T11:04:58Z".to_string()),
