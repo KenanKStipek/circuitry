@@ -1325,7 +1325,10 @@ pub fn apply_eta_to_header(
 /// finished run's own state for as long as the user likes, and
 /// measuring elapsed time against a live `now` would show an ETA
 /// that kept sliding forward, eventually past its own usual end.
-fn eta_anchor_now<'a>(state: &'a Value, now: &'a str) -> &'a str {
+/// `pub`: the binary crate's own `history_io::HistoryHandle::eta_
+/// with_stats` anchors a live run's own `elapsed_s` the same way,
+/// ahead of calling [`apply_eta_to_header`] with the result.
+pub fn eta_anchor_now<'a>(state: &'a Value, now: &'a str) -> &'a str {
     if crate::model::run_ended(state) {
         if let Some(ts) = state
             .pointer("/runtime/last_run/completed_at")

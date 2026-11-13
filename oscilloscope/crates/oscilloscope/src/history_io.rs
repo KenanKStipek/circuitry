@@ -273,7 +273,7 @@ impl HistoryHandle {
             .pointer("/runtime/last_run/document_hash")
             .and_then(serde_json::Value::as_str);
         let stats = self.stats_for(current_hash)?;
-        let anchor_now = eta_anchor_now(state, now);
+        let anchor_now = history::eta_anchor_now(state, now);
         let elapsed_s =
             oscilloscope_core::observe::duration_seconds(eta_start_ts, anchor_now).unwrap_or(0.0);
         let input = history::eta_input_from_state(state, plan, eta_start_ts, elapsed_s);
@@ -356,23 +356,6 @@ pub fn apply_history_eta(
         return;
     };
     history::apply_eta_to_header(header, &eta, &stats, state, now);
-}
-
-/// Once a run has truly ended (issue #649), the ETA freezes at its
-/// own end rather than the wall clock: the TUI can stay open on a
-/// finished run's state for as long as the user likes, and measuring
-/// elapsed time against a live `now` would show an ETA that kept
-/// sliding forward, eventually past its own usual end.
-fn eta_anchor_now<'a>(state: &'a serde_json::Value, now: &'a str) -> &'a str {
-    if oscilloscope_core::model::run_ended(state) {
-        if let Some(ts) = state
-            .pointer("/runtime/last_run/completed_at")
-            .and_then(serde_json::Value::as_str)
-        {
-            return ts;
-        }
-    }
-    now
 }
 
 #[cfg(test)]
