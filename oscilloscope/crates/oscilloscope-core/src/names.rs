@@ -52,29 +52,118 @@ fn id_suffix(run_id: &str) -> String {
         .collect()
 }
 
-/// Every one of `run_ids`' own [`run_name`], in the same order, with the first four hex digits of its own
-/// run id appended wherever two or more positions share the same bare name (issue #717: "if two runs on the
-/// same screen get the same name, both add" the suffix) -- `None` passes straight through unchanged, a run
-/// whose `run_start` hasn't arrived yet showing no name at all rather than colliding with anything.
-pub fn disambiguated_names(run_ids: &[Option<&str>]) -> Vec<Option<String>> {
-    let bare: Vec<Option<String>> = run_ids.iter().map(|id| id.map(run_name)).collect();
+/// A run's own display name (issue #752): its own cleaned label
+/// when it has one, else [`run_name`]'s own generated one -- `None`
+/// only when there is neither (no label, and `run_id` itself not
+/// known yet). `label` is always already [`clean_label`]'d by the
+/// one caller that reads it off a file (`render::build_header`,
+/// `discovery::discover_runs`, `history::build_record`); this never
+/// cleans it again, so a caller that hands in raw, unclean text
+/// gets it back unclean.
+pub fn display_name(label: Option<&str>, run_id: Option<&str>) -> Option<String> {
+    match label {
+        Some(label) => Some(label.to_string()),
+        None => run_id.map(run_name),
+    }
+}
+
+/// Every one of `runs`' own `(label, run_id)` pair turned into its own [`display_name`], in the same
+/// order, disambiguated against every other position on the same screen (issue #752, extending #717's own
+/// rule): two positions whose bare display name collides each add their own tell-apart suffix -- two shared
+/// labels each add their own [`run_name`] (`ticket-42 \u{b7} amber-falcon`), two shared generated names (no
+/// label on either) each add the first four hex digits of their own run id instead (`amber-falcon\u{b7}0299`,
+/// #717's own original rule), exactly as before when no label is in play at all. A label whose own run id
+/// isn't known yet (a file written by something other than `cof`/`electricity` can carry a `label` with no
+/// `run_id` at all, see [`clean_label`]'s own doc comment on why osi never trusts a file to be well-formed)
+/// gets no suffix to derive one from either: a colliding one instead gets a plain positional count, `\u{b7}2`,
+/// `\u{b7}3`, ... in the order `runs` lists them, its very first occurrence keeping the bare name unsuffixed --
+/// never a panic. A label alone is capped at [`MAX_NAME_DISPLAY_CELLS`] display cells, cut with `\u{22ef}`,
+/// before collision counting -- the "longest + 2" column-width rule ([`name_column_width`]) a caller derives
+/// from this result's own strings never has to reserve more than that for one run's own name, however long a
+/// label actually is; the tell-apart suffix itself is never further cut, since it alone still has to tell the
+/// two runs apart. `None` passes straight through unchanged, a run whose `run_start` hasn't arrived yet (no
+/// label, no run id) showing no name at all rather than colliding with anything.
+pub fn disambiguated_names(runs: &[(Option<&str>, Option<&str>)]) -> Vec<Option<String>> {
+    let bare: Vec<Option<String>> = runs
+        .iter()
+        .map(|(label, id)| {
+            display_name(*label, *id)
+                .map(|name| truncate_display_width(&name, MAX_NAME_DISPLAY_CELLS))
+        })
+        .collect();
     let mut counts: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
     for name in bare.iter().flatten() {
         *counts.entry(name.as_str()).or_insert(0) += 1;
     }
-    run_ids
+    let suffixed: Vec<Option<String>> = runs
         .iter()
         .zip(bare.iter())
-        .map(|(id, name)| {
+        .map(|((label, id), name)| {
             let name = name.as_ref()?;
             let collides = counts.get(name.as_str()).copied().unwrap_or(0) > 1;
-            if collides {
-                Some(format!(
-                    "{name}\u{b7}{}",
-                    id_suffix(id.expect("name implies id"))
-                ))
-            } else {
-                Some(name.clone())
+            if !collides {
+                return Some(name.clone());
+            }
+            let Some(id) = id else {
+                // No run id to tell this one apart with at all --
+                // left for the positional pass below, which also
+                // needs every other colliding bare name's own count
+                // decided first.
+                return None;
+            };
+            Some(match label {
+                Some(_) => format!("{name} \u{b7} {}", run_name(id)),
+                None => format!("{name}\u{b7}{}", id_suffix(id)),
+            })
+        })
+        .collect();
+    // Finding on #752's own collision rule: a shared label's own
+    // generated-name suffix (`run_name(id)`, same ~40,000-way spread
+    // as the bare generated name itself) can collide too, for two
+    // different ids -- counted only among `suffixed`'s own `Some`s,
+    // so a `None` left for the positional pass just below never
+    // joins this count.
+    let mut suffixed_counts: std::collections::HashMap<&str, usize> =
+        std::collections::HashMap::new();
+    for name in suffixed.iter().flatten() {
+        *suffixed_counts.entry(name.as_str()).or_insert(0) += 1;
+    }
+    let mut no_id_seen: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+    runs.iter()
+        .zip(bare.iter())
+        .zip(suffixed.iter())
+        .map(|(((label, id), name), suffixed_name)| {
+            let name = name.as_ref()?;
+            match suffixed_name {
+                Some(suffixed_name) => {
+                    // The extra append only ever applies to a shared
+                    // label's own `run_name(id)` suffix (the one with
+                    // a ~40,000-way spread that can itself collide
+                    // for two different ids) -- the no-label branch's
+                    // `id_suffix(id)` keeps #717's own original rule
+                    // unchanged, exactly as before #752.
+                    if label.is_some()
+                        && suffixed_counts
+                            .get(suffixed_name.as_str())
+                            .copied()
+                            .unwrap_or(0)
+                            > 1
+                    {
+                        let id = id.expect("a suffixed name always came from a known run id");
+                        Some(format!("{suffixed_name}\u{b7}{}", id_suffix(id)))
+                    } else {
+                        Some(suffixed_name.clone())
+                    }
+                }
+                None => {
+                    let seen = no_id_seen.entry(name.as_str()).or_insert(0);
+                    *seen += 1;
+                    if *seen == 1 {
+                        Some(name.clone())
+                    } else {
+                        Some(format!("{name}\u{b7}{seen}"))
+                    }
+                }
             }
         })
         .collect()
@@ -90,9 +179,114 @@ pub fn name_column_width(names: &[Option<&str>]) -> usize {
     names
         .iter()
         .flatten()
-        .map(|n| n.chars().count())
+        .map(|n| display_width(n))
         .max()
         .map_or(2, |longest| longest + 2)
+}
+
+/// A label's own cap in a column (issue #752's §3: "a label counts
+/// at most 32 display cells, cut with `⋯`") -- applied once, inside
+/// [`disambiguated_names`], to every bare display name before
+/// collision counting; never applied to the header's own name,
+/// which shows a label in full.
+pub const MAX_NAME_DISPLAY_CELLS: usize = 32;
+
+/// `text`'s own width in terminal cells (issue #752's §3: "use
+/// display width, CJK and emoji count 2, never byte or char
+/// counts") -- `unicode_width::UnicodeWidthChar`'s own per-`char`
+/// answer, summed; a control character (none of which ever survive
+/// [`clean_label`]) would count 0, same as `unicode-width` itself
+/// answers for one.
+pub fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
+        .sum()
+}
+
+/// `text`, cut to at most `max_cells` display cells, with a
+/// trailing `⋯` (itself one cell) once it doesn't fit whole --
+/// [`truncate_text`]'s own shape in `oscilloscope`'s `tui.rs`, but
+/// by display width rather than by `char` count, so a label holding
+/// wide characters is never cut shorter, or let run longer, than
+/// its own cap actually allows.
+pub fn truncate_display_width(text: &str, max_cells: usize) -> String {
+    if display_width(text) <= max_cells {
+        return text.to_string();
+    }
+    if max_cells == 0 {
+        return String::new();
+    }
+    let budget = max_cells - 1;
+    let mut cut = String::new();
+    let mut width = 0usize;
+    for ch in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if width + w > budget {
+            break;
+        }
+        cut.push(ch);
+        width += w;
+    }
+    cut.push('⋯');
+    cut
+}
+
+/// `text`, right-padded with plain spaces to `width` display cells
+/// (issue #752's §3: "never byte or char counts") -- the column-
+/// padding equivalent of [`truncate_display_width`]: `format!("{:<
+/// width$}", text)` pads by `char` count, which overshoots for any
+/// text narrower, cell for cell, than its own `char` count (a label
+/// holding a CJK character or an emoji) and leaves every later
+/// column misaligned. `text` already wider than `width` is returned
+/// unchanged, same as `format!`'s own `<width$>` for a `str` that
+/// overruns its column.
+pub fn pad_display_width(text: &str, width: usize) -> String {
+    let pad = width.saturating_sub(display_width(text));
+    let mut padded = text.to_string();
+    padded.push_str(&" ".repeat(pad));
+    padded
+}
+
+/// A run's own label (issue #752), cleaned exactly the way both
+/// engines already clean it before ever writing it -- osi cleans it
+/// again on every read, since a `--events`/state file can be
+/// written by anything else, not only a `cof`/`electricity` that
+/// cleaned it first: ANSI/CSI escape sequences stripped first (so a
+/// lone `\x1b` byte they leave behind is never mistaken for a
+/// control character of its own), then every run of whitespace
+/// (line breaks included) collapsed to one plain space, every
+/// remaining control character dropped outright, the result trimmed
+/// and cut to at most 64 characters. `None` for anything that
+/// cleans away to nothing at all -- an empty or all-control/
+/// whitespace label is the same as no label.
+pub fn clean_label(raw: &str) -> Option<String> {
+    let stripped = crate::engine::strip_ansi_escapes(raw);
+    let mut cleaned = String::new();
+    let mut in_space_run = false;
+    for ch in stripped.chars() {
+        if ch.is_whitespace() {
+            if !in_space_run {
+                cleaned.push(' ');
+                in_space_run = true;
+            }
+        } else if ch.is_control() {
+            continue;
+        } else {
+            cleaned.push(ch);
+            in_space_run = false;
+        }
+    }
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let cut: String = trimmed.chars().take(64).collect();
+    let cut = cut.trim_end();
+    if cut.is_empty() {
+        None
+    } else {
+        Some(cut.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -164,8 +358,32 @@ mod tests {
     }
 
     #[test]
+    fn display_name_prefers_a_label_over_the_generated_name() {
+        assert_eq!(
+            display_name(
+                Some("ticket 42"),
+                Some("936ff268-5f52-479a-887f-fda1a47dae63")
+            ),
+            Some("ticket 42".to_string())
+        );
+    }
+
+    #[test]
+    fn display_name_falls_back_to_the_generated_name_with_no_label() {
+        assert_eq!(
+            display_name(None, Some("936ff268-5f52-479a-887f-fda1a47dae63")),
+            Some("square-jay".to_string())
+        );
+    }
+
+    #[test]
+    fn display_name_is_none_with_neither_a_label_nor_a_run_id() {
+        assert_eq!(display_name(None, None), None);
+    }
+
+    #[test]
     fn disambiguated_names_passes_through_a_single_run_unchanged() {
-        let names = disambiguated_names(&[Some("936ff268-5f52-479a-887f-fda1a47dae63")]);
+        let names = disambiguated_names(&[(None, Some("936ff268-5f52-479a-887f-fda1a47dae63"))]);
         assert_eq!(names, vec![Some("square-jay".to_string())]);
     }
 
@@ -177,7 +395,7 @@ mod tests {
         let a = "00000016-aaaa-bbbb-cccc-dddddddddddd";
         let b = "0000007f-aaaa-bbbb-cccc-dddddddddddd";
         assert_eq!(run_name(a), run_name(b), "fixture pair must collide");
-        let names = disambiguated_names(&[Some(a), Some(b)]);
+        let names = disambiguated_names(&[(None, Some(a)), (None, Some(b))]);
         assert_eq!(
             names,
             vec![
@@ -189,15 +407,231 @@ mod tests {
 
     #[test]
     fn disambiguated_names_leaves_a_run_with_no_run_id_unnamed() {
-        let names = disambiguated_names(&[Some("936ff268-5f52-479a-887f-fda1a47dae63"), None]);
+        let names = disambiguated_names(&[
+            (None, Some("936ff268-5f52-479a-887f-fda1a47dae63")),
+            (None, None),
+        ]);
         assert_eq!(names[1], None);
     }
 
     #[test]
     fn disambiguated_names_does_not_collide_a_pair_that_differs() {
-        let names = disambiguated_names(&[Some("run-a"), Some("run-b")]);
+        let names = disambiguated_names(&[(None, Some("run-a")), (None, Some("run-b"))]);
         assert_ne!(names[0], None);
         assert!(!names[0].as_ref().unwrap().contains('\u{b7}'));
+    }
+
+    #[test]
+    fn disambiguated_names_adds_the_generated_name_only_on_a_real_label_collision() {
+        let names = disambiguated_names(&[
+            (
+                Some("ticket 42"),
+                Some("936ff268-5f52-479a-887f-fda1a47dae63"),
+            ),
+            (
+                Some("ticket 42"),
+                Some("d2c8267e-2864-4e04-89d6-4f174bc64516"),
+            ),
+        ]);
+        assert_eq!(
+            names,
+            vec![
+                Some("ticket 42 \u{b7} square-jay".to_string()),
+                Some("ticket 42 \u{b7} ochre-desert".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn disambiguated_names_does_not_collide_two_distinct_labels() {
+        let names = disambiguated_names(&[
+            (
+                Some("ticket 42"),
+                Some("936ff268-5f52-479a-887f-fda1a47dae63"),
+            ),
+            (
+                Some("ticket 43"),
+                Some("d2c8267e-2864-4e04-89d6-4f174bc64516"),
+            ),
+        ]);
+        assert_eq!(
+            names,
+            vec![Some("ticket 42".to_string()), Some("ticket 43".to_string()),]
+        );
+    }
+
+    #[test]
+    fn disambiguated_names_never_panics_on_a_shared_label_with_no_run_id_at_all() {
+        // A file written by something other than cof/electricity can
+        // carry `runtime.last_run.label` with no `_run_id` at all --
+        // two such runs sharing a label must never panic, and each
+        // gets told apart by plain position instead of a suffix
+        // derived from an id neither one has.
+        let names = disambiguated_names(&[(Some("ticket 42"), None), (Some("ticket 42"), None)]);
+        assert_eq!(
+            names,
+            vec![
+                Some("ticket 42".to_string()),
+                Some("ticket 42\u{b7}2".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn disambiguated_names_numbers_a_third_shared_label_with_no_run_id() {
+        let names = disambiguated_names(&[
+            (Some("ticket 42"), None),
+            (Some("ticket 42"), None),
+            (Some("ticket 42"), None),
+        ]);
+        assert_eq!(
+            names,
+            vec![
+                Some("ticket 42".to_string()),
+                Some("ticket 42\u{b7}2".to_string()),
+                Some("ticket 42\u{b7}3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn disambiguated_names_tells_apart_two_shared_labels_whose_generated_names_also_collide() {
+        // Two distinct ids whose bare generated name collides (the
+        // same ~40,000-way spread a shared label's own tell-apart
+        // suffix, `run_name(id)`, draws from) but whose `id_suffix`
+        // doesn't -- found by search, since `run_name`'s hash gives
+        // no simple way to construct one by hand.
+        let mut by_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        let (a, b) = (0..100_000)
+            .map(|i| format!("id-{i}"))
+            .find_map(|id| {
+                let name = run_name(&id);
+                if let Some(other) = by_name.get(&name) {
+                    if id_suffix(other) != id_suffix(&id) {
+                        return Some((other.clone(), id));
+                    }
+                }
+                by_name.insert(name, id);
+                None
+            })
+            .expect("some collision within 100k ids");
+        let names = disambiguated_names(&[
+            (Some("ticket 42"), Some(a.as_str())),
+            (Some("ticket 42"), Some(b.as_str())),
+        ]);
+        assert_ne!(names[0], names[1], "{names:?}");
+        for name in names.iter().flatten() {
+            assert!(name.starts_with("ticket 42 \u{b7} "), "{name:?}");
+        }
+    }
+
+    #[test]
+    fn disambiguated_names_caps_a_long_label_at_32_display_cells() {
+        let long = "x".repeat(80);
+        let names = disambiguated_names(&[(Some(long.as_str()), Some("run-a"))]);
+        let name = names[0].as_ref().unwrap();
+        assert_eq!(display_width(name), 32);
+        assert!(name.ends_with('\u{22ef}'));
+    }
+
+    #[test]
+    fn clean_label_collapses_whitespace_runs_and_drops_control_characters() {
+        assert_eq!(
+            clean_label("ticket\t\n  42\x07done"),
+            Some("ticket 42done".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_label_strips_ansi_escapes() {
+        assert_eq!(
+            clean_label("\x1b[1;36mticket 42\x1b[0m"),
+            Some("ticket 42".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_label_drops_an_osc_sequences_own_body_terminated_by_bel() {
+        // A terminal title set (`ESC ] 0 ; title BEL`) drops the
+        // title text itself, not only the two control bytes around
+        // it (issue #752's own cleaning rule: "escape sequences are
+        // dropped", not just their control bytes).
+        assert_eq!(
+            clean_label("ticket 42\x1b]0;evil title\x07done"),
+            Some("ticket 42done".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_label_drops_an_osc_sequences_own_body_terminated_by_st() {
+        assert_eq!(
+            clean_label("ticket 42\x1b]0;evil title\x1b\\done"),
+            Some("ticket 42done".to_string())
+        );
+    }
+
+    #[test]
+    fn clean_label_drops_a_two_byte_escape_sequence() {
+        // `ESC c` (a full terminal reset) is neither CSI nor OSC --
+        // just the one byte after `ESC` itself, dropped the same way.
+        assert_eq!(clean_label("ticket\x1bc 42"), Some("ticket 42".to_string()));
+    }
+
+    #[test]
+    fn clean_label_trims_and_cuts_at_64_characters() {
+        let raw = format!("  {}  ", "a".repeat(100));
+        assert_eq!(clean_label(&raw), Some("a".repeat(64)));
+    }
+
+    #[test]
+    fn clean_label_trims_the_space_the_64_character_cut_itself_lands_on() {
+        // 63 characters, then a space, then more text: the cut at 64
+        // characters keeps that space as its own 64th character --
+        // trimmed again afterwards, so the result never ends in one,
+        // the same rule the engines apply to their own cut (issue
+        // #752's cleaning rule, matched exactly).
+        let raw = format!("{} more text", "a".repeat(63));
+        assert_eq!(clean_label(&raw), Some("a".repeat(63)));
+    }
+
+    #[test]
+    fn clean_label_is_none_for_text_that_cleans_away_to_nothing() {
+        assert_eq!(clean_label("  \x01\x02  "), None);
+    }
+
+    #[test]
+    fn display_width_counts_wide_characters_twice() {
+        assert_eq!(display_width("ab"), 2);
+        assert_eq!(display_width("\u{4e2d}\u{6587}"), 4);
+    }
+
+    #[test]
+    fn truncate_display_width_cuts_a_wide_character_string_by_cells_not_chars() {
+        // Five two-cell characters: 10 cells, cut to 6 keeps only two
+        // whole characters plus the ellipsis (2+2+1 = 5, the next
+        // character's own 2 cells would make 7).
+        let text = "\u{4e2d}\u{6587}\u{4e2d}\u{6587}\u{4e2d}";
+        let cut = truncate_display_width(text, 6);
+        assert_eq!(display_width(&cut), 5);
+        assert!(cut.ends_with('\u{22ef}'));
+    }
+
+    #[test]
+    fn pad_display_width_pads_a_wide_character_string_by_cells_not_chars() {
+        // One CJK character is 2 cells but 1 char: padding to 5
+        // cells needs 3 spaces, not 4.
+        assert_eq!(pad_display_width("注", 5), "注   ");
+    }
+
+    #[test]
+    fn pad_display_width_leaves_text_already_at_width_unchanged() {
+        assert_eq!(pad_display_width("abc", 3), "abc");
+    }
+
+    #[test]
+    fn truncate_display_width_leaves_text_that_already_fits_unchanged() {
+        assert_eq!(truncate_display_width("amber-falcon", 32), "amber-falcon");
     }
 
     #[test]

@@ -56,6 +56,8 @@
 //!   it here would only check against data (a capability ceiling) this
 //!   crate's own `RunContext` doesn't carry yet.
 
+mod live;
+
 use crate::params::{
     ParamsCtx, RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params,
     render_params_json,
@@ -161,6 +163,7 @@ pub async fn run_tool(
     timeout_seconds: u32,
     token: &CancellationToken,
     armed: bool,
+    on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)>,
     limited: bool,
     confine_to: Option<&str>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
@@ -171,6 +174,7 @@ pub async fn run_tool(
         config: &config,
         token,
         armed,
+        on_live,
         limited,
         confine_to,
     };
@@ -911,9 +915,38 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 // cancellation check once a dispatched call has
                                 // actually returned, only before the next attempt.
                                 //
-                                let is_cel = electricity_value::pycompat::py_strip(&tool.provider)
-                                    .to_lowercase()
-                                    == "cel";
+                                let normalized_provider =
+                                    electricity_value::pycompat::py_strip(&tool.provider)
+                                        .to_lowercase();
+                                let is_cel = normalized_provider == "cel";
+                                let live_state = live::publishes_live(&normalized_provider)
+                                    .then(live::LiveToolState::new);
+                                if let Some(state) = &live_state {
+                                    set_leaf(store, &meta_node, "live", state.empty_snapshot());
+                                    observer.write();
+                                }
+                                let on_live_closure = live_state.as_ref().map(|state| {
+                                    |tail: electricity_tools::process::LiveTail| {
+                                        set_leaf(store, &meta_node, "live", state.snapshot(tail));
+                                        observer.write();
+                                    }
+                                });
+                                let on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)> =
+                                    on_live_closure.as_ref().map(|f| f as _);
+                                struct ClearLiveOnDrop<'a> {
+                                    meta_node: &'a crate::NodeRef,
+                                    observer: &'a dyn RunObserver,
+                                }
+                                impl Drop for ClearLiveOnDrop<'_> {
+                                    fn drop(&mut self) {
+                                        pop_leaf(self.meta_node, "live");
+                                        self.observer.write();
+                                    }
+                                }
+                                let _clear_live = live_state.is_some().then(|| ClearLiveOnDrop {
+                                    meta_node: &meta_node,
+                                    observer,
+                                });
                                 let dispatch = tokio::select! {
                                     biased;
                                     result = async {
@@ -928,6 +961,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 timeout_seconds,
                                                 token,
                                                 run_ctx.armed,
+                                                on_live,
                                                 tool.limited,
                                                 tool.confine_to.as_deref(),
                                             ).await
@@ -935,6 +969,15 @@ pub async fn execute_tool<R: ParamsCtx>(
                                     } => Some(result),
                                     () = token.cancelled() => None,
                                 };
+                                // `meta.live` is removed before this
+                                // attempt's own result/error is written, so
+                                // the final node is byte-identical to a run
+                                // with no live publishing at all (#741) --
+                                // explicit, not merely left for this
+                                // scope's own end, so it happens before the
+                                // result-handling code below writes this
+                                // attempt's own final meta values.
+                                drop(_clear_live);
                                 // Released before this attempt's own backoff
                                 // sleep (and before a model-mode `expect:` would
                                 // run, if M0-H ever dispatched one) -- a
@@ -1499,6 +1542,7 @@ mod tests {
             300,
             &token,
             false,
+            None,
             false,
             None,
         )
@@ -1523,6 +1567,7 @@ mod tests {
             300,
             &token,
             false,
+            None,
             false,
             None,
         )
@@ -1692,6 +1737,136 @@ mod tests {
             meta.get(&Value::from("provider")),
             Some(&Value::from("json"))
         );
+    }
+
+    #[tokio::test]
+    async fn a_process_backed_tool_publishes_meta_live_while_running_and_clears_it_after() {
+        struct FakeLiveTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for FakeLiveTool {
+            fn name(&self) -> &str {
+                "shell"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                let on_live = call.on_live.expect("shell always gets an on_live callback");
+                on_live(electricity_tools::process::LiveTail {
+                    stdout_tail: "hi".to_string(),
+                    stderr_tail: String::new(),
+                    stdout_bytes: 2,
+                    stderr_bytes: 0,
+                });
+                Ok(electricity_tools::ToolResult::new(
+                    Value::from("ok"),
+                    Value::None,
+                ))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "shell".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(FakeLiveTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let root = snapshot.as_dict().unwrap();
+        let node = root.get(&Value::from("fetch")).unwrap().as_dict().unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        // `meta.live` is gone from the final node (#741): the
+        // plugin above did publish one while it ran, but it must never
+        // survive into this attempt's own final write.
+        assert!(meta.get(&Value::from("live")).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_provider_outside_the_live_set_never_gets_an_on_live_callback() {
+        struct AssertNoLiveTool;
+        #[async_trait::async_trait(?Send)]
+        impl electricity_tools::ToolPlugin for AssertNoLiveTool {
+            fn name(&self) -> &str {
+                "http"
+            }
+            async fn execute(
+                &self,
+                _params: Value,
+                call: &electricity_tools::ToolCall<'_>,
+            ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+                assert!(call.on_live.is_none());
+                Ok(electricity_tools::ToolResult::new(Value::None, Value::None))
+            }
+            fn check(&self) -> electricity_tools::CheckResult {
+                electricity_tools::CheckResult {
+                    ok: true,
+                    missing: Vec::new(),
+                    message: None,
+                }
+            }
+        }
+
+        let mut tool = tool_op(IndexMap::new());
+        tool.provider = "http".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(AssertNoLiveTool));
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
     }
 
     #[tokio::test]

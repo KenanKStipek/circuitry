@@ -423,6 +423,7 @@ mod tests {
             run_dir: None,
             document_hash: Some("h1".to_string()),
             engine: Some("cof".to_string()),
+            label: None,
             started_at: "2026-01-01T00:00:00Z".to_string(),
             ended_at: "2026-01-01T00:01:00Z".to_string(),
             outcome: history::Outcome::Ok,

@@ -56,7 +56,7 @@ const ABOUT: &str = "\
 osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
-  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
+  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log] [--label TEXT]
   osi watch <dir | state.live.json> [--plan doc.yml]
 
 With no orchestration, on a TTY with no --log: finds the orchestrations already running on this machine (the run
@@ -107,6 +107,13 @@ struct RunArgs {
     /// same.
     #[arg(long)]
     no_history: bool,
+    /// Literal text for this run's own label (issue #752), passed
+    /// through to the engine unchanged -- wins over the document's
+    /// own `label:` template. Shown in place of the run's generated
+    /// name wherever one is shown, from the first frame; `osi watch`
+    /// has no `--label` of its own, since it never launches anything.
+    #[arg(long, value_name = "TEXT")]
+    label: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -222,8 +229,11 @@ fn print_discovered_runs() -> ExitCode {
         scan_enabled.then_some(cwd.as_path()),
         std::time::SystemTime::now(),
     );
-    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
-    let names = oscilloscope_core::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
     for (run, name) in runs.iter().zip(names.iter()) {
         println!(
             "{}",
@@ -402,6 +412,32 @@ fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<Stri
     } else {
         None
     }
+}
+
+/// `do_run`'s own notice for `osi <doc> --label TEXT` against an
+/// engine whose `--help` never mentioned `--label` at all (issue
+/// #752): `--label` is simply never passed to it (`CofEngine`/
+/// `ElectricityEngine::command`'s own `self.caps.label` check), so
+/// nothing the engine writes -- `run_start`, `runtime.last_run` --
+/// ever carries this run's own label; osi still shows it everywhere
+/// it shows a run's name today, from `RunSpec::label` alone, so this
+/// is purely informational, never a reason to withhold the label
+/// osi can perfectly well show on its own. `None` with no `--label`
+/// given at all, or with a timed-out/missing probe (whichever more
+/// specific notice [`engine_capability_notice`] already prints for
+/// those covers this too, rather than piling a second, redundant
+/// notice with the same root cause on top of it).
+fn label_capability_notice(
+    caps: &EngineCaps,
+    engine_name: &str,
+    label_given: bool,
+) -> Option<String> {
+    if !label_given || caps.label || caps.missing || caps.timed_out {
+        return None;
+    }
+    Some(format!(
+        "osi: this {engine_name} has no --label: showing it in osi only"
+    ))
 }
 
 /// `oscilloscope_core::plan::compile`, mirroring `cof`'s own config
@@ -648,6 +684,12 @@ fn run_glance(
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
     let mut current_state: Option<serde_json::Value> = None;
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
@@ -1047,6 +1089,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         config,
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
+        label: args.label.clone(),
     };
     // `config` recorded in history exactly as given on the command
     // line, never resolved further; `run_dir` made absolute so
@@ -1095,6 +1138,11 @@ fn do_run(args: RunArgs) -> ExitCode {
         return exit_early(code);
     }
     if let Some(notice) = engine_capability_notice(&engine.caps(), engine.name()) {
+        eprintln!("{notice}");
+    }
+    if let Some(notice) =
+        label_capability_notice(&engine.caps(), engine.name(), spec.label.is_some())
+    {
         eprintln!("{notice}");
     }
 
@@ -1238,6 +1286,12 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
 
     let exit_status = supervise_plain(
         &mut out,
@@ -2120,6 +2174,16 @@ fn run_tui(
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    // Issue #752: `--label`'s own cleaned value shows from this
+    // run's very first frame, as a fallback below `run_start` and
+    // the state file's own label, in both the header and the exit
+    // summary.
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
     // Finding 4: a plain running count of every line ever pushed,
@@ -4976,6 +5040,7 @@ mod all_run_slot_tests {
             events: None,
             live_state: None,
             started_at: None,
+            label: None,
         };
         let mut slot = AllRunSlot::new(found_bare);
         assert_eq!(slot.document_label, "—");
@@ -5008,6 +5073,7 @@ mod all_run_slot_tests {
             events: None,
             live_state: None,
             started_at: None,
+            label: None,
         };
         let mut slot = AllRunSlot::new(run.clone());
         let plan_ptr_before = std::ptr::addr_of!(slot.plan);
@@ -5031,6 +5097,7 @@ mod all_run_slot_tests {
             events: None,
             live_state: None,
             started_at: None,
+            label: None,
         };
         let mut slots = vec![
             AllRunSlot::new(run("/a/triage.yml")),
@@ -5351,8 +5418,11 @@ fn disambiguate_tile_labels(slots: &mut [AllRunSlot]) {
         slots.iter().map(|s| s.run.clone()).collect();
     let config_labels: Vec<Option<String>> = slots.iter().map(|s| s.config_label.clone()).collect();
     let labels = oscilloscope_core::select::disambiguated_document_labels(&runs, &config_labels);
-    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
-    let names = oscilloscope_core::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
     for ((slot, label), name) in slots.iter_mut().zip(labels).zip(names) {
         slot.document_label = label;
         slot.name = name;
@@ -7083,6 +7153,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (_lines, final_state, _) = drain_until_ended(
@@ -7156,6 +7227,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (lines, final_state, _) = drain_until_ended(
@@ -7244,6 +7316,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (lines, final_state, _) = drain_until_ended(
@@ -7416,6 +7489,7 @@ mod tests {
         let timed_out = EngineCaps {
             events: false,
             live_state: true,
+            label: false,
             missing: false,
             timed_out: true,
         };
@@ -7427,6 +7501,7 @@ mod tests {
         let no_events = EngineCaps {
             events: false,
             live_state: true,
+            label: false,
             missing: false,
             timed_out: false,
         };
@@ -7438,6 +7513,7 @@ mod tests {
         let fully_capable = EngineCaps {
             events: true,
             live_state: true,
+            label: true,
             missing: false,
             timed_out: false,
         };
@@ -7446,6 +7522,7 @@ mod tests {
         let missing = EngineCaps {
             events: false,
             live_state: false,
+            label: false,
             missing: true,
             timed_out: false,
         };
@@ -7453,6 +7530,56 @@ mod tests {
             engine_capability_notice(&missing, "cof"),
             None,
             "a missing binary gets its own, more specific error once the spawn fails"
+        );
+    }
+
+    #[test]
+    fn label_capability_notice_only_fires_with_a_label_against_an_engine_with_no_label_support() {
+        let no_label = EngineCaps {
+            events: true,
+            live_state: true,
+            label: false,
+            missing: false,
+            timed_out: false,
+        };
+        assert_eq!(
+            label_capability_notice(&no_label, "cof", true).as_deref(),
+            Some("osi: this cof has no --label: showing it in osi only")
+        );
+        assert_eq!(
+            label_capability_notice(&no_label, "cof", false),
+            None,
+            "no --label given at all: nothing to notice about"
+        );
+
+        let has_label = EngineCaps {
+            label: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&has_label, "cof", true),
+            None,
+            "the engine supports --label: nothing to notice about"
+        );
+
+        let timed_out = EngineCaps {
+            timed_out: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&timed_out, "cof", true),
+            None,
+            "the probe's own notice already covers a timed-out --help"
+        );
+
+        let missing = EngineCaps {
+            missing: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&missing, "cof", true),
+            None,
+            "the later spawn failure already covers a missing binary"
         );
     }
 
@@ -7568,6 +7695,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: run_dir.clone(),
+            label: None,
         };
         std::fs::write(
             spec.live_state_path(),

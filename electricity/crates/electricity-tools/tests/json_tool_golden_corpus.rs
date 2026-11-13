@@ -88,6 +88,7 @@ async fn golden_corpus_json_tool() {
         config: &none_config,
         token: &token,
         armed: false,
+        on_live: None,
         limited: false,
         confine_to: None,
     };
