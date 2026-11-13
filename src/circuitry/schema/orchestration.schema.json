@@ -21,6 +21,10 @@
       "type": ["string", "number"],
       "description": "Optional free-form version string for THIS orchestration document (e.g. '1.2.0'), for the author's own tracking. It is not a schema version and not a runtime feature gate — the runtime reads it and ignores it. Numbers are accepted for back-compat; a string is canonical."
     },
+    "label": {
+      "type": "string",
+      "description": "Mustache template rendered once, when the run starts, against this run's inputs ({{input.*}}) only — nothing has run yet. Lets a run say what it's for ('ticket {{input.ticket}}'), distinct from osi's generated per-run name. --label TEXT on the run command is literal text that wins over this. Cleaned the same way either way: whitespace runs collapsed to one space, control characters and escape sequences dropped, trimmed, and cut at 64 characters; empty after cleaning means no label. A render failure warns once and the run continues with no label. Ignored on a 'use' child's own document when it runs as a child — only the root document's label counts."
+    },
     "effects": {
       "type": "array",
       "description": "Ordered list of top-level effects to execute.",
