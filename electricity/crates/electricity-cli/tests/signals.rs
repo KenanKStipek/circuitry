@@ -180,6 +180,39 @@ fn wait_until_running(home: &TempHome) {
     }
 }
 
+/// Waits until the run's `--live-state` shows every step in `paths`
+/// (dotted, from the state root) with a `meta.created_at`, so a signal
+/// sent next lands while those steps run rather than merely once the
+/// file exists at all (which happens before `execute_root` even
+/// starts) -- `signals_loop.rs`'s own helper, duplicated here per this
+/// file's own module doc comment's convention.
+fn wait_until_started(home: &TempHome, paths: &[&str]) {
+    let path = live_state_path(home);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let started = fs::read_to_string(&path)
+            .ok()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(&text).ok())
+            .is_some_and(|state| {
+                paths.iter().all(|dotted| {
+                    let node = dotted.split('.').fold(&state, |node, key| &node[key]);
+                    node["meta"]["created_at"].is_string()
+                })
+            });
+        if started {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "{} never showed {paths:?} running within 10s: {}",
+                path.display(),
+                fs::read_to_string(&path).unwrap_or_default()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Waits for *path* to exist -- used where `--live-state` itself can't
 /// stand in for "this step has actually started": it never republishes
 /// a `use` child's own effects past its own first write, so polling it
@@ -456,7 +489,21 @@ effects:
     let doc = home.write("doc.yml", DOC);
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
-    wait_until_running(&home);
+    wait_until_started(&home, &["prime.fanout.first"]);
+    // Neither branch's own state survives into `out`'s own final merge
+    // once the run is cancelled (`signals_loop.rs`'s own tree test:
+    // "no merge happens at all once the run is cancelled, even for a
+    // branch that did finish before the signal"), so the precondition
+    // that the first branch was actually running has to come from the
+    // live-state snapshot `wait_until_started` just confirmed.
+    let live_before_signal: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(live_state_path(&home)).unwrap()).unwrap();
+    assert!(
+        live_before_signal["prime"]["fanout"]["first"]["meta"]["created_at"].is_string(),
+        "the first branch must have been running when the signal was sent, or the \
+         next assertion (no second) would trivially pass with neither branch \
+         ever having started: {live_before_signal}"
+    );
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
@@ -505,7 +552,19 @@ finally:
     let doc = home.write("doc.yml", DOC);
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
-    wait_until_running(&home);
+    wait_until_started(&home, &["prime.wrapper.slow"]);
+    // The child's own step never gets merged onto the use node at all
+    // once cancelled (the very thing this test proves below), so the
+    // precondition that it was actually running when the signal was
+    // sent has to come from the live-state snapshot `wait_until_started`
+    // just confirmed, not from `out`'s own final state.
+    let live_before_signal: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(live_state_path(&home)).unwrap()).unwrap();
+    assert!(
+        live_before_signal["prime"]["wrapper"]["slow"]["meta"]["created_at"].is_string(),
+        "the child's own step must have been running when the signal was \
+         sent: {live_before_signal}"
+    );
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
