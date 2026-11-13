@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use support::{
     SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process, drain_continuously,
     e2e_enabled, launch_osi_log, open_pty, resize_pty, send_bytes, spawn_osi_on_pty,
-    wait_for_registry_entries, wait_for_screen_text, wait_for_screen_text_gone,
+    wait_for_registry_entries, wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone,
     wait_for_step_start, wait_with_timeout, write_doc,
 };
 
@@ -81,7 +81,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -148,7 +150,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     // two runs started a moment apart is real timing, not something
     // this test can assume either way.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
+        !s.contains("osi  All") && s.contains("SIGNAL")
+    });
     assert!(
         screen.contains("SIGNAL") && !screen.contains("osi  All"),
         "expected enter to open the focused run on the screen every tile was already showing \
@@ -171,12 +175,14 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
 
     send_bytes(&mut master, b"\x1b[C"); // Right arrow: focus the other tile.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
     let second_doc = if first_doc == "a.yml" {
         "b.yml"
     } else {
         "a.yml"
     };
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
+        !s.contains("osi  All") && s.contains(second_doc)
+    });
     assert!(
         screen.contains(second_doc) && !screen.contains(first_doc) && !screen.contains("osi  All"),
         "expected the right arrow to move focus to the other tile, so this enter opens \
@@ -197,7 +203,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     // also reach from a freshly reset focus, so this is the one
     // check that actually tells the two apart.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
+        !s.contains("osi  All") && s.contains(second_doc)
+    });
     assert!(
         screen.contains(second_doc) && !screen.contains(first_doc) && !screen.contains("osi  All"),
         "expected the grid's own focus to still be on {second_doc} after the esc round trip, \
@@ -263,7 +271,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -374,8 +384,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     // "SIGNAL" alone is a substring of "COMBINED SIGNAL", so this
     // waits for the Combined chip to actually disappear, not merely
     // for a needle the Combined screen itself already satisfies.
-    let screen =
-        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
+        !s.contains("COMBINED SIGNAL") && s.contains("SIGNAL")
+    });
     assert!(
         screen.contains("SIGNAL") && !screen.contains("COMBINED SIGNAL"),
         "expected enter on the selected run to open it full-screen on Signal:\n{screen}"
@@ -398,8 +409,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     );
 
     send_bytes(&mut master, b"\x1b");
-    let screen =
-        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
+        !s.contains("COMBINED SIGNAL") && s.contains("osi  All")
+    });
     assert!(
         screen.contains("osi  All") && !screen.contains("COMBINED SIGNAL"),
         "expected esc from the Combined Signal to return to the tiles:\n{screen}"
@@ -419,7 +431,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     // TAPE" chip), so this waits for that chip to actually change,
     // not merely for a needle the grid itself already satisfies.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "ALL · TAPE", Duration::from_secs(10));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
+        !s.contains("ALL · TAPE") && doc_names.iter().any(|doc| s.contains(doc))
+    });
     assert!(
         doc_names.iter().any(|doc| screen.contains(doc)),
         "expected enter on the grid to open one of the three runs:\n{screen}"
@@ -464,7 +478,9 @@ fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -594,7 +610,9 @@ fn two_runs_of_the_same_document_and_config_get_different_names_on_select_and_al
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 

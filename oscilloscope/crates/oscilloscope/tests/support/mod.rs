@@ -369,12 +369,21 @@ pub fn assert_no_new_osi_dirs(before: &std::collections::HashSet<PathBuf>) {
 }
 
 pub fn assert_no_leftover_process(needle: &Path) {
-    std::thread::sleep(Duration::from_millis(300));
-    let ps = Command::new("pgrep")
-        .arg("-f")
-        .arg(needle.display().to_string())
-        .output()
-        .expect("pgrep should be available");
+    // A process can take a moment to go after osi exits, longer on a
+    // loaded machine: poll for up to 10 s rather than sleep a fixed
+    // 300 ms and fail a process that is still on its way out.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let ps = loop {
+        let ps = Command::new("pgrep")
+            .arg("-f")
+            .arg(needle.display().to_string())
+            .output()
+            .expect("pgrep should be available");
+        if ps.stdout.is_empty() || Instant::now() >= deadline {
+            break ps;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
     assert!(
         ps.stdout.is_empty(),
         "a process matching {needle:?} survived osi's exit: {}",
@@ -782,6 +791,27 @@ pub fn wait_for_screen_texts(
         let whole = captured_buf.lock().unwrap().clone();
         let screen = screen_grid(&whole, 200, 60).join("\n");
         if needles.iter().all(|needle| screen.contains(needle)) || Instant::now() >= deadline {
+            return screen;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Polls until `done` holds for the replayed screen, or the deadline
+/// passes, and returns the last screen seen. For a screen change, wait
+/// for what the new screen shows, not only for the old text to go: a
+/// frame that has cleared the old screen but not drawn the new one yet
+/// shows neither.
+pub fn wait_for_screen(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    timeout: Duration,
+    done: impl Fn(&str) -> bool,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = screen_grid(&whole, 200, 60).join("\n");
+        if done(&screen) || Instant::now() >= deadline {
             return screen;
         }
         std::thread::sleep(Duration::from_millis(100));
