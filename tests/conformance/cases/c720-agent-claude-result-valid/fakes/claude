@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
 """A fake `claude` for c720-agent-claude-result-valid (issue #720): reads
-the prompt from stdin, really writes a valid result file (a `Write` tool
-call followed by its own result), and reports a session id, usage and a
-final cost -- no repair turn should ever run."""
+the prompt from stdin, really writes a valid result file, and reports a
+session id, usage and a final cost -- no repair turn should ever run.
+
+Writes the file directly rather than through a scripted `tool_use`/
+`tool_result` pair: cof's own `agent_live.py::LiveTracker._end_tool`
+times a Claude Code tool call from wall-clock elapsed time (the real
+protocol carries no duration of its own), so `meta.raw.tool_counts`'s
+`ms` is genuinely non-deterministic on cof itself -- a case this suite
+compares byte-for-byte avoids exercising it rather than committing a
+flaky expectation.
+"""
 
 from __future__ import annotations
 
@@ -24,24 +32,7 @@ events = [
         "message": {
             "id": "m1",
             "model": "claude-fake",
-            "usage": {"input_tokens": 12, "output_tokens": 0},
-            "content": [
-                {
-                    "type": "tool_use",
-                    "id": "t1",
-                    "name": "Write",
-                    "input": {"file_path": "scratch/result.json", "content": "one\ntwo\n"},
-                }
-            ],
-        },
-    },
-    {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": False}]}},
-    {
-        "type": "assistant",
-        "message": {
-            "id": "m2",
-            "model": "claude-fake",
-            "usage": {"input_tokens": 3, "output_tokens": 5},
+            "usage": {"input_tokens": 12, "output_tokens": 5},
             "content": [{"type": "text", "text": "done"}],
         },
     },
@@ -52,8 +43,8 @@ events = [
         "result": "done",
         "session_id": "sess-c720-claude",
         "total_cost_usd": 0.02,
-        "usage": {"input_tokens": 15, "output_tokens": 5},
-        "num_turns": 2,
+        "usage": {"input_tokens": 12, "output_tokens": 5},
+        "num_turns": 1,
     },
 ]
 for event in events:
