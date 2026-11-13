@@ -23,6 +23,7 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/accept')) ||
       (github.event_name == 'pull_request' && github.event.label.name == 'accepted')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
       pull-requests: write
@@ -74,6 +75,19 @@ jobs:
           fi
           if [ "$draft" = "true" ] || echo "$body" | grep -qF '**WIP — run in progress**'; then
             fail "Not accepted: PR is still draft/WIP."
+          fi
+
+          # A text-clean merge can still break the default branch if the PR
+          # head doesn't contain its current tip: each half can be green
+          # alone and still fail to compile together once both land. `compare`
+          # is directional (base...head): a nonzero `behind_by` means the
+          # default branch has commits this head doesn't, i.e. the branch is
+          # out of date.
+          default_branch=$(gh api "repos/$REPO" --jq '.default_branch')
+          head_sha_for_compare=$(gh api "repos/$REPO/pulls/$PR" --jq '.head.sha')
+          behind_by=$(gh api "repos/$REPO/compare/$default_branch...$head_sha_for_compare" --jq '.behind_by')
+          if [ "$behind_by" != "0" ]; then
+            fail "Not accepted: this branch is $behind_by commit(s) behind $default_branch. Merge $default_branch into the branch, let CI run, then run /accept again."
           fi
 
           # Readiness = no merge conflicts, and every check on the head commit
