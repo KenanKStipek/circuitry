@@ -333,6 +333,23 @@ fn write_prompt_file(scratch_dir: &Path, prompt: &str) -> Result<PathBuf, ToolEr
     Ok(path)
 }
 
+/// `pi`'s own `--tools`/`--exclude-tools` flags, then *options*'s own
+/// `extra_args` -- the one piece of `run_pi_turn`'s own command-building
+/// that isn't already covered by `agent_cli::pi_command`'s own tests.
+fn pi_extra_args(options: &EngineOptions) -> Vec<String> {
+    let mut extra: Vec<String> = Vec::new();
+    if !options.tools.is_empty() {
+        extra.push("--tools".to_string());
+        extra.push(options.tools.join(","));
+    }
+    if !options.exclude_tools.is_empty() {
+        extra.push("--exclude-tools".to_string());
+        extra.push(options.exclude_tools.join(","));
+    }
+    extra.extend(options.extra_args.iter().cloned());
+    extra
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_pi_turn(
     options: &EngineOptions,
@@ -345,16 +362,7 @@ async fn run_pi_turn(
     token: &CancellationToken,
 ) -> Result<AgentTurn, TurnOutcome> {
     let prompt_file = write_prompt_file(scratch_dir, prompt).map_err(TurnOutcome::Raise)?;
-    let mut extra: Vec<String> = Vec::new();
-    if !options.tools.is_empty() {
-        extra.push("--tools".to_string());
-        extra.push(options.tools.join(","));
-    }
-    if !options.exclude_tools.is_empty() {
-        extra.push("--exclude-tools".to_string());
-        extra.push(options.exclude_tools.join(","));
-    }
-    extra.extend(options.extra_args.iter().cloned());
+    let extra = pi_extra_args(options);
     let cmd = pi_command(
         &options.binary,
         &prompt_file.to_string_lossy(),
@@ -420,17 +428,19 @@ async fn run_pi_turn(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
-async fn run_claude_turn(
+/// Claude Code's own `--setting-sources`/`--tools`/`--allowedTools`/
+/// `--permission-mode`/`--disallowedTools` flags, then *options*'s own
+/// `extra_args` -- the one piece of `run_claude_turn`'s own command-
+/// building that isn't already covered by `agent_cli::claude_command`'s
+/// own tests. `--tools` gets the engine's own builtin names
+/// ([`builtin_tool_names`]) and `--allowedTools` the caller's own list
+/// verbatim, including an MCP tool's `mcp__server__tool` form
+/// [`builtin_tool_names`] drops.
+fn claude_extra_args(
     options: &EngineOptions,
     permission_mode: &str,
     trust_project_settings: bool,
-    prompt: &str,
-    session_id: Option<&str>,
-    timeout_seconds: f64,
-    live: &LiveTracker<'_>,
-    token: &CancellationToken,
-) -> Result<AgentTurn, TurnOutcome> {
+) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     if !trust_project_settings {
         args.push("--setting-sources".to_string());
@@ -451,6 +461,21 @@ async fn run_claude_turn(
         args.extend(options.exclude_tools.iter().cloned());
     }
     args.extend(options.extra_args.iter().cloned());
+    args
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_claude_turn(
+    options: &EngineOptions,
+    permission_mode: &str,
+    trust_project_settings: bool,
+    prompt: &str,
+    session_id: Option<&str>,
+    timeout_seconds: f64,
+    live: &LiveTracker<'_>,
+    token: &CancellationToken,
+) -> Result<AgentTurn, TurnOutcome> {
+    let args = claude_extra_args(options, permission_mode, trust_project_settings);
     let cmd = claude_command(
         &options.binary,
         &ClaudeCommandOpts {
@@ -1470,4 +1495,544 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
         pi_binary: binaries[0].take(),
         claude_binary: binaries[1].take(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use electricity_value::CancellationToken;
+
+    static NONE: Value = Value::None;
+
+    fn call(token: &CancellationToken) -> ToolCall<'_> {
+        ToolCall {
+            timeout_seconds: 5,
+            config: &NONE,
+            token,
+            armed: false,
+            secret_headers: &[],
+            scrub: None,
+            on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
+            limited: false,
+            confine_to: None,
+        }
+    }
+
+    fn params(pairs: Vec<(&str, Value)>) -> Value {
+        let mut dict = Dict::new();
+        for (k, v) in pairs {
+            dict.insert(Value::from(k), v);
+        }
+        Value::Dict(dict)
+    }
+
+    /// A plugin whose own configured binary never resolves to anything
+    /// real -- every test here that needs to clear every param check and
+    /// reach `resolve_binary` must still never start a real `pi`/`claude`
+    /// process (the lane's own hard rule), regardless of what the host
+    /// running this test happens to have on `PATH`.
+    fn plugin_with_unresolvable_binaries() -> AgentPlugin {
+        AgentPlugin {
+            default_engine: PI.to_string(),
+            pi_binary: Some("/nonexistent/circuitry-test-agent-pi".to_string()),
+            claude_binary: Some("/nonexistent/circuitry-test-agent-claude".to_string()),
+        }
+    }
+
+    fn engine_options(
+        tools: &[&str],
+        exclude_tools: &[&str],
+        extra_args: &[&str],
+    ) -> EngineOptions {
+        EngineOptions {
+            binary: "pi".to_string(),
+            cwd: ".".to_string(),
+            unset_env: Vec::new(),
+            env: Vec::new(),
+            model: String::new(),
+            tools: tools.iter().map(|s| s.to_string()).collect(),
+            exclude_tools: exclude_tools.iter().map(|s| s.to_string()).collect(),
+            extra_args: extra_args.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    // ---- pi_extra_args ----
+
+    #[test]
+    fn pi_extra_args_is_empty_with_no_tools_or_extra_args() {
+        let options = engine_options(&[], &[], &[]);
+        assert_eq!(pi_extra_args(&options), Vec::<String>::new());
+    }
+
+    #[test]
+    fn pi_extra_args_lists_tools_then_exclude_tools_then_extra_args() {
+        let options = engine_options(&["read", "write"], &["shell"], &["--verbose"]);
+        assert_eq!(
+            pi_extra_args(&options),
+            vec![
+                "--tools".to_string(),
+                "read,write".to_string(),
+                "--exclude-tools".to_string(),
+                "shell".to_string(),
+                "--verbose".to_string(),
+            ]
+        );
+    }
+
+    // ---- claude_extra_args ----
+
+    #[test]
+    fn claude_extra_args_isolates_project_settings_by_default() {
+        let options = engine_options(&[], &[], &[]);
+        assert_eq!(
+            claude_extra_args(&options, "", false),
+            vec!["--setting-sources".to_string(), "user".to_string()]
+        );
+    }
+
+    #[test]
+    fn claude_extra_args_omits_setting_sources_once_project_settings_are_trusted() {
+        let options = engine_options(&[], &[], &[]);
+        assert_eq!(claude_extra_args(&options, "", true), Vec::<String>::new());
+    }
+
+    #[test]
+    fn claude_extra_args_tools_become_builtin_names_plus_the_full_allowed_list() {
+        let options = engine_options(&["read", "write", "mcp__server__tool"], &[], &[]);
+        assert_eq!(
+            claude_extra_args(&options, "", true),
+            vec![
+                "--tools".to_string(),
+                "read,write".to_string(),
+                "--allowedTools".to_string(),
+                "read".to_string(),
+                "write".to_string(),
+                "mcp__server__tool".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_extra_args_exclude_tools_become_disallowed_tools_verbatim() {
+        let options = engine_options(&[], &["shell", "mcp__server__danger"], &[]);
+        assert_eq!(
+            claude_extra_args(&options, "", true),
+            vec![
+                "--disallowedTools".to_string(),
+                "shell".to_string(),
+                "mcp__server__danger".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn claude_extra_args_permission_mode_and_extra_args_come_last_and_in_order() {
+        let options = engine_options(&["read"], &["shell"], &["--debug"]);
+        assert_eq!(
+            claude_extra_args(&options, "dontAsk", true),
+            vec![
+                "--tools".to_string(),
+                "read".to_string(),
+                "--allowedTools".to_string(),
+                "read".to_string(),
+                "--permission-mode".to_string(),
+                "dontAsk".to_string(),
+                "--disallowedTools".to_string(),
+                "shell".to_string(),
+                "--debug".to_string(),
+            ]
+        );
+    }
+
+    // ---- builtin_tool_names ----
+
+    #[test]
+    fn builtin_tool_names_drops_mcp_tools_and_trailing_parens_and_dedupes() {
+        let names = builtin_tool_names(&[
+            "read".to_string(),
+            "read".to_string(),
+            "bash(ls)".to_string(),
+            "mcp__server__tool".to_string(),
+        ]);
+        assert_eq!(names, vec!["read".to_string(), "bash".to_string()]);
+    }
+
+    // ---- permission mode default (execute()'s own pre-dispatch logic) ----
+
+    #[tokio::test]
+    async fn permission_mode_defaults_to_dont_ask_once_tools_are_set_for_claude_code() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let params = params(vec![
+            ("prompt", Value::from("do it")),
+            ("engine", Value::from(CLAUDE_CODE)),
+            ("tools", Value::List(vec![Value::from("read")])),
+        ]);
+        let err = plugin.execute(params, &call).await.unwrap_err();
+        // Cleared every param check, including `tools`'s own emptiness
+        // check, and reached binary resolution -- the one place this
+        // test's own unresolvable, configured binary can fail safely,
+        // without ever starting a real `pi`/`claude` process.
+        assert!(err.message.contains("circuitry-test-agent-claude"));
+    }
+
+    // ---- param validation errors ----
+
+    #[tokio::test]
+    async fn prompt_must_be_a_non_empty_string() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(params(vec![("prompt", Value::from("   "))]), &call)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent requires params['prompt'] as a non-empty string."
+        );
+    }
+
+    #[tokio::test]
+    async fn an_unknown_engine_is_an_error() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("engine", Value::from("codex")),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: unknown engine 'codex'; expected one of ['claude_code', 'pi']."
+        );
+    }
+
+    #[tokio::test]
+    async fn cwd_must_be_a_directory() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("cwd", Value::from("/nonexistent/circuitry-test-agent-cwd")),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: cwd '/nonexistent/circuitry-test-agent-cwd' is not a directory."
+        );
+    }
+
+    #[tokio::test]
+    async fn thinking_applies_to_pi_only() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("engine", Value::from(CLAUDE_CODE)),
+                    ("thinking", Value::from("high")),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['thinking'] applies to engine 'pi' only."
+        );
+    }
+
+    #[tokio::test]
+    async fn permission_mode_applies_to_claude_code_only() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("permission_mode", Value::from("dontAsk")),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['permission_mode'] applies to engine 'claude_code' only."
+        );
+    }
+
+    #[tokio::test]
+    async fn trust_project_settings_must_be_a_bool() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("engine", Value::from(CLAUDE_CODE)),
+                    ("trust_project_settings", Value::from("sometimes")),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['trust_project_settings'] must be true or false."
+        );
+    }
+
+    #[tokio::test]
+    async fn trust_project_settings_applies_to_claude_code_only() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("trust_project_settings", Value::from(true)),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['trust_project_settings'] applies to engine 'claude_code' only."
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_tools_list_is_an_error() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("tools", Value::List(Vec::new())),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['tools'] is empty; leave it out to keep the engine's default tools."
+        );
+    }
+
+    #[tokio::test]
+    async fn result_schema_needs_result_file() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("result_schema", Value::Dict(Dict::new())),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['result_schema'] needs params['result_file']."
+        );
+    }
+
+    #[tokio::test]
+    async fn result_schema_must_be_an_object() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("result_file", Value::from("result.json")),
+                    ("result_schema", Value::from("nope")),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "agent: params['result_schema'] must be a JSON Schema object."
+        );
+    }
+
+    #[tokio::test]
+    async fn result_schema_must_be_a_well_formed_json_schema() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let mut schema = Dict::new();
+        schema.insert(Value::from("type"), Value::from(123));
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("result_file", Value::from("result.json")),
+                    ("result_schema", Value::Dict(schema)),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.message
+                .starts_with("agent: params['result_schema'] is not a valid JSON Schema: ")
+        );
+    }
+
+    /// Issue #720's own review finding: `result_schema: null` (the shape
+    /// a rendered `params_json` overlay can carry for an omitted key) is
+    /// absent, exactly like a missing key -- never `params['result_schema']
+    /// needs params['result_file']`. With no `result_file` either, this
+    /// clears every param check and reaches binary resolution, which this
+    /// test's own unresolvable, configured binary fails safely.
+    #[tokio::test]
+    async fn result_schema_null_is_treated_as_absent() {
+        let token = CancellationToken::new();
+        let plugin = plugin_with_unresolvable_binaries();
+        let call = call(&token);
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("prompt", Value::from("do it")),
+                    ("result_schema", Value::None),
+                ]),
+                &call,
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("result_schema"));
+        assert!(err.message.contains("circuitry-test-agent-pi"));
+    }
+
+    // ---- project_instructions (CLAUDE.md append) ----
+
+    #[test]
+    fn project_instructions_reads_claude_md_from_the_git_root() {
+        let dir = crate::agent_cli::TempDirGuard::new("circuitry-test-agent-claude-md-").unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "Follow these project rules.").unwrap();
+        let nested = root.join("nested");
+        std::fs::create_dir_all(&nested).unwrap();
+
+        let (path, text) = project_instructions(&nested).expect("CLAUDE.md should be found");
+        assert_eq!(text, "Follow these project rules.");
+        assert!(path.ends_with("CLAUDE.md"));
+    }
+
+    #[test]
+    fn project_instructions_is_none_with_no_claude_md() {
+        let dir =
+            crate::agent_cli::TempDirGuard::new("circuitry-test-agent-no-claude-md-").unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+
+        assert!(project_instructions(root).is_none());
+    }
+
+    #[test]
+    fn project_instructions_is_none_for_a_blank_claude_md() {
+        let dir =
+            crate::agent_cli::TempDirGuard::new("circuitry-test-agent-blank-claude-md-").unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        std::fs::write(root.join("CLAUDE.md"), "   \n  ").unwrap();
+
+        assert!(project_instructions(root).is_none());
+    }
+
+    // ---- read_result ----
+
+    #[test]
+    fn read_result_reports_every_violation_sorted_by_path_and_capped() {
+        let dir = crate::agent_cli::TempDirGuard::new("circuitry-test-agent-read-result-").unwrap();
+        let result_file = dir.path().join("result.json");
+        std::fs::write(&result_file, r#"{"b": 1, "a": 1, "nested": {"x": 1}}"#).unwrap();
+        let mut properties = Dict::new();
+        properties.insert(Value::from("a"), Value::from(serde_dict("string")));
+        properties.insert(Value::from("b"), Value::from(serde_dict("string")));
+        let mut nested_properties = Dict::new();
+        nested_properties.insert(Value::from("x"), Value::from(serde_dict("string")));
+        let mut nested = Dict::new();
+        nested.insert(Value::from("type"), Value::from("object"));
+        nested.insert(Value::from("properties"), Value::Dict(nested_properties));
+        properties.insert(Value::from("nested"), Value::Dict(nested));
+        let mut schema = Dict::new();
+        schema.insert(Value::from("type"), Value::from("object"));
+        schema.insert(Value::from("properties"), Value::Dict(properties));
+        let schema = Value::Dict(schema);
+
+        let (_value, errors) = read_result(&result_file, Some(&schema)).unwrap();
+        assert_eq!(
+            errors,
+            vec![
+                "a: 1 is not of type 'string'".to_string(),
+                "b: 1 is not of type 'string'".to_string(),
+                "nested/x: 1 is not of type 'string'".to_string(),
+            ]
+        );
+    }
+
+    fn serde_dict(type_name: &str) -> Dict {
+        let mut d = Dict::new();
+        d.insert(Value::from("type"), Value::from(type_name));
+        d
+    }
+
+    #[test]
+    fn read_result_raises_on_invalid_utf8() {
+        let dir = crate::agent_cli::TempDirGuard::new("circuitry-test-agent-utf8-").unwrap();
+        let result_file = dir.path().join("result.json");
+        std::fs::write(&result_file, [0xff, 0xfe, 0xfd]).unwrap();
+
+        let err = read_result(&result_file, None).unwrap_err();
+        assert_eq!(err.py_class, PyExc::UnicodeDecodeError);
+    }
+
+    #[test]
+    fn resolve_relative_follows_symlinks_in_existing_ancestors() {
+        let dir = crate::agent_cli::TempDirGuard::new("circuitry-test-agent-resolve-").unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        let link = dir.path().join("link");
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let resolved = resolve_relative(&link, "result.json");
+        assert_eq!(resolved, real.canonicalize().unwrap().join("result.json"));
+    }
 }
