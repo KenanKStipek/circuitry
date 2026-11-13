@@ -1289,8 +1289,13 @@ impl SystemOnePlugin {
                     server.display
                 )));
             }
+            // Only `send_to_sink` (save_to) produces these; mapped rather
+            // than unreachable, so a future change there can never panic here.
             Err(SendError::BodyOverCap { .. }) | Err(SendError::Sink(_)) => {
-                unreachable!("send_capped's own loop never raises either, only send_to_sink's")
+                return Err(no_reply_error(format!(
+                    "systemone server at {} dropped the connection",
+                    server.display
+                )));
             }
             Ok(response) => response,
         };
@@ -1337,9 +1342,9 @@ impl SystemOnePlugin {
                 // returns the bytes it did get rather than raising; the
                 // short body almost always then fails to parse as JSON.
                 Some(SendError::IncompleteRead { .. }) | None => {}
-                Some(SendError::BodyOverCap { .. }) | Some(SendError::Sink(_)) => {
-                    unreachable!("send_capped's own loop never raises either, only send_to_sink's")
-                }
+                // Only `send_to_sink` (save_to) produces these; treated like a
+                // short read rather than unreachable.
+                Some(SendError::BodyOverCap { .. }) | Some(SendError::Sink(_)) => {}
             }
         }
         let text = if matches!(response.body_error, Some(SendError::IncompleteRead { .. })) {
