@@ -3,13 +3,13 @@
 //! cleaning rules, the same render-failure-warns-and-continues contract.
 //!
 //! `label:`'s own syntax (does it parse as Mustache) is checked only by
-//! `cof check`/`electricity`'s own document-check path, not here and not
-//! by [`crate::run::run_orchestration`]'s own hard-fail gate: a malformed
-//! template that reaches a run anyway is a [`render_document_label`]
-//! warning, never a failure (`core/document_check.py::label_syntax_error`'s
-//! own doc comment has the full reasoning).
+//! `cof check` (`core/document_check.py::label_syntax_error`); electricity
+//! has no `check` subcommand of its own. A malformed template that reaches
+//! a run anyway -- an unchecked file, or `electricity run` itself -- is a
+//! [`render_document_label`] warning, never a failure of
+//! [`crate::run::run_orchestration`]'s own hard-fail gate.
 
-use electricity_template::{PlainCtx, render_template};
+use electricity_template::{PlainCtx, render_template_with_escape};
 use electricity_value::{Dict, Value};
 
 /// Cut point, in Unicode scalar values (`char`s) -- not grapheme
@@ -68,7 +68,10 @@ pub fn clean_label(text: &str) -> String {
 
     let without_controls: String = collapsed.chars().filter(|c| !is_control(*c)).collect();
     let trimmed = without_controls.trim();
-    trimmed.chars().take(MAX_LABEL_LENGTH).collect()
+    let cut: String = trimmed.chars().take(MAX_LABEL_LENGTH).collect();
+    // The cut can land right after a whitespace run's collapsed single
+    // space, leaving a trailing space the earlier `trim()` never saw.
+    cut.trim_end().to_string()
 }
 
 /// Drops every ESC-initiated sequence in *text*: an OSC (`ESC ]` ...
@@ -164,7 +167,10 @@ pub fn render_document_label(
     let mut root_dict = Dict::new();
     root_dict.insert(Value::Str("input".to_string()), input_namespace);
     let root = Value::Dict(root_dict);
-    match render_template(template, &root, &PlainCtx, "label") {
+    // escape: false -- a label is display text in a terminal or a log,
+    // not HTML, the same reasoning that turned escaping off for prompt
+    // text (#397).
+    match render_template_with_escape(template, &root, &PlainCtx, "label", false) {
         Ok(rendered) => {
             let cleaned = clean_label(&rendered);
             if cleaned.is_empty() {
@@ -226,7 +232,8 @@ mod tests {
 
     #[test]
     fn combining_marks_are_preserved() {
-        assert_eq!(clean_label("éclair"), "éclair");
+        let text = "e\u{301}clair";
+        assert_eq!(clean_label(text), text);
     }
 
     #[test]
@@ -253,6 +260,12 @@ mod tests {
         let cleaned = clean_label(&text);
         assert_eq!(cleaned, "x".repeat(64));
         assert_eq!(cleaned.chars().count(), 64);
+    }
+
+    #[test]
+    fn cut_lands_on_a_collapsed_space() {
+        let text = format!("{} y", "x".repeat(63));
+        assert_eq!(clean_label(&text), "x".repeat(63));
     }
 
     #[test]
@@ -303,6 +316,18 @@ mod tests {
         assert!(warning.contains("label"));
         assert!(warning.contains("malformed Mustache template"));
         assert!(warning.ends_with("the run continues without a label."));
+    }
+
+    #[test]
+    fn render_document_label_does_not_html_escape() {
+        let mut input = Dict::new();
+        input.insert(
+            Value::Str("raw".to_string()),
+            Value::Str("R&D \"fix\" <x> 'y'".to_string()),
+        );
+        let (label, warning) = render_document_label(Some("{{input.raw}}"), Value::Dict(input));
+        assert_eq!(label, Some("R&D \"fix\" <x> 'y'".to_string()));
+        assert_eq!(warning, None);
     }
 
     #[test]

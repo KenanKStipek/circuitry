@@ -21,6 +21,7 @@ _CLEAN_CASES = [
     ("combining marks preserved", "éclair", "éclair"),
     ("only whitespace", "   \t\n  ", ""),
     ("leading/trailing whitespace trimmed", "  hi  ", "hi"),
+    ("cut lands on a collapsed space", "x" * 63 + " y", "x" * 63),
 ]
 
 
@@ -85,4 +86,12 @@ def test_render_document_label_cleans_the_result() -> None:
         "  {{input.a}}\t{{input.b}}  ", {"input": {"a": "x", "b": "y"}}
     )
     assert label == "x y"
+    assert warning is None
+
+
+def test_render_document_label_does_not_html_escape() -> None:
+    label, warning = render_document_label(
+        "{{input.raw}}", {"input": {"raw": "R&D \"fix\" <x> 'y'"}}
+    )
+    assert label == "R&D \"fix\" <x> 'y'"
     assert warning is None

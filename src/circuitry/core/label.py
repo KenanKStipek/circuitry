@@ -43,9 +43,12 @@ _ESCAPE_RE = re.compile(
 #: ASCII whitespace only — collapsed to one space *before* `_CONTROL_RE`
 #: below runs, since \t/\n/\v/\f/\r are themselves C0 control bytes and
 #: must become a space rather than be dropped outright. A non-ASCII
-#: Unicode space (NBSP, ...) is left alone: it isn't whitespace by this
-#: narrower, cross-engine-stable definition, and it isn't a control
-#: character either.
+#: Unicode space (NBSP, ...) isn't whitespace by this narrower,
+#: cross-engine-stable definition and isn't a control character either,
+#: so a run of them in the middle of the text is left alone; one at
+#: either end is still removed, by the final ``.strip()`` below, like
+#: any other Unicode whitespace — ``str.strip()`` doesn't consult this
+#: regex at all.
 _WHITESPACE_RE = re.compile(r"[ \t\n\r\f\v]+")
 #: C0 controls (0x00-0x1F), DEL (0x7F), C1 controls (0x80-0x9F). Run after
 #: whitespace collapsing, so the C0 whitespace bytes it just replaced with
@@ -65,7 +68,9 @@ def clean_label(text: str) -> str:
     text = _ESCAPE_RE.sub("", text)
     text = _WHITESPACE_RE.sub(" ", text)
     text = _CONTROL_RE.sub("", text).strip()
-    return text[:MAX_LABEL_LENGTH]
+    # The cut can land right after a whitespace run's collapsed single
+    # space, leaving a trailing space the first .strip() never saw.
+    return text[:MAX_LABEL_LENGTH].rstrip()
 
 
 def render_document_label(
@@ -79,11 +84,15 @@ def render_document_label(
     (malformed template or any other render failure) — the caller decides
     how to surface it, but never raises itself, matching "a render failure
     warns once and the run continues with no label" (#752).
+
+    Rendered with ``escape=False``: a label is display text in a terminal
+    or a log, not HTML, so the same reasoning that turned escaping off for
+    prompt text (#397) applies here too.
     """
     if not isinstance(label_template, str) or not label_template:
         return None, None
     try:
-        rendered = render_template(label_template, ctx, label="label")
+        rendered = render_template(label_template, ctx, label="label", escape=False)
     except TemplateError as exc:
         return None, f"{exc}; the run continues without a label."
     cleaned = clean_label(rendered)
