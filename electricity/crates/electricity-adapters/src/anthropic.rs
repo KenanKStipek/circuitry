@@ -2,7 +2,7 @@
 //! API, over [`crate::transport`]: system-turn hoisting, image blocks
 //! ahead of text, and `stop_reason`'s own truncation signal.
 
-use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
+use crate::config::{cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url};
 use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -345,6 +345,7 @@ pub struct AnthropicAdapter {
     pub base_url: Value,
     pub default_model: String,
     pub max_tokens: i64,
+    pub api_key_env: String,
 }
 
 #[async_trait(?Send)]
@@ -365,13 +366,14 @@ impl Adapter for AnthropicAdapter {
         } else {
             model
         };
-        let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
         if api_key.is_empty() {
             return Err(AdapterError {
-                message: "Anthropic API key not found. Set ANTHROPIC_API_KEY in the \
-                          environment (recommended: ~/.config/circuitry/.env). Run `cof \
-                          doctor` to verify."
-                    .to_string(),
+                message: format!(
+                    "Anthropic API key not found. Set {} in the environment (recommended: \
+                     ~/.config/circuitry/.env). Run `cof doctor` to verify.",
+                    self.api_key_env
+                ),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
@@ -399,11 +401,11 @@ impl Adapter for AnthropicAdapter {
 
     async fn check(&self) -> CheckResult {
         let mut missing = Vec::new();
-        if std::env::var("ANTHROPIC_API_KEY")
+        if std::env::var(&self.api_key_env)
             .unwrap_or_default()
             .is_empty()
         {
-            missing.push("env:ANTHROPIC_API_KEY".to_string());
+            missing.push(format!("env:{}", self.api_key_env));
         }
         CheckResult {
             ok: missing.is_empty(),
@@ -438,6 +440,7 @@ pub fn build_anthropic(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         base_url: cfg_value_or(cfg, "base_url", "https://api.anthropic.com"),
         default_model: cfg_str_or(cfg, "default_model", "claude-sonnet-5"),
         max_tokens,
+        api_key_env: resolve_api_key_env(cfg, "ANTHROPIC_API_KEY", name)?,
     }))
 }
 

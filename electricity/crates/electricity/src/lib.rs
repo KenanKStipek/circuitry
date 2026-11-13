@@ -1313,6 +1313,21 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
+    // Every `runtime.adapters.<name>.api_key_env` is validated up front
+    // here too, built-in or alias, whether or not any effect selects it
+    // (#669), identical text to `cof`'s.
+    let api_key_env_errors = adapters.adapter_api_key_env_errors(&alias_check_runtime);
+    if !api_key_env_errors.is_empty() {
+        fail!(format!(
+            "Invalid adapter api_key_env:\n{}",
+            api_key_env_errors
+                .iter()
+                .map(|e| format!("  - {e}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
     // Profile routing pins and provider denials (issue #495, lane R):
     // run only when `profile.effects` is non-empty, after concurrency
     // and persistence validation (`pre_input_checks` bundles complexity,

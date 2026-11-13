@@ -6,7 +6,9 @@
 //! `nvidia-nim`, `openrouter`, `perplexity`, `qwen-dashscope`, `tgi`,
 //! `together`, `vllm`, `xai`) shares, over [`crate::transport`].
 
-use crate::config::{cfg_get, cfg_str_or, cfg_value_or, rstrip_base_url, value_is_truthy};
+use crate::config::{
+    cfg_get, cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, value_is_truthy,
+};
 use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -300,6 +302,11 @@ pub struct OpenAiCompatibleConfig {
     pub api_key_env: String,
     pub default_model: String,
     pub chat_completions_path: String,
+    /// Only read by azure-openai's own precheck/check_override: the
+    /// variable its `api-key` header (not Bearer) comes from. Kept apart
+    /// from `api_key_env`, which stays empty for azure-openai so
+    /// [`chat_completion`]'s own Bearer path never fires.
+    pub extra_key_env: String,
 }
 
 impl OpenAiCompatibleConfig {
@@ -313,11 +320,17 @@ impl OpenAiCompatibleConfig {
             api_key_env: api_key_env.into(),
             default_model: default_model.into(),
             chat_completions_path: "/chat/completions".to_string(),
+            extra_key_env: String::new(),
         }
     }
 
     fn with_path(mut self, path: impl Into<String>) -> Self {
         self.chat_completions_path = path.into();
+        self
+    }
+
+    fn with_extra_key_env(mut self, name: impl Into<String>) -> Self {
+        self.extra_key_env = name.into();
         self
     }
 }
@@ -538,7 +551,7 @@ pub fn build_ai21(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterEr
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.ai21.com/studio/v1"),
-            "AI21_API_KEY",
+            resolve_api_key_env(cfg, "AI21_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "jamba-large"),
         ),
     ))
@@ -549,7 +562,7 @@ pub fn build_cohere(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.cohere.com"),
-            "COHERE_API_KEY",
+            resolve_api_key_env(cfg, "COHERE_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "command-r-plus"),
         )
         .with_path("/compatibility/v1/chat/completions"),
@@ -561,7 +574,7 @@ pub fn build_deepseek(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapt
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.deepseek.com/v1"),
-            "DEEPSEEK_API_KEY",
+            resolve_api_key_env(cfg, "DEEPSEEK_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "deepseek-chat"),
         ),
     ))
@@ -572,7 +585,7 @@ pub fn build_fireworks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.fireworks.ai/inference/v1"),
-            "FIREWORKS_API_KEY",
+            resolve_api_key_env(cfg, "FIREWORKS_API_KEY", name)?,
             cfg_str_or(
                 cfg,
                 "default_model",
@@ -591,7 +604,7 @@ pub fn build_gemini(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
                 "base_url",
                 "https://generativelanguage.googleapis.com/v1beta/openai",
             ),
-            "GOOGLE_API_KEY",
+            resolve_api_key_env(cfg, "GOOGLE_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "gemini-2.5-flash"),
         ),
     ))
@@ -602,7 +615,7 @@ pub fn build_groq(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterEr
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.groq.com/openai/v1"),
-            "GROQ_API_KEY",
+            resolve_api_key_env(cfg, "GROQ_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "llama-3.3-70b-versatile"),
         ),
     ))
@@ -616,7 +629,7 @@ pub fn build_huggingface_inference(
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://router.huggingface.co/v1"),
-            "HF_TOKEN",
+            resolve_api_key_env(cfg, "HF_TOKEN", name)?,
             cfg_str_or(cfg, "default_model", "meta-llama/Llama-3.3-70B-Instruct"),
         ),
     ))
@@ -627,7 +640,7 @@ pub fn build_llamacpp(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapt
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:8080/v1"),
-            "",
+            resolve_api_key_env(cfg, "", name)?,
             cfg_str_or(cfg, "default_model", ""),
         ),
     ))
@@ -638,7 +651,7 @@ pub fn build_lmstudio(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapt
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:1234/v1"),
-            "",
+            resolve_api_key_env(cfg, "", name)?,
             cfg_str_or(cfg, "default_model", ""),
         ),
     ))
@@ -649,18 +662,14 @@ pub fn build_mistral(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapte
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.mistral.ai/v1"),
-            "MISTRAL_API_KEY",
+            resolve_api_key_env(cfg, "MISTRAL_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "mistral-large-latest"),
         ),
     ))
 }
 
 pub fn build_nvidia_nim(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let api_key_env = match cfg_get(cfg, "api_key_env") {
-        None | Some(Value::None) => "NIM_API_KEY".to_string(),
-        Some(Value::Str(s)) => s.clone(),
-        Some(_) => "NIM_API_KEY".to_string(),
-    };
+    let api_key_env = resolve_api_key_env(cfg, "NIM_API_KEY", name)?;
     Ok(simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
@@ -676,7 +685,7 @@ pub fn build_openrouter(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Ada
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://openrouter.ai/api/v1"),
-            "OPENROUTER_API_KEY",
+            resolve_api_key_env(cfg, "OPENROUTER_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "openai/gpt-4o-mini"),
         ),
     ))
@@ -687,7 +696,7 @@ pub fn build_perplexity(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Ada
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.perplexity.ai"),
-            "PERPLEXITY_API_KEY",
+            resolve_api_key_env(cfg, "PERPLEXITY_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "sonar"),
         ),
     ))
@@ -702,18 +711,14 @@ pub fn build_qwen_dashscope(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>,
                 "base_url",
                 "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
             ),
-            "DASHSCOPE_API_KEY",
+            resolve_api_key_env(cfg, "DASHSCOPE_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "qwen-max"),
         ),
     ))
 }
 
 pub fn build_tgi(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterError> {
-    let api_key_env = match cfg_get(cfg, "api_key_env") {
-        None | Some(Value::None) => String::new(),
-        Some(Value::Str(s)) => s.clone(),
-        Some(_) => String::new(),
-    };
+    let api_key_env = resolve_api_key_env(cfg, "", name)?;
     Ok(simple_adapter(
         name,
         OpenAiCompatibleConfig::new(
@@ -729,7 +734,7 @@ pub fn build_together(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapt
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.together.xyz/v1"),
-            "TOGETHER_API_KEY",
+            resolve_api_key_env(cfg, "TOGETHER_API_KEY", name)?,
             cfg_str_or(
                 cfg,
                 "default_model",
@@ -744,7 +749,7 @@ pub fn build_vllm(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterEr
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "http://localhost:8000/v1"),
-            "",
+            resolve_api_key_env(cfg, "", name)?,
             cfg_str_or(cfg, "default_model", ""),
         ),
     ))
@@ -755,7 +760,7 @@ pub fn build_xai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, AdapterErr
         name,
         OpenAiCompatibleConfig::new(
             cfg_value_or(cfg, "base_url", "https://api.x.ai/v1"),
-            "XAI_API_KEY",
+            resolve_api_key_env(cfg, "XAI_API_KEY", name)?,
             cfg_str_or(cfg, "default_model", "grok-2-latest"),
         ),
     ))
@@ -781,10 +786,10 @@ fn azure_openai_precheck(
             py_class: PyExc::RuntimeError,
         });
     }
-    let api_key = std::env::var("AZURE_OPENAI_API_KEY").unwrap_or_default();
+    let api_key = std::env::var(&cfg.extra_key_env).unwrap_or_default();
     if api_key.is_empty() {
         return Err(AdapterError {
-            message: format!("{name}: AZURE_OPENAI_API_KEY not set."),
+            message: format!("{name}: {} not set.", cfg.extra_key_env),
             retry: RetryInfo::not_retryable(),
             py_class: PyExc::RuntimeError,
         });
@@ -824,11 +829,11 @@ fn azure_openai_check(_name: &str, cfg: &OpenAiCompatibleConfig) -> CheckResult 
         },
         Ok(endpoint) => {
             let mut missing = Vec::new();
-            if std::env::var("AZURE_OPENAI_API_KEY")
+            if std::env::var(&cfg.extra_key_env)
                 .unwrap_or_default()
                 .is_empty()
             {
-                missing.push("env:AZURE_OPENAI_API_KEY".to_string());
+                missing.push(format!("env:{}", cfg.extra_key_env));
             }
             if endpoint.is_empty() {
                 missing.push("env:AZURE_OPENAI_ENDPOINT".to_string());
@@ -853,11 +858,13 @@ pub fn build_azure_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, A
         .cloned()
         .unwrap_or_else(|| Value::Str(String::new()));
     let api_version = cfg_str_or(cfg, "api_version", "2024-10-21");
+    let api_key_env = resolve_api_key_env(cfg, "AZURE_OPENAI_API_KEY", name)?;
     let openai_cfg =
         OpenAiCompatibleConfig::new(raw_endpoint, "", cfg_str_or(cfg, "default_model", ""))
             .with_path(format!(
                 "/openai/deployments/{{model}}/chat/completions?api-version={api_version}"
-            ));
+            ))
+            .with_extra_key_env(api_key_env);
     Ok(Box::new(OpenAiCompatibleAdapter {
         provider_name: name.to_string(),
         cfg: openai_cfg,
@@ -925,7 +932,7 @@ pub fn build_cloudflare_workers_ai(
     let base_url = cloudflare_resolve_base_url(&explicit_base_url, &account_id);
     let openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
-        "CF_API_TOKEN",
+        resolve_api_key_env(cfg, "CF_API_TOKEN", name)?,
         cfg_str_or(
             cfg,
             "default_model",
@@ -992,7 +999,7 @@ pub fn build_databricks(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Ada
     let base_url = databricks_resolve_base_url(&cfg_value_or(cfg, "base_url", ""));
     let openai_cfg = OpenAiCompatibleConfig::new(
         base_url,
-        "DATABRICKS_TOKEN",
+        resolve_api_key_env(cfg, "DATABRICKS_TOKEN", name)?,
         cfg_str_or(
             cfg,
             "default_model",

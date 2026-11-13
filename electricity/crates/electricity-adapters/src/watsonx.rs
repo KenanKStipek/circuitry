@@ -3,7 +3,9 @@
 //! [`crate::transport`]. Rust tests only (the IAM URL is hard-coded in
 //! the reference); no conformance case (issue #503's own ruling).
 
-use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url, value_is_truthy};
+use crate::config::{
+    cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, value_is_truthy,
+};
 use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -187,6 +189,7 @@ pub struct WatsonXAdapter {
     pub base_url: Value,
     pub default_model: String,
     pub api_version: String,
+    pub api_key_env: String,
     iam_url: String,
     token_cache: TokenCache,
 }
@@ -222,10 +225,10 @@ impl Adapter for WatsonXAdapter {
         options: &GenerateOptions,
         call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
-        let api_key = std::env::var("WATSONX_API_KEY").unwrap_or_default();
+        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
         if api_key.is_empty() {
             return Err(AdapterError {
-                message: "watsonx: WATSONX_API_KEY not set.".to_string(),
+                message: format!("watsonx: {} not set.", self.api_key_env),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
@@ -355,11 +358,11 @@ impl Adapter for WatsonXAdapter {
 
     async fn check(&self) -> CheckResult {
         let mut missing = Vec::new();
-        if std::env::var("WATSONX_API_KEY")
+        if std::env::var(&self.api_key_env)
             .unwrap_or_default()
             .is_empty()
         {
-            missing.push("env:WATSONX_API_KEY".to_string());
+            missing.push(format!("env:{}", self.api_key_env));
         }
         if std::env::var("WATSONX_PROJECT_ID")
             .unwrap_or_default()
@@ -382,6 +385,7 @@ pub fn build_watsonx(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapte
         base_url: cfg_value_or(cfg, "base_url", ""),
         default_model: cfg_str_or(cfg, "default_model", "meta-llama/llama-3-3-70b-instruct"),
         api_version: cfg_str_or(cfg, "api_version", "2024-03-14"),
+        api_key_env: resolve_api_key_env(cfg, "WATSONX_API_KEY", name)?,
         iam_url: "https://iam.cloud.ibm.com/identity/token".to_string(),
         token_cache: TokenCache,
     }))
@@ -461,6 +465,7 @@ mod tests {
             base_url: Value::Str(format!("http://{gen_addr}")),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
+            api_key_env: "WATSONX_API_KEY".to_string(),
             iam_url: format!("http://{iam_addr}/identity/token"),
             token_cache: TokenCache,
         };
@@ -583,6 +588,7 @@ mod tests {
                 base_url: Value::Str(format!("http://{gen_addr}")),
                 default_model: "m".to_string(),
                 api_version: "2024-03-14".to_string(),
+                api_key_env: "WATSONX_API_KEY".to_string(),
                 iam_url: format!("http://{iam_addr}/identity/token"),
                 token_cache: TokenCache,
             };
@@ -637,6 +643,7 @@ mod tests {
             base_url: Value::Str(format!("http://{gen_addr}")),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
+            api_key_env: "WATSONX_API_KEY".to_string(),
             iam_url: format!("http://{iam_addr}/identity/token"),
             token_cache: TokenCache,
         };
@@ -645,6 +652,7 @@ mod tests {
             base_url: Value::Str(format!("http://{gen_addr}")),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
+            api_key_env: "WATSONX_API_KEY".to_string(),
             iam_url: format!("http://{iam_addr}/identity/token"),
             token_cache: TokenCache,
         };
@@ -690,6 +698,7 @@ mod tests {
             base_url: Value::from(5i64),
             default_model: "m".to_string(),
             api_version: "2024-03-14".to_string(),
+            api_key_env: "WATSONX_API_KEY".to_string(),
             iam_url: format!("http://{iam_addr}/identity/token"),
             token_cache: TokenCache,
         };

@@ -182,6 +182,61 @@ fn key_paths(prefix: &str, value: &Value, depth: usize) -> Vec<String> {
 /// paths`, always empty here since there is no host `runtime.plugins.
 /// shell.allowed_commands`-style pin to intersect against) are both
 /// unreachable from either surface and are not ported.
+/// `_strip_document_api_key_env` (#669), applied here too: an
+/// `adapters.<name>.api_key_env` in *orch_runtime* is never applied
+/// and never named in the "Applied host settings" notice below --
+/// only its own "ignored" warning names it. Returns the runtime with
+/// every such key removed (so the notice-building loop below never
+/// sees it) and the warnings, in name order.
+fn strip_document_api_key_env_for_notice(
+    orch_runtime: Option<&Dict>,
+    document_name: &str,
+) -> (Option<Dict>, Vec<String>) {
+    let Some(runtime) = orch_runtime else {
+        return (None, Vec::new());
+    };
+    let Some(adapters) = runtime
+        .get(&Value::Str("adapters".to_string()))
+        .and_then(Value::as_dict)
+    else {
+        return (Some(runtime.clone()), Vec::new());
+    };
+    let mut warnings = Vec::new();
+    let mut filtered_adapters = Dict::new();
+    for (name, entry) in adapters {
+        let name_str = name.as_str().unwrap_or_default();
+        if let Some(entry_dict) = entry.as_dict() {
+            if entry_dict.contains_key(&Value::Str("api_key_env".to_string())) {
+                warnings.push(format!(
+                    "runtime.adapters.{name_str}.api_key_env from {document_name} ignored: \
+                     only config chooses which environment variable an adapter's key comes \
+                     from"
+                ));
+                let mut remainder = entry_dict.clone();
+                remainder.shift_remove(&Value::Str("api_key_env".to_string()));
+                if !remainder.is_empty() {
+                    filtered_adapters.insert(name.clone(), Value::Dict(remainder));
+                }
+                continue;
+            }
+        }
+        filtered_adapters.insert(name.clone(), entry.clone());
+    }
+    if warnings.is_empty() {
+        return (Some(runtime.clone()), Vec::new());
+    }
+    let mut result = runtime.clone();
+    if filtered_adapters.is_empty() {
+        result.shift_remove(&Value::Str("adapters".to_string()));
+    } else {
+        result.insert(
+            Value::Str("adapters".to_string()),
+            Value::Dict(filtered_adapters),
+        );
+    }
+    (Some(result), warnings)
+}
+
 fn host_setting_warnings(document: &Value, document_name: &str) -> Vec<String> {
     let dict = document.as_dict();
     let orch_plugins = dict
@@ -191,9 +246,11 @@ fn host_setting_warnings(document: &Value, document_name: &str) -> Vec<String> {
     let orch_runtime = dict
         .and_then(|d| d.get(&Value::Str("runtime".to_string())))
         .and_then(Value::as_dict);
+    let (orch_runtime, api_key_env_warnings) =
+        strip_document_api_key_env_for_notice(orch_runtime, document_name);
 
     let mut runtime_paths = Vec::new();
-    if let Some(runtime) = orch_runtime {
+    if let Some(runtime) = orch_runtime.as_ref() {
         for (key, value) in runtime {
             let key_str = match key {
                 Value::Str(s) => s.clone(),
@@ -219,17 +276,19 @@ fn host_setting_warnings(document: &Value, document_name: &str) -> Vec<String> {
         .filter_map(|p| p.as_str().map(|s| s.to_string()))
         .collect();
 
-    if runtime_paths.is_empty() && plugin_ids.is_empty() {
-        return Vec::new();
-    }
     let mut parts = runtime_paths;
     if !plugin_ids.is_empty() {
         parts.push(format!("plugins: {}", plugin_ids.join(", ")));
     }
-    vec![format!(
-        "Applied host settings from {document_name}: {}",
-        parts.join(", ")
-    )]
+    let mut result = Vec::new();
+    if !parts.is_empty() {
+        result.push(format!(
+            "Applied host settings from {document_name}: {}",
+            parts.join(", ")
+        ));
+    }
+    result.extend(api_key_env_warnings);
+    result
 }
 
 /// `orchestration_path.resolve().parent` -- an absolute, symlink-

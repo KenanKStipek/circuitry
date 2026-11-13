@@ -232,6 +232,36 @@ fn is_env_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// `adapters/factory.py::resolve_api_key_env` -- `cfg["api_key_env"]`
+/// when present, else *default*: the name of the environment variable
+/// an adapter reads its credential from. An empty string is a valid,
+/// explicit override (self-hosted endpoints that take no key at all);
+/// only a present, non-empty value must match an environment-variable
+/// name. Only config ever reaches a builder with this key still set --
+/// `runtime.adapters.<name>.api_key_env` from an orchestration document
+/// is stripped before merge (`electricity-config`'s own
+/// `strip_document_api_key_env`), on the security grounds in
+/// `docs/threat-model.md`.
+pub fn resolve_api_key_env(
+    cfg: &Value,
+    default: &str,
+    adapter_name: &str,
+) -> Result<String, AdapterError> {
+    match cfg_get(cfg, "api_key_env") {
+        None => Ok(default.to_string()),
+        Some(Value::Str(s)) if s.is_empty() || is_env_name(s) => Ok(s.clone()),
+        Some(other) => Err(AdapterError {
+            message: format!(
+                "runtime.adapters.{adapter_name}.api_key_env must be an environment \
+                 variable name, got {}",
+                other.py_repr()
+            ),
+            retry: RetryInfo::not_retryable(),
+            py_class: PyExc::ValueError,
+        }),
+    }
+}
+
 /// `os.path.expanduser(value)` for a value starting `~/`: the home
 /// directory (`$HOME`, else the password database -- `std::env::
 /// home_dir`'s own order, the same one Python's `expanduser` follows)
@@ -391,6 +421,51 @@ mod tests {
         let cfg = dict(&[("api_key_env", Value::None)]);
         assert_eq!(cfg_get(&cfg, "api_key_env"), Some(&Value::None));
         assert_eq!(cfg_get(&cfg, "missing"), None);
+    }
+
+    #[test]
+    fn resolve_api_key_env_defaults_when_absent() {
+        assert_eq!(
+            resolve_api_key_env(&Value::None, "GROQ_API_KEY", "groq").unwrap(),
+            "GROQ_API_KEY"
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_env_keeps_an_explicit_name_or_empty_string() {
+        let cfg = dict(&[("api_key_env", Value::Str("GROQ_TEAM_KEY".to_string()))]);
+        assert_eq!(
+            resolve_api_key_env(&cfg, "GROQ_API_KEY", "groq").unwrap(),
+            "GROQ_TEAM_KEY"
+        );
+        let cfg = dict(&[("api_key_env", Value::Str(String::new()))]);
+        assert_eq!(
+            resolve_api_key_env(&cfg, "NIM_API_KEY", "nvidia-nim").unwrap(),
+            ""
+        );
+    }
+
+    #[test]
+    fn resolve_api_key_env_rejects_an_invalid_name() {
+        let cfg = dict(&[("api_key_env", Value::Str("not a name!".to_string()))]);
+        let err = resolve_api_key_env(&cfg, "GROQ_API_KEY", "groq").unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.groq.api_key_env must be an environment variable name, \
+             got 'not a name!'"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
+        assert!(!err.retry.retryable);
+    }
+
+    #[test]
+    fn resolve_api_key_env_rejects_a_non_string() {
+        let cfg = dict(&[("api_key_env", Value::from(5i64))]);
+        let err = resolve_api_key_env(&cfg, "GROQ_API_KEY", "groq").unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.groq.api_key_env must be an environment variable name, got 5"
+        );
     }
 
     #[test]

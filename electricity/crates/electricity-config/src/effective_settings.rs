@@ -134,6 +134,59 @@ fn ceiling_intersected_paths(cfg: &CircuitryConfig) -> Vec<String> {
         .collect()
 }
 
+/// `_strip_document_api_key_env` (#669): drop a document's
+/// `adapters.<name>.api_key_env`, unconditionally -- unlike
+/// [`strip_disallowed_adapter_retargets`], not gated on
+/// `enabled_adapters`, and not restored for a trusted document either
+/// (every document electricity runs is trusted, this module's own doc
+/// comment): only config ever chooses which environment variable an
+/// adapter's key comes from. A document run by path can already set
+/// `base_url`; letting it also choose `api_key_env` would let it point
+/// an adapter's Bearer header at any variable in the host's
+/// environment, not just that provider's own key (`docs/threat-model.md`).
+fn strip_document_api_key_env(
+    orch_runtime: &Dict,
+    document_name: Option<&str>,
+) -> (Dict, Vec<String>) {
+    let Some(adapters) = orch_runtime
+        .get(&Value::Str("adapters".to_string()))
+        .and_then(Value::as_dict)
+    else {
+        return (orch_runtime.clone(), Vec::new());
+    };
+    let source = document_name.unwrap_or("the orchestration");
+    let mut warnings = Vec::new();
+    let mut filtered = Dict::new();
+    for (name, entry) in adapters {
+        let name_str = name.as_str().unwrap_or_default();
+        if let Some(entry_dict) = entry.as_dict() {
+            if entry_dict.contains_key(&Value::Str("api_key_env".to_string())) {
+                warnings.push(format!(
+                    "runtime.adapters.{name_str}.api_key_env from {source} ignored: only \
+                     config chooses which environment variable an adapter's key comes from"
+                ));
+                let mut remainder = entry_dict.clone();
+                remainder.shift_remove(&Value::Str("api_key_env".to_string()));
+                if !remainder.is_empty() {
+                    filtered.insert(name.clone(), Value::Dict(remainder));
+                }
+                continue;
+            }
+        }
+        filtered.insert(name.clone(), entry.clone());
+    }
+    if warnings.is_empty() {
+        return (orch_runtime.clone(), Vec::new());
+    }
+    let mut result = orch_runtime.clone();
+    if filtered.is_empty() {
+        result.shift_remove(&Value::Str("adapters".to_string()));
+    } else {
+        result.insert(Value::Str("adapters".to_string()), Value::Dict(filtered));
+    }
+    (result, warnings)
+}
+
 /// `_strip_disallowed_adapter_retargets` (#656): drop a document's
 /// `adapters.<name>.adapter` key when `enabled_adapters` is set --
 /// only config may then define or retarget an adapter alias, or a
@@ -466,6 +519,8 @@ pub fn effective_settings_with_profile(
 
     let orch_plugins = orchestration_plugins(doc_dict)?;
     let orch_runtime = orchestration_runtime(doc_dict)?;
+    let (orch_runtime, api_key_env_warnings) =
+        strip_document_api_key_env(&orch_runtime, document_name);
     let (orch_runtime, alias_retarget_warnings) = strip_disallowed_adapter_retargets(
         &orch_runtime,
         config.enabled_adapters.as_deref(),
@@ -483,6 +538,7 @@ pub fn effective_settings_with_profile(
         config,
         document_name,
     ));
+    warnings.extend(api_key_env_warnings);
     warnings.extend(alias_retarget_warnings);
 
     // plugins: config's own list, then the orchestration's (trusted, so
@@ -735,6 +791,62 @@ mod tests {
             settings.warnings,
             vec!["Applied host settings from doc.yml: runtime.secrets.doc_tok".to_string()]
         );
+    }
+
+    #[test]
+    fn document_api_key_env_is_ignored_with_a_warning_and_never_merged() {
+        let mut config = CircuitryConfig::default();
+        let mut config_adapters = Dict::new();
+        config_adapters.insert(
+            Value::Str("openai".to_string()),
+            Value::Dict(Dict::new()),
+        );
+        let mut config_runtime = Dict::new();
+        config_runtime.insert(
+            Value::Str("adapters".to_string()),
+            Value::Dict(config_adapters),
+        );
+        config.runtime = Some(Value::Dict(config_runtime));
+
+        let mut entry = Dict::new();
+        entry.insert(
+            Value::Str("api_key_env".to_string()),
+            Value::Str("ATTACKER_CHOSEN_VAR".to_string()),
+        );
+        let mut doc_adapters = Dict::new();
+        doc_adapters.insert(Value::Str("openai".to_string()), Value::Dict(entry));
+        let mut doc_runtime = Dict::new();
+        doc_runtime.insert(
+            Value::Str("adapters".to_string()),
+            Value::Dict(doc_adapters),
+        );
+
+        let settings = effective_settings(
+            &config,
+            &doc(vec![("runtime", Value::Dict(doc_runtime))]),
+            Some("evil.yml"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.warnings,
+            vec![
+                "runtime.adapters.openai.api_key_env from evil.yml ignored: only config \
+                 chooses which environment variable an adapter's key comes from"
+                    .to_string()
+            ]
+        );
+        let merged_openai = settings
+            .runtime
+            .as_ref()
+            .and_then(Value::as_dict)
+            .and_then(|r| get(r, "adapters"))
+            .and_then(Value::as_dict)
+            .and_then(|a| get(a, "openai"))
+            .and_then(Value::as_dict)
+            .cloned()
+            .unwrap_or_default();
+        assert!(!merged_openai.contains_key(&Value::Str("api_key_env".to_string())));
     }
 
     #[test]

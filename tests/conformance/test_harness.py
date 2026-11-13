@@ -300,14 +300,42 @@ def test_load_case_accepts_well_formed_fake_credentials(tmp_path: Path) -> None:
     assert metadata["fake_credentials"] == {"OPENAI_API_KEY": "circuitry-test-fake-key"}
 
 
-def test_load_case_rejects_a_fake_credentials_key_outside_credential_env_vars(
+def test_load_case_accepts_a_custom_fake_credentials_key(tmp_path: Path) -> None:
+    """A custom variable name (not one of CREDENTIAL_ENV_VARS) is accepted,
+    for a case exercising a per-adapter `api_key_env` override (#669)."""
+    case_dir = _write_case(
+        tmp_path,
+        {
+            "expect": "success",
+            "fake_credentials": {"OPENAI_TEAM_KEY": "circuitry-test-fake-team-key"},
+        },
+    )
+    metadata = harness.load_case(case_dir)
+    assert metadata["fake_credentials"] == {"OPENAI_TEAM_KEY": "circuitry-test-fake-team-key"}
+
+
+def test_load_case_rejects_a_fake_credentials_key_shaped_like_a_circuitry_override(
     tmp_path: Path,
 ) -> None:
     case_dir = _write_case(
         tmp_path,
-        {"expect": "success", "fake_credentials": {"NOT_A_CREDENTIAL": "circuitry-test-fake-x"}},
+        {
+            "expect": "success",
+            "fake_credentials": {"CIRCUITRY_MODEL": "circuitry-test-fake-x"},
+        },
     )
-    with pytest.raises(ValueError, match="not in"):
+    with pytest.raises(ValueError, match="must be a"):
+        harness.load_case(case_dir)
+
+
+def test_load_case_rejects_a_fake_credentials_key_not_shaped_like_a_variable(
+    tmp_path: Path,
+) -> None:
+    case_dir = _write_case(
+        tmp_path,
+        {"expect": "success", "fake_credentials": {"not a name!": "circuitry-test-fake-x"}},
+    )
+    with pytest.raises(ValueError, match="must be a"):
         harness.load_case(case_dir)
 
 
