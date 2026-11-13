@@ -8,6 +8,7 @@ effects:
   - type: reflector
     name: plan_it
     prime_template: "Plan it."
+    allow_tools: [json]
     effects:
       - type: prompt
         name: propose_steps
