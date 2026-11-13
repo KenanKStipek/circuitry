@@ -1070,7 +1070,16 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         }
     };
 
-    let out_path = run_args.out.map(PathBuf::from);
+    // DESIGN.md §6.8: "--resume with no explicit --out of its own writes
+    // back to the file it resumed from" -- --state <file> --resume,
+    // with no --out given, defaults --out to that same file.
+    let out_path = run_args.out.map(PathBuf::from).or_else(|| {
+        if run_args.resume.is_some() {
+            run_args.state.clone().map(PathBuf::from)
+        } else {
+            None
+        }
+    });
 
     // `--resume` (issue #727): only the `--state <file>` form is in
     // scope -- `cof run --resume last`/`--resume <run-id>` both need a
