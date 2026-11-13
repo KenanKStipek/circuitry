@@ -120,12 +120,13 @@ def test_create_select_upsert_delete_round_trip(
     assert _first_record(upserted.value)["name"] == "grace"
 
     after_upsert = plugin.execute(params={"mode": "select", "target": record_id})
+    assert isinstance(after_upsert.value, list)
     assert _first_record(after_upsert.value)["score"] == 2
 
     plugin.execute(params={"mode": "delete", "record": record_id})
 
     remaining = plugin.execute(params={"mode": "select", "target": table})
-    assert remaining.value in ([], None)
+    assert remaining.value == []
 
 
 def test_query_with_bound_params(plugin: SurrealDBPlugin, table: str) -> None:
@@ -222,7 +223,7 @@ def test_database_scoped_editor_and_viewer_authenticate_with_correct_grants(
     denied = viewer.execute(
         params={"mode": "create", "table": table, "data": {"name": "grace"}}
     )
-    assert denied.value in ([], None)
+    assert denied.value == []
 
     selected = viewer.execute(params={"mode": "select", "target": table})
     assert _first_record(selected.value)["name"] == "ada"

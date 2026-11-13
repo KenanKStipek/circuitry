@@ -39,8 +39,7 @@ from urllib.parse import urlsplit
 
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
-from ..surrealdb_sdk import record_target, run_query
-from ..surrealdb_sdk import run as run_sdk_call
+from ..surrealdb_sdk import record_target, run_query, run_select, run_write
 from .base import ToolResult
 
 DEFAULT_URL = "ws://localhost:8000/rpc"
@@ -186,20 +185,20 @@ def _build_call(mode: str, params: dict[str, Any]) -> Callable[[Any], Any]:
 
     if mode == "select":
         target = _require_str(params, ("target", "record", "table"), mode="select")
-        return lambda db: run_sdk_call(db.select(record_target(target)))
+        return lambda db: run_select(db.select(record_target(target)))
 
     if mode == "create":
         table = _require_str(params, ("table", "target"), mode="create")
         data = _require_data(params, mode="create")
-        return lambda db: run_sdk_call(db.create(record_target(table), data))
+        return lambda db: run_write(db.create(record_target(table), data))
 
     if mode == "upsert":
         record = _require_str(params, ("record", "target"), mode="upsert")
         data = _require_data(params, mode="upsert")
-        return lambda db: run_sdk_call(db.upsert(record_target(record), data))
+        return lambda db: run_write(db.upsert(record_target(record), data))
 
     record = _require_str(params, ("record", "target"), mode="delete")
-    return lambda db: run_sdk_call(db.delete(record_target(record)))
+    return lambda db: run_write(db.delete(record_target(record)))
 
 
 def _signin_scopes(namespace: str, database: str) -> list[dict[str, str]]:

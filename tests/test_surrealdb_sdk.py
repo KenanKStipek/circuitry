@@ -8,7 +8,7 @@ from typing import Any
 
 import pytest
 
-from circuitry.surrealdb_sdk import record_target, run, run_query
+from circuitry.surrealdb_sdk import record_target, run, run_query, run_select, run_write
 
 
 class _FakeStringRecordId:
@@ -87,6 +87,34 @@ def test_run_query_propagates_a_statement_error() -> None:
     builder = _Builder(error=RuntimeError("Parse error: boom"))
     with pytest.raises(RuntimeError, match="Parse error"):
         run_query(builder)
+
+
+def test_run_select_leaves_a_list_alone() -> None:
+    assert run_select([{"name": "ada"}, {"name": "grace"}]) == [
+        {"name": "ada"},
+        {"name": "grace"},
+    ]
+
+
+def test_run_select_wraps_a_bare_record_in_a_list() -> None:
+    builder = _Builder(result={"name": "ada"})
+    assert run_select(builder) == [{"name": "ada"}]
+
+
+def test_run_select_turns_none_into_an_empty_list() -> None:
+    builder = _Builder(result=None)
+    assert run_select(builder) == []
+
+
+def test_run_write_leaves_a_record_or_list_alone() -> None:
+    assert run_write({"name": "ada"}) == {"name": "ada"}
+    assert run_write([{"name": "ada"}]) == [{"name": "ada"}]
+    assert run_write([]) == []
+
+
+def test_run_write_turns_none_into_an_empty_list() -> None:
+    builder = _Builder(result=None)
+    assert run_write(builder) == []
 
 
 def test_record_target_wraps_a_table_colon_id_string(

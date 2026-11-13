@@ -11,6 +11,12 @@ sent until its ``.execute()`` is called. SDK 3.x also reads a bare
 string passed as a record target as a table name, never a specific
 record, unless it is wrapped in ``StringRecordId`` — SDK 2.x parses a
 ``"table:id"`` string into a record id on its own.
+
+SDK 3.x also unwraps a single-record result further than SDK 2.x does:
+a ``select()`` of one record id returns the bare record (``None`` if
+missing) rather than a one-element list, and a ``create()``/``upsert()``/
+``delete()`` that touches no rows returns ``None`` rather than ``[]``.
+``run_select`` and ``run_write`` normalise both back to SDK 2.x's shape.
 """
 
 from __future__ import annotations
@@ -45,6 +51,34 @@ def run_query(value: Any) -> Any:
         statements = execute()
         return statements[0] if statements else None
     return value
+
+
+def run_select(value: Any) -> Any:
+    """Run ``select()``'s builder/result, normalised to SDK 2.x's shape.
+
+    SDK 2.x's ``select()`` never unwraps: the result is always a list, even
+    for a single record id. SDK 3.x's ``select()`` unwraps a single-record
+    target to the bare record, or to ``None`` if it doesn't exist. This
+    undoes that so callers never have to branch on which SDK is installed.
+    """
+    result = run(value)
+    if result is None:
+        return []
+    if isinstance(result, dict):
+        return [result]
+    return result
+
+
+def run_write(value: Any) -> Any:
+    """Run ``create()``/``upsert()``/``delete()``'s builder/result, normalised to SDK 2.x's shape.
+
+    Both SDKs unwrap a single-record write to the bare record. They differ
+    only when no row was written or deleted (e.g. a permissions clause
+    silently dropped the write): SDK 2.x gives ``[]``, SDK 3.x gives
+    ``None``.
+    """
+    result = run(value)
+    return [] if result is None else result
 
 
 def record_target(value: str) -> Any:

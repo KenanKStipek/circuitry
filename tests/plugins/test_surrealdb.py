@@ -115,6 +115,22 @@ def _plugin() -> SurrealDBPlugin:
     return SurrealDBPlugin(url=DEFAULT_URL, namespace="test_ns", database="test_db")
 
 
+class _FakeStringRecordId:
+    """Mirrors SDK 3.x's ``StringRecordId``: a wrapper compared by value."""
+
+    def __init__(self, value: str) -> None:
+        self.value = value
+
+    def __eq__(self, other: object) -> bool:
+        return isinstance(other, _FakeStringRecordId) and other.value == self.value
+
+    def __hash__(self) -> int:
+        return hash(self.value)
+
+    def __repr__(self) -> str:
+        return f"StringRecordId({self.value!r})"
+
+
 class _FakeBuilder:
     """Mimics SDK 3.x's builder: nothing runs until ``.execute()``."""
 
@@ -167,6 +183,7 @@ def fake_builder_sdk(monkeypatch: pytest.MonkeyPatch) -> type[FakeSurrealBuilder
 
     module = types.ModuleType("surrealdb")
     module.Surreal = FakeSurrealBuilderSDK  # type: ignore[attr-defined]
+    module.StringRecordId = _FakeStringRecordId  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "surrealdb", module)
 
     monkeypatch.setenv("SURREAL_USER", "root")
@@ -216,13 +233,54 @@ def test_builder_sdk_select_create_upsert_delete_dispatch(
     )
     assert (
         "upsert",
-        ("person:1", {"name": "grace"}),
+        (_FakeStringRecordId("person:1"), {"name": "grace"}),
     ) in fake_builder_sdk.instances[-1].calls
     assert upserted.value == [{"id": "person:1", "name": "ada"}]
 
     deleted = plugin.execute(params={"mode": "delete", "record": "person:1"})
-    assert ("delete", ("person:1",)) in fake_builder_sdk.instances[-1].calls
+    assert (
+        "delete",
+        (_FakeStringRecordId("person:1"),),
+    ) in fake_builder_sdk.instances[-1].calls
     assert deleted.value == [{"id": "person:1", "name": "ada"}]
+
+
+def test_builder_sdk_select_of_a_record_id_unwraps_to_a_single_element_list(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    # SDK 3.x unwraps select() of a single record id to the bare record;
+    # the plugin normalises it back to SDK 2.x's always-a-list shape.
+    fake_builder_sdk.op_result = {"id": "person:1", "name": "ada"}
+
+    result = _plugin().execute(params={"mode": "select", "target": "person:1"})
+
+    db = fake_builder_sdk.instances[-1]
+    assert ("select", (_FakeStringRecordId("person:1"),)) in db.calls
+    assert result.value == [{"id": "person:1", "name": "ada"}]
+
+
+def test_builder_sdk_select_of_a_missing_record_is_an_empty_list(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    fake_builder_sdk.op_result = None
+
+    result = _plugin().execute(params={"mode": "select", "target": "person:1"})
+
+    assert result.value == []
+
+
+def test_builder_sdk_denied_create_is_an_empty_list(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    # A permissions clause can silently drop a write; SDK 3.x reports it as
+    # None where SDK 2.x reports []. The plugin normalises both to [].
+    fake_builder_sdk.op_result = None
+
+    result = _plugin().execute(
+        params={"mode": "create", "table": "person", "data": {"name": "ada"}}
+    )
+
+    assert result.value == []
 
 
 def test_builder_sdk_surrealql_error_raised_from_execute(
