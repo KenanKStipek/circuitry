@@ -191,6 +191,112 @@ async fn a_named_loop_resumes_at_its_first_unfinished_pass() {
 }
 
 #[tokio::test]
+async fn a_while_loop_resumes_its_unfinished_pass_without_re_evaluating_the_condition() {
+    let dir = temp_dir("while");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "interface:\n  inputs:\n    go: {default: true}\n\
+         effects:\n  - name: w\n    type: loop\n    max_iterations: 1\n    \
+         while: {mode: cel, expr: state.input.go}\n    body:\n      - name: step\n        \
+         type: tool\n        provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+
+    // Interrupted mid-pass-0: the body itself never finished (unlike
+    // `a_named_loop_resumes_at_its_first_unfinished_pass`'s own "pass
+    // already done, bookkeeping lagging" shape) -- `completed_passes`
+    // is empty, and the pass's own in-flight step is removed outright.
+    set(&mut state, "prime.w.meta.completed_at", Value::None);
+    set(
+        &mut state,
+        "prime.w.meta.completed_passes",
+        Value::List(vec![]),
+    );
+    remove(&mut state, "prime.w.iter_0", "step");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+    // The condition would now select "stop" if it were ever
+    // re-evaluated for the pass this resumes -- it must not be: that
+    // pass already held before the interrupt. `max_iterations: 1`
+    // means the *next* pass's own condition check (which does
+    // re-evaluate) is what actually stops the loop here, not this
+    // override on its own.
+    req.inputs.insert("go".to_string(), "false".to_string());
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let step = child(at_mut(&mut resumed, "prime.w.iter_0"), "step");
+    assert!(
+        child(&child(&step, "meta"), "completed_at") != Value::None,
+        "pass 0 must still run to completion: {step:?}"
+    );
+    let completed_passes = child(
+        &child(at_mut(&mut resumed, "prime.w"), "meta"),
+        "completed_passes",
+    );
+    assert_eq!(
+        completed_passes,
+        Value::List(vec![Value::from(0)]),
+        "pass 0 completed; no further pass started"
+    );
+}
+
+#[tokio::test]
+async fn a_chain_resumes_at_the_first_effect_that_did_not_finish_whole() {
+    let dir = temp_dir("chain-positional");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n  - name: b\n    \
+         type: tool\n    provider: uuid\n  - name: c\n    type: tool\n    provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_a = child(&state, "prime");
+    let saved_a = child(&saved_a, "a");
+
+    // b never finished; c (positioned after it in the same chain) was
+    // never even reached -- a plain crash mid-chain leaves exactly
+    // this shape (a's own node intact, b's own node absent or
+    // unfinished, c's own node never created at all).
+    remove(&mut state, "prime", "b");
+    remove(&mut state, "prime", "c");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime"), "a"),
+        saved_a,
+        "a already finished and comes before the first unfinished effect -- skipped and reused"
+    );
+    for name in ["b", "c"] {
+        let node = child(at_mut(&mut resumed, "prime"), name);
+        assert!(
+            child(&child(&node, "meta"), "completed_at") != Value::None,
+            "{name} must actually run on resume: {node:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_use_without_record_children_reruns_its_child_whole() {
     let dir = temp_dir("use-no-record-children");
     let config = write(&dir, "config.json", "{}");
