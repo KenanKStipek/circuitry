@@ -37,6 +37,7 @@
 //! precisely so `--last` (issue #760) can stand in for it, so Click never
 //! raises a usage error for its absence either.
 
+use std::io::IsTerminal as _;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
@@ -342,17 +343,20 @@ fn normalize_path_str(raw: &str) -> String {
 /// own accessors are keyed by name, not position, so this is purely for
 /// a byte-for-byte-readable file, not a functional requirement. Every
 /// key `cof run` writes that electricity's own CLI has no flag for
-/// (`print_state`/`dry_run`/`json_out`/`verbose`/`tail`/`skip_preflight`/
+/// (`print_state`/`dry_run`/`verbose`/`tail`/`skip_preflight`/
 /// `profile_from_state`/`model`/`explain_routing`/`decompose_out`/
 /// `scoring`/`routing`/`decompose`/`split`) is written as the value an
 /// invocation that never passed the reference's own equivalent flag
-/// would stash -- `false`/`null` either way. `trust_document` is always
-/// `true` and `remote_library_source` always `false`: electricity's own
-/// positional orchestration argument is always a literal path, never a
-/// library name (this module's own earlier doc comment).
+/// would stash -- `false`/`null` either way; `json_out` is the one
+/// exception (see *piped*'s own call-site comment below). `trust_document`
+/// is always `true` and `remote_library_source` always `false`:
+/// electricity's own positional orchestration argument is always a
+/// literal path, never a library name (this module's own earlier doc
+/// comment).
 fn last_run_stash_args(
     run_args: &RunArgs,
     resume_default_out_path: Option<&Path>,
+    piped: bool,
 ) -> electricity_value::Dict {
     use electricity_value::{Dict, Value};
 
@@ -397,8 +401,17 @@ fn last_run_stash_args(
     );
     args.insert(Value::Str("print_state".to_string()), Value::Bool(false));
     args.insert(Value::Str("dry_run".to_string()), Value::Bool(false));
-    args.insert(Value::Str("json_out".to_string()), Value::Bool(false));
-    args.insert(Value::Str("quiet".to_string()), Value::Bool(run_args.quiet));
+    // `cli/app.py::run_cmd`'s own auto-pipe detection (`if not sys.
+    // stdout.isatty(): json_out = True; quiet = True`, run ahead of
+    // everything else and unconditional on any flag) -- electricity has
+    // no `--tail` of its own for that check's `and not tail` half to
+    // ever matter, and no `--json` flag either, so *piped* alone decides
+    // both fields here the way it decides both of cof's.
+    args.insert(Value::Str("json_out".to_string()), Value::Bool(piped));
+    args.insert(
+        Value::Str("quiet".to_string()),
+        Value::Bool(run_args.quiet || piped),
+    );
     args.insert(Value::Str("verbose".to_string()), Value::Bool(false));
     args.insert(
         Value::Str("live_state".to_string()),
@@ -410,12 +423,19 @@ fn last_run_stash_args(
     );
     args.insert(
         Value::Str("env_vars".to_string()),
-        Value::List(
-            electricity_config::redacted_env_pairs(&run_args.inputs)
-                .into_iter()
-                .map(Value::Str)
-                .collect(),
-        ),
+        // `None` with no `-e` at all, matching Typer's own multi-option
+        // default -- `cli/redaction.py::redact_env_pairs(None)` returns
+        // `None` too, so `cof run` with no `-e` stashes `null`, never `[]`.
+        if run_args.inputs.is_empty() {
+            Value::None
+        } else {
+            Value::List(
+                electricity_config::redacted_env_pairs(&run_args.inputs)
+                    .into_iter()
+                    .map(Value::Str)
+                    .collect(),
+            )
+        },
     );
     args.insert(
         Value::Str("label".to_string()),
@@ -1527,7 +1547,11 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
         if let Some(path) = home.as_deref().map(electricity_config::last_run_path) {
             electricity_config::write_last_run(
                 &path,
-                last_run_stash_args(&run_args, resume_default_out_path.as_deref()),
+                last_run_stash_args(
+                    &run_args,
+                    resume_default_out_path.as_deref(),
+                    !std::io::stdout().is_terminal(),
+                ),
             );
         }
     }

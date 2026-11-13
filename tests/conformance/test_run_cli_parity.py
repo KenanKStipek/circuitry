@@ -1188,3 +1188,64 @@ def test_last_normalizes_a_leading_dot_slash_the_same_way_cof_does(
     assert replayed.returncode == 0, (replayed.stdout, replayed.stderr)
     state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
     assert state["input"]["topic"] == "widgets"
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_last_stash_is_byte_identical_between_engines_for_the_same_run(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """issue #760's own core requirement: the same keys, key order and
+    JSON formatting, for the same invocation -- compared here against a
+    fixed reference captured from `cof` once, rather than engine-to-
+    engine, so a change that drifts *both* engines' own writers the same
+    way (and so would pass an engine-to-engine comparison) still fails."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    written = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "-e", "topic=widgets", "--out", "out.json"],
+    )
+    assert written.returncode == 0, (engine, written.stdout, written.stderr)
+
+    expected = {
+        "orchestration": "orchestration.yml",
+        "config": "config.json",
+        "state": None,
+        "out": "out.json",
+        "pretty": False,
+        "print_state": False,
+        "dry_run": False,
+        "json_out": True,
+        "quiet": True,
+        "verbose": False,
+        "live_state": None,
+        "events": None,
+        "env_vars": ["topic=widgets"],
+        "label": None,
+        "tail": False,
+        "skip_preflight": False,
+        "allow_capabilities": None,
+        "profile": None,
+        "profile_from_state": None,
+        "adapter": None,
+        "model": None,
+        "explain_routing": False,
+        "decompose_out": None,
+        "scoring": None,
+        "routing": None,
+        "decompose": None,
+        "split": None,
+        "trust_document": True,
+        "remote_library_source": False,
+    }
+    stashed = json.loads(_stash_path(home_dir).read_text(encoding="utf-8"))
+    assert stashed == expected, (engine, stashed)
+    # `==` above doesn't check key order -- `json.loads` preserves
+    # insertion order (Python 3.7+), so this does separately.
+    assert list(stashed.keys()) == list(expected.keys()), (engine, list(stashed.keys()))
+    raw = _stash_path(home_dir).read_bytes()
+    assert raw.endswith(b"\n") and raw.count(b"\n") == 1
+    assert b", " in raw and b": " in raw
