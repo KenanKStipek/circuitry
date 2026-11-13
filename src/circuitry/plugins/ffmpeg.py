@@ -3,11 +3,13 @@ from __future__ import annotations
 import re
 import shlex
 import subprocess
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
 from ..core.cancellation import run_tracked
 from ..preflight import CheckResult
+from ..subprocess_live import SubprocessLiveTracker
 from ._subprocess import check_binary, merged_env, resolve_plugin_binary
 from .base import ToolResult
 
@@ -97,6 +99,7 @@ class FfmpegPlugin:
         *,
         params: dict[str, Any],
         timeout_seconds: int = 300,
+        on_live: Callable[[dict[str, Any] | None], None] | None = None,
     ) -> ToolResult:
         input_path = params.get("input")
         if not input_path or not isinstance(input_path, str):
@@ -146,21 +149,29 @@ class FfmpegPlugin:
         )
         cmd[0] = binary
 
+        live = SubprocessLiveTracker(on_live) if on_live is not None else None
         try:
-            proc = run_tracked(
-                cmd,
-                timeout=timeout_seconds,
-                env=merged_env(self.env),
-            )
-        except FileNotFoundError as e:
-            raise RuntimeError(
-                "ffmpeg is not installed or not on PATH. "
-                "Install ffmpeg, or set runtime.plugins.ffmpeg.binary."
-            ) from e
-        except subprocess.TimeoutExpired as e:
-            raise RuntimeError(
-                f"ffmpeg timed out after {timeout_seconds}s"
-            ) from e
+            try:
+                proc = run_tracked(
+                    cmd,
+                    timeout=timeout_seconds,
+                    env=merged_env(self.env),
+                    on_live_chunk=live.record if live is not None else None,
+                )
+            except FileNotFoundError as e:
+                raise RuntimeError(
+                    "ffmpeg is not installed or not on PATH. "
+                    "Install ffmpeg, or set runtime.plugins.ffmpeg.binary."
+                ) from e
+            except subprocess.TimeoutExpired as e:
+                raise RuntimeError(
+                    f"ffmpeg timed out after {timeout_seconds}s"
+                ) from e
+        finally:
+            if live is not None:
+                live.close()
+                assert on_live is not None
+                on_live(None)
 
         if proc.returncode != 0:
             cmd_str = " ".join(shlex.quote(a) for a in cmd)

@@ -1288,6 +1288,7 @@ mod tests {
             progress_eta_s: None,
             live: None,
             prompt_live: None,
+            tool_live: None,
             value: serde_json::Value::Null,
             meta: serde_json::json!({}),
         }

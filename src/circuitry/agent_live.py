@@ -216,6 +216,25 @@ class LivePublisher:
     about *interval* of it, even if nothing else happens afterwards: the
     writer thread wakes on its own once the window ends, it doesn't wait
     for the next :meth:`update` call.
+
+    *snapshot* may be a plain ``dict`` or a zero-argument callable that
+    builds one. A caller with a cheap, already-final snapshot (``agent``'s
+    own :class:`LiveTracker`) passes the dict directly. A caller whose own
+    snapshot is itself costly to build, and whose own "has anything
+    changed" signal arrives far more often than this publishes (a
+    subprocess tool's live tail, #741), instead passes a bound method --
+    the same one, every call -- so :meth:`update` only ever does an
+    attribute lookup and a ``notify()``, and the actual build happens at
+    most once a second, inside :meth:`_loop` itself, right before
+    *publish* is called with its result. That also closes a race a
+    caller-built snapshot would otherwise have: two concurrent callers
+    (a subprocess tool's own stdout/stderr reader threads) each building
+    their own dict from the caller's state and racing to set ``_pending``
+    could leave the *older* one published, since whichever call reaches
+    this lock first is no guarantee of which call read the newer state.
+    With a shared builder, only :meth:`_loop` itself ever calls it, and
+    always right before publishing -- so it always reads whatever is
+    current at that moment, however many updates were coalesced into it.
     """
 
     def __init__(
@@ -229,7 +248,7 @@ class LivePublisher:
         self._interval = interval
         self._now = now
         self._wake = threading.Condition()
-        self._pending: dict[str, Any] | None = None
+        self._pending: dict[str, Any] | Callable[[], dict[str, Any]] | None = None
         self._closed = False
         self._next_due = 0.0
         self._thread = threading.Thread(
@@ -237,7 +256,7 @@ class LivePublisher:
         )
         self._thread.start()
 
-    def update(self, snapshot: dict[str, Any]) -> None:
+    def update(self, snapshot: dict[str, Any] | Callable[[], dict[str, Any]]) -> None:
         # `threading.Condition.__exit__` is pure Python (#555's deadlock
         # class): a signal landing mid-release on the main thread -- the
         # thread a sequential chain's own effect runs on -- would leak
@@ -268,7 +287,7 @@ class LivePublisher:
             # kill this thread -- the same as `LiveStateMirror._write_loop`
             # already does for its own writer thread (#636 review).
             try:
-                self._publish(snapshot)
+                self._publish(snapshot() if callable(snapshot) else snapshot)
             except Exception:
                 logger.warning("agent live publish failed", exc_info=True)
 
