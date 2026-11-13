@@ -24,9 +24,28 @@ state is written. See [`DESIGN.md`](DESIGN.md) §4.2.
 ```
 osi do-thing.yml config.json
 osi do-thing.yml -e key=value --engine cof --out-dir ./run
+osi do-thing.yml --label "ticket 42"
 osi watch ./run
 osi watch ./run --plan do-thing.yml --config config.json -e key=value
 ```
+
+`--label TEXT` (issue #752) passes literal text through to whichever engine
+runs the document, overriding its own `label:` template; `osi watch` has no
+`--label` of its own, since it never launches anything. Wherever osi shows a
+run's own generated name (issue #717's `amber-falcon`) -- the header, Select,
+Recent Runs, All's tile bands, the Combined Signal's legend and Per Run
+table, `--log` and the exit summary -- a labelled run shows its label
+instead, cleaned the same way both engines already clean it before writing
+it (whitespace runs collapsed to one space, control characters and escape
+sequences dropped, trimmed and cut to 64 characters), since a file osi reads
+back can be written by anything. Two runs on the same screen sharing a
+label each add their own generated name (`ticket 42 · amber-falcon`), the
+same way two unlabelled runs already add their own run id's first four hex
+digits; in a column (Select's NAME, the Combined Signal's Per Run, a tile's
+own band) a label is cut to 32 display cells, never a byte or character
+count, so CJK or emoji text is cut exactly where it stops fitting -- the
+header alone shows a label in full, cut only once the header itself is too
+narrow for it.
 
 - With no `config.json`, `cof` resolves its own config layers (global,
   project, environment) exactly as `cof run` would. The plan osi compiles
