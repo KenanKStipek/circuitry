@@ -1,0 +1,18 @@
+#!/usr/bin/env python3
+"""A decoy `gh` for the conformance suite (issue #722): on `PATH` next to
+the real override at `override/gh`. If anything ever runs this one
+instead, `runtime.plugins.gh.binary` stopped being honored and the tool
+fell back to a plain `PATH` lookup."""
+
+from __future__ import annotations
+
+import sys
+
+
+def main() -> int:
+    sys.stderr.write("PATH lookup used instead of runtime.plugins.gh.binary\n")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import inspect
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -33,6 +33,26 @@ class GenerateResult:
     warnings: tuple[str, ...] = ()
     #: The call's cost in US dollars, when the provider reports one.
     cost_usd: float | None = None
+
+
+@dataclass(frozen=True)
+class GenerateProgress:
+    """One delta of a streamed reply, handed to ``GenerateOptions.on_progress``.
+
+    ``delta_chars`` is the number of reply characters this delta added;
+    ``delta_count`` is always ``1`` (one call per provider chunk, so a
+    caller counting calls gets a running chunk count for free).
+    ``tokens_sent``/``tokens_received`` are the provider's own exact
+    figures once it has reported them on this call (Anthropic's
+    ``message_start`` reports ``tokens_sent`` before any text arrives;
+    every streaming protocol here reports ``tokens_received`` only on its
+    final event) — ``None`` until then.
+    """
+
+    delta_chars: int
+    delta_count: int
+    tokens_sent: int | None = None
+    tokens_received: int | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +105,15 @@ class GenerateOptions:
     adapter that can ask its provider for output matching it
     (``claude_code``). The runtime validates the reply against it either
     way, so an adapter that ignores it is not warned about.
+
+    ``on_progress``, when set, is called once per chunk a streaming adapter
+    reads from its provider, with a :class:`GenerateProgress`. An adapter
+    that does not stream a given call never calls it. It is not a "set
+    field" for :meth:`set_fields` — streaming is not something an adapter
+    can refuse and need warn about the way it warns about an ignored
+    ``temperature`` or ``stop`` — but it does make :meth:`is_empty` return
+    ``False``, the same as ``json_schema``, so ``call_generate`` still
+    passes a non-empty ``options`` through to an adapter that accepts them.
     """
 
     temperature: float | None = None
@@ -95,6 +124,13 @@ class GenerateOptions:
     messages: tuple[ChatMessage, ...] = ()
     images: tuple[ImageInput, ...] = ()
     json_schema: Mapping[str, Any] | None = None
+    #: Excluded from equality/repr (like a callback would be anywhere else
+    #: in this codebase): two otherwise-identical ``GenerateOptions`` built
+    #: with different closures over the same attempt must still compare
+    #: equal, and a repr naming a closure's own address is never useful.
+    on_progress: Callable[[GenerateProgress], None] | None = field(
+        default=None, compare=False, repr=False
+    )
 
     def set_fields(self) -> list[str]:
         """The fields carrying a value, named the way a warning shows them.
@@ -118,7 +154,12 @@ class GenerateOptions:
         return names
 
     def is_empty(self) -> bool:
-        return not self.set_fields() and not self.deterministic and self.json_schema is None
+        return (
+            not self.set_fields()
+            and not self.deterministic
+            and self.json_schema is None
+            and self.on_progress is None
+        )
 
 
 def ignored_options_warning(

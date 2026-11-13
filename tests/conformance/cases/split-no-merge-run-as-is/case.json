@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 4: no split.merge.template on an object output records no_merge and runs as-is",
+  "description": "prompt_type: object has no native merge rule and no split.merge.template, so meta.decomposition records reason: no_merge, run_as_is (the default on_failure), and the original prompt dispatches whole on its own path.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

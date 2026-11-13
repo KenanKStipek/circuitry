@@ -1,0 +1,7 @@
+{
+  "spec_case": "#752",
+  "description": "`label:` renders `&`, `\"`, `<` and `'` from an `-e` value unescaped: a label is terminal/log text, not HTML, so none of those characters are turned into entities the way they would be in a prompt without `{{{ }}}`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "raw=R&D \"fix\" <x> 'y'"]
+}

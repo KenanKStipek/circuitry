@@ -299,16 +299,26 @@ pub fn allowlists(config: &CircuitryConfig) -> Allowlists {
     }
 }
 
-/// `runtime_config["_capability_allow"]`: always empty for electricity
-/// -- there is no `--allow-capabilities` flag in M0-H's own CLI usage
-/// (issue #431's "CLI" section), so there is nothing a document's own
-/// capability-consent gate could ever be pre-approved with. A function,
-/// not a bare `Vec::new()` at the call site, so issue #431's lane D
-/// (run wiring) has one named seam to widen if a later milestone adds
-/// the flag, instead of a silent empty literal scattered at the call
-/// site.
-pub fn capability_allow() -> Vec<String> {
-    Vec::new()
+/// `runtime_config["_capability_allow"]`: `--allow-capabilities`' own
+/// parsed set, deduplicated and sorted (`cli/app.py::
+/// _parse_allow_capabilities` already returns a `frozenset`, so `cli/
+/// runtime_shim.py::run`'s own `sorted(req.allow_capabilities)` is
+/// sorting an already-distinct set) -- this lands verbatim in `state.
+/// runtime.effective_settings.runtime._capability_allow` on every run
+/// (every conformance case's own `expected.out.json` carries it), so a
+/// repeated name on the command line (`--allow-capabilities
+/// shell,shell`) must not survive into a second engine's own output as
+/// a duplicate. Also read by a `use: ref:` child's own capability-
+/// consent re-check (`core/use.py::UseRuntime._capability_allow_
+/// override`), which electricity does not build yet (DESIGN.md's own
+/// `use: {ref: ...}` refusal) -- that half of the port has no
+/// observable effect on any document electricity runs today, kept so a
+/// later `use: ref:` port finds the plumbing already in place.
+pub fn capability_allow(allow_capabilities: &[String]) -> Vec<String> {
+    let mut sorted = allow_capabilities.to_vec();
+    sorted.sort();
+    sorted.dedup();
+    sorted
 }
 
 #[cfg(test)]
@@ -437,8 +447,28 @@ mod tests {
     }
 
     #[test]
-    fn capability_allow_is_always_empty() {
-        assert_eq!(capability_allow(), Vec::<String>::new());
+    fn capability_allow_is_empty_with_no_allow_capabilities() {
+        assert_eq!(capability_allow(&[]), Vec::<String>::new());
+    }
+
+    #[test]
+    fn capability_allow_sorts_the_given_names() {
+        assert_eq!(
+            capability_allow(&["network".to_string(), "shell".to_string()]),
+            vec!["network".to_string(), "shell".to_string()]
+        );
+        assert_eq!(
+            capability_allow(&["shell".to_string(), "fs-write".to_string()]),
+            vec!["fs-write".to_string(), "shell".to_string()]
+        );
+    }
+
+    #[test]
+    fn capability_allow_deduplicates_a_repeated_name() {
+        assert_eq!(
+            capability_allow(&["shell".to_string(), "shell".to_string()]),
+            vec!["shell".to_string()]
+        );
     }
 
     #[test]

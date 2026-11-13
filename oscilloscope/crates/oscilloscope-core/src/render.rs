@@ -6,7 +6,7 @@
 //! `ratatui`; a future GUI front end can lay out a `RenderState` of
 //! its own just as well.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
@@ -76,7 +76,7 @@ impl RowKind {
         }
     }
 
-    fn from_plan_entry(kind: &PlanEntryKind) -> Self {
+    pub(crate) fn from_plan_entry(kind: &PlanEntryKind) -> Self {
         match kind {
             PlanEntryKind::Leaf(LeafEffectKind::Tool) => RowKind::Tool,
             PlanEntryKind::Leaf(LeafEffectKind::Prompt) => RowKind::Prompt,
@@ -222,6 +222,13 @@ pub struct Header {
     pub document: String,
     pub engine: String,
     pub run_id: Option<String>,
+    /// This run's own label (issue #752), already [`crate::names::
+    /// clean_label`]'d -- `run_start`'s own `label` first, else
+    /// state's own `runtime.last_run.label`, the same fallback order
+    /// `run_id` already uses against `_run_id`. `names::display_name`
+    /// shows it in place of the generated name wherever one is
+    /// shown; `None` with no label at all.
+    pub label: Option<String>,
     pub status: RunStatus,
     pub elapsed_s: f64,
     /// The run's own start (issue #613's "one clock"/"run start and
@@ -243,8 +250,29 @@ pub struct Header {
     /// shows it with a trailing `+` (`3/3+`) rather than as if it
     /// were exact.
     pub effects_planned_is_lower_bound: bool,
+    /// The compiled plan's own full size (issue #678's Tape Totals
+    /// row), never collapsed to `effects_done` once a run has ended
+    /// early (`effects_planned`'s own rule for every other screen's
+    /// "done of planned") -- a failed or cancelled run's own Totals
+    /// row still reads the document's real size, `3/14`, not `3/3`.
+    /// `None` under the same conditions `effects_planned` is.
+    pub effects_planned_full: Option<u64>,
     pub tokens_sent: u64,
     pub tokens_received: u64,
+    /// Every currently running prompt's own live estimate (issue
+    /// #675) -- `tokens_sent`/`tokens_received` once the provider has
+    /// reported one, else its own estimate, summed separately from
+    /// the exact pair above so a front end can draw it in the faint
+    /// "live" style and add it on top. A node's own exact tokens and
+    /// this estimate are never both counted: `tokens_sent`/`_received`
+    /// above only ever reads a *finished* node's `meta.tokens_sent`/
+    /// `_received` (always `null` while running), and this only ever
+    /// sums a node still running right now -- the instant a poll
+    /// catches one finished, it drops out of this sum and its own
+    /// exact figure joins the pair above instead, once each, never
+    /// both in the same frame.
+    pub tokens_sent_live_estimate: u64,
+    pub tokens_received_live_estimate: u64,
     pub innermost_loop_eta_s: Option<f64>,
     /// `innermost_loop_eta_s`, as an absolute clock time (`now` plus
     /// the ETA) rather than a remaining duration (issue #613: "the
@@ -278,6 +306,11 @@ pub struct Header {
     /// The usual (p50) whole-run time behind `history_vs_usual_s` —
     /// the overview's own `(p50 45m)`.
     pub history_usual_total_s: Option<f64>,
+    /// The usual (p50) whole-run tokens, over the same pool
+    /// `history_usual_total_s` comes from (issue #678's Totals row
+    /// `+12% Usual` and the Tape's own Run End `usually 1.3 kt`).
+    /// `None` below the same threshold.
+    pub history_usual_total_tokens: Option<u64>,
     /// How many ok runs of the current document hash history has,
     /// whatever their count — the overview's own `history: N of 3
     /// runs` while below the threshold a whole-run ETA itself needs,
@@ -471,12 +504,11 @@ pub fn token_bar_in_flight_line(bar: &TokenBar) -> String {
 /// bar, and the log pane's lines so far. `details_for` builds the
 /// right pane for whichever row is currently selected — kept separate
 /// from `rows` so selecting a different row never needs a fresh
-/// `RunModel::observe` call. The Cost screen's own by-store treemap
-/// (issue #632) is deliberately not part of this: it is built only
+/// `RunModel::observe` call. The Store screen's own area diagram
+/// (issue #695) is deliberately not part of this: it is built only
 /// while that screen is actually on display (`main.rs`'s own
-/// `build_cost_screen_if_active`), not on every redraw regardless of
-/// which screen is showing, the way the old `tokens by key` treemap
-/// screen 2 drew was.
+/// `build_store_screen_if_active`), not on every redraw regardless
+/// of which screen is showing.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RenderState {
     pub header: Header,
@@ -525,12 +557,6 @@ pub fn build(
     let state_ref = state.unwrap_or(&empty);
     let flat = flatten_state(state_ref);
     let statuses = model.observe(state_ref, plan, process.clone());
-    // Issue #641: a new sample of every live agent session's own
-    // running tokens, right alongside `observe` -- the "tokens over
-    // time" chart needs these to attribute a long session's own
-    // tokens to when they actually arrived, not just to its own
-    // `completed_at`.
-    model.record_live_token_observations(&flat, now, crate::model::run_ended(state_ref));
     // Every path either side of a run has ever heard of (hoisted here,
     // issue/finding on `use` accounting): the header's own
     // planned/done counts need the identical view `build_rows`/
@@ -1177,7 +1203,10 @@ pub fn details_for(
             .get("prompt_sent")
             .and_then(Value::as_str)
             .map(|s| preview(s, DETAILS_PREVIEW_CHARS)),
-        value: Some(preview(&display_value(&node.value), DETAILS_PREVIEW_CHARS)),
+        value: Some(preview(
+            &json_summary_or_display_value(&node.value, DETAILS_PREVIEW_CHARS),
+            DETAILS_PREVIEW_CHARS,
+        )),
         sent,
         received,
     }
@@ -1313,8 +1342,10 @@ fn build_sent_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
 /// reports output tokens before a prompt finishes (the same rule the
 /// token bar's own estimate follows). Once it's answered: `meta.
 /// answer` when present (the raw reply for `boolean`/`number`
-/// prompts and model-mode conditions), else the node's own value (a
-/// string as is, anything else as compact JSON).
+/// prompts and model-mode conditions), else the node's own value --
+/// plain text in full, same as always, but JSON (an object, an
+/// array, or a string holding one) summarised by issue #739's one
+/// shared rule rather than shown raw.
 fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
     if node.is_running() {
         return TokenBlock {
@@ -1328,7 +1359,7 @@ fn build_received_block(meta: &Value, node: &NodeMeta) -> TokenBlock {
         .get("answer")
         .and_then(Value::as_str)
         .map(str::to_string)
-        .unwrap_or_else(|| display_value(&node.value));
+        .unwrap_or_else(|| json_summary_or_display_value(&node.value, DETAILS_PREVIEW_CHARS));
     let snippet = Some(preview(&collapse_whitespace(&text), DETAILS_PREVIEW_CHARS));
     let (_, received) = crate::model::node_tokens(meta);
     TokenBlock {
@@ -1360,12 +1391,44 @@ pub enum FullValueField {
     Value,
 }
 
-fn display_value(v: &Value) -> String {
+pub(crate) fn display_value(v: &Value) -> String {
     match v {
         Value::String(s) => s.clone(),
         Value::Null => String::new(),
         other => other.to_string(),
     }
+}
+
+/// Issue #739's own summary for a JSON value (an object, an array,
+/// or a string holding one), [`display_value`] in full for anything
+/// else -- a plain-text reply or value keeps today's full preview,
+/// cut only by the caller's own [`preview`], not by [`json_value_
+/// summary`]'s first-words rule, which would otherwise stop a long
+/// plain reply at its first sentence the way a Tape row's shorter
+/// first-words text deliberately does (§3.4).
+fn json_summary_or_display_value(value: &Value, max_chars: usize) -> String {
+    if crate::summary::is_json_shaped(value) {
+        crate::summary::json_value_summary(value, max_chars)
+    } else {
+        display_value(value)
+    }
+}
+
+/// The header's own document name (issue #714): the file name of
+/// `document`, whatever the orchestration path handed to `build`/
+/// `build_folded` looks like -- `osi watch <dir> --plan /path/to/
+/// ticket.yml` once showed the whole absolute path, where every
+/// frame shows the file name alone (`demo.yml`); two runs on the
+/// same file name are already told apart by the parent directory on
+/// Select and All, never here. Falls back to `document` itself only
+/// if it carries no file name of its own (empty, or `.`/`..`/`/`),
+/// never expected for a real path.
+fn document_file_name(document: &str) -> String {
+    std::path::Path::new(document)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| document.to_string())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1384,7 +1447,42 @@ fn build_header(
 ) -> Header {
     let engine_alive = matches!(process, ProcessState::Running);
     let status = run_status(state, process.clone());
-    let run_id = model.run_start_id().map(str::to_string);
+    // Issue #717: a run's own name needs its id even with no
+    // `--events` stream at all (`osi watch` of a bare
+    // `state.live.json`) -- both engines write the same id into
+    // state's own top-level `_run_id` (`cli/runtime_shim.py`'s
+    // `state["_run_id"]`), so this falls back to it exactly where
+    // `run_start` never arrived to set `model`'s own copy.
+    let run_id = model.run_start_id().map(str::to_string).or_else(|| {
+        state
+            .and_then(|s| s.get("_run_id"))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    });
+
+    // Issue #752: a run's own label, the same fallback order as
+    // `run_id` just above -- `run_start`'s own `label` field, else
+    // `osi watch`'s own `runtime.last_run.label` with no `--events`
+    // stream at all, else `osi <doc> --label TEXT`'s own hint (set
+    // once by whoever launched this run, `RunModel::set_label_hint`)
+    // so a labelled run shows its label from its very first frame,
+    // before either `run_start` or a live-state write has landed.
+    // Cleaned here, the one point this header's own `label` field is
+    // ever set from `run_start`/state, since either file can be
+    // written by anything, not only an engine that already cleaned
+    // it once -- `label_hint` is already clean, cleaned by its own
+    // caller before it's ever handed to `RunModel`.
+    let label = model
+        .run_start_label()
+        .map(str::to_string)
+        .or_else(|| {
+            state
+                .and_then(|s| s.pointer("/runtime/last_run/label"))
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .and_then(|raw| crate::names::clean_label(&raw))
+        .or_else(|| model.label_hint().map(str::to_string));
 
     // Issue #613's "one clock": the run's own start, from the first
     // `--events` `run_start` when one arrived, else the earliest
@@ -1407,7 +1505,7 @@ fn build_header(
         (None, _) => fallback_elapsed_s,
     };
 
-    let (effects_planned, effects_planned_is_lower_bound) = if plan.has_plan() {
+    let (effects_planned_full, effects_planned_full_is_lower_bound) = if plan.has_plan() {
         let countable_paths: std::collections::BTreeSet<&String> =
             plan.countable_paths().iter().collect();
         let mut total = 0u64;
@@ -1436,7 +1534,7 @@ fn build_header(
                 lower_bound |= use_lower_bound;
                 continue;
             }
-            let (passes, path_lower_bound) = leaf_pass_count(path, plan, flat);
+            let (passes, path_lower_bound) = leaf_pass_count(path, plan, flat, state);
             total = total.saturating_add(passes);
             lower_bound |= path_lower_bound;
         }
@@ -1444,6 +1542,8 @@ fn build_header(
     } else {
         (None, false)
     };
+    let effects_planned = effects_planned_full;
+    let effects_planned_is_lower_bound = effects_planned_full_is_lower_bound;
     let effects_done_raw = statuses
         .iter()
         .filter(|(path, status)| {
@@ -1562,6 +1662,86 @@ fn build_header(
             })
         });
 
+    // Issue #702's cancelled-run case: a leftover `meta.live` whose
+    // own node never got a `completed_at` at all (the run ended
+    // while the session was still mid-attempt, or whose own
+    // heartbeat has simply gone stale while the rest of the run
+    // carries on) stops counting as live the moment it stops being
+    // recent, never mind whether `statuses` still calls its path
+    // `Running` -- counted into the exact total here, never the live
+    // estimate below, since nothing is still updating it (rule 1:
+    // "not as live").
+    let (leftover_sent, leftover_received) = flat
+        .iter()
+        .filter(|(_, node)| {
+            node.completed_at.is_none()
+                && node.live.as_ref().is_some_and(|live| !live.is_recent(now))
+        })
+        .fold((0u64, 0u64), |(sent, recv), (_, node)| {
+            let live = node.live.as_ref().expect("filtered above");
+            (
+                sent + live.tokens_sent.unwrap_or(0),
+                recv + live.tokens_received.unwrap_or(0),
+            )
+        });
+    let tokens_sent = tokens_sent + leftover_sent;
+    let tokens_received = tokens_received + leftover_received;
+
+    // Issue #675: every currently running prompt's own live
+    // estimate, summed separately -- gated on `statuses` reading
+    // `Running` for the path, not merely on `flat` still carrying a
+    // `meta.live` object, so a run that was killed mid-attempt (whose
+    // leftover `meta.live` stops updating but is never removed) drops
+    // out of this sum the same frame `statuses` stops calling it
+    // `Running`, rather than staying counted for as long as that
+    // state is open. A path `--events` alone has confirmed `Running`
+    // but that has no node in `flat` at all (`osi watch` with no
+    // live state) still counts, from the latest `progress` line, so
+    // the Totals row gets an events-only estimate too; `is_running_
+    // prompt` still gates a real node, so this never double-counts
+    // one running a tool.
+    // Issue #702: a running agent session's own `meta.live` tokens
+    // count toward this same sum, exact rather than estimated (an
+    // agent's own CLI reports them directly, never from a character
+    // count) -- a path never carries both a running prompt's live
+    // record and an agent's own, so the two branches below are
+    // mutually exclusive per path, same as `node.live`/`node.
+    // prompt_live` already are.
+    let (tokens_sent_live_estimate, tokens_received_live_estimate) = statuses
+        .iter()
+        .filter(|(_, status)| status.kind == StatusKind::Running)
+        .fold((0u64, 0u64), |(sent, recv), (path, _)| {
+            let node = flat.get(path.as_str());
+            let is_prompt = match node {
+                Some(node) => crate::model::is_running_prompt(node),
+                None => model.progress_at(path).is_some(),
+            };
+            if is_prompt {
+                let Some(live) = crate::model::prompt_live_figures(node, path, model, now) else {
+                    return (sent, recv);
+                };
+                return (
+                    sent + live.tokens_sent.or(live.tokens_sent_estimate).unwrap_or(0),
+                    recv + live
+                        .tokens_received
+                        .or(live.tokens_received_estimate)
+                        .unwrap_or(0),
+                );
+            }
+            let Some(agent_live) = node.and_then(|n| n.live.as_ref()) else {
+                return (sent, recv);
+            };
+            if !agent_live.is_recent(now) {
+                // Already folded into the exact total above (rule 1:
+                // a stale leftover is never flagged live).
+                return (sent, recv);
+            }
+            (
+                sent + agent_live.tokens_sent.unwrap_or(0),
+                recv + agent_live.tokens_received.unwrap_or(0),
+            )
+        });
+
     // The innermost running loop's own ETA (§6.3: "There is no
     // run-level ETA") — the running loop with the deepest path, since
     // a nested loop's own progress is more specific than its
@@ -1597,9 +1777,10 @@ fn build_header(
     });
 
     Header {
-        document: document.to_string(),
+        document: document_file_name(document),
         engine: engine.to_string(),
         run_id,
+        label,
         status,
         elapsed_s,
         run_start_ts,
@@ -1607,8 +1788,11 @@ fn build_header(
         effects_done,
         effects_planned,
         effects_planned_is_lower_bound,
+        effects_planned_full,
         tokens_sent,
         tokens_received,
+        tokens_sent_live_estimate,
+        tokens_received_live_estimate,
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
         // Issue #649: `build`/`build_header` have no history of
@@ -1623,6 +1807,7 @@ fn build_header(
         history_eta_high_ts: None,
         history_vs_usual_s: None,
         history_usual_total_s: None,
+        history_usual_total_tokens: None,
         history_same_hash_count: None,
         history_step_usual: Default::default(),
         latest_report,
@@ -1653,17 +1838,26 @@ fn build_header(
 /// (its body's path is reused verbatim across passes, DESIGN.md
 /// §2.3), so without this, a leaf under one was silently counted as
 /// exactly one pass forever, with no `+` to say otherwise.
-fn leaf_pass_count(
+pub(crate) fn leaf_pass_count(
     leaf_path: &str,
     plan: &PlanTree,
     flat: &BTreeMap<String, NodeMeta>,
+    state: Option<&Value>,
 ) -> (u64, bool) {
     let mut multiplier: u64 = 1;
     let mut lower_bound = false;
     let mut container = String::new();
     for segment in leaf_path.split('.') {
         if segment == "iter_*" {
-            match flat.get(container.as_str()).and_then(|n| n.progress_total) {
+            let total = flat
+                .get(container.as_str())
+                .and_then(|n| n.progress_total)
+                // Issue #678's Starting state: no node has run yet,
+                // so nothing in `flat` has a `progress.total` of its
+                // own, but a plain `each.in` path (`"input.topics"`)
+                // already resolves against the run's own input.
+                .or_else(|| state.and_then(|root| plan.resolve_each_len(&container, root)));
+            match total {
                 Some(total) if total > 0 => multiplier = multiplier.saturating_mul(total),
                 _ => lower_bound = true,
             }
@@ -1693,7 +1887,90 @@ fn leaf_pass_count(
     (multiplier, lower_bound)
 }
 
-fn row_kind_for(path: &str, plan: &PlanTree, flat: &BTreeMap<String, NodeMeta>) -> RowKind {
+/// A Tape-only addition to a build's own `rows` (issue #678's
+/// Normal state, a loop frozen partway through its own passes): the
+/// shared `rows`/`statuses` pipeline only ever seeds a loop's own
+/// un-dispatched passes *before its first one dispatches at all*
+/// (`RunModel::observe`'s own rule, which every screen shares) --
+/// the Flow/Time/Cost state pane's own tree deliberately shows
+/// nothing past a loop's already-real passes once it's under way,
+/// so that rule can't simply grow to cover every still-missing index
+/// without changing what those screens already draw. The Tape's own
+/// "ahead" rows need exactly that, so it's synthesized here instead,
+/// once a loop has *some* real passes but not yet every one its own
+/// resolved total calls for.
+pub(crate) fn missing_loop_pass_rows(
+    rows: &[Row],
+    flat: &BTreeMap<String, NodeMeta>,
+    plan: &PlanTree,
+    state: Option<&Value>,
+) -> Vec<(String, Row)> {
+    let mut out = Vec::new();
+    if !plan.has_plan() {
+        return out;
+    }
+    let empty = Value::Null;
+    for path in plan.all_paths() {
+        let Some((loop_path, suffix)) = path.split_once(".iter_*.") else {
+            continue;
+        };
+        let prefix = format!("{loop_path}.");
+        let real_pass_indices: BTreeSet<u64> = rows
+            .iter()
+            .filter_map(|r| {
+                r.path
+                    .strip_prefix(prefix.as_str())
+                    .and_then(|rest| rest.split('.').next())
+                    .and_then(|seg| seg.strip_prefix("iter_"))
+                    .filter(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+                    .and_then(|n| n.parse().ok())
+            })
+            .collect();
+        if real_pass_indices.is_empty() {
+            // No real pass yet at all -- the shared pipeline's own
+            // rule already covers this case for every screen.
+            continue;
+        }
+        let total = flat
+            .get(loop_path)
+            .and_then(|n| n.progress_total)
+            .or_else(|| plan.resolve_each_len(loop_path, state.unwrap_or(&empty)));
+        let Some(total) = total else {
+            continue;
+        };
+        for i in 0..total {
+            if real_pass_indices.contains(&i) {
+                continue;
+            }
+            let concrete = format!("{loop_path}.iter_{i}.{suffix}");
+            out.push((
+                loop_path.to_string(),
+                Row {
+                    path: concrete.clone(),
+                    depth: 0,
+                    label: suffix.to_string(),
+                    kind: row_kind_for(&concrete, plan, flat),
+                    status: RowStatus {
+                        kind: StatusKind::Pending,
+                        skip_reason: None,
+                        retrying: false,
+                    },
+                    duration_s: None,
+                    loop_progress: None,
+                    dim: None,
+                    has_children: false,
+                },
+            ));
+        }
+    }
+    out
+}
+
+pub(crate) fn row_kind_for(
+    path: &str,
+    plan: &PlanTree,
+    flat: &BTreeMap<String, NodeMeta>,
+) -> RowKind {
     let has_children = crate::model::subtree_entries(path, flat).any(|(p, _)| p != path);
     row_kind_for_with_has_children(path, plan, flat, has_children)
 }
@@ -1859,7 +2136,7 @@ fn child_segments(
     children
 }
 
-fn pass_index(segment: &str) -> Option<u64> {
+pub(crate) fn pass_index(segment: &str) -> Option<u64> {
     segment.strip_prefix("iter_").and_then(|n| n.parse().ok())
 }
 
@@ -2001,7 +2278,7 @@ fn all_observed_paths(
         // See `RunModel::observe`'s own matching guard: `prime` is
         // never treated as report-only, and the no-plan fallback only
         // trusts `--events`' own report paths where the plan has no
-        // real entry there and the node's value has the report shape.
+        // real entry there and the node's own value has the report shape.
         let fallback_report = flat
             .get(path)
             .is_some_and(|node| model.is_report_event_path(path, plan, &node.value));
@@ -2126,6 +2403,18 @@ fn walk_rows(
 ) {
     let node = flat.get(path);
     let kind = row_kind_for(path, plan, flat);
+    // Issue #675's events-only attach: a path `--events` has
+    // confirmed with no state node at all (`osi watch` on `--events`
+    // alone) has nothing of its own in `flat` or `plan` for
+    // `row_kind_for` to classify by, so it reads `Unknown` even when
+    // it is in fact the running prompt the latest `progress` line
+    // names -- read as a prompt here instead, the one case `Unknown`
+    // plus a progress sample for this exact path can mean.
+    let kind = if kind == RowKind::Unknown && node.is_none() && model.progress_at(path).is_some() {
+        RowKind::Prompt
+    } else {
+        kind
+    };
     let last_segment = path.rsplit('.').next().unwrap_or(path);
     let label = if pass_index(last_segment).is_some() {
         pass_row_label(path, flat)
@@ -2244,6 +2533,36 @@ mod tests {
     use crate::observe::Event;
     use serde_json::json;
 
+    /// Issue #714: `osi watch <dir> --plan /path/to/ticket.yml`
+    /// shows `ticket.yml` in the header, never the whole absolute
+    /// path.
+    #[test]
+    fn document_file_name_keeps_only_the_file_name() {
+        assert_eq!(document_file_name("/path/to/ticket.yml"), "ticket.yml");
+        assert_eq!(document_file_name("demo.yml"), "demo.yml");
+        assert_eq!(document_file_name("sub/dir/demo.yml"), "demo.yml");
+    }
+
+    /// The same, through `build` -- the header's own `document`
+    /// field a real `--plan` carries an absolute path into.
+    #[test]
+    fn build_header_keeps_only_the_plan_files_own_file_name() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = build(
+            "/path/to/ticket.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T00:00:00Z",
+            &[],
+        );
+        assert_eq!(state.header.document, "ticket.yml");
+    }
+
     /// Siblings created in the same second but at different
     /// timestamp precisions (`2026-01-01T00:00:00Z` is earlier than
     /// `...00.200Z`, but sorts *after* it as a raw string, since `.`
@@ -2300,17 +2619,22 @@ mod tests {
                                 description: None,
                                 group: None,
                                 prompt_file: None,
+                                limited: false,
+                                secret_headers: indexmap::IndexMap::new(),
+                                confine_to: None,
                             },
                         ))),
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2510,11 +2834,15 @@ mod tests {
                                     description: None,
                                     group: None,
                                     prompt_file: None,
+                                    limited: false,
+                                    secret_headers: indexmap::IndexMap::new(),
+                                    confine_to: None,
                                 },
                             ))),
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                         Op {
                             path: report_path,
@@ -2528,6 +2856,7 @@ mod tests {
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                     ],
                     overlay: false,
@@ -2535,6 +2864,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2614,16 +2944,21 @@ mod tests {
                             description: None,
                             group: None,
                             prompt_file: None,
+                            limited: false,
+                            secret_headers: indexmap::IndexMap::new(),
+                            confine_to: None,
                         }))),
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2834,6 +3169,8 @@ mod tests {
             run_id: "r1".to_string(),
             pid: Some(1234),
             engine: None,
+            config: None,
+            label: None,
         });
         model.observe_event(&Event::RunEnd {
             ts: "2026-01-01T11:31:10Z".to_string(),
@@ -2874,6 +3211,126 @@ mod tests {
         assert_eq!(rendered.header.elapsed_s, 1572.0);
     }
 
+    #[test]
+    fn build_header_reads_the_label_from_run_start() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("ticket 42".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_falls_back_to_the_states_own_label_with_no_run_start_event() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state_json = json!({
+            "_run_id": "r1",
+            "runtime": {"last_run": {"label": "ticket 42"}}
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state_json),
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_cleans_a_label_holding_ansi_codes_and_a_newline() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("\u{1b}[1mticket\n42\u{1b}[0m".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_falls_back_to_the_label_hint_with_no_run_start_or_state_label() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.set_label_hint(Some("ticket 42".to_string()));
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("ticket 42"));
+    }
+
+    #[test]
+    fn build_header_prefers_run_start_label_over_the_hint() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.set_label_hint(Some("hint".to_string()));
+        model.observe_event(&Event::RunStart {
+            ts: "2026-01-01T11:04:58Z".to_string(),
+            run_id: "r1".to_string(),
+            pid: Some(1234),
+            engine: None,
+            config: None,
+            label: Some("from run_start".to_string()),
+        });
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            ProcessState::Running,
+            0.0,
+            "2026-01-01T11:05:00Z",
+            &[],
+        );
+        assert_eq!(rendered.header.label.as_deref(), Some("from run_start"));
+    }
+
     /// An aborted run (the engine was killed, so no `run_end` event
     /// and `prime` never got its own `completed_at`) must stop
     /// ticking `elapsed` at the latest real completion anywhere in
@@ -2887,6 +3344,8 @@ mod tests {
             run_id: "r1".to_string(),
             pid: Some(1234),
             engine: None,
+            config: None,
+            label: None,
         });
         let state_json = json!({
             "prime": {"value": null, "meta": {"created_at": "2026-01-01T11:04:58Z", "completed_at": null},
@@ -3132,10 +3591,14 @@ mod tests {
                                         description: None,
                                         group: None,
                                         prompt_file: None,
+                                        limited: false,
+                                        secret_headers: indexmap::IndexMap::new(),
+                                        confine_to: None,
                                     }))),
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -3148,12 +3611,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -3211,10 +3676,14 @@ mod tests {
                                         description: None,
                                         group: None,
                                         prompt_file: None,
+                                        limited: false,
+                                        secret_headers: indexmap::IndexMap::new(),
+                                        confine_to: None,
                                     }))),
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -3227,12 +3696,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -3272,6 +3743,7 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }
             }
 
@@ -3380,6 +3852,7 @@ mod tests {
                                 on_error: OnError::Fail,
                                 labels: None,
                                 enabled: true,
+                                resume_mode: electricity_bytecode::ResumeMode::Continue,
                             },
                         );
                     }
@@ -3502,6 +3975,34 @@ mod tests {
     }
 
     #[test]
+    fn effects_planned_resolves_a_loops_each_in_before_any_event_at_all() {
+        // Issue #678's Starting state: a named loop's own `each.in`
+        // (a plain dotted path, never a node's `progress.total`,
+        // which doesn't exist before the loop's own first event) is
+        // already enough to know its pass count with no state node
+        // at all -- `effects_planned` must read it as a known total,
+        // not a lower bound.
+        let plan = PlanTree::from_program(&named_loop_with_one_leaf_program());
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"items": ["a", "b", "c", "d"]}});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        // The root and `fan`'s own container both count (issue
+        // #620) alongside the body leaf's own now-known total: 2 + 4.
+        assert_eq!(rendered.header.effects_planned, Some(6));
+        assert!(!rendered.header.effects_planned_is_lower_bound);
+    }
+
+    #[test]
     fn effects_planned_is_a_lower_bound_under_an_unnamed_loop_even_once_a_pass_is_done() {
         // Review finding 6 on #458's comment 3: an unnamed loop never
         // gets a known `progress.total` of its own path the way a
@@ -3564,10 +4065,14 @@ mod tests {
                     description: None,
                     group: None,
                     prompt_file: None,
+                    limited: false,
+                    secret_headers: indexmap::IndexMap::new(),
+                    confine_to: None,
                 }))),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }
         }
 
@@ -3604,12 +4109,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -4103,6 +4610,42 @@ mod tests {
         assert_eq!(tail, "line 4\nline 5\nline 6\nline 7\nline 8");
     }
 
+    /// Issue #739: a non-prompt step's own JSON value (the Flow's
+    /// "produced:" line, via `FocusedStep::value`) reads a short
+    /// summary, never the raw JSON `details.value` used to show.
+    #[test]
+    fn details_for_a_tool_summarises_a_json_value_instead_of_showing_raw_json() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": {"edits": [1, 2], "files": [1, 2, 3]}, "meta": {
+                "created_at": "t0", "completed_at": "t1", "provider": "shell"
+            }}
+        }});
+        let details = details_for("prime.tool", &plan, &RunModel::new(), Some(&state_json));
+        assert_eq!(
+            details.value.as_deref(),
+            Some("edits 2 items · files 3 items")
+        );
+    }
+
+    /// A tool's own plain-text value -- not JSON-shaped at all --
+    /// keeps today's full preview, not the summary's first-words cut
+    /// at its first sentence: the summary rule is for JSON only.
+    #[test]
+    fn details_for_a_tool_keeps_the_full_preview_for_plain_text() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "tool": {"value": "The bug was in X. I fixed it by Y.", "meta": {
+                "created_at": "t0", "completed_at": "t1", "provider": "shell"
+            }}
+        }});
+        let details = details_for("prime.tool", &plan, &RunModel::new(), Some(&state_json));
+        assert_eq!(
+            details.value.as_deref(),
+            Some("The bug was in X. I fixed it by Y.")
+        );
+    }
+
     #[test]
     fn details_for_a_prompt_truncates_the_preview_but_full_value_does_not() {
         let plan = PlanTree::empty();
@@ -4193,6 +4736,8 @@ mod tests {
             run_id: "run-xyz".to_string(),
             pid: Some(1),
             engine: None,
+            config: None,
+            label: None,
         });
         let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null}}});
         let details = details_for("prime", &plan, &model, Some(&state_json));
@@ -4247,11 +4792,32 @@ mod tests {
         let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
         let received = details.received.unwrap();
         // no `meta.answer` here (not boolean/number), so the node's
-        // own value, as compact JSON, is the snippet.
-        assert_eq!(received.snippet.as_deref(), Some(r#"{"ok":true}"#));
+        // own value, summarised by its own first keys (issue #739)
+        // rather than shown as raw JSON, is the snippet.
+        assert_eq!(received.snippet.as_deref(), Some("ok true"));
         assert_eq!(received.tokens, Some(3));
         let sent = details.sent.unwrap();
         assert_eq!(sent.tokens, Some(9));
+    }
+
+    /// A multi-sentence plain-text reply -- not JSON -- keeps its
+    /// own full preview rather than the summary's first-words cut at
+    /// its first sentence.
+    #[test]
+    fn sent_received_blocks_for_a_plain_text_reply_keep_the_full_preview() {
+        let plan = PlanTree::empty();
+        let state_json = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "ask": {"value": "The bug was in X. I fixed it by Y.", "meta": {
+                "created_at": "t0", "completed_at": "t1", "adapter": "scripted", "model": "m",
+                "prompt_sent": "what happened"
+            }}
+        }});
+        let details = details_for("prime.ask", &plan, &RunModel::new(), Some(&state_json));
+        let received = details.received.unwrap();
+        assert_eq!(
+            received.snippet.as_deref(),
+            Some("The bug was in X. I fixed it by Y.")
+        );
     }
 
     #[test]
@@ -4899,6 +5465,237 @@ mod tests {
         assert_eq!(rendered.token_bar.agents_running, 1);
     }
 
+    /// Issue #674: a streamed prompt effect's own `meta.live` (which
+    /// always carries `adapter`, never `tools`/`current_tool`) must
+    /// never count toward `agents_running` the way an agent tool's
+    /// `meta.live` heartbeat does -- it already counts toward
+    /// `prompts_running` through the ordinary running-prompt path.
+    #[test]
+    fn a_streamed_prompt_meta_live_does_not_count_as_an_agent_in_flight() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "p": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                    "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:52:54Z",
+                    "streaming": true, "first_token_at": "2026-10-08T11:46:44Z",
+                    "tokens_sent": null, "tokens_sent_estimate": 3, "tokens_received": null,
+                    "tokens_received_estimate": 2, "chars_received": 11,
+                    "tokens_per_second": null}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:52:55Z",
+            &[],
+        );
+        assert_eq!(rendered.token_bar.agents_running, 0);
+        assert_eq!(rendered.token_bar.prompts_running, 1);
+        // Issue #675: the header's own live estimate reads the
+        // running prompt's `tokens_sent_estimate`/`tokens_received_
+        // estimate` (neither is exact yet), on top of the exact
+        // pair above, which stays zero while it runs.
+        assert_eq!(rendered.header.tokens_sent, 0);
+        assert_eq!(rendered.header.tokens_received, 0);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 3);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 2);
+    }
+
+    /// Issue #675's "no double counting": the same prompt, observed
+    /// once still running (its tokens only in the live estimate) and
+    /// once finished (its tokens only in the exact pair) -- never
+    /// both at once for the same instant.
+    #[test]
+    fn a_prompt_that_finishes_between_two_polls_is_counted_exactly_once() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let running_state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "p": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "live": {"v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+                    "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+                    "streaming": true, "first_token_at": "2026-10-08T11:46:43.6Z",
+                    "tokens_sent": null, "tokens_sent_estimate": 10, "tokens_received": null,
+                    "tokens_received_estimate": 8, "chars_received": 30,
+                    "tokens_per_second": null}}}
+        }});
+        let running = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&running_state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:44Z",
+            &[],
+        );
+        assert_eq!(running.header.tokens_sent, 0);
+        assert_eq!(running.header.tokens_received, 0);
+        assert_eq!(running.header.tokens_sent_live_estimate, 10);
+        assert_eq!(running.header.tokens_received_live_estimate, 8);
+
+        let finished_state = json!({"prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:45Z"},
+            "p": {"value": "ok", "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": "2026-10-08T11:46:45Z",
+                "adapter": "ollama", "model": "m", "prompt_type": "text", "prompt_sent": "hi",
+                "tokens_sent": 10, "tokens_received": 12}}
+        }});
+        let finished = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&finished_state),
+            ProcessState::Running,
+            2.0,
+            "2026-10-08T11:46:46Z",
+            &[],
+        );
+        assert_eq!(finished.header.tokens_sent, 10);
+        assert_eq!(finished.header.tokens_received, 12);
+        assert_eq!(finished.header.tokens_sent_live_estimate, 0);
+        assert_eq!(finished.header.tokens_received_live_estimate, 0);
+    }
+
+    /// Issue #702: a running agent session's own `meta.live` tokens
+    /// count toward the Totals row's own live estimate the same way a
+    /// running prompt's already do -- never both at once for the
+    /// same path.
+    #[test]
+    fn a_running_agents_meta_live_tokens_count_toward_the_live_estimate() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:50Z",
+                    "tokens_sent": 2100, "tokens_received": 40}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:51Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent, 0);
+        assert_eq!(rendered.header.tokens_received, 0);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 2100);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 40);
+    }
+
+    /// Claude Code never reports `tokens_received` live (`docs/
+    /// plugins/agent.md`) -- `null` there must add `0` to the live
+    /// estimate, never panic or poison the whole sum.
+    #[test]
+    fn a_running_agents_null_tokens_received_adds_zero_to_the_live_estimate() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "claude_code", "updated_at": "2026-10-08T11:46:50Z",
+                    "tokens_sent": 1600, "tokens_received": null}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:51Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 1600);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 0);
+    }
+
+    /// Issue #702's cancelled-run case: an interrupted run leaves
+    /// the agent's own node with no `completed_at` at all and
+    /// `runtime.last_run.totals` at `0`/`0` (no attempt ever
+    /// finished) -- its last known `meta.live` tokens still land in
+    /// the Totals row's own exact figure, since nothing is updating
+    /// them any more to call them "live".
+    #[test]
+    fn an_interrupted_agents_leftover_meta_live_tokens_land_in_the_exact_total() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"runtime": {"last_run": {"completed_at": "2026-10-08T11:46:51Z",
+                "totals": {"tokens_sent": 0, "tokens_received": 0}}},
+            "prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:51Z", "error": "Interrupted"},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:44Z",
+                    "tokens_sent": 2100, "tokens_received": 40}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Exited {
+                interrupted: true,
+                likely_failed: false,
+                has_failure_reason: false,
+                exited_at: None,
+            },
+            1.0,
+            "2026-10-08T11:46:55Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent, 2100);
+        assert_eq!(rendered.header.tokens_received, 40);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 0);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 0);
+    }
+
+    /// A still-running process's own agent whose `meta.live`
+    /// heartbeat has itself gone stale (no update in over 5s, issue
+    /// #637's recency rule) must count in the Totals row's exact
+    /// pair, never the live estimate -- rule 1's "not as live" holds
+    /// regardless of whether the process as a whole is still
+    /// running, not only once the whole run has ended.
+    #[test]
+    fn a_stale_agent_heartbeat_in_an_otherwise_running_process_lands_in_the_exact_total() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {"created_at": "2026-10-08T11:46:43Z",
+                "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": "2026-10-08T11:46:44Z",
+                    "tokens_sent": 2100, "tokens_received": 40}}}
+        }});
+        let rendered = build(
+            "do-thing.yml",
+            "cof",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            1.0,
+            "2026-10-08T11:46:55Z",
+            &[],
+        );
+        assert_eq!(rendered.header.tokens_sent, 2100);
+        assert_eq!(rendered.header.tokens_received, 40);
+        assert_eq!(rendered.header.tokens_sent_live_estimate, 0);
+        assert_eq!(rendered.header.tokens_received_live_estimate, 0);
+    }
+
     /// An interrupted run's own leftover `meta.live` (DESIGN.md) must
     /// never count as an agent in flight once its own heartbeat has
     /// gone stale, even though the node itself still has no
@@ -4975,10 +5772,16 @@ mod tests {
                                         retries: None,
                                         description: None,
                                         group: None,
+                                        split_budget_tokens: None,
+                                        split_enabled: None,
+                                        split_max_parts: None,
+                                        split_separator: None,
+                                        split_merge_template: None,
                                     }))),
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -4991,12 +5794,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -5048,10 +5853,14 @@ mod tests {
                     description: None,
                     group: None,
                     prompt_file: None,
+                    limited: false,
+                    secret_headers: indexmap::IndexMap::new(),
+                    confine_to: None,
                 }))),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             })
             .collect();
         Program {
@@ -5079,12 +5888,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -5481,10 +6292,14 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                secret_headers: indexmap::IndexMap::new(),
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -5526,6 +6341,7 @@ mod tests {
             on_error,
             labels: None,
             enabled,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -5546,6 +6362,7 @@ mod tests {
             on_error,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -5580,6 +6397,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -5612,6 +6430,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -5628,6 +6447,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),

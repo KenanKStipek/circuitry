@@ -1,0 +1,8 @@
+[
+  {"key": "triage", "orchestration": "triage.yml", "config": "config-triage.json", "engine": "cof", "run_dir": "run6-triage", "pid": 976},
+  {"key": "triage-b", "orchestration": "triage.yml", "config": "config-triage-b.json", "engine": "cof", "run_dir": "run6-triage-b", "pid": 980},
+  {"key": "digest", "orchestration": "digest.yml", "config": "config-digest.json", "engine": "cof", "run_dir": "run6-digest", "pid": 982},
+  {"key": "review", "orchestration": "review.yml", "config": "config-review.json", "engine": "cof", "run_dir": "run6-review", "pid": 984},
+  {"key": "summarize", "orchestration": "summarize.yml", "config": "config-summarize.json", "engine": "electricity", "run_dir": "run6-summarize", "pid": 987},
+  {"key": "classify", "orchestration": "classify.yml", "config": "config-classify.json", "engine": "electricity", "run_dir": "run6-classify", "pid": 988}
+]

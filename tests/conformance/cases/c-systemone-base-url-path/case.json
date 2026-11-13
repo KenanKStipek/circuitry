@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "A systemone base_url with a path prefix sends the request under that prefix (<base_url>/v1/systemone), not just /v1/systemone -- the recorded request target is pinned on both engines.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml"
+}

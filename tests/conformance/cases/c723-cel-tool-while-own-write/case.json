@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #723",
+  "description": "A `cel` row inside a `while` body sees the enclosing loop's own prior-pass writes and the bindings an `if` at the same position sees, both before and after a sibling in the same pass writes its own node -- one acceptance item of #723's own list. `before_write_bare`'s own bare `state.prime.own_write.value` read is unset on every pass (the pass-local overlay resets each pass, before this pass's own `own_write` runs); `before_write_via_prev`'s `state.prime.counter.prev.own_write.value` read is unset only on the first pass, then carries the previous completed pass's own written value.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

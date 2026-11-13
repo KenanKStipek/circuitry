@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 7: fixed text alone over budget records no_split_point",
+  "description": "The template's fixed text (everything but the one reference) alone exceeds the budget, leaving no room for even one occurrence of the reference -- meta.decomposition records reason: no_split_point, outcome: run_as_is, and the prompt dispatches whole.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=x"],
+  "expect": "success"
+}

@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #674: runtime.adapters.<name>.stream: false restores the old request",
+  "description": "`runtime.adapters.ollama.stream: false` sends the pre-streaming request body (`\"stream\": false`, no NDJSON parsing) and produces no `progress` event, even though ollama streams by default.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

@@ -13,9 +13,15 @@
 
 #![allow(dead_code)]
 
-use std::io::Read;
+use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 pub fn e2e_enabled() -> bool {
@@ -126,6 +132,11 @@ pub fn osi_command(home: &TestHome) -> Command {
     cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
     cmd.env_remove("XDG_STATE_HOME");
     cmd.env_remove("OSI_HISTORY");
+    // Issue #698: same discipline for the run registry -- an
+    // inherited `XDG_RUNTIME_DIR`/`XDG_STATE_HOME` would otherwise
+    // still point it at a real, shared directory.
+    cmd.env("OSI_RUNS_DIR", home.path().join("runs"));
+    cmd.env_remove("XDG_RUNTIME_DIR");
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
@@ -283,6 +294,28 @@ pub fn last_event(path: &Path) -> serde_json::Value {
         .unwrap_or_else(|e| panic!("{} last line is not JSON: {e}", path.display()))
 }
 
+/// Whether `text` (a `--log` stdout capture) shows the run's own exit
+/// summary ending `ok` -- never the `■ run started` line, and never
+/// fooled by a run's own name that happens to contain the substring
+/// `ok` (`*-brook`, say): the summary's own fields (an optional name,
+/// the status, optional totals) are always joined with a double
+/// space, so splitting on that and requiring one field to equal `ok`
+/// exactly finds the real status wherever it landed, whether or not a
+/// name precedes it. `split_once` rather than `strip_prefix`: every
+/// `--log` line carries its own `HH:MM:SS ` clock prefix ahead of the
+/// `■ run ` marker, not just at the very start of the line.
+pub fn log_shows_run_ok(text: &str) -> bool {
+    text.lines().any(|line| {
+        let Some(after_marker) = line.split_once("■ run ").map(|(_, rest)| rest) else {
+            return false;
+        };
+        if after_marker.starts_with("started ") {
+            return false;
+        }
+        after_marker.split("  ").any(|field| field == "ok")
+    })
+}
+
 pub fn write_doc(dir: &Path, name: &str, contents: &str) -> PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, contents).unwrap();
@@ -347,4 +380,610 @@ pub fn assert_no_leftover_process(needle: &Path) {
         "a process matching {needle:?} survived osi's exit: {}",
         String::from_utf8_lossy(&ps.stdout)
     );
+}
+
+/// Replays raw terminal output onto a blank character grid: cursor positioning (`CSI r;cH` / `f`,
+/// `CSI nA/B/C/D`), carriage return and line feed move the cursor, every other escape sequence
+/// (colours, attributes, clears, cursor visibility, alternate screen) is skipped, and printable text
+/// lands at the cursor. Each returned line is one row, trailing blanks trimmed, so a test can look for
+/// the text a screen actually shows rather than for bytes that a styled run may split with escapes.
+pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut grid = vec![vec![' '; cols]; rows];
+    let (mut row, mut col) = (0usize, 0usize);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\u{1b}' {
+            i += 1;
+            if i < chars.len() && chars[i] == '[' {
+                i += 1;
+                let start = i;
+                while i < chars.len() && !chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    break;
+                }
+                let params: String = chars[start..i].iter().collect();
+                let fin = chars[i];
+                i += 1;
+                let nums: Vec<usize> = params
+                    .trim_start_matches('?')
+                    .split(';')
+                    .filter_map(|p| p.parse().ok())
+                    .collect();
+                match fin {
+                    'H' | 'f' => {
+                        row = nums.first().copied().unwrap_or(1).saturating_sub(1);
+                        col = nums.get(1).copied().unwrap_or(1).saturating_sub(1);
+                    }
+                    'A' => row = row.saturating_sub(nums.first().copied().unwrap_or(1)),
+                    'B' => row += nums.first().copied().unwrap_or(1),
+                    'C' => col += nums.first().copied().unwrap_or(1),
+                    'D' => col = col.saturating_sub(nums.first().copied().unwrap_or(1)),
+                    // Erase in display/line (`\x1b[2J`, `\x1b[K`, ...)
+                    // -- a real terminal drops the erased cells for
+                    // good; a resize mid-stream (ratatui clears and
+                    // redraws from scratch at the new size) leaves a
+                    // wider frame's own stale cells bleeding through
+                    // underneath a narrower one otherwise, since this
+                    // replay buffer never actually shrinks.
+                    'J' => {
+                        let mode = nums.first().copied().unwrap_or(0);
+                        match mode {
+                            0 => {
+                                if row < rows {
+                                    for c in grid[row].iter_mut().skip(col) {
+                                        *c = ' ';
+                                    }
+                                    for line in grid.iter_mut().skip(row + 1) {
+                                        line.iter_mut().for_each(|c| *c = ' ');
+                                    }
+                                }
+                            }
+                            1 => {
+                                for line in grid.iter_mut().take(row) {
+                                    line.iter_mut().for_each(|c| *c = ' ');
+                                }
+                                if row < rows {
+                                    for c in grid[row].iter_mut().take(col.min(cols)) {
+                                        *c = ' ';
+                                    }
+                                }
+                            }
+                            _ => {
+                                for line in grid.iter_mut() {
+                                    line.iter_mut().for_each(|c| *c = ' ');
+                                }
+                            }
+                        }
+                    }
+                    'K' => {
+                        let mode = nums.first().copied().unwrap_or(0);
+                        if row < rows {
+                            match mode {
+                                0 => {
+                                    for c in grid[row].iter_mut().skip(col) {
+                                        *c = ' ';
+                                    }
+                                }
+                                1 => {
+                                    for c in grid[row].iter_mut().take(col.min(cols)) {
+                                        *c = ' ';
+                                    }
+                                }
+                                _ => {
+                                    grid[row].iter_mut().for_each(|c| *c = ' ');
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else if i < chars.len() {
+                // a two-character escape (`ESC 7`, `ESC =`, ...)
+                i += 1;
+            }
+            continue;
+        }
+        match c {
+            '\r' => col = 0,
+            '\n' => {
+                row += 1;
+                col = 0;
+            }
+            '\u{7}' | '\u{8}' | '\u{f}' | '\u{e}' => {}
+            _ => {
+                if !c.is_control() {
+                    if row < rows && col < cols {
+                        grid[row][col] = c;
+                    }
+                    col += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    grid.into_iter()
+        .map(|r| r.into_iter().collect::<String>().trim_end().to_string())
+        .collect()
+}
+
+/// [`screen_grid`], but keeping each cell's own foreground as the SGR
+/// parameters that set it (`38;2;r;g;b` truecolor, `38;5;n` 256-colour,
+/// `31`/`92` basic) instead of discarding every SGR sequence -- a PTY
+/// check that a symbol's own *style*, not just its text, changed
+/// (issue #738's own `T` test) reads a specific cell's colour here,
+/// the same way `screen_grid` reads its character, whatever colour
+/// depth the terminal's own `COLORTERM` made osi pick.
+pub fn screen_grid_fg(bytes: &[u8], cols: usize, rows: usize) -> Vec<Vec<Option<String>>> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut grid = vec![vec![None; cols]; rows];
+    let (mut row, mut col) = (0usize, 0usize);
+    let mut fg: Option<String> = None;
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c == '\u{1b}' {
+            i += 1;
+            if i < chars.len() && chars[i] == '[' {
+                i += 1;
+                let start = i;
+                while i < chars.len() && !chars[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                if i >= chars.len() {
+                    break;
+                }
+                let params: String = chars[start..i].iter().collect();
+                let fin = chars[i];
+                i += 1;
+                let nums: Vec<i64> = params
+                    .trim_start_matches('?')
+                    .split(';')
+                    .map(|p| p.parse().unwrap_or(-1))
+                    .collect();
+                match fin {
+                    'H' | 'f' => {
+                        row = nums.first().copied().unwrap_or(1).max(1) as usize - 1;
+                        col = nums.get(1).copied().unwrap_or(1).max(1) as usize - 1;
+                    }
+                    'A' => {
+                        row = row.saturating_sub(nums.first().copied().unwrap_or(1).max(0) as usize)
+                    }
+                    'B' => row += nums.first().copied().unwrap_or(1).max(0) as usize,
+                    'C' => col += nums.first().copied().unwrap_or(1).max(0) as usize,
+                    'D' => {
+                        col = col.saturating_sub(nums.first().copied().unwrap_or(1).max(0) as usize)
+                    }
+                    'J' | 'K' => {}
+                    'm' => {
+                        let mut j = 0;
+                        if nums.is_empty() {
+                            fg = None;
+                        }
+                        while j < nums.len() {
+                            match nums[j] {
+                                0 => fg = None,
+                                38 if nums.get(j + 1) == Some(&2) && nums.len() > j + 4 => {
+                                    fg = Some(format!(
+                                        "38;2;{};{};{}",
+                                        nums[j + 2],
+                                        nums[j + 3],
+                                        nums[j + 4]
+                                    ));
+                                    j += 4;
+                                }
+                                38 if nums.get(j + 1) == Some(&5) && nums.len() > j + 2 => {
+                                    fg = Some(format!("38;5;{}", nums[j + 2]));
+                                    j += 2;
+                                }
+                                n @ (30..=37 | 90..=97) => fg = Some(n.to_string()),
+                                39 => fg = None,
+                                _ => {}
+                            }
+                            j += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            } else if i < chars.len() {
+                i += 1;
+            }
+            continue;
+        }
+        match c {
+            '\r' => col = 0,
+            '\n' => {
+                row += 1;
+                col = 0;
+            }
+            '\u{7}' | '\u{8}' | '\u{f}' | '\u{e}' => {}
+            _ => {
+                if !c.is_control() {
+                    if row < rows && col < cols {
+                        grid[row][col] = fg.clone();
+                    }
+                    col += 1;
+                }
+            }
+        }
+        i += 1;
+    }
+    grid
+}
+
+/// Opens a fresh pty pair, unlocked and granted, ready for a child to
+/// use its slave side as its controlling stdio. Returns the master
+/// (kept open for the caller's own lifetime; its own `Drop` closes it)
+/// and the slave device's path, re-opened fresh for each of the
+/// child's three standard streams below -- a single shared `File`
+/// handle would make all three the same underlying OS file
+/// description, which is not what three independent dup'd fds of a
+/// real terminal ever are.
+pub fn open_pty() -> (File, PathBuf) {
+    let master_fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
+    assert!(master_fd >= 0, "posix_openpt failed");
+    assert_eq!(unsafe { libc::grantpt(master_fd) }, 0, "grantpt failed");
+    assert_eq!(unsafe { libc::unlockpt(master_fd) }, 0, "unlockpt failed");
+    // Without `FD_CLOEXEC`, `spawn_osi_on_pty`'s own `Command::spawn`
+    // (fork, then exec) would hand osi itself a surviving duplicate
+    // of this exact fd -- a real bug a caller of this helper could
+    // otherwise never hit before needing the master to actually,
+    // fully close while osi was still alive: osi would then still
+    // hold the pty's master open all on its own even after the
+    // caller's own copy is dropped, so the slave side it cares about
+    // (osi's own stdin/stdout/stderr) would never see the EOF/write-
+    // error a closed master is supposed to cause at all.
+    assert_eq!(
+        unsafe { libc::fcntl(master_fd, libc::F_SETFD, libc::FD_CLOEXEC) },
+        0,
+        "fcntl F_SETFD FD_CLOEXEC failed"
+    );
+
+    let slave_name = unsafe { libc::ptsname(master_fd) };
+    assert!(!slave_name.is_null(), "ptsname failed");
+    let slave_path = unsafe { std::ffi::CStr::from_ptr(slave_name) }
+        .to_str()
+        .expect("ptsname is valid UTF-8")
+        .to_string();
+
+    // A freshly opened pty's own window size defaults to 0x0 until
+    // something sets it -- crossterm's own `terminal::size()` reads
+    // exactly this, so without it every frame a TUI draws lays out
+    // into a zero-area buffer and writes nothing at all beyond the
+    // alternate-screen/cursor sequences. `TIOCSWINSZ` on the master
+    // fd alone fails ENOTTY on macOS -- it has to go through an open
+    // slave fd, but the size itself belongs to the pty, not that one
+    // fd, so it's still in effect once this one closes again.
+    {
+        let slave = File::options()
+            .read(true)
+            .write(true)
+            .open(&slave_path)
+            .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
+        let ws = libc::winsize {
+            ws_row: 40,
+            ws_col: 120,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
+            panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
+        }
+        // Not closed: on macOS, the slave side's open-file count
+        // dropping to zero even briefly -- closing this one before
+        // `spawn_osi_on_pty` opens its own three, moments later --
+        // signals a hangup the master side sees as an immediate EOF,
+        // which would silently end `drain_continuously`'s own read
+        // loop before osi ever wrote a single byte. Leaking this one
+        // fd for the rest of the test binary's own short life keeps
+        // the slave's own open count never reaching zero in between.
+        //
+        // Review finding 5 on PR #496: the cost of that is paid by
+        // every test that calls this helper, not just the first one --
+        // this leaked fd stays open for the whole binary's life, so
+        // the real slave fds `spawn_osi_on_pty` opens next are never
+        // the last ones left, and `master` (this pty's own read side)
+        // can never see a real EOF once osi's own three close on
+        // exit. `drain_continuously`'s loop below only ever stops
+        // reading because its read errors (the master itself closing
+        // when this function's own `File` drops at the end of a
+        // test), never because the pipe quietly ran dry.
+        std::mem::forget(slave);
+    }
+
+    let master = unsafe { File::from_raw_fd(master_fd as RawFd) };
+    (master, PathBuf::from(slave_path))
+}
+
+/// Resizes an already-open pty to `cols`x`rows`, the same
+/// `TIOCSWINSZ` [`open_pty`] uses for its own initial 120x40 --
+/// `TIOCSWINSZ` changing the size of a process's own controlling
+/// terminal raises `SIGWINCH` to its foreground process group on
+/// its own, which crossterm turns into `Event::Resize` the same way
+/// a real terminal resize would.
+pub fn resize_pty(slave_path: &Path, cols: u16, rows: u16) {
+    let slave = File::options()
+        .read(true)
+        .write(true)
+        .open(slave_path)
+        .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
+    };
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
+        panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
+    }
+}
+
+/// Drains `master` continuously, from the moment it's called, into a
+/// shared buffer a caller can inspect at any time -- started right
+/// after the pty is opened, *before* the child is even spawned,
+/// rather than only read from in bursts (a redrawing TUI can fill a
+/// pty's own small kernel buffer in well under a second; nothing
+/// draining it would make osi's own writes block, delaying its exit
+/// for however long this wasn't reading, and risking losing whatever
+/// it tried to write once it finally did get to exit).
+pub fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
+    let buf = Arc::new(Mutex::new(Vec::new()));
+    let shared = Arc::clone(&buf);
+    std::thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        loop {
+            match master.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => shared.lock().unwrap().extend_from_slice(&chunk[..n]),
+            }
+        }
+    });
+    buf
+}
+
+/// Polls the replayed screen (every drawn byte so far through
+/// [`screen_grid`], 200x60) until it shows `needle`, returning that
+/// screen; after `timeout` it returns whatever the screen shows, for
+/// the caller's own assertion to name the step that lagged.
+pub fn wait_for_screen_text(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    needle: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = screen_grid(&whole, 200, 60).join("\n");
+        if screen.contains(needle) || Instant::now() >= deadline {
+            return screen;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// [`wait_for_screen_text`], but waiting for `needle` to disappear
+/// instead.
+pub fn wait_for_screen_text_gone(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    needle: &str,
+    timeout: Duration,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = screen_grid(&whole, 200, 60).join("\n");
+        if !screen.contains(needle) || Instant::now() >= deadline {
+            return screen;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
+/// Writes `bytes` to the pty's master side, i.e. exactly what a key
+/// press on a real terminal would deliver to osi's own raw-mode
+/// stdin.
+pub fn send_bytes(master: &mut File, bytes: &[u8]) {
+    master.write_all(bytes).expect("write to pty master");
+    master.flush().expect("flush pty master");
+}
+
+fn open_slave(path: &Path) -> OwnedFd {
+    // On Linux, a process that has called `setsid()` (no controlling
+    // terminal of its own yet) and then opens a tty device *by path*
+    // auto-acquires it as its controlling terminal, same as a bare
+    // `open()` + no `O_NOCTTY` always has on historical SysV ttys --
+    // `osi` itself never asks for one (`TerminalGuard::enter` only
+    // `tcgetattr`/`tcsetattr`s an already-open fd), so the three
+    // slave opens below, each handed to the spawned `osi` as a
+    // *fresh* stdio fd rather than a dup of one already-open one,
+    // must say so explicitly.
+    let file = File::options()
+        .read(true)
+        .write(true)
+        .custom_flags(libc::O_NOCTTY)
+        .open(path)
+        .unwrap_or_else(|e| panic!("opening pty slave {path:?}: {e}"));
+    OwnedFd::from(file)
+}
+
+fn stdio_from_slave(path: &Path) -> Stdio {
+    let fd = open_slave(path);
+    Stdio::from(fd)
+}
+
+/// Spawns `osi` with every one of its standard streams attached to
+/// the pty's slave side, in its own process group (the same
+/// isolation `osi` itself gives `cof`, and the lane rule this
+/// repository's tests all follow: "signals only to processes you
+/// started, in their own session").
+pub fn spawn_osi_on_pty(home: &TestHome, slave_path: &Path, args: &[&OsStr]) -> Child {
+    spawn_osi_on_pty_with_env(home, slave_path, args, &[])
+}
+
+/// [`spawn_osi_on_pty`], with extra environment variables set on the
+/// spawned `osi` before it starts.
+pub fn spawn_osi_on_pty_with_env(
+    home: &TestHome,
+    slave_path: &Path,
+    args: &[&OsStr],
+    extra_env: &[(&str, &OsStr)],
+) -> Child {
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
+    cmd.args(args);
+    cmd.env("HOME", home.path());
+    cmd.env("TERM", "xterm-256color");
+    // Issue #649: a bare `HOME` override isn't enough on its own --
+    // an inherited `XDG_STATE_HOME` or `OSI_HISTORY_DIR` would still
+    // point history at the real directory.
+    cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
+    // Issue #698: same discipline for the run registry.
+    cmd.env("OSI_RUNS_DIR", home.path().join("runs"));
+    // A machine-wide `ps` scan would otherwise let a Select/All pty
+    // test see, and open or signal, an orchestration this test
+    // never started -- off by default for every pty test spawned
+    // here. The one test that exercises the scan itself
+    // (`e2e_tui_pty.rs`'s own bare-`osi`-discovers-a-live-run check)
+    // never calls this function at all; it spawns through
+    // `osi_command` instead, which leaves the scan on.
+    cmd.env("OSI_PROCESS_SCAN", "0");
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+        "XDG_STATE_HOME",
+        "XDG_RUNTIME_DIR",
+        "OSI_HISTORY",
+        // `effective_log_mode` (DESIGN.md §6.2) forces the plain
+        // stream whenever `CI` is set, which GitHub Actions sets for
+        // every job regardless of what osi's own stdout actually is
+        // -- without removing it here, every pty test here always
+        // exercised the plain path on CI, and never the TUI it
+        // exists to test.
+        "CI",
+    ] {
+        cmd.env_remove(key);
+    }
+    for (key, value) in extra_env {
+        cmd.env(key, value);
+    }
+    cmd.stdin(stdio_from_slave(slave_path));
+    cmd.stdout(stdio_from_slave(slave_path));
+    cmd.stderr(stdio_from_slave(slave_path));
+    // `setsid()`, not merely `setpgid(0, 0)` -- matching how a real
+    // terminal-launching driver spawns its own child (Python's own
+    // `start_new_session=True`), and the only way osi ends up with
+    // *no controlling terminal at all* rather than merely its own
+    // process group within the test harness's own session. A plain
+    // tty slave fd (no explicit `TIOCSCTTY`, and now `O_NOCTTY` on
+    // top, `open_slave`'s own doc comment) is still enough for
+    // `crossterm::terminal::enable_raw_mode`'s own `tcgetattr`/
+    // `tcsetattr`, which only need an open fd referring to some tty
+    // device, not a controlling-terminal relationship -- this
+    // isolation is here for the same reason `osi` itself gives `cof`
+    // its own (DESIGN.md §4.1), so a signal sent to just this pid
+    // never reaches the test harness's own session either.
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    cmd.spawn().expect("spawn osi on a pty")
+}
+
+/// A long-running document (a `sleep` tool, allow-listed) so a run
+/// launched from it stays live long enough for a second `osi` to
+/// find it on Select -- 60s, not the 5s a quick probe would use: a
+/// shared, busy machine's own scheduling delays can stretch the gap
+/// between launching this run and a caller actually checking it is
+/// still live well past a few seconds (`terminate_launcher` ends it
+/// well before this ever elapses in practice).
+pub const SELECT_SLOW_DOC: &str = "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"60\"]\n      allowed_commands: [\"sleep\"]\n";
+
+/// Launches `osi <doc> <config> --out-dir <out> --log` in the
+/// background (issue #698: a plain, non-TTY run needs no pty of its
+/// own, and writes the same registry entry a TUI launch would) --
+/// its own stdout/stderr are discarded, never read, since the point
+/// of a Select test is bare `osi`'s own Select screen, not this
+/// launcher's own log lines.
+pub fn launch_osi_log(
+    home: &TestHome,
+    work: &Path,
+    doc: &Path,
+    config: &Path,
+    out: &Path,
+) -> Child {
+    let mut cmd = osi_command(home);
+    cmd.current_dir(work)
+        .arg(doc)
+        .arg(config)
+        .arg("--out-dir")
+        .arg(out)
+        .arg("--log")
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    cmd.spawn().expect("spawn osi --log")
+}
+
+/// A SIGTERM, not a SIGKILL -- `osi --log`'s own `SignalWatcher`
+/// forwards a caught SIGTERM to the engine it supervises (`cof`),
+/// which in turn ends the long-running `sleep` tool underneath it;
+/// a SIGKILL on the launcher alone would leave both still running,
+/// unreachable to `osi`'s own signal handling at all. Falls back to
+/// a real kill if the launcher hasn't actually exited by the time
+/// the caller is done with it.
+pub fn terminate_launcher(mut child: Child) {
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Polls `runs_dir` until it holds at least `want` entries, capped
+/// at `timeout` -- the registry entry is written once `run_start` is
+/// known, not instantly at spawn.
+pub fn wait_for_registry_entries(runs_dir: &Path, want: usize, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    let entries = || -> Vec<String> {
+        std::fs::read_dir(runs_dir)
+            .map(|rd| {
+                rd.flatten()
+                    .map(|e| e.file_name().to_string_lossy().into_owned())
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    loop {
+        let json = entries().iter().filter(|n| n.ends_with(".json")).count();
+        if json >= want {
+            return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "expected {want} registry entries in {} within {timeout:?}, found {:?}",
+                runs_dir.display(),
+                entries()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }

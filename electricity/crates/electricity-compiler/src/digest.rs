@@ -92,6 +92,52 @@ fn add_prompt_files(
     Ok(())
 }
 
+/// `core/resume.py::_legacy_document_sha256` -- the pre-#407
+/// `document_hash` algorithm a state file from before that change
+/// recorded: *resolved_path*'s own bytes, then every referenced prompt
+/// file's own bytes (sorted by resolved path, swallowing a file that
+/// fails to read rather than stopping, unlike [`document_content_
+/// digest`]'s own [`add_prompt_files`]) -- no per-file label or length
+/// prefix. `--resume`'s own hash-mismatch check falls back to this when
+/// the current algorithm doesn't match a saved state's recorded hash,
+/// so a state file an older release wrote still resumes without
+/// `--force`. COMPATIBILITY FALLBACK ONLY, same as the Python function
+/// this ports -- remove both together.
+pub fn legacy_document_sha256(
+    resolved_path: &Path,
+    document: &Value,
+    confinement_root: &Path,
+) -> io::Result<String> {
+    let document_bytes = std::fs::read(resolved_path)?;
+    let mut hasher = Sha256::new();
+    hasher.update(&document_bytes);
+
+    if let Ok(document_dir) = resolve_non_strict(resolved_path) {
+        if let Some(document_dir) = document_dir.parent() {
+            let mut paths: BTreeSet<PathBuf> = BTreeSet::new();
+            for value in referenced_file_values(document) {
+                let Some(file_value) = file_shaped(value) else {
+                    continue;
+                };
+                if let Ok((_, resolved)) =
+                    resolve_prompt_file_path(file_value, "file", document_dir, confinement_root)
+                {
+                    paths.insert(resolved);
+                }
+            }
+            for prompt_file in paths {
+                // A file that fails to read is skipped, not fatal --
+                // `_legacy_document_sha256`'s own per-file `except
+                // OSError: continue`.
+                if let Ok(data) = std::fs::read(&prompt_file) {
+                    hasher.update(&data);
+                }
+            }
+        }
+    }
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
 /// Every value that could be a `{file: ...}` prompt source: the
 /// top-level `prompts:` map's own values, and, walked the same way
 /// [`crate::compose::all_effect_names`] walks the document, each

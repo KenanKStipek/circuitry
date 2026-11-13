@@ -813,6 +813,7 @@ mod tests {
             path: &path,
             timeout_seconds: 30,
             token: &token,
+            on_progress: None,
         };
         let adapter = PlaceholderAdapter::new("openai".to_string());
         let err = adapter

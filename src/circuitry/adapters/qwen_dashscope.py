@@ -30,11 +30,14 @@ class QwenDashScopeAdapter:
     base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     default_model: str = "qwen-max"
 
+    streams: bool = True
+
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
             api_key_env="DASHSCOPE_API_KEY",
             default_model=self.default_model,
+            streams=self.streams,
         )
 
     def generate(

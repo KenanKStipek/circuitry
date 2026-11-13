@@ -59,7 +59,7 @@ fn a_simple_run_succeeds_and_prints_the_log() {
         "osi should exit 0, got {status:?}; stdout:\n{stdout}"
     );
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(stdout.contains("exit 0"), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
     assert_no_new_osi_dirs(&osi_dirs_before);
@@ -118,7 +118,7 @@ fn a_documents_reports_show_up_in_the_log_and_the_run_still_ends_ok() {
     // must never also grow its own step line.
     assert!(!stdout.contains("▶ prime.summary"), "stdout:\n{stdout}");
     assert!(!stdout.contains("✓ prime.summary"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
@@ -522,7 +522,7 @@ fn watch_mirrors_a_run_osi_did_not_start() {
 
     assert!(watch_status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.hello"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
@@ -565,8 +565,8 @@ fn a_scripted_prompt_prints_tokens_sent_and_received() {
 
     assert!(status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
-    assert!(stdout.contains("↑3 t ↓5 t"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 
@@ -615,8 +615,8 @@ fn a_scripted_prompt_after_a_slow_leading_effect_prints_tokens_sent_and_received
 
     assert!(status.success(), "stdout:\n{stdout}");
     assert!(stdout.contains("prime.ask"), "stdout:\n{stdout}");
-    assert!(stdout.contains("↑3 t ↓5 t"), "stdout:\n{stdout}");
-    assert!(stdout.contains("■ run ok"), "stdout:\n{stdout}");
+    assert!(stdout.contains("↑3 ↓5"), "stdout:\n{stdout}");
+    assert!(support::log_shows_run_ok(&stdout), "stdout:\n{stdout}");
     assert!(!stderr.contains("has no --events"), "stderr:\n{stderr}");
 }
 

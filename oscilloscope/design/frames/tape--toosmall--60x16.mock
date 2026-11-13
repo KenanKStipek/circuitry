@@ -1,0 +1,22 @@
+#! tui-mockup 1
+#! size: 60x16
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — too small
+#! state: toosmall
+#! theme: catppuccin-mocha
+
+
+
+{accent.primary bold}                            osi{/}
+
+{fg.title bold}                     Terminal too small{/}
+
+{fg.muted}                 Width    {/}{status.success}60   {/}{fg.muted}needs {/}{fg.default}60  {/}{status.success}✓{/}
+{fg.muted}                 Height   {/}{status.error bold}16   {/}{fg.muted}needs {/}{fg.default}24  {/}{status.error}✗{/}
+
+{fg.muted}      osi needs 60 columns and 24 rows · try osi --log{/}
+
+
+
+
+{keyhint.key bold on:statusbar.bg}                                                     q {/}{keyhint.desc on:statusbar.bg}Quit {/}

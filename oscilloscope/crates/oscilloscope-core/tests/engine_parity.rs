@@ -89,7 +89,7 @@ fn normalized_log_lines(dir_name: &str) -> Vec<String> {
     sort_log_lines(&mut lines);
     lines
         .into_iter()
-        .map(|line| normalize_run_started(&normalize_duration(&line.text)))
+        .map(|line| normalize_run_started(&normalize_run_name(&normalize_duration(&line.text))))
         .collect()
 }
 
@@ -101,6 +101,29 @@ fn normalize_run_started(text: &str) -> String {
     match text.strip_prefix("■ run started  ") {
         Some(_) => "■ run started  <RUN_ID>".to_string(),
         None => text.to_string(),
+    }
+}
+
+/// The exit summary's own run name (issue #717), also derived from
+/// the run's own fresh `run_id` and so just as unable to agree
+/// between two independently recorded fixtures, normalized away the
+/// same way `normalize_run_started` already handles the `started`
+/// line's own id: `■ run <name>  ok  ...` -> `■ run <NAME>  ok  ...`.
+fn normalize_run_name(text: &str) -> String {
+    let Some(rest) = text.strip_prefix("■ run ") else {
+        return text.to_string();
+    };
+    let Some((first_word, remainder)) = rest.split_once("  ") else {
+        return text.to_string();
+    };
+    let is_name = first_word.contains('-')
+        && first_word
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c == '-');
+    if is_name {
+        format!("■ run <NAME>  {remainder}")
+    } else {
+        text.to_string()
     }
 }
 

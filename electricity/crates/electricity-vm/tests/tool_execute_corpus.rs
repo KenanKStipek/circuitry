@@ -254,7 +254,10 @@ async fn golden_corpus_execute_tool() {
             expect,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         };
         let op = Op {
             path: EffectPath::root().push_name(&name),
@@ -263,6 +266,7 @@ async fn golden_corpus_execute_tool() {
             on_error,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();

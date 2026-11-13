@@ -1,0 +1,13 @@
+name: split-then-complexity
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    template: >-
+      Analyze and critique the following in great depth, cross-reference
+      every claim, and deduce the underlying causes, evaluate alternatives
+      and justify your conclusion with explicit reasoning. {{input.doc}}

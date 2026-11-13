@@ -1,0 +1,4 @@
+prime.greeting:
+  - chunks: ["hello ", "from ", "scripted"]
+    tokens_sent: 4
+    tokens_received: 6

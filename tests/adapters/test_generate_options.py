@@ -24,10 +24,12 @@ from circuitry.adapters.base import (
     DETERMINISTIC_SEED,
     ChatMessage,
     GenerateOptions,
+    GenerateProgress,
     GenerateResult,
     ImageInput,
     adapter_accepts_images,
     call_generate,
+    ignored_options_warning,
 )
 from circuitry.adapters.conformance import validate_generate_result
 from circuitry.adapters.factory import ADAPTER_REGISTRY, build_adapter
@@ -123,6 +125,41 @@ def _record(monkeypatch: pytest.MonkeyPatch, response: dict[str, Any]) -> CurlRe
     return recorder
 
 
+# ---------- GenerateOptions.on_progress ----------
+
+
+def test_on_progress_is_not_a_set_field_but_makes_options_non_empty() -> None:
+    options = GenerateOptions(on_progress=lambda progress: None)
+    assert options.set_fields() == []
+    assert options.is_empty() is False
+    assert ignored_options_warning("adapter", options) == ()
+
+
+def test_options_with_no_on_progress_and_nothing_else_is_empty() -> None:
+    assert GenerateOptions().is_empty() is True
+
+
+def test_on_progress_is_excluded_from_equality_and_repr() -> None:
+    a = GenerateOptions(temperature=0.5, on_progress=lambda progress: None)
+    b = GenerateOptions(temperature=0.5, on_progress=lambda progress: progress)
+    assert a == b
+    assert "on_progress" not in repr(a)
+
+
+def test_call_generate_passes_a_non_empty_options_with_only_on_progress_set() -> None:
+    options = GenerateOptions(on_progress=lambda progress: None)
+    result = call_generate(
+        OptionsAdapter(), model="m", prompt="p", timeout_seconds=5, options=options
+    )
+    assert result.raw["options"] is options
+
+
+def test_generate_progress_defaults() -> None:
+    progress = GenerateProgress(delta_chars=5, delta_count=1)
+    assert progress.tokens_sent is None
+    assert progress.tokens_received is None
+
+
 # ---------- the call_generate shim ----------
 
 
@@ -214,7 +251,7 @@ def test_ollama_template_prompt_maps_options_onto_generate(
         monkeypatch,
         {"response": " Once ", "done_reason": "length", "prompt_eval_count": 3, "eval_count": 5},
     )
-    result = OllamaAdapter().generate(
+    result = OllamaAdapter(streams=False).generate(
         model="smollm2:135m",
         prompt="Write a story.",
         timeout_seconds=9,
@@ -252,7 +289,7 @@ def test_ollama_template_prompt_maps_options_onto_generate(
 
 def test_ollama_explicit_seed_wins_over_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
     curl = _record(monkeypatch, {"response": "x"})
-    OllamaAdapter().generate(
+    OllamaAdapter(streams=False).generate(
         model="m",
         prompt="p",
         options=GenerateOptions(temperature=0.0, params={"seed": 42}, deterministic=True),
@@ -266,7 +303,7 @@ def test_ollama_messages_use_chat_with_images_on_last_user_turn(
     curl = _record(
         monkeypatch, {"message": {"role": "assistant", "content": "A cat."}, "done_reason": "stop"}
     )
-    result = OllamaAdapter().generate(
+    result = OllamaAdapter(streams=False).generate(
         model="m", prompt="flattened", options=GenerateOptions(messages=TURNS, images=(PNG,))
     )
     assert curl.url == "http://localhost:11434/api/chat"
@@ -285,7 +322,7 @@ def test_ollama_without_options_sends_the_original_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     curl = _record(monkeypatch, {"response": "hi"})
-    OllamaAdapter().generate(model="m", prompt="p")
+    OllamaAdapter(streams=False).generate(model="m", prompt="p")
     assert curl.url.endswith("/api/generate")
     assert curl.body == {"model": "m", "prompt": "p", "stream": False}
 
@@ -293,7 +330,7 @@ def test_ollama_without_options_sends_the_original_request(
 def test_ollama_refuses_an_image_url(monkeypatch: pytest.MonkeyPatch) -> None:
     _record(monkeypatch, {"response": "hi"})
     with pytest.raises(RuntimeError, match="cannot fetch an image URL"):
-        OllamaAdapter().generate(
+        OllamaAdapter(streams=False).generate(
             model="m",
             prompt="p",
             options=GenerateOptions(images=(ImageInput(url="https://x.test/a.png"),)),
@@ -313,7 +350,7 @@ def _chat_response(text: str = "ok", finish_reason: str = "stop") -> dict[str, A
 def test_openai_compat_maps_options_turns_and_images(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "k")
     curl = _record(monkeypatch, _chat_response("cut", "length"))
-    result = GroqAdapter().generate(
+    result = GroqAdapter(streams=False).generate(
         model="llama",
         prompt="flattened",
         options=GenerateOptions(
@@ -356,7 +393,7 @@ def test_openai_compat_without_options_sends_one_user_turn(
 ) -> None:
     monkeypatch.setenv("GROQ_API_KEY", "k")
     curl = _record(monkeypatch, _chat_response())
-    GroqAdapter().generate(model="llama", prompt="p")
+    GroqAdapter(streams=False).generate(model="llama", prompt="p")
     assert curl.body == {"model": "llama", "messages": [{"role": "user", "content": "p"}]}
 
 
@@ -365,7 +402,7 @@ def test_openai_sends_max_completion_tokens_and_a_deterministic_seed(
 ) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
     curl = _record(monkeypatch, _chat_response("hi", "stop"))
-    result = OpenAIAdapter().generate(
+    result = OpenAIAdapter(streams=False).generate(
         model="gpt-4o-mini",
         prompt="p",
         timeout_seconds=3,
@@ -404,7 +441,7 @@ def test_anthropic_system_field_turns_options_and_image_blocks(
             "usage": {"input_tokens": 9, "output_tokens": 3},
         },
     )
-    result = AnthropicAdapter().generate(
+    result = AnthropicAdapter(streams=False).generate(
         model="claude-sonnet-5",
         prompt="flattened",
         options=GenerateOptions(
@@ -449,7 +486,7 @@ def test_anthropic_without_options_keeps_the_configured_max_tokens(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     curl = _record(monkeypatch, {"content": [{"type": "text", "text": "hi"}]})
-    AnthropicAdapter(max_tokens=777).generate(model="claude-sonnet-5", prompt="p")
+    AnthropicAdapter(max_tokens=777, streams=False).generate(model="claude-sonnet-5", prompt="p")
     assert curl.body == {
         "model": "claude-sonnet-5",
         "max_tokens": 777,
@@ -462,7 +499,7 @@ def test_anthropic_system_only_messages_go_out_as_a_user_turn(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
     curl = _record(monkeypatch, {"content": [{"type": "text", "text": "hi"}]})
-    AnthropicAdapter(max_tokens=777).generate(
+    AnthropicAdapter(max_tokens=777, streams=False).generate(
         model="claude-sonnet-5",
         prompt="system: Say hi.",
         options=GenerateOptions(messages=(ChatMessage(role="system", content="Say hi."),)),
@@ -480,10 +517,10 @@ def test_anthropic_system_only_messages_go_out_as_a_user_turn(
 @pytest.mark.parametrize(
     "adapter,env_var,response",
     [
-        (OllamaAdapter(), None, {"response": "ok"}),
-        (GroqAdapter(), "GROQ_API_KEY", _chat_response()),
-        (OpenAIAdapter(), "OPENAI_API_KEY", _chat_response()),
-        (AnthropicAdapter(), "ANTHROPIC_API_KEY", {"content": [{"type": "text", "text": "ok"}]}),
+        (OllamaAdapter(streams=False), None, {"response": "ok"}),
+        (GroqAdapter(streams=False), "GROQ_API_KEY", _chat_response()),
+        (OpenAIAdapter(streams=False), "OPENAI_API_KEY", _chat_response()),
+        (AnthropicAdapter(streams=False), "ANTHROPIC_API_KEY", {"content": [{"type": "text", "text": "ok"}]}),
     ],
     ids=["ollama", "openai_compat", "openai", "anthropic"],
 )

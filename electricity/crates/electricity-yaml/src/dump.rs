@@ -54,6 +54,7 @@
 
 use crate::scalar;
 use electricity_value::Value;
+use std::collections::HashMap;
 use std::fmt;
 
 /// `best_width` -- PyYAML's own fixed default (`Emitter.__init__`'s
@@ -98,7 +99,122 @@ impl Default for DumpOptions {
 /// `yaml.dump(value, default_flow_style=False, sort_keys=options.sort_keys)`.
 pub fn dump(value: &Value, options: &DumpOptions) -> Result<String, DumpError> {
     let mut out = String::new();
-    let open_ended = emit_root(&mut out, value, options, 1)?;
+    let ctx = EmitCtx {
+        options,
+        aliases: AliasIndex::empty(),
+    };
+    let mut path = Vec::new();
+    let open_ended = emit_root(&mut out, value, &ctx, 1, &mut path)?;
+    if open_ended {
+        out.push_str("...\n");
+    }
+    Ok(out)
+}
+
+/// [`emit_mapping`]/[`emit_mapping_value`]/[`emit_sequence`]'s own
+/// read-only call-wide state, bundled into one parameter so adding
+/// [`dump_aliased`]'s own aliasing didn't push any of them over
+/// clippy's argument-count lint.
+struct EmitCtx<'a> {
+    options: &'a DumpOptions,
+    aliases: AliasIndex,
+}
+
+/// A mapping key or sequence index on the way from the document root
+/// down to a value [`dump_aliased`] anchors or aliases.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum PathSegment {
+    Key(Value),
+    Index(usize),
+}
+
+/// One container value the caller already knows -- from its own
+/// domain knowledge, never inferred from equal content -- is the exact
+/// same object at two or more positions in the tree [`dump_aliased`]
+/// is about to render: `core/decompose.py::_generate_split_plan` has
+/// exactly this shape -- `_copy_source_fields` assigns the source
+/// prompt's own `schema`/`params`/`inputs` dict onto both the
+/// generated map and merge prompts by reference (not a copy), and
+/// `_forwarded_split_config`'s own nested `merge` dict the same way --
+/// so `yaml.safe_dump`, which aliases by Python object identity
+/// (`SafeRepresenter.ignore_aliases` exempting only scalars), renders
+/// the first occurrence anchored and every later one as a bare alias.
+/// electricity's own [`Value`] carries no identity of its own (every
+/// clone is a fresh, independently owned tree), so nothing here
+/// *discovers* sharing -- the caller states it, by path, or
+/// [`dump_aliased`] never aliases at all; two different paths whose
+/// values happen to render identically, but were never the same
+/// source field, are never merged into one anchor just because their
+/// text would match.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MappingAlias {
+    /// This group's own `&idN`/`*idN` number -- the caller's to assign
+    /// ([`dump_aliased`] never renumbers), so the caller controls
+    /// ordering across more than one group too (`yaml.safe_dump`
+    /// itself numbers anchors in the order its own serializer pass
+    /// first reaches each one).
+    pub id: u32,
+    /// The first occurrence: a path of mapping keys/sequence indices
+    /// from the document root down to the shared value -- always a
+    /// mapping *value*'s own position (its last segment is the
+    /// [`PathSegment::Key`] it sits under), never a bare sequence
+    /// item; this dumper's own aliasing is scoped to mapping values,
+    /// the only shape `_generate_split_plan`'s sharing ever takes.
+    pub anchor_path: Vec<PathSegment>,
+    /// Every later occurrence of the same value, by the same kind of
+    /// path -- each one, instead of being dumped, becomes a bare
+    /// `*idN`.
+    pub alias_paths: Vec<Vec<PathSegment>>,
+}
+
+/// [`MappingAlias`]'s own fast lookup, built once per [`dump_aliased`]
+/// call -- empty (and so a no-op on every lookup) for [`dump`] itself,
+/// which shares every emit function below with [`dump_aliased`] rather
+/// than duplicating them.
+struct AliasIndex {
+    anchors: HashMap<Vec<PathSegment>, u32>,
+    aliases: HashMap<Vec<PathSegment>, u32>,
+}
+
+impl AliasIndex {
+    fn empty() -> Self {
+        AliasIndex {
+            anchors: HashMap::new(),
+            aliases: HashMap::new(),
+        }
+    }
+
+    fn build(specs: &[MappingAlias]) -> Self {
+        let mut anchors = HashMap::new();
+        let mut aliases = HashMap::new();
+        for spec in specs {
+            anchors.insert(spec.anchor_path.clone(), spec.id);
+            for alias_path in &spec.alias_paths {
+                aliases.insert(alias_path.clone(), spec.id);
+            }
+        }
+        AliasIndex { anchors, aliases }
+    }
+}
+
+/// [`dump`], except every [`MappingAlias`] in *aliases* renders its own
+/// first occurrence as `&idN` and every later one as a bare `*idN`,
+/// matching `yaml.safe_dump`'s own identity-based aliasing for the
+/// container values the caller names -- see [`MappingAlias`]'s own doc
+/// comment for why this never aliases two values the caller didn't
+/// name, however equal their rendered text.
+pub fn dump_aliased(
+    value: &Value,
+    options: &DumpOptions,
+    aliases: &[MappingAlias],
+) -> Result<String, DumpError> {
+    let mut out = String::new();
+    let ctx = EmitCtx {
+        options,
+        aliases: AliasIndex::build(aliases),
+    };
+    let mut path = Vec::new();
+    let open_ended = emit_root(&mut out, value, &ctx, 1, &mut path)?;
     if open_ended {
         out.push_str("...\n");
     }
@@ -122,15 +238,16 @@ fn depth_error() -> DumpError {
 fn emit_root(
     out: &mut String,
     value: &Value,
-    options: &DumpOptions,
+    ctx: &EmitCtx,
     depth: usize,
+    path: &mut Vec<PathSegment>,
 ) -> Result<bool, DumpError> {
     if depth > electricity_value::MAX_DEPTH {
         return Err(depth_error());
     }
     match value {
         Value::Dict(d) if !d.is_empty() => {
-            emit_mapping(out, d, 0, options, depth)?;
+            emit_mapping(out, d, 0, ctx, depth, path)?;
             out.push('\n');
             Ok(false)
         }
@@ -139,7 +256,7 @@ fn emit_root(
             Ok(false)
         }
         Value::List(items) if !items.is_empty() => {
-            emit_sequence(out, items, 0, options, depth)?;
+            emit_sequence(out, items, 0, ctx, depth, path)?;
             out.push('\n');
             Ok(false)
         }
@@ -215,13 +332,14 @@ fn emit_mapping(
     out: &mut String,
     dict: &electricity_value::Dict,
     indent: usize,
-    options: &DumpOptions,
+    ctx: &EmitCtx,
     depth: usize,
+    path: &mut Vec<PathSegment>,
 ) -> Result<(), DumpError> {
     if depth > electricity_value::MAX_DEPTH {
         return Err(depth_error());
     }
-    let keys = sorted_keys(dict, options.sort_keys);
+    let keys = sorted_keys(dict, ctx.options.sort_keys);
     for (i, key) in keys.iter().enumerate() {
         let value = dict.get(key).expect("key was read from this dict");
         if i > 0 {
@@ -239,7 +357,10 @@ fn emit_mapping(
             false,
         );
         out.push(':');
-        emit_mapping_value(out, value, indent, key_col + 1, options, depth)?;
+        path.push(PathSegment::Key(key.clone()));
+        let result = emit_mapping_value(out, value, indent, key_col + 1, ctx, depth, path);
+        path.pop();
+        result?;
     }
     Ok(())
 }
@@ -249,15 +370,25 @@ fn emit_mapping_value(
     value: &Value,
     indent: usize,
     column_after_colon: usize,
-    options: &DumpOptions,
+    ctx: &EmitCtx,
     depth: usize,
+    path: &mut Vec<PathSegment>,
 ) -> Result<(), DumpError> {
+    if let Some(&id) = ctx.aliases.aliases.get(path.as_slice()) {
+        out.push(' ');
+        out.push_str(&format!("*id{id:03}"));
+        return Ok(());
+    }
+    if let Some(&id) = ctx.aliases.anchors.get(path.as_slice()) {
+        out.push(' ');
+        out.push_str(&format!("&id{id:03}"));
+    }
     match value {
         Value::Dict(d) if d.is_empty() => out.push_str(" {}"),
         Value::Dict(d) => {
             out.push('\n');
             out.push_str(&" ".repeat(indent + BEST_INDENT));
-            emit_mapping(out, d, indent + BEST_INDENT, options, depth + 1)?;
+            emit_mapping(out, d, indent + BEST_INDENT, ctx, depth + 1, path)?;
         }
         Value::List(items) if items.is_empty() => out.push_str(" []"),
         // Indentless: a mapping value's own sequence keeps the
@@ -268,7 +399,7 @@ fn emit_mapping_value(
         Value::List(items) => {
             out.push('\n');
             out.push_str(&" ".repeat(indent));
-            emit_sequence(out, items, indent, options, depth + 1)?;
+            emit_sequence(out, items, indent, ctx, depth + 1, path)?;
         }
         scalar_value => {
             out.push(' ');
@@ -296,8 +427,9 @@ fn emit_sequence(
     out: &mut String,
     items: &[Value],
     indent: usize,
-    options: &DumpOptions,
+    ctx: &EmitCtx,
     depth: usize,
+    path: &mut Vec<PathSegment>,
 ) -> Result<(), DumpError> {
     if depth > electricity_value::MAX_DEPTH {
         return Err(depth_error());
@@ -308,39 +440,45 @@ fn emit_sequence(
             out.push_str(&" ".repeat(indent));
         }
         out.push('-');
-        match item {
-            Value::Dict(d) if d.is_empty() => out.push_str(" {}"),
-            Value::Dict(d) => {
-                out.push(' ');
-                emit_mapping(out, d, indent + BEST_INDENT, options, depth + 1)?;
+        path.push(PathSegment::Index(i));
+        let result = (|| -> Result<(), DumpError> {
+            match item {
+                Value::Dict(d) if d.is_empty() => out.push_str(" {}"),
+                Value::Dict(d) => {
+                    out.push(' ');
+                    emit_mapping(out, d, indent + BEST_INDENT, ctx, depth + 1, path)?;
+                }
+                Value::List(inner) if inner.is_empty() => out.push_str(" []"),
+                // Compact: a sequence item that is itself a non-empty
+                // sequence/mapping continues right after this item's own
+                // `"- "` (`Emitter.expect_node`'s own sequence/mapping
+                // compacting), rather than starting a fresh, further-
+                // indented line the way a mapping value's collection does.
+                // Writing `"- "` lands the cursor exactly on `indent +
+                // BEST_INDENT`, which is also the *indent* this nested
+                // call's own entry 0 needs -- no further write here.
+                Value::List(inner) => {
+                    out.push(' ');
+                    emit_sequence(out, inner, indent + BEST_INDENT, ctx, depth + 1, path)?;
+                }
+                scalar_value => {
+                    out.push(' ');
+                    let (text, needs_str_check) = scalar_text(scalar_value);
+                    let style = choose_style(&text, false, needs_str_check);
+                    write_scalar(
+                        out,
+                        &text,
+                        style,
+                        indent + BEST_INDENT,
+                        indent + BEST_INDENT,
+                        true,
+                    );
+                }
             }
-            Value::List(inner) if inner.is_empty() => out.push_str(" []"),
-            // Compact: a sequence item that is itself a non-empty
-            // sequence/mapping continues right after this item's own
-            // `"- "` (`Emitter.expect_node`'s own sequence/mapping
-            // compacting), rather than starting a fresh, further-
-            // indented line the way a mapping value's collection does.
-            // Writing `"- "` lands the cursor exactly on `indent +
-            // BEST_INDENT`, which is also the *indent* this nested
-            // call's own entry 0 needs -- no further write here.
-            Value::List(inner) => {
-                out.push(' ');
-                emit_sequence(out, inner, indent + BEST_INDENT, options, depth + 1)?;
-            }
-            scalar_value => {
-                out.push(' ');
-                let (text, needs_str_check) = scalar_text(scalar_value);
-                let style = choose_style(&text, false, needs_str_check);
-                write_scalar(
-                    out,
-                    &text,
-                    style,
-                    indent + BEST_INDENT,
-                    indent + BEST_INDENT,
-                    true,
-                );
-            }
-        }
+            Ok(())
+        })();
+        path.pop();
+        result?;
     }
     Ok(())
 }
@@ -904,4 +1042,115 @@ fn write_double_quoted(
     }
     out.push('"');
     column + 1
+}
+
+#[cfg(test)]
+mod alias_tests {
+    use super::*;
+    use electricity_value::Dict;
+
+    fn dict(pairs: Vec<(&str, Value)>) -> Dict {
+        let mut d = Dict::new();
+        for (k, v) in pairs {
+            d.insert(Value::Str(k.to_string()), v);
+        }
+        d
+    }
+
+    fn key(name: &str) -> PathSegment {
+        PathSegment::Key(Value::Str(name.to_string()))
+    }
+
+    #[test]
+    fn dump_aliased_anchors_the_first_occurrence_and_aliases_the_second() {
+        let schema = Value::Dict(dict(vec![("type", Value::Str("object".to_string()))]));
+        let map_prompt = Value::Dict(dict(vec![
+            ("name", Value::Str("map".to_string())),
+            ("schema", schema.clone()),
+        ]));
+        let merge_prompt = Value::Dict(dict(vec![
+            ("name", Value::Str("merge".to_string())),
+            ("schema", schema),
+        ]));
+        let plan = Value::Dict(dict(vec![(
+            "effects",
+            Value::List(vec![map_prompt, merge_prompt]),
+        )]));
+        let aliases = vec![MappingAlias {
+            id: 1,
+            anchor_path: vec![key("effects"), PathSegment::Index(0), key("schema")],
+            alias_paths: vec![vec![key("effects"), PathSegment::Index(1), key("schema")]],
+        }];
+        let text = dump_aliased(&plan, &DumpOptions { sort_keys: false }, &aliases).unwrap();
+        assert_eq!(
+            text,
+            "effects:\n- name: map\n  schema: &id001\n    type: object\n- name: merge\n  schema: *id001\n"
+        );
+    }
+
+    #[test]
+    fn dump_aliased_anchors_an_empty_dict_inline() {
+        let schema = Value::Dict(Dict::new());
+        let map_prompt = Value::Dict(dict(vec![("schema", schema.clone())]));
+        let merge_prompt = Value::Dict(dict(vec![("schema", schema)]));
+        let plan = Value::Dict(dict(vec![(
+            "effects",
+            Value::List(vec![map_prompt, merge_prompt]),
+        )]));
+        let aliases = vec![MappingAlias {
+            id: 1,
+            anchor_path: vec![key("effects"), PathSegment::Index(0), key("schema")],
+            alias_paths: vec![vec![key("effects"), PathSegment::Index(1), key("schema")]],
+        }];
+        let text = dump_aliased(&plan, &DumpOptions { sort_keys: false }, &aliases).unwrap();
+        assert_eq!(text, "effects:\n- schema: &id001 {}\n- schema: *id001\n");
+    }
+
+    #[test]
+    fn dump_aliased_numbers_groups_in_the_callers_own_order() {
+        let shared_a = Value::Dict(dict(vec![("x", Value::from(1i64))]));
+        let shared_b = Value::Dict(dict(vec![("y", Value::from(2i64))]));
+        let first = Value::Dict(dict(vec![("a", shared_a.clone()), ("b", shared_b.clone())]));
+        let second = Value::Dict(dict(vec![("a", shared_a), ("b", shared_b)]));
+        let plan = Value::Dict(dict(vec![("items", Value::List(vec![first, second]))]));
+        let aliases = vec![
+            MappingAlias {
+                id: 1,
+                anchor_path: vec![key("items"), PathSegment::Index(0), key("a")],
+                alias_paths: vec![vec![key("items"), PathSegment::Index(1), key("a")]],
+            },
+            MappingAlias {
+                id: 2,
+                anchor_path: vec![key("items"), PathSegment::Index(0), key("b")],
+                alias_paths: vec![vec![key("items"), PathSegment::Index(1), key("b")]],
+            },
+        ];
+        let text = dump_aliased(&plan, &DumpOptions { sort_keys: false }, &aliases).unwrap();
+        assert_eq!(
+            text,
+            "items:\n- a: &id001\n    x: 1\n  b: &id002\n    y: 2\n- a: *id001\n  b: *id002\n"
+        );
+    }
+
+    #[test]
+    fn dump_never_aliases_without_an_explicit_alias_list() {
+        let shared = Value::Dict(dict(vec![("x", Value::from(1i64))]));
+        let plan = Value::Dict(dict(vec![("a", shared.clone()), ("b", shared)]));
+        // Plain `dump` never aliases anything, even two values that
+        // happen to be built from the same source -- only `dump_aliased`,
+        // told explicitly which paths share one identity, ever does.
+        let text = dump(&plan, &DumpOptions { sort_keys: false }).unwrap();
+        assert_eq!(text, "a:\n  x: 1\nb:\n  x: 1\n");
+    }
+
+    #[test]
+    fn dump_aliased_never_merges_two_paths_not_named_together_even_with_equal_content() {
+        let a = Value::Dict(dict(vec![("x", Value::from(1i64))]));
+        let b = Value::Dict(dict(vec![("x", Value::from(1i64))]));
+        let plan = Value::Dict(dict(vec![("a", a), ("b", b)]));
+        // No alias list names these two paths as shared -- equal
+        // rendered content alone is never enough.
+        let text = dump_aliased(&plan, &DumpOptions { sort_keys: false }, &[]).unwrap();
+        assert_eq!(text, "a:\n  x: 1\nb:\n  x: 1\n");
+    }
 }

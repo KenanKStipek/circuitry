@@ -984,6 +984,13 @@ pub fn pre_input_checks(
     // `resolve_effective_settings`'s own `runtime.state.prompt_sent` (#577)
     // and `runtime.state.parsed_stdout` (#592) checks, right after the
     // complexity block and before the limiter.
+    // issue #725: a malformed `runtime.plugins.<name>.env` secret, host-
+    // or document-set, is never a run-start gate -- cof only ever checks
+    // the document's own runtime block this way, at compile time
+    // (`compile_document`'s own call, ahead of this function), and
+    // checks the merged/host-config one only at dispatch, for the one
+    // effect that actually reads it (`electricity_vm::exec::tool::
+    // resolve_env_secrets`).
     if let Some(message) = electricity_config::prompt_sent_errors(effective_runtime)
         .into_iter()
         .chain(electricity_config::parsed_stdout_errors(effective_runtime))

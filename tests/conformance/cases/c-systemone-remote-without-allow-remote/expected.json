@@ -1,0 +1,3 @@
+{
+  "error": "Preflight failed: tool:systemone: not ready \u2014 systemone: base_url host 'example.com' is not a loopback host; set runtime.plugins.systemone.allow_remote to true to use a remote server. Re-run with --skip-preflight to bypass."
+}

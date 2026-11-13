@@ -1,0 +1,23 @@
+interface:
+  inputs:
+    files: {type: array, default: ["api.py", "models.py", "cli.py", "tests.py"]}
+effects:
+  - name: plan
+    type: prompt
+    template: "Plan a review of {{input.files}}."
+  - name: reviews
+    type: loop
+    flow: tree
+    max_concurrency: 3
+    each: {in: input.files, as: file}
+    body:
+      - name: review
+        type: prompt
+        template: "Review {{file}} for bugs."
+      - name: lint
+        type: tool
+        provider: shell
+        params: {command: sleep, args: ["3"], allowed_commands: ["sleep"]}
+  - name: verdict
+    type: prompt
+    template: "Give a verdict."

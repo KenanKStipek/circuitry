@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 
-use crate::observe::Event;
+use crate::observe::{Event, duration_seconds};
 use crate::plan::{Flow, PlanTree};
 
 /// A tool name's own `{calls, ms}` entry under `meta.live.tools`.
@@ -91,6 +91,31 @@ impl AgentLive {
     /// a stuck display.
     pub fn from_value(v: &Value) -> Option<Self> {
         let obj = v.as_object()?;
+        // A streamed prompt effect's own `meta.live` (issue #674) has
+        // its own `adapter` key (the adapter name) where the agent
+        // tool's own live summary has `engine` (the CLI name) instead --
+        // `AgentLive` has no `adapter` field at all, so a plain
+        // field-by-field read would otherwise just leave it unread
+        // rather than refusing a shape that was never an agent's. Both
+        // shapes do carry a `v` key, `model`, `attempt`, `started_at`,
+        // `updated_at`, `tokens_sent` and `tokens_received`, so none of
+        // those distinguish them; this checks the *live record's own*
+        // `adapter` key specifically, never the surrounding node's
+        // `meta.adapter`/`meta.provider` (a node can carry either in any
+        // combination with the other, e.g. a fixture setting `adapter`
+        // on every node for the Cost screen's own token-bearing rule).
+        //
+        // A running subprocess tool's own `meta.live` (issue #741) has
+        // its own `stdout_tail` key, which this shape never carries
+        // either -- excluded the same way, so a `shell`/`awk`/`ffmpeg`
+        // step's own live record never parses as a near-empty
+        // `AgentLive` (which would otherwise make `StepTokensSoFar`
+        // and friends think an ordinary subprocess tool's running step
+        // is a live agent session with no tokens yet, rather than not
+        // one at all).
+        if obj.contains_key("adapter") || obj.contains_key("stdout_tail") {
+            return None;
+        }
         let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
         let u64_field = |k: &str| obj.get(k).and_then(Value::as_u64);
         let f64_field = |k: &str| obj.get(k).and_then(Value::as_f64);
@@ -162,6 +187,324 @@ impl AgentLive {
     }
 }
 
+/// A streamed prompt effect's own `meta.live` (issue #674's own
+/// shape, `docs/orchestration-reference.md`'s "Streaming adapters
+/// and a prompt's live progress" table) -- told apart from
+/// [`AgentLive`] by the one key only this shape ever carries,
+/// `adapter` (the opposite of [`AgentLive::from_value`]'s own check).
+/// Every field is read permissively, same reason as `AgentLive`'s:
+/// this is read every redraw from a live, still-being-written
+/// process, and a wrong-typed or missing field must never panic or
+/// freeze the display, only leave that one field `None`.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct PromptLive {
+    pub attempt: u64,
+    pub adapter: String,
+    pub model: Option<String>,
+    pub started_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub streaming: bool,
+    pub first_token_at: Option<String>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_sent_estimate: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub tokens_received_estimate: Option<u64>,
+    pub chars_received: Option<u64>,
+    pub tokens_per_second: Option<f64>,
+}
+
+impl PromptLive {
+    /// `None` for anything that isn't a prompt's own live record --
+    /// in particular, for the agent tool's own `meta.live` (no
+    /// `adapter` key at all) and for anything that isn't an object.
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        let adapter = obj.get("adapter").and_then(Value::as_str)?.to_string();
+        let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
+        let u64_field = |k: &str| obj.get(k).and_then(Value::as_u64);
+        Some(PromptLive {
+            attempt: u64_field("attempt").unwrap_or(0),
+            adapter,
+            model: str_field("model"),
+            started_at: str_field("started_at"),
+            updated_at: str_field("updated_at"),
+            streaming: obj
+                .get("streaming")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            first_token_at: str_field("first_token_at"),
+            tokens_sent: u64_field("tokens_sent"),
+            tokens_sent_estimate: u64_field("tokens_sent_estimate"),
+            tokens_received: u64_field("tokens_received"),
+            tokens_received_estimate: u64_field("tokens_received_estimate"),
+            chars_received: u64_field("chars_received"),
+            tokens_per_second: obj.get("tokens_per_second").and_then(Value::as_f64),
+        })
+    }
+}
+
+/// A running subprocess tool's own `meta.live` (issue #741,
+/// `docs/orchestration-reference.md`'s "A running subprocess tool's
+/// live output" section) -- `shell` and every tool built on
+/// `plugins/_subprocess.py` (not the agent tool, [`AgentLive`], nor
+/// `http`, which has no process). Told apart from both other live
+/// shapes by its own `stdout_tail` key, which neither carries.
+/// Every field is read permissively, the same reason as
+/// [`AgentLive::from_value`]'s: this is read every redraw from a
+/// live, still-being-written process, and a wrong-typed or missing
+/// field must never panic or freeze the display, only leave that one
+/// field empty.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ToolLive {
+    pub started_at: Option<String>,
+    pub updated_at: Option<String>,
+    pub stdout_tail: String,
+    pub stderr_tail: String,
+    pub stdout_bytes: Option<u64>,
+    pub stderr_bytes: Option<u64>,
+}
+
+impl ToolLive {
+    /// `None` for anything that isn't this shape at all -- in
+    /// particular, for the agent tool's own `meta.live` (no
+    /// `stdout_tail` key) and a streamed prompt's (no `stdout_tail`
+    /// either).
+    pub fn from_value(v: &Value) -> Option<Self> {
+        let obj = v.as_object()?;
+        if !obj.contains_key("stdout_tail") {
+            return None;
+        }
+        let str_field = |k: &str| obj.get(k).and_then(Value::as_str).map(str::to_string);
+        Some(ToolLive {
+            started_at: str_field("started_at"),
+            updated_at: str_field("updated_at"),
+            stdout_tail: str_field("stdout_tail").unwrap_or_default(),
+            stderr_tail: str_field("stderr_tail").unwrap_or_default(),
+            stdout_bytes: obj.get("stdout_bytes").and_then(Value::as_u64),
+            stderr_bytes: obj.get("stderr_bytes").and_then(Value::as_u64),
+        })
+    }
+
+    /// Issue #741's own heartbeat rule, the same 5-second window as
+    /// [`AgentLive::is_recent`]: a tail whose own `updated_at` is
+    /// within 5 seconds of `now` is still growing right now; once a
+    /// process that would keep writing it is gone, this reads
+    /// `false` within a few seconds of its last write.
+    pub fn is_recent(&self, now: &str) -> bool {
+        let Some(updated_at) = self.updated_at.as_deref() else {
+            return false;
+        };
+        crate::observe::duration_seconds(updated_at, now).is_some_and(|secs| secs.abs() <= 5.0)
+    }
+}
+
+/// A running prompt's live figures (issue #675), read either from
+/// state's own `meta.live` ([`PromptLive`]) or, when no live state is
+/// available at all (`osi watch` on `--events` alone), from the
+/// latest `progress` line [`RunModel`] has seen for `path`
+/// ([`RunModel::progress_at`]) -- a front end asks for this once per
+/// running prompt row and reads the same shape regardless of which
+/// source actually backed it. `None` when neither source has
+/// anything for `path` at all.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct PromptLiveFigures {
+    /// `false` only for a state-backed, non-streaming adapter --
+    /// always `true` from a `progress` line alone, since that line is
+    /// only ever emitted for a streaming adapter's own delta.
+    pub streaming: bool,
+    /// This attempt's index, `0` for the first -- `None` from a
+    /// `progress` line alone, which carries no attempt of its own.
+    pub attempt: Option<u64>,
+    /// Time since the attempt started, `now`'s own reading of it --
+    /// the row and detail pane's own elapsed figure.
+    pub elapsed_s: Option<f64>,
+    /// Time from the attempt's start to its first delta, once there
+    /// has been one.
+    pub first_token_elapsed_s: Option<f64>,
+    pub waiting_for_first_token: bool,
+    pub tokens_sent: Option<u64>,
+    pub tokens_sent_estimate: Option<u64>,
+    pub tokens_received: Option<u64>,
+    pub tokens_received_estimate: Option<u64>,
+    pub tokens_per_second: Option<f64>,
+}
+
+impl PromptLiveFigures {
+    /// Received so far: the provider's own exact count once it has
+    /// reported one, else the running estimate, marked live by the
+    /// caller whenever it came from here rather than from `tokens`
+    /// -- `None` before the first delta.
+    pub fn tokens_received_or_estimate(&self) -> Option<(u64, bool)> {
+        match (self.tokens_received, self.tokens_received_estimate) {
+            (Some(exact), _) => Some((exact, false)),
+            (None, Some(estimate)) => Some((estimate, true)),
+            (None, None) => None,
+        }
+    }
+
+    /// Sent so far, the same exact-or-estimate rule as
+    /// [`Self::tokens_received_or_estimate`] -- always `Some` once
+    /// there is a live record at all, since the estimate
+    /// (`ceil(prompt_chars / 4)`) is known from the very first
+    /// publish.
+    pub fn tokens_sent_or_estimate(&self) -> Option<(u64, bool)> {
+        match (self.tokens_sent, self.tokens_sent_estimate) {
+            (Some(exact), _) => Some((exact, false)),
+            (None, Some(estimate)) => Some((estimate, true)),
+            (None, None) => None,
+        }
+    }
+}
+
+/// [`PromptLiveFigures`] for `path`, from `node`'s own `meta.live`
+/// when it has one, else from the latest `progress` line `model` has
+/// seen for `path` -- `None` when neither source has anything, which
+/// a caller reads the same way it already reads a node whose `meta.
+/// live` never existed or failed to parse (shown as today, §4 of
+/// issue #675).
+pub fn prompt_live_figures(
+    node: Option<&NodeMeta>,
+    path: &str,
+    model: &RunModel,
+    now: &str,
+) -> Option<PromptLiveFigures> {
+    if let Some(live) = node.and_then(|n| n.prompt_live.as_ref()) {
+        let started = live
+            .started_at
+            .as_deref()
+            .or_else(|| node.and_then(|n| n.created_at.as_deref()));
+        let elapsed_s = started.and_then(|s| duration_seconds(s, now));
+        let first_token_elapsed_s = match (started, live.first_token_at.as_deref()) {
+            (Some(s), Some(ft)) => duration_seconds(s, ft),
+            _ => None,
+        };
+        return Some(PromptLiveFigures {
+            streaming: live.streaming,
+            attempt: Some(live.attempt),
+            elapsed_s,
+            first_token_elapsed_s,
+            waiting_for_first_token: live.first_token_at.is_none(),
+            tokens_sent: live.tokens_sent,
+            tokens_sent_estimate: live.tokens_sent_estimate,
+            tokens_received: live.tokens_received,
+            tokens_received_estimate: live.tokens_received_estimate,
+            tokens_per_second: live.tokens_per_second,
+        });
+    }
+    let progress = model.progress_at(path)?;
+    let elapsed_s = progress.ms.map(|ms| ms as f64 / 1000.0);
+    let first_token_elapsed_s = progress.first_token_ms.map(|ms| ms as f64 / 1000.0);
+    // The events-only line carries no `tokens_per_second` of its own
+    // (`docs/orchestration-reference.md`'s `--events` table) --
+    // derived here the same way `meta.live`'s own figure is (received
+    // over time since the first delta), gated the same 500ms a real
+    // second delta needs to have arrived by for the figure to mean
+    // anything rather than dividing by noise.
+    let tokens_per_second = match (
+        progress.tokens_received_estimate,
+        progress.ms,
+        progress.first_token_ms,
+    ) {
+        (Some(tokens), Some(ms), Some(first)) if ms > first && (ms - first) >= 500 => {
+            Some(tokens as f64 / ((ms - first) as f64 / 1000.0))
+        }
+        _ => None,
+    };
+    Some(PromptLiveFigures {
+        streaming: true,
+        attempt: None,
+        elapsed_s,
+        first_token_elapsed_s,
+        waiting_for_first_token: progress.first_token_ms.is_none(),
+        tokens_sent: progress.tokens_sent,
+        tokens_sent_estimate: progress.tokens_sent_estimate,
+        tokens_received: None,
+        tokens_received_estimate: progress.tokens_received_estimate,
+        tokens_per_second,
+    })
+}
+
+/// A step's tokens so far (issue #702): exact, once it has finished
+/// ([`node_tokens`]'s own `_total`-first pair); while it runs, a
+/// prompt's own live figures ([`prompt_live_figures`], estimates
+/// read exact-or-estimate the same way the Tape row's own text
+/// already does) or an agent's `meta.live.tokens_sent`/
+/// `tokens_received` ([`AgentLive`], read exact even mid-turn, never
+/// an estimate). A leftover `meta.live` whose own session has gone
+/// quiet ([`AgentLive::is_recent`] false, issue #637) still gives its
+/// last known figures, just no longer flagged `live` -- the same
+/// rule a stale leftover's Store tile already follows. `tokens_sent`/
+/// `tokens_received` stay `None`, never `0`, for a figure neither
+/// source has ever reported (Claude Code's own `tokens_received:
+/// null` mid-turn); every caller that sums or shares this across
+/// steps reads a missing figure as `0` (`.unwrap_or(0)`), the same
+/// way a `None` already behaves everywhere else in this module.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct StepTokensSoFar {
+    pub tokens_sent: Option<u64>,
+    pub tokens_received: Option<u64>,
+    /// Whether these are still a running figure, as opposed to a
+    /// finished step's exact total or a stale leftover's last known
+    /// one -- a front end draws only this case faint/`≈`.
+    pub live: bool,
+}
+
+impl StepTokensSoFar {
+    /// `None` with nothing known yet at all (a step ahead, or a
+    /// running step neither live source has anything for), else the
+    /// sum of whichever figures are known, a missing one treated as
+    /// `0` -- the same total a finished step's own `sent + received`
+    /// already is.
+    pub fn total(&self) -> Option<u64> {
+        match (self.tokens_sent, self.tokens_received) {
+            (None, None) => None,
+            (sent, received) => Some(sent.unwrap_or(0) + received.unwrap_or(0)),
+        }
+    }
+}
+
+/// [`StepTokensSoFar`] for `path` -- `node`'s own finished totals, or
+/// else whichever live source (an agent's `meta.live`, a prompt's own
+/// live record, or an events-only `progress` line) actually has
+/// something for it. `node` and `path` must name the same step; `path`
+/// alone carries the events-only fallback [`prompt_live_figures`]
+/// needs, since a step known only from `--events` (DESIGN.md §1.4) has
+/// no `node` at all yet.
+pub fn step_tokens_so_far(
+    node: Option<&NodeMeta>,
+    path: &str,
+    model: &RunModel,
+    now: &str,
+) -> StepTokensSoFar {
+    if let Some(node) = node {
+        if node.completed_at.is_some() {
+            let (sent, received) = node_tokens(&node.meta);
+            return StepTokensSoFar {
+                tokens_sent: Some(sent),
+                tokens_received: Some(received),
+                live: false,
+            };
+        }
+        if let Some(agent_live) = &node.live {
+            return StepTokensSoFar {
+                tokens_sent: agent_live.tokens_sent,
+                tokens_received: agent_live.tokens_received,
+                live: agent_live.is_recent(now),
+            };
+        }
+    }
+    if let Some(live) = prompt_live_figures(node, path, model, now) {
+        let sent = live.tokens_sent_or_estimate();
+        let received = live.tokens_received_or_estimate();
+        return StepTokensSoFar {
+            tokens_sent: sent.map(|(n, _)| n),
+            tokens_received: received.map(|(n, _)| n),
+            live: sent.is_some() || received.is_some(),
+        };
+    }
+    StepTokensSoFar::default()
+}
+
 /// One effect node's `{value, meta}` shape, flattened to its dotted
 /// state path (DESIGN.md §1.2-§1.3).
 #[derive(Debug, Clone)]
@@ -176,13 +519,24 @@ pub struct NodeMeta {
     pub progress_eta_s: Option<f64>,
     /// `meta.live` (`docs/plugins/agent.md`'s "Live progress while the
     /// session runs"), parsed once here so every reader (the overview's
-    /// now pane, Flow's selected pane, the Cost screen) shares one
-    /// parse instead of re-reading the raw `Value` each time. `None`
+    /// now pane, Flow's selected pane, the Store's own running tiles)
+    /// shares one parse instead of re-reading the raw `Value` each
+    /// time. `None`
     /// for every node that isn't a currently- or recently-live agent
     /// session, including one that finished normally (`meta.live` is
     /// removed once the attempt ends, success or failure, except when
     /// the run itself was interrupted).
     pub live: Option<AgentLive>,
+    /// `meta.live` again, read as a streamed prompt's own live record
+    /// instead (issue #675) -- mutually exclusive with `live` above:
+    /// a given `meta.live` object parses as at most one of the two,
+    /// told apart by its own `adapter` key.
+    pub prompt_live: Option<PromptLive>,
+    /// `meta.live` once more, read as a running subprocess tool's own
+    /// live output instead (issue #741) -- mutually exclusive with
+    /// both `live` and `prompt_live` above, told apart by its own
+    /// `stdout_tail` key.
+    pub tool_live: Option<ToolLive>,
     pub value: Value,
     pub meta: Value,
 }
@@ -210,6 +564,8 @@ impl NodeMeta {
             progress_total: meta.pointer("/progress/total").and_then(Value::as_u64),
             progress_eta_s: meta.pointer("/progress/eta_s").and_then(Value::as_f64),
             live: meta.get("live").and_then(AgentLive::from_value),
+            prompt_live: meta.get("live").and_then(PromptLive::from_value),
+            tool_live: meta.get("live").and_then(ToolLive::from_value),
             value: value.clone(),
             meta: meta.clone(),
         }
@@ -734,6 +1090,24 @@ pub struct RunModel {
     /// when `--events` carried one -- both engines always write it,
     /// but a stream from an older build might not.
     run_start_engine: Option<String>,
+    /// `run_start`'s own `config` field (issue #697), when the engine
+    /// writes one -- neither engine does yet.
+    run_start_config: Option<String>,
+    /// `run_start`'s own `label` field (issue #752), cleaned here
+    /// (the one point a `label` read off `--events` is ever
+    /// cleaned, since a stream can be written by anything, not only
+    /// an engine that already cleaned it) -- `None` with no label on
+    /// the line at all, or one that cleans away to nothing.
+    run_start_label: Option<String>,
+    /// `osi <doc> --label TEXT`'s own cleaned value (issue #752), set
+    /// once by the caller that actually launched this run -- the
+    /// header's own fallback below `run_start_label` and the state
+    /// file's `runtime.last_run.label`, so a labelled run shows its
+    /// label from its very first frame, before `run_start` has even
+    /// arrived. `None` for every caller with nothing of its own to
+    /// fall back to (`osi watch`, which never launches anything, and
+    /// every test fixture that never calls [`RunModel::set_label_hint`]).
+    label_hint: Option<String>,
     /// `Event::Start`'s own `ts`, by `id` -- `started_at` alone keeps
     /// only the latest start *per path*, which can't tell two
     /// concurrently open ids at the same (unnamed-loop) path apart.
@@ -786,19 +1160,52 @@ pub struct RunModel {
     /// this cache alone, no observable state of the model itself ever
     /// changes because of it.
     interval_offset_cache: std::cell::RefCell<IntervalOffsetCache>,
-    /// Every distinct `meta.live.tokens_sent`/`tokens_received`
-    /// reading seen for a path while osi actually watched it live
-    /// (issue #641), oldest first: `(ts, tokens_sent, tokens_
-    /// received)`, `ts` the moment this model observed it, not the
-    /// live summary's own `updated_at` -- `meta.live` carries no
-    /// per-sample timestamp of its own, only a `started_at`/
-    /// `updated_at` pair for the whole session. Lets the "tokens
-    /// over time" chart attribute a long session's own tokens to
-    /// when they actually arrived instead of dumping the whole
-    /// total into one bucket at its own `completed_at`. Empty for a
-    /// session never observed running at all (a finished run opened
-    /// fresh, or a watch that started after it ended).
-    agent_token_observations: BTreeMap<String, Vec<(String, u64, u64)>>,
+    /// The latest `progress` line seen for each path (issue #675's
+    /// events-only attach) -- cleared at the path's next `start`
+    /// (a retry, or an unnamed loop's next pass reusing it), so a
+    /// stale reading from an earlier attempt never outlives it.
+    progress: BTreeMap<String, ProgressSample>,
+    /// The last live `tokens_sent`/`tokens_received` seen for each
+    /// running agent session, by path (issue #702's Signal trace) --
+    /// removed once the session's own remainder has been recorded (at
+    /// its own `completed_at`) or a retry starts the attempt over.
+    agent_live_last_totals: BTreeMap<String, (u64, u64)>,
+    /// [`Self::agent_live_last_totals`]'s own `updated_at`, by path --
+    /// a redraw that re-observes the identical `meta.live` (nothing
+    /// written since the last poll) must never record a zero-delta
+    /// sighting twice.
+    agent_live_last_seen_at: BTreeMap<String, String>,
+    /// Every increase in a running agent's own live totals, observed
+    /// in order, plus its own end-of-session remainder (issue #702's
+    /// Signal trace: "each increase ... becomes a column at the time
+    /// it was observed"; "at the agent's end only the remainder not
+    /// yet plotted is added, at its end time") -- a front end turns
+    /// each into one Signal column at its own `ts`, so the sum of one
+    /// path's own sightings always equals its final tokens.
+    agent_live_sightings: Vec<AgentLiveSighting>,
+    /// The running total of every [`AgentLiveSighting`] already
+    /// pushed for a path, by path -- never cleared on retry, unlike
+    /// `agent_live_last_totals`: an abandoned attempt's own tokens
+    /// are already in here from its own sightings, so the retried
+    /// attempt's own end-of-session remainder (`node_tokens`'s own
+    /// `_total`-first pair, which folds both attempts in) subtracts
+    /// them instead of counting them twice. Also what makes a
+    /// redraw safe: once a path's remainder has been pushed once,
+    /// this equals `node_tokens` exactly, so the next redraw's own
+    /// remainder reads `0` and pushes nothing further.
+    agent_live_plotted_total: BTreeMap<String, (u64, u64)>,
+}
+
+/// One entry of [`RunModel::agent_live_sightings`]: `path`'s own
+/// live totals grew by exactly `tokens_sent`/`tokens_received` since
+/// the last sighting (or, for the first one, since the session
+/// started), observed at `ts` -- never a running total of its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentLiveSighting {
+    pub path: String,
+    pub ts: String,
+    pub tokens_sent: u64,
+    pub tokens_received: u64,
 }
 
 /// [`RunModel`]'s own `interval_offset_cache` field: the run start
@@ -840,6 +1247,21 @@ pub struct ReportSighting {
     pub data_truncated: bool,
 }
 
+/// The latest `progress` line seen for a path (issue #675's events-
+/// only attach), as last observed -- `RunModel::progress` keeps only
+/// one per path, since a front end only ever wants the current
+/// attempt's own latest reading, never a history of them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ProgressSample {
+    pub id: Option<i64>,
+    pub ms: Option<u64>,
+    pub tokens_received_estimate: Option<u64>,
+    pub chars_received: Option<u64>,
+    pub tokens_sent: Option<u64>,
+    pub tokens_sent_estimate: Option<u64>,
+    pub first_token_ms: Option<u64>,
+}
+
 impl RunModel {
     pub fn new() -> Self {
         RunModel {
@@ -863,6 +1285,9 @@ impl RunModel {
             reports_by_path: BTreeMap::new(),
             report_event_paths: BTreeSet::new(),
             run_start_engine: None,
+            run_start_config: None,
+            run_start_label: None,
+            label_hint: None,
             start_ts_by_id: BTreeMap::new(),
             paths_with_id_events: BTreeSet::new(),
             step_intervals: Vec::new(),
@@ -870,82 +1295,12 @@ impl RunModel {
             overflowed_minute_counts: BTreeMap::new(),
             overflowed_total_passes: 0,
             interval_offset_cache: std::cell::RefCell::new((None, Vec::new())),
-            agent_token_observations: BTreeMap::new(),
+            progress: BTreeMap::new(),
+            agent_live_last_totals: BTreeMap::new(),
+            agent_live_last_seen_at: BTreeMap::new(),
+            agent_live_sightings: Vec::new(),
+            agent_live_plotted_total: BTreeMap::new(),
         }
-    }
-
-    /// Records a new sample of every live agent session's own
-    /// running token totals, at `now` (issue #641) -- called once
-    /// per redraw, right alongside [`Self::observe`] (which this
-    /// does not replace: `meta.live` isn't an event, so there is no
-    /// `observe_event` counterpart for it). Only a session whose
-    /// `tokens_sent`/`tokens_received` actually moved since the last
-    /// sample gets a new entry -- `meta.live` is published at most
-    /// once a second, but a redraw can easily happen more often than
-    /// that, and a repeated identical reading would otherwise read
-    /// as a burst of new tokens arriving at every one of those
-    /// redraws instead of one real update. `run_already_ended` gates
-    /// a path's very first sample: a leftover `meta.live` first seen
-    /// after the run itself has already ended is never recorded at
-    /// all (see this field's own doc comment), and a sample whose
-    /// own totals dropped below the path's last one clears that
-    /// path's earlier samples first, so a rerun of the same agent
-    /// path never adds its own tokens on top of an already-finished
-    /// pass's.
-    pub fn record_live_token_observations(
-        &mut self,
-        flat: &BTreeMap<String, NodeMeta>,
-        now: &str,
-        run_already_ended: bool,
-    ) {
-        for (path, node) in flat {
-            let Some(live) = &node.live else { continue };
-            let sent = live.tokens_sent.unwrap_or(0);
-            let received = live.tokens_received.unwrap_or(0);
-            if run_already_ended && !self.agent_token_observations.contains_key(path) {
-                // An interrupted session's leftover `meta.live` is
-                // seen for the very first time only once the run
-                // itself has already ended -- it was never actually
-                // watched running in this process, so there is no
-                // real moment to attribute a sample to. Leaving it
-                // unrecorded lets the "tokens over time" chart spread
-                // its tokens over its own span instead, the same as
-                // any other session never observed running.
-                continue;
-            }
-            let samples = self
-                .agent_token_observations
-                .entry(path.clone())
-                .or_default();
-            if let Some((_, prev_sent, prev_received)) = samples.last() {
-                if sent < *prev_sent || received < *prev_received {
-                    // An unnamed loop rerunning the same agent path
-                    // starts that path's own running totals back at
-                    // zero -- the previous pass's samples no longer
-                    // describe anything `node_tokens` will ever
-                    // report again for this path, so keeping them
-                    // would only ever overshoot the chart's own total
-                    // for the step once it next completes.
-                    samples.clear();
-                }
-            }
-            let unchanged = samples
-                .last()
-                .is_some_and(|(_, s, r)| *s == sent && *r == received);
-            if !unchanged {
-                samples.push((now.to_string(), sent, received));
-            }
-        }
-    }
-
-    /// A path's own recorded live token samples (issue #641), oldest
-    /// first -- empty when that path was never observed running with
-    /// `meta.live` at all.
-    pub fn agent_token_observations(&self, path: &str) -> &[(String, u64, u64)] {
-        self.agent_token_observations
-            .get(path)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
     }
 
     /// Feeds one parsed `--events` line in (DESIGN.md §2.1's "With
@@ -971,10 +1326,14 @@ impl RunModel {
                 run_id,
                 pid,
                 engine,
+                config,
+                label,
             } => {
                 self.run_start = Some((run_id.clone(), *pid));
                 self.run_start_ts = Some(ts.clone());
                 self.run_start_engine = engine.clone();
+                self.run_start_config = config.clone();
+                self.run_start_label = label.as_deref().and_then(crate::names::clean_label);
             }
             Event::Start { ts, id, path } => {
                 self.started_at.insert(path.clone(), ts.clone());
@@ -986,6 +1345,7 @@ impl RunModel {
                 // it is open again now, so a stale `ended` entry must
                 // not keep answering for it.
                 self.ended.remove(path);
+                self.progress.remove(path);
                 match id {
                     Some(id) => {
                         self.open_by_id.insert(*id, path.clone());
@@ -1113,7 +1473,38 @@ impl RunModel {
                 self.reports_by_path.insert(path.clone(), sighting);
                 self.report_event_paths.insert(path.clone());
             }
+            Event::Progress {
+                id,
+                path,
+                ms,
+                tokens_received_estimate,
+                chars_received,
+                tokens_sent,
+                tokens_sent_estimate,
+                first_token_ms,
+                ..
+            } => {
+                self.progress.insert(
+                    path.clone(),
+                    ProgressSample {
+                        id: *id,
+                        ms: *ms,
+                        tokens_received_estimate: *tokens_received_estimate,
+                        chars_received: *chars_received,
+                        tokens_sent: *tokens_sent,
+                        tokens_sent_estimate: *tokens_sent_estimate,
+                        first_token_ms: *first_token_ms,
+                    },
+                );
+            }
         }
+    }
+
+    /// The latest `progress` line seen for `path` (issue #675's
+    /// events-only attach) -- `None` until one has arrived, or once
+    /// the path has since restarted.
+    pub fn progress_at(&self, path: &str) -> Option<&ProgressSample> {
+        self.progress.get(path)
     }
 
     /// The latest report seen on any path (#610's header status
@@ -1450,10 +1841,43 @@ impl RunModel {
         &self.overflowed_minute_counts
     }
 
+    /// `run_start`'s own `config` field (issue #697), when the engine
+    /// writes one -- part of the config fallback for an attached run
+    /// (the registry entry's own `config`, else this, else the
+    /// process arguments, else `None`; see `registry::resolve_attached_config`).
+    pub fn run_start_config(&self) -> Option<&str> {
+        self.run_start_config.as_deref()
+    }
+
     /// `run_start`'s own `engine` field (issue #649), when `--events`
     /// carried one.
     pub fn run_start_engine(&self) -> Option<&str> {
         self.run_start_engine.as_deref()
+    }
+
+    /// `run_start`'s own `label` field (issue #752), already cleaned
+    /// -- `None` with no `run_start` seen yet, no `label` on the
+    /// line at all, or one that cleaned away to nothing.
+    pub fn run_start_label(&self) -> Option<&str> {
+        self.run_start_label.as_deref()
+    }
+
+    /// Sets [`RunModel::label_hint`] (issue #752) -- called once, by
+    /// whichever caller actually launched this run, right after
+    /// [`RunModel::new`], from `osi <doc> --label TEXT`'s own
+    /// already-[`crate::names::clean_label`]'d value. A no-op with
+    /// `None` (no `--label` given).
+    pub fn set_label_hint(&mut self, hint: Option<String>) {
+        self.label_hint = hint;
+    }
+
+    /// `osi <doc> --label TEXT`'s own cleaned value (issue #752), set
+    /// by [`RunModel::set_label_hint`] -- the header's own fallback
+    /// below [`RunModel::run_start_label`] and the state file's
+    /// `runtime.last_run.label`, so a labelled run shows its label
+    /// from its very first frame.
+    pub fn label_hint(&self) -> Option<&str> {
+        self.label_hint.as_deref()
     }
 
     /// Whether `--events` has actually been flowing at all (any
@@ -1464,6 +1888,126 @@ impl RunModel {
     /// instead and labels the strip `(state)`").
     pub fn has_events(&self) -> bool {
         self.latest_event_ts.is_some()
+    }
+
+    /// Every sighting of a running agent's own live totals growing,
+    /// in order, plus each session's own end-of-run remainder (issue
+    /// #702's Signal trace) -- the Signal screen's own agent columns
+    /// read straight off this, never off `flat` directly, since a
+    /// past sighting's own observation time is gone from `flat` the
+    /// moment the next poll overwrites `meta.live`.
+    pub fn agent_live_sightings(&self) -> &[AgentLiveSighting] {
+        &self.agent_live_sightings
+    }
+
+    /// [`Self::agent_live_sightings`]'s own bookkeeping for `path`,
+    /// called once per `observe` for every flattened node (issue
+    /// #702's Signal trace, rule 4): while `node` still carries a
+    /// `meta.live` of its own, any increase since the last sighting
+    /// becomes a new one, at that live record's own `updated_at`,
+    /// added to `agent_live_plotted_total` alongside it; once it no
+    /// longer does (the attempt finished, or was never an agent
+    /// session at all), whatever `node_tokens`' own final total still
+    /// owes beyond what `agent_live_plotted_total` already carries is
+    /// recorded once, at `completed_at` -- so a node with no `meta.
+    /// live` and nothing owed (the overwhelming majority of every
+    /// non-agent step) costs one `BTreeMap` lookup that finds
+    /// nothing, same as `last_created_at`'s own per-node bookkeeping
+    /// above. `retrying` resets `agent_live_last_totals` (the current
+    /// attempt's own delta baseline) but never `agent_live_plotted_
+    /// total`: an abandoned attempt's own tokens are already in its
+    /// own sightings, so the retried attempt's own eventual remainder
+    /// (`node_tokens`'s own `_total`-first pair, which folds both
+    /// attempts in) subtracts them instead of counting them twice. A
+    /// session osi never saw running at all (`osi watch` of an
+    /// already-finished run, an attach after the fact, or one
+    /// shorter than one poll) has nothing in `agent_live_plotted_
+    /// total` yet, so its whole `node_tokens` becomes the remainder;
+    /// a redraw with no new state then owes `0` and pushes nothing
+    /// further, needing no separate "already recorded" flag.
+    fn observe_agent_live(&mut self, path: &str, node: &NodeMeta, retrying: bool) {
+        if retrying {
+            self.agent_live_last_totals.remove(path);
+            self.agent_live_last_seen_at.remove(path);
+        }
+        if let Some(live) = &node.live {
+            let current = (
+                live.tokens_sent.unwrap_or(0),
+                live.tokens_received.unwrap_or(0),
+            );
+            let last = self
+                .agent_live_last_totals
+                .get(path)
+                .copied()
+                .unwrap_or((0, 0));
+            let moved = live.updated_at.as_deref()
+                != self.agent_live_last_seen_at.get(path).map(String::as_str);
+            if moved && (current.0 > last.0 || current.1 > last.1) {
+                let delta = (
+                    current.0.saturating_sub(last.0),
+                    current.1.saturating_sub(last.1),
+                );
+                if let Some(ts) = live.updated_at.clone().or_else(|| node.created_at.clone()) {
+                    self.agent_live_sightings.push(AgentLiveSighting {
+                        path: path.to_string(),
+                        ts,
+                        tokens_sent: delta.0,
+                        tokens_received: delta.1,
+                    });
+                }
+                self.agent_live_last_totals
+                    .insert(path.to_string(), current);
+                let plotted = self
+                    .agent_live_plotted_total
+                    .entry(path.to_string())
+                    .or_insert((0, 0));
+                plotted.0 += delta.0;
+                plotted.1 += delta.1;
+            }
+            if let Some(updated_at) = &live.updated_at {
+                self.agent_live_last_seen_at
+                    .insert(path.to_string(), updated_at.clone());
+            }
+            return;
+        }
+        let Some(completed_at) = &node.completed_at else {
+            return;
+        };
+        let was_seen_running = self.agent_live_last_totals.remove(path).is_some();
+        if was_seen_running {
+            self.agent_live_last_seen_at.remove(path);
+        }
+        let is_agent = was_seen_running
+            || node
+                .meta
+                .get("provider")
+                .and_then(Value::as_str)
+                .is_some_and(|p| p.trim().eq_ignore_ascii_case("agent"));
+        if !is_agent {
+            return;
+        }
+        let (final_sent, final_received) = node_tokens(&node.meta);
+        let plotted = self
+            .agent_live_plotted_total
+            .get(path)
+            .copied()
+            .unwrap_or((0, 0));
+        let remainder_sent = final_sent.saturating_sub(plotted.0);
+        let remainder_received = final_received.saturating_sub(plotted.1);
+        if remainder_sent > 0 || remainder_received > 0 {
+            self.agent_live_sightings.push(AgentLiveSighting {
+                path: path.to_string(),
+                ts: completed_at.clone(),
+                tokens_sent: remainder_sent,
+                tokens_received: remainder_received,
+            });
+            let p = self
+                .agent_live_plotted_total
+                .entry(path.to_string())
+                .or_insert((0, 0));
+            p.0 += remainder_sent;
+            p.1 += remainder_received;
+        }
     }
 
     /// Recomputes every row's status from one snapshot, the plan, and
@@ -1546,6 +2090,8 @@ impl RunModel {
                 }
             }
 
+            self.observe_agent_live(path, node, retrying);
+
             let kind = if node.is_running() {
                 match &process {
                     ProcessState::Running => StatusKind::Running,
@@ -1582,13 +2128,47 @@ impl RunModel {
                 // segment as the literal string `iter_*`, DESIGN.md
                 // §5's path-display ask) — `match_path` can never match
                 // that literal text back against a real `iter_N`
-                // segment, so seeding a row for it here only ever left
-                // a stale `Pending` row beside the real per-pass rows
-                // observation produces (F8). Skip it: a real pass's own
-                // row already covers it, and an unreached/skipped loop
-                // shows via the loop container's own row, not a body
-                // template's.
-                if path.split('.').any(|seg| seg == "iter_*") {
+                // segment, so seeding a row for the template itself
+                // here would only ever leave a stale `Pending` row
+                // beside the real per-pass rows observation produces
+                // (F8); skipped below once any real pass already
+                // exists. Before the loop's first dispatch, though
+                // (issue #678's Starting/Failed states), its own
+                // eventual passes still read ahead like any other
+                // un-dispatched leaf, which needs a row of its own
+                // per pass, not the compiled template's -- inserted
+                // once the loop's own total resolves (a state node's
+                // own `progress.total`, or a plain `each.in` against
+                // the run's own input), each exactly the loop
+                // container's own status (Pending, or Skipped with
+                // its own reason, never re-derived through `infer_
+                // absent` on a synthetic path whose `earlier_siblings`/
+                // `branch_alternates` lookup is keyed by this same
+                // template string, not a concrete pass's own).
+                if let Some((loop_path, suffix)) = path.split_once(".iter_*.") {
+                    let prefix = format!("{loop_path}.");
+                    let has_real_pass = flat.keys().any(|p| {
+                        p.strip_prefix(prefix.as_str())
+                            .and_then(|rest| rest.split('.').next())
+                            .is_some_and(|seg| {
+                                seg.strip_prefix("iter_").is_some_and(|n| {
+                                    !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit())
+                                })
+                            })
+                    });
+                    if !has_real_pass {
+                        let total = flat
+                            .get(loop_path)
+                            .and_then(|n| n.progress_total)
+                            .or_else(|| plan.resolve_each_len(loop_path, state));
+                        if let Some(total) = total {
+                            let loop_status = self.infer_absent(loop_path, &flat, plan);
+                            for i in 0..total {
+                                rows.entry(format!("{loop_path}.iter_{i}.{suffix}"))
+                                    .or_insert_with(|| loop_status.clone());
+                            }
+                        }
+                    }
                     continue;
                 }
                 rows.insert(path.clone(), self.infer_absent(path, &flat, plan));
@@ -1958,10 +2538,554 @@ mod tests {
         assert!(!live.is_recent("2026-10-08T11:52:55Z"));
     }
 
+    fn agent_node(meta_extra: Value) -> NodeMeta {
+        let mut meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": null, "provider": "agent"
+        });
+        for (k, v) in meta_extra.as_object().unwrap() {
+            meta.as_object_mut().unwrap().insert(k.clone(), v.clone());
+        }
+        NodeMeta::from_object(&Value::Null, &meta)
+    }
+
+    /// Issue #702's rule 1: a running agent's own `meta.live.
+    /// tokens_sent`/`tokens_received` are read exact, never an
+    /// estimate, and flagged `live`.
+    #[test]
+    fn step_tokens_so_far_reads_a_running_agents_live_totals_as_live() {
+        let node = agent_node(json!({"live": {
+            "engine": "pi", "updated_at": "2026-10-08T11:46:50Z",
+            "tokens_sent": 2100, "tokens_received": 40
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:51Z");
+        assert_eq!(figures.tokens_sent, Some(2100));
+        assert_eq!(figures.tokens_received, Some(40));
+        assert!(figures.live);
+        assert_eq!(figures.total(), Some(2140));
+    }
+
+    /// Claude Code never reports `tokens_received` live (`docs/
+    /// plugins/agent.md`) -- `step_tokens_so_far` must leave it
+    /// `None`, never `0`, while still totalling the known half.
+    #[test]
+    fn step_tokens_so_far_leaves_claude_codes_null_received_as_none() {
+        let node = agent_node(json!({"live": {
+            "engine": "claude_code", "updated_at": "2026-10-08T11:46:50Z",
+            "tokens_sent": 1600, "tokens_received": null
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:51Z");
+        assert_eq!(figures.tokens_sent, Some(1600));
+        assert_eq!(figures.tokens_received, None);
+        assert_eq!(figures.total(), Some(1600));
+    }
+
+    /// Issue #702's rule 1: a stale leftover `meta.live` (an
+    /// interrupted session, `updated_at` more than 5 seconds behind
+    /// `now`) still gives its own last known figures, just not
+    /// flagged `live` any more.
+    #[test]
+    fn step_tokens_so_far_gives_a_stale_leftovers_last_figures_not_live() {
+        let node = agent_node(json!({"live": {
+            "engine": "pi", "updated_at": "2026-10-08T11:46:44Z",
+            "tokens_sent": 2100, "tokens_received": 40
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:52:55Z");
+        assert_eq!(figures.tokens_sent, Some(2100));
+        assert_eq!(figures.tokens_received, Some(40));
+        assert!(!figures.live);
+    }
+
+    /// Once the step has finished, its exact `node_tokens` pair wins
+    /// over anything `meta.live` once said, and is never flagged
+    /// `live` any more.
+    #[test]
+    fn step_tokens_so_far_reads_a_finished_agents_exact_totals() {
+        let meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+            "provider": "agent", "tokens_sent_total": 11550, "tokens_received_total": 130
+        });
+        let node = NodeMeta::from_object(&Value::Null, &meta);
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:59Z");
+        assert_eq!(figures.tokens_sent, Some(11550));
+        assert_eq!(figures.tokens_received, Some(130));
+        assert!(!figures.live);
+    }
+
+    #[test]
+    fn step_tokens_so_far_is_default_for_a_step_with_nothing_at_all() {
+        let model = RunModel::new();
+        let figures = step_tokens_so_far(None, "prime.unseen", &model, "2026-10-08T11:46:59Z");
+        assert_eq!(figures, StepTokensSoFar::default());
+        assert_eq!(figures.total(), None);
+    }
+
+    fn agent_state(live_tokens_sent: u64, live_tokens_received: u64, updated_at: &str) -> Value {
+        json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": null, "meta": {
+                "created_at": "2026-10-08T11:46:43Z", "completed_at": null, "provider": "agent",
+                "live": {"engine": "pi", "updated_at": updated_at,
+                    "tokens_sent": live_tokens_sent, "tokens_received": live_tokens_received}
+            }}
+        }})
+    }
+
+    /// Issue #702 rule 4's own Signal test: two live snapshots a
+    /// second apart give two sightings, each the increase since the
+    /// one before it, at its own observation time -- never a running
+    /// total.
+    #[test]
+    fn observe_turns_each_increase_in_an_agents_live_totals_into_its_own_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe(
+            &agent_state(2100, 40, "2026-10-08T11:46:44Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        model.observe(
+            &agent_state(4450, 90, "2026-10-08T11:46:45Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let sightings = model.agent_live_sightings();
+        assert_eq!(sightings.len(), 2);
+        assert_eq!(sightings[0].ts, "2026-10-08T11:46:44Z");
+        assert_eq!(sightings[0].tokens_sent, 2100);
+        assert_eq!(sightings[0].tokens_received, 40);
+        assert_eq!(sightings[1].ts, "2026-10-08T11:46:45Z");
+        assert_eq!(sightings[1].tokens_sent, 2350);
+        assert_eq!(sightings[1].tokens_received, 50);
+    }
+
+    /// A redraw that re-observes the exact same `meta.live` (nothing
+    /// written since the last poll, the same `updated_at`) must never
+    /// record a second, zero-delta sighting.
+    #[test]
+    fn observe_never_records_a_sighting_twice_for_an_unmoved_heartbeat() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = agent_state(2100, 40, "2026-10-08T11:46:44Z");
+        model.observe(&state, &plan, ProcessState::Running);
+        model.observe(&state, &plan, ProcessState::Running);
+        model.observe(&state, &plan, ProcessState::Running);
+        assert_eq!(model.agent_live_sightings().len(), 1);
+    }
+
+    /// Issue #702 rule 4: at the agent's end, only the remainder not
+    /// yet plotted is added, at its own end time -- the sum of every
+    /// sighting for the path equals its final tokens exactly, never
+    /// double-counted.
+    #[test]
+    fn observe_adds_only_the_remainder_at_the_agents_own_end() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        model.observe(
+            &agent_state(2100, 40, "2026-10-08T11:46:44Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        model.observe(
+            &agent_state(4450, 90, "2026-10-08T11:46:45Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+                "provider": "agent", "tokens_sent_total": 11550, "tokens_received_total": 130
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let sightings = model.agent_live_sightings();
+        assert_eq!(sightings.len(), 3);
+        assert_eq!(sightings[2].ts, "2026-10-08T11:46:58Z");
+        assert_eq!(sightings[2].tokens_sent, 11550 - 4450);
+        assert_eq!(sightings[2].tokens_received, 130 - 90);
+        let (total_sent, total_received) = sightings.iter().fold((0u64, 0u64), |(s, r), sig| {
+            (s + sig.tokens_sent, r + sig.tokens_received)
+        });
+        assert_eq!(total_sent, 11550);
+        assert_eq!(total_received, 130);
+        // A later redraw of the same finished state must never record
+        // the remainder a second time.
+        model.observe(&finished, &plan, ProcessState::Running);
+        assert_eq!(model.agent_live_sightings().len(), 3);
+    }
+
+    /// Issue #702's retry case: an abandoned first attempt's own
+    /// sightings must not be counted again when the retried
+    /// attempt's own final total (which folds both attempts in)
+    /// settles -- the sum of every sighting for the path still
+    /// equals the final total exactly.
+    #[test]
+    fn a_retried_agents_abandoned_attempt_is_never_counted_twice() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let first_attempt = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:43Z", "completed_at": null, "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &first_attempt(2100, 40, "2026-10-08T11:46:44Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        // The first attempt is abandoned (a new `created_at` at the
+        // same path, still running): its own 2100/40 is already in
+        // `agent_live_sightings`, nothing more ever observed for it.
+        let second_attempt = |sent: u64, received: u64, updated_at: &str| {
+            json!({"prime": {"value": null, "meta": {"completed_at": null},
+                "fixer": {"value": null, "meta": {
+                    "created_at": "2026-10-08T11:46:50Z", "completed_at": null, "provider": "agent",
+                    "live": {"engine": "pi", "updated_at": updated_at,
+                        "tokens_sent": sent, "tokens_received": received}
+                }}
+            }})
+        };
+        model.observe(
+            &second_attempt(1500, 30, "2026-10-08T11:46:51Z"),
+            &plan,
+            ProcessState::Running,
+        );
+        // The retried attempt's own final total, the same `_total`-
+        // first pair `node_tokens` always reads, folds both attempts
+        // in: 2100+1500 sent, 40+30 received.
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-10-08T11:46:50Z", "completed_at": "2026-10-08T11:46:55Z",
+                "provider": "agent", "tokens_sent_total": 3600, "tokens_received_total": 70
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let (total_sent, total_received) = model
+            .agent_live_sightings()
+            .iter()
+            .fold((0u64, 0u64), |(s, r), sig| {
+                (s + sig.tokens_sent, r + sig.tokens_received)
+            });
+        assert_eq!(
+            total_sent, 3600,
+            "the abandoned attempt's own tokens must count once, not twice"
+        );
+        assert_eq!(total_received, 70);
+    }
+
+    /// Issue #702: `osi watch` attaching after the agent has already
+    /// finished (or any other way the session is seen finished with
+    /// no running sighting ever observed first) still gets its own
+    /// Signal column, from the very first state this model ever
+    /// observes.
+    #[test]
+    fn an_agent_session_osi_only_ever_saw_finished_still_gets_one_sighting() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let finished = json!({"prime": {"value": null, "meta": {"completed_at": "2026-10-08T11:46:58Z"},
+            "fixer": {"value": "done", "meta": {
+                "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+                "provider": "agent", "tokens_sent_total": 11550, "tokens_received_total": 130
+            }}
+        }});
+        model.observe(&finished, &plan, ProcessState::Running);
+        let sightings = model.agent_live_sightings();
+        assert_eq!(sightings.len(), 1);
+        assert_eq!(sightings[0].path, "prime.fixer");
+        assert_eq!(sightings[0].ts, "2026-10-08T11:46:58Z");
+        assert_eq!(sightings[0].tokens_sent, 11550);
+        assert_eq!(sightings[0].tokens_received, 130);
+        // A later redraw of the identical, already-finished state
+        // must never record the same sighting a second time.
+        model.observe(&finished, &plan, ProcessState::Running);
+        assert_eq!(model.agent_live_sightings().len(), 1);
+    }
+
     #[test]
     fn a_non_object_meta_live_value_parses_as_none() {
         assert_eq!(AgentLive::from_value(&Value::Null), None);
         assert_eq!(AgentLive::from_value(&json!([1, 2])), None);
+    }
+
+    /// Issue #674: a streamed prompt's own `meta.live` carries a `v`
+    /// schema-version key the agent tool's own live summary never has,
+    /// and several of its other field names (`model`, `attempt`,
+    /// `started_at`, `updated_at`, `tokens_sent`, `tokens_received`)
+    /// collide with this struct's own -- without the `v` check, this
+    /// would silently half-parse into a bogus agent summary rather than
+    /// returning `None`.
+    #[test]
+    fn a_prompt_effects_own_live_record_parses_as_none() {
+        let value = json!({
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "t0", "updated_at": "t1", "streaming": true,
+            "first_token_at": "t0", "tokens_sent": null, "tokens_sent_estimate": 3,
+            "tokens_received": null, "tokens_received_estimate": 2,
+            "chars_received": 11, "tokens_per_second": null
+        });
+        assert_eq!(AgentLive::from_value(&value), None);
+    }
+
+    fn prompt_live_value() -> Value {
+        json!({
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:44Z",
+            "tokens_sent": null, "tokens_sent_estimate": 3,
+            "tokens_received": null, "tokens_received_estimate": 2,
+            "chars_received": 11, "tokens_per_second": null
+        })
+    }
+
+    #[test]
+    fn a_prompts_own_live_record_parses_as_prompt_live() {
+        let live = PromptLive::from_value(&prompt_live_value()).unwrap();
+        assert_eq!(live.adapter, "ollama");
+        assert_eq!(live.attempt, 0);
+        assert!(live.streaming);
+        assert_eq!(live.tokens_sent_estimate, Some(3));
+        assert_eq!(live.tokens_received_estimate, Some(2));
+        assert_eq!(live.tokens_sent, None);
+    }
+
+    /// The agent tool's own live summary (no `adapter` key at all)
+    /// parses as neither a prompt's own record.
+    #[test]
+    fn an_agent_live_record_parses_as_none_for_prompt_live() {
+        let value = json!({"turns": 2, "tools": {}, "updated_at": "t"});
+        assert_eq!(PromptLive::from_value(&value), None);
+    }
+
+    #[test]
+    fn a_non_object_meta_live_value_parses_as_no_prompt_live_either() {
+        assert_eq!(PromptLive::from_value(&Value::Null), None);
+        assert_eq!(PromptLive::from_value(&json!([1, 2])), None);
+    }
+
+    /// A node whose `meta.live` is malformed (an object with neither
+    /// shape's own telling key, missing fields entirely) parses as
+    /// `PromptLive::from_value(..) == None` -- `AgentLive::from_value`
+    /// has no telling key of its own to require, so the same value
+    /// still parses as an (empty) `AgentLive`; either way, this never
+    /// crashes (issue #675's own acceptance).
+    #[test]
+    fn a_malformed_meta_live_crashes_neither_parse() {
+        let value = json!({"something": "else"});
+        assert!(AgentLive::from_value(&value).is_some());
+        assert_eq!(PromptLive::from_value(&value), None);
+    }
+
+    fn prompt_node(meta_extra: Value) -> NodeMeta {
+        let mut meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": null,
+            "adapter": "ollama", "model": "m", "prompt_chars": 40
+        });
+        for (k, v) in meta_extra.as_object().unwrap() {
+            meta.as_object_mut().unwrap().insert(k.clone(), v.clone());
+        }
+        NodeMeta::from_object(&Value::Null, &meta)
+    }
+
+    #[test]
+    fn prompt_live_figures_reads_a_running_prompts_own_state_before_the_first_token() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:43Z",
+            "streaming": true, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": null,
+            "chars_received": 0, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:44Z").unwrap();
+        assert!(live.waiting_for_first_token);
+        assert!(live.streaming);
+        assert_eq!(live.elapsed_s, Some(1.0));
+        assert_eq!(live.tokens_sent_or_estimate(), Some((10, true)));
+        assert_eq!(live.tokens_received_or_estimate(), None);
+    }
+
+    #[test]
+    fn prompt_live_figures_reads_estimates_mid_stream_the_ollama_shape() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44.200Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.600Z",
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": 41,
+            "chars_received": 160, "tokens_per_second": 68.0
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:44.200Z")
+                .unwrap();
+        assert!(!live.waiting_for_first_token);
+        assert_eq!(live.tokens_received_or_estimate(), Some((41, true)));
+        assert_eq!(live.tokens_per_second, Some(68.0));
+    }
+
+    /// Anthropic reports its own input tokens at `message_start`, so
+    /// `tokens_sent` is already exact mid-stream, never an estimate
+    /// -- the one shape where sent reads without `≈` while running.
+    #[test]
+    fn prompt_live_figures_reads_an_exact_sent_count_mid_stream_the_anthropic_shape() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "anthropic", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.700Z",
+            "tokens_sent": 348, "tokens_sent_estimate": 350,
+            "tokens_received": null, "tokens_received_estimate": 5,
+            "chars_received": 20, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:44Z").unwrap();
+        assert_eq!(live.tokens_sent_or_estimate(), Some((348, false)));
+        assert_eq!(live.tokens_received_or_estimate(), Some((5, true)));
+    }
+
+    #[test]
+    fn prompt_live_figures_reads_a_non_streaming_adapter_as_streaming_false() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "litellm", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": false, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": null,
+            "chars_received": null, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:45Z").unwrap();
+        assert!(!live.streaming);
+    }
+
+    #[test]
+    fn prompt_live_figures_carries_a_retrys_own_attempt_number() {
+        let node = prompt_node(json!({"live": {
+            "v": 1, "attempt": 1, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:50Z", "updated_at": "2026-10-08T11:46:51Z",
+            "streaming": true, "first_token_at": null,
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": null,
+            "chars_received": 0, "tokens_per_second": null
+        }}));
+        let model = RunModel::new();
+        let live =
+            prompt_live_figures(Some(&node), "prime.ask", &model, "2026-10-08T11:46:51Z").unwrap();
+        assert_eq!(live.attempt, Some(1));
+    }
+
+    /// Issue #675's events-only attach: `osi watch` on `--events`
+    /// alone has no `meta.live` at all, only the latest `progress`
+    /// line `RunModel` has seen for the path -- the same received
+    /// estimate, rate and first-token figures, derived without ever
+    /// reading state.
+    #[test]
+    fn prompt_live_figures_falls_back_to_the_latest_progress_line_with_no_state_at_all() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Progress {
+            ts: "2026-10-08T11:46:44Z".to_string(),
+            id: Some(1),
+            path: "prime.ask".to_string(),
+            ms: Some(1200),
+            tokens_received_estimate: Some(41),
+            chars_received: Some(160),
+            tokens_sent: None,
+            tokens_sent_estimate: Some(10),
+            first_token_ms: Some(600),
+        });
+        let live = prompt_live_figures(None, "prime.ask", &model, "now").unwrap();
+        assert!(live.streaming);
+        assert_eq!(live.attempt, None);
+        assert_eq!(live.elapsed_s, Some(1.2));
+        assert_eq!(live.first_token_elapsed_s, Some(0.6));
+        assert_eq!(live.tokens_received_or_estimate(), Some((41, true)));
+        // `(1200 - 600) / 1000 == 0.6s`, under the 500ms-since-the-
+        // first-delta gate `tokens_per_second` needs cleared, so
+        // 41 tokens over 0.6s -- a real rate, not a divide-by-noise.
+        assert!(live.tokens_per_second.unwrap() > 0.0);
+    }
+
+    #[test]
+    fn prompt_live_figures_is_none_with_neither_state_nor_a_progress_line() {
+        let model = RunModel::new();
+        assert_eq!(prompt_live_figures(None, "prime.ask", &model, "now"), None);
+    }
+
+    /// A fresh `start` at a path clears any progress line left over
+    /// from an earlier attempt -- a stale reading must never outlive
+    /// its own attempt.
+    #[test]
+    fn a_fresh_start_event_clears_the_paths_own_progress_sample() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Progress {
+            ts: "t0".to_string(),
+            id: Some(1),
+            path: "prime.ask".to_string(),
+            ms: Some(500),
+            tokens_received_estimate: Some(10),
+            chars_received: Some(40),
+            tokens_sent: None,
+            tokens_sent_estimate: Some(5),
+            first_token_ms: Some(200),
+        });
+        assert!(model.progress_at("prime.ask").is_some());
+        model.observe_event(&Event::Start {
+            ts: "t1".to_string(),
+            id: Some(2),
+            path: "prime.ask".to_string(),
+        });
+        assert!(model.progress_at("prime.ask").is_none());
+    }
+
+    /// Issue #675's "no double counting": a prompt that ends between
+    /// two polls contributes its exact tokens through `node_tokens`
+    /// once it has `completed_at`, never both that and the live
+    /// estimate -- `prompt_live_figures` reads `None` for a node that
+    /// has already finished, since `is_running_prompt`'s own gate
+    /// (`completed_at.is_none()`) is what every caller filters on
+    /// before ever asking for the live figures at all.
+    #[test]
+    fn a_node_that_finishes_between_two_polls_is_never_counted_as_both_running_and_done() {
+        let running = prompt_node(json!({"live": {
+            "v": 1, "attempt": 0, "adapter": "ollama", "model": "m",
+            "started_at": "2026-10-08T11:46:43Z", "updated_at": "2026-10-08T11:46:44Z",
+            "streaming": true, "first_token_at": "2026-10-08T11:46:43.600Z",
+            "tokens_sent": null, "tokens_sent_estimate": 10,
+            "tokens_received": null, "tokens_received_estimate": 8,
+            "chars_received": 30, "tokens_per_second": null
+        }}));
+        assert!(is_running_prompt(&running));
+        let model = RunModel::new();
+        assert!(
+            prompt_live_figures(Some(&running), "prime.ask", &model, "2026-10-08T11:46:44Z")
+                .is_some()
+        );
+
+        let mut finished_meta = running.meta.clone();
+        finished_meta.as_object_mut().unwrap().remove("live");
+        finished_meta["completed_at"] = json!("2026-10-08T11:46:45Z");
+        finished_meta["tokens_sent"] = json!(10);
+        finished_meta["tokens_received"] = json!(12);
+        let finished = NodeMeta::from_object(&json!("ok"), &finished_meta);
+        assert!(!is_running_prompt(&finished));
+        assert_eq!(node_tokens(&finished.meta), (10, 12));
+        assert_eq!(
+            prompt_live_figures(Some(&finished), "prime.ask", &model, "2026-10-08T11:46:46Z"),
+            None
+        );
     }
 
     /// Table-driven: every branch of `run_status` (DESIGN.md §2.1
@@ -2214,10 +3338,14 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                secret_headers: indexmap::IndexMap::new(),
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = electricity_bytecode::Program {
             root: Op {
@@ -2235,12 +3363,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2316,6 +3446,7 @@ mod tests {
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             })),
@@ -2324,12 +3455,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2504,10 +3637,14 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                secret_headers: indexmap::IndexMap::new(),
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         electricity_bytecode::Program {
             root: Op {
@@ -2520,6 +3657,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2581,10 +3719,14 @@ mod tests {
                 description: None,
                 group: None,
                 prompt_file: None,
+                limited: false,
+                secret_headers: indexmap::IndexMap::new(),
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let named = |path: EffectPath, name: &str| {
             let mut op = tool(path);
@@ -2625,6 +3767,7 @@ mod tests {
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                         named(root_path.push_name("b"), "b"),
                     ],
@@ -2633,6 +3776,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2720,10 +3864,14 @@ mod tests {
                                         description: None,
                                         group: None,
                                         prompt_file: None,
+                                        limited: false,
+                                        secret_headers: indexmap::IndexMap::new(),
+                                        confine_to: None,
                                     }))),
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -2736,12 +3884,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2845,16 +3995,21 @@ mod tests {
                             description: None,
                             group: None,
                             prompt_file: None,
+                            limited: false,
+                            secret_headers: indexmap::IndexMap::new(),
+                            confine_to: None,
                         }))),
                         on_error: OnError::Skip,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2928,6 +4083,8 @@ mod tests {
             run_id: "abc".to_string(),
             pid: Some(4242),
             engine: None,
+            config: None,
+            label: None,
         });
         assert_eq!(model.run_start_pid(), Some(4242));
         assert_eq!(model.run_start_id(), Some("abc"));

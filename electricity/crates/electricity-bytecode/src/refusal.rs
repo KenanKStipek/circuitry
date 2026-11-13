@@ -84,6 +84,28 @@ const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];
 /// field to this already-final struct rather than flip one lane A
 /// already named for it.
 const TOOL_VALIDATE_YAML_PROVIDERS: &[&str] = &["validate_yaml"];
+/// Issue #723's own native provider -- a `cel` tool effect, built
+/// straight off the condition-evaluation CEL already wired for `if`/
+/// `while`, so it gets its own flag the same way `validate_yaml`'s
+/// own does (#448) rather than joining one of the four process/
+/// stdlib/regex/http sets above.
+const TOOL_CEL_PROVIDERS: &[&str] = &["cel"];
+/// The `gh` provider (#722): a pass-through to the `gh` binary, built
+/// on the same subprocess machinery as [`TOOLS_PROCESS_PROVIDERS`] but
+/// with its own flag, since it was added after that set (#719).
+const TOOL_GH_PROVIDERS: &[&str] = &["gh"];
+/// The `systemone` provider (#724): `POST <base_url>/v1/systemone`,
+/// built on the shared HTTP client ([`TOOL_HTTP_PROVIDERS`]'s own
+/// stack) but with its own flag, since it was added after that set.
+const TOOL_SYSTEMONE_PROVIDERS: &[&str] = &["systemone"];
+/// The `service` provider (#721): starts, stops and reports on a
+/// process the tool itself owns, built on its own record/lock rather
+/// than any other provider's machinery.
+const TOOL_SERVICE_PROVIDERS: &[&str] = &["service"];
+/// The `agent` provider (#720): a headless `pi`/Claude Code session,
+/// built on [`crate::plugin_names`]'s own shared `agent_cli` half (#520)
+/// but with its own flag, since it was added after every set above.
+const TOOL_AGENT_PROVIDERS: &[&str] = &["agent"];
 
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -224,6 +246,16 @@ pub struct Supported<'a> {
     pub tool_http: bool,
     /// Lane L2 (#448): `validate_yaml` ([`TOOL_VALIDATE_YAML_PROVIDERS`]).
     pub tool_validate_yaml: bool,
+    /// Issue #723: `cel` ([`TOOL_CEL_PROVIDERS`]).
+    pub tool_cel: bool,
+    /// Issue #722: `gh` ([`TOOL_GH_PROVIDERS`]).
+    pub tool_gh: bool,
+    /// Issue #724: `systemone` ([`TOOL_SYSTEMONE_PROVIDERS`]).
+    pub tool_systemone: bool,
+    /// Issue #721: `service` ([`TOOL_SERVICE_PROVIDERS`]).
+    pub tool_service: bool,
+    /// Issue #720: `agent` ([`TOOL_AGENT_PROVIDERS`]).
+    pub tool_agent: bool,
     /// Lane K2 (#448, #516): scoring and routing are wired into
     /// `prompt` from this lane on -- read nowhere by the walker itself
     /// (nothing in a compiled [`Program`] says "this effect is
@@ -239,6 +271,17 @@ pub struct Supported<'a> {
     /// successor to what [`Supported::complexity`] used to gate (issue
     /// #516 §4(b)).
     pub decomposition: bool,
+    /// Issue #725: `runtime.secrets.<name>` and `{secret: <name>}`,
+    /// resolved at dispatch, in an `http` effect's `params.headers` or a
+    /// subprocess tool's host `runtime.plugins.<name>.env`. A reference
+    /// anywhere else is a compile error regardless of this flag (the
+    /// compiler's own placement check, not something this walker ever
+    /// gates), so this flag only ever lowers [`RefusalReason::
+    /// SecretReference`] for a well-placed one.
+    pub secrets: bool,
+    /// Issue #726: an `http` effect's `params.save_to` writes a 2xx body
+    /// to a file as raw bytes.
+    pub http_save_to: bool,
     /// Extra provider names accepted on top of `json` (always on) and
     /// the four capability flags above -- only ever non-empty for the
     /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
@@ -274,8 +317,15 @@ impl<'a> Supported<'a> {
             tool_regex: false,
             tool_http: false,
             tool_validate_yaml: false,
+            tool_cel: false,
+            tool_gh: false,
+            tool_systemone: false,
+            tool_service: false,
+            tool_agent: false,
             complexity: false,
             decomposition: false,
+            secrets: false,
+            http_save_to: false,
             providers,
         }
     }
@@ -331,10 +381,25 @@ impl<'a> Supported<'a> {
             tool_http: true,
             // lane L2a (#448, #521)
             tool_validate_yaml: true,
+            // issue #723
+            tool_cel: true,
+            // issue #722
+            tool_gh: true,
+            // issue #724
+            tool_systemone: true,
+            // issue #721
+            tool_service: true,
+            // issue #720
+            tool_agent: true,
             // lane K2 (#448, #516)
             complexity: true,
             // lane L2b (#448, #522)
             decomposition: true,
+            // issue #725
+            secrets: true,
+            // issue #726
+            http_save_to: true,
+            // issue #682: the size trigger for decomposition
             providers,
         }
     }
@@ -352,6 +417,11 @@ impl<'a> Supported<'a> {
             || (self.tool_regex && TOOL_REGEX_PROVIDERS.contains(&name))
             || (self.tool_http && TOOL_HTTP_PROVIDERS.contains(&name))
             || (self.tool_validate_yaml && TOOL_VALIDATE_YAML_PROVIDERS.contains(&name))
+            || (self.tool_cel && TOOL_CEL_PROVIDERS.contains(&name))
+            || (self.tool_gh && TOOL_GH_PROVIDERS.contains(&name))
+            || (self.tool_systemone && TOOL_SYSTEMONE_PROVIDERS.contains(&name))
+            || (self.tool_service && TOOL_SERVICE_PROVIDERS.contains(&name))
+            || (self.tool_agent && TOOL_AGENT_PROVIDERS.contains(&name))
     }
 }
 
@@ -419,12 +489,11 @@ fn refusal(path: &EffectPath, reason: RefusalReason) -> Option<Refusal> {
 
 fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> Option<Refusal> {
     match leaf {
-        LeafKind::Prompt(_) => {
-            if supported.prompt {
-                None
-            } else {
-                refusal(path, RefusalReason::Prompt)
+        LeafKind::Prompt(_prompt_op) => {
+            if !supported.prompt {
+                return refusal(path, RefusalReason::Prompt);
             }
+            None
         }
         LeafKind::Use(use_op) => {
             if !supported.use_ {
@@ -492,10 +561,13 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
                 );
             }
-            if names_a_secret(&tool.params, normalized_provider == "http") {
+            if !supported.secrets && names_a_secret(&tool.params, normalized_provider == "http") {
                 return refusal(path, RefusalReason::SecretReference);
             }
-            if normalized_provider == "http" && names_save_to(&tool.params) {
+            if !supported.http_save_to
+                && normalized_provider == "http"
+                && names_save_to(&tool.params)
+            {
                 return refusal(path, RefusalReason::HttpSaveTo);
             }
             None
@@ -625,7 +697,7 @@ fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effects::{PromptContent, PromptOp, PromptType, RetryPolicy, ToolOp};
+    use crate::effects::{PromptContent, PromptOp, PromptType, ResumeMode, RetryPolicy, ToolOp};
     use crate::op::OnError;
     use crate::template::{Escape, TemplateText};
     use indexmap::IndexMap;
@@ -708,6 +780,16 @@ mod tests {
         // `false`, so this asserts directly rather than against it, the
         // same convention as `tool_http` above.
         assert!(current.tool_validate_yaml);
+        // issue #722: `tool_gh` is `true` now -- asserted directly
+        // rather than against `m0.tool_gh` (always `false`), the one
+        // field this change flips.
+        assert!(current.tool_gh);
+        assert!(!m0.tool_gh);
+        // issue #721: `tool_service` is `true` now -- asserted directly
+        // rather than against `m0.tool_service` (always `false`), the
+        // one field this change flips.
+        assert!(current.tool_service);
+        assert!(!m0.tool_service);
         // lane K2 (#448, #516): `complexity` is `true` now -- asserted
         // directly rather than against `m0.complexity` (always
         // `false`), the one field this lane's own PR flips.
@@ -732,7 +814,10 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -744,6 +829,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -758,6 +844,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -777,6 +864,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -788,6 +876,7 @@ mod tests {
         leaf_op(
             path,
             LeafKind::Use(crate::effects::UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
@@ -911,6 +1000,36 @@ mod tests {
     }
 
     #[test]
+    fn a_gh_provider_is_refused_while_tool_gh_is_off() {
+        let tool_path = EffectPath::root().push_name("run");
+        let tool = leaf_op(
+            tool_path.clone(),
+            LeafKind::Tool(tool_op_with_provider("gh", ParamNode::Map(IndexMap::new()))),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("gh".to_string())
+        );
+        assert_eq!(refusal.path, tool_path);
+    }
+
+    #[test]
+    fn a_gh_provider_is_accepted_once_tool_gh_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("run"),
+            LeafKind::Tool(tool_op_with_provider("gh", ParamNode::Map(IndexMap::new()))),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_gh: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
+    }
+
+    #[test]
     fn a_provider_that_is_not_a_cof_plugin_at_all_is_never_refused_by_the_walker() {
         // Issue #511: `nonexistent_tool` is in nobody's registry --
         // `cof run` fails this at preflight/dispatch with "Unknown
@@ -953,10 +1072,10 @@ mod tests {
     }
 
     #[test]
-    fn systemone_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
-        // `systemone` (issue #580) is a cof-only plugin until it is ported:
-        // it is in `PLUGIN_NAMES` (so it is not mistaken for an unknown
-        // name) and no build supports it.
+    fn systemone_is_a_known_cof_plugin_and_is_refused_with_the_preview_marker_while_off() {
+        // `systemone` (issue #724) is in `PLUGIN_NAMES` (so it is not
+        // mistaken for an unknown name) and still refused under the exact
+        // M0 capability set.
         assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"systemone"));
         let tool = leaf_op(
             EffectPath::root().push_name("decide"),
@@ -974,6 +1093,64 @@ mod tests {
         let text = crate::refusal_text::format_refusal(&refusal);
         assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
         assert!(text.contains("systemone"));
+    }
+
+    #[test]
+    fn a_systemone_provider_is_accepted_once_tool_systemone_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("decide"),
+            LeafKind::Tool(tool_op_with_provider(
+                "systemone",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_systemone: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
+    }
+
+    #[test]
+    fn service_is_a_known_cof_plugin_and_is_refused_with_the_preview_marker_while_off() {
+        // `service` (issue #721) is in `PLUGIN_NAMES` (so it is not
+        // mistaken for an unknown name) and still refused under the exact
+        // M0 capability set.
+        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"service"));
+        let tool = leaf_op(
+            EffectPath::root().push_name("start_web"),
+            LeafKind::Tool(tool_op_with_provider(
+                "service",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let refusal = first_unsupported(&program, false, &m0()).unwrap();
+        assert_eq!(
+            refusal.reason,
+            RefusalReason::UnsupportedToolProvider("service".to_string())
+        );
+        let text = crate::refusal_text::format_refusal(&refusal);
+        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
+        assert!(text.contains("service"));
+    }
+
+    #[test]
+    fn a_service_provider_is_accepted_once_tool_service_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("start_web"),
+            LeafKind::Tool(tool_op_with_provider(
+                "service",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_service: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
     }
 
     #[test]
@@ -1048,6 +1225,39 @@ mod tests {
     }
 
     #[test]
+    fn an_http_effect_with_save_to_is_accepted_once_http_save_to_is_set() {
+        // Issue #726: once this build writes the body to a file, the
+        // same document the first test above refused runs unrefused.
+        let mut with_save_to = Supported::m0(&["json", "http"]);
+        with_save_to.http_save_to = true;
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("url".to_string()),
+            ParamNode::Literal(Value::Str("https://example.com/a.png".to_string())),
+        );
+        params.insert(
+            Value::Str("save_to".to_string()),
+            ParamNode::From {
+                path: "input.name".to_string(),
+                default: None,
+                as_json: false,
+            },
+        );
+        let tool = leaf_op(
+            EffectPath::root().push_name("download"),
+            LeafKind::Tool(tool_op_with_provider("http", ParamNode::Map(params))),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_save_to
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn a_tool_whose_params_name_a_secret_is_refused_with_the_preview_marker() {
         // Issue #598: `{secret: <name>}` in an `http` header, or anywhere
         // else in a tool's params (`cof check` rejects that placement).
@@ -1104,6 +1314,41 @@ mod tests {
     }
 
     #[test]
+    fn a_well_placed_secret_header_is_accepted_once_secrets_is_set() {
+        // Issue #725: a `{secret: ...}` in an `http` header runs once
+        // this build resolves it -- the compiler's own placement check
+        // (not this walker) is what still refuses a misplaced one.
+        let mut headers = IndexMap::new();
+        headers.insert(
+            Value::Str("Authorization".to_string()),
+            ParamNode::Map({
+                let mut reference = IndexMap::new();
+                reference.insert(
+                    Value::Str("secret".to_string()),
+                    ParamNode::Literal(Value::Str("api".to_string())),
+                );
+                reference
+            }),
+        );
+        let mut params = IndexMap::new();
+        params.insert(Value::Str("headers".to_string()), ParamNode::Map(headers));
+        let mut with_secrets = Supported::m0(&["json", "http"]);
+        with_secrets.secrets = true;
+        let tool = leaf_op(
+            EffectPath::root().push_name("call"),
+            LeafKind::Tool(tool_op_with_provider("http", ParamNode::Map(params))),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_secrets
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn a_mapping_with_a_secret_key_and_other_keys_is_data_outside_http_headers() {
         // Issue #598's review: like a `{from:}` leaf, only `secret` plus an
         // optional `prefix` is a reference, except as an `http` header's
@@ -1148,10 +1393,24 @@ mod tests {
     }
 
     #[test]
-    fn cel_is_a_known_cof_only_plugin_and_is_refused_with_the_preview_marker() {
-        // `cel` (issue #597) is a cof-only plugin until it is ported: a CEL
-        // map here has no key order, and the tool's result keeps it.
-        assert!(crate::plugin_names::PLUGIN_NAMES.contains(&"cel"));
+    fn cel_is_accepted_once_tool_cel_is_set() {
+        let tool = leaf_op(
+            EffectPath::root().push_name("value"),
+            LeafKind::Tool(tool_op_with_provider(
+                "cel",
+                ParamNode::Map(IndexMap::new()),
+            )),
+        );
+        let program = program_with_root(root_block(vec![tool]));
+        let supported = Supported {
+            tool_cel: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
+    }
+
+    #[test]
+    fn cel_is_refused_until_its_own_flag_is_set() {
         let tool = leaf_op(
             EffectPath::root().push_name("value"),
             LeafKind::Tool(tool_op_with_provider(
@@ -1165,9 +1424,6 @@ mod tests {
             refusal.reason,
             RefusalReason::UnsupportedToolProvider("cel".to_string())
         );
-        let text = crate::refusal_text::format_refusal(&refusal);
-        assert!(text.contains(crate::refusal_text::PREVIEW_MARKER));
-        assert!(text.contains("cel"));
     }
 
     #[test]
@@ -1440,6 +1696,45 @@ mod tests {
     }
 
     #[test]
+    fn a_prompt_with_split_budget_tokens_is_never_refused() {
+        // Issue #682: the size trigger is a supported feature now --
+        // `split.budget_tokens` on a prompt effect compiles cleanly and
+        // never trips this walker, which no longer has any splitting-
+        // specific check at all.
+        let prompt = leaf_op(
+            EffectPath::root().push_name("ask"),
+            LeafKind::Prompt(PromptOp {
+                content: PromptContent::Template(TemplateText::new("hi", false, Escape::None)),
+                prompt_type: PromptType::Text,
+                schema: None,
+                model: None,
+                provider: None,
+                provider_fallbacks: Vec::new(),
+                routing_override: None,
+                model_params: None,
+                timeout_ms: None,
+                deterministic: false,
+                inputs: None,
+                assets: Vec::new(),
+                retries: None,
+                description: None,
+                group: None,
+                split_budget_tokens: Some(1000),
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
+            }),
+        );
+        let program = program_with_root(root_block(vec![prompt]));
+        let supported = Supported {
+            prompt: true,
+            ..m0()
+        };
+        assert!(first_unsupported(&program, false, &supported).is_none());
+    }
+
+    #[test]
     fn a_document_level_adapter_refuses_even_with_an_otherwise_supported_tree() {
         let tool_path = EffectPath::root().push_name("parse");
         let tool = leaf_op(
@@ -1527,6 +1822,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
@@ -1562,6 +1858,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1588,6 +1885,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let supported = Supported {
@@ -1605,6 +1903,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
@@ -1633,6 +1932,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1664,6 +1964,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1713,6 +2014,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![inner]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1745,6 +2047,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1777,6 +2080,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let supported = Supported {
@@ -1824,6 +2128,7 @@ mod tests {
         let use_op = leaf_op(
             use_path.clone(),
             LeafKind::Use(crate::effects::UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
@@ -1848,6 +2153,7 @@ mod tests {
         let use_op = leaf_op(
             EffectPath::root().push_name("sub"),
             LeafKind::Use(crate::effects::UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
@@ -1896,6 +2202,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let supported = Supported {
@@ -1930,6 +2237,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let supported = Supported {
@@ -1981,11 +2289,17 @@ mod tests {
                 retries: None,
                 description: None,
                 group: None,
+                split_budget_tokens: None,
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }),
         );
         let use_op = leaf_op(
             EffectPath::root().push_name("sub"),
             LeafKind::Use(crate::effects::UseOp {
+                resume_mode: crate::ResumeMode::Continue,
                 parent_trusted: false,
                 source: crate::effects::UseSource::Path("child.yml".to_string()),
                 inputs: None,
@@ -2021,6 +2335,11 @@ mod tests {
                 retries: None,
                 description: None,
                 group: None,
+                split_budget_tokens: None,
+                split_enabled: None,
+                split_max_parts: None,
+                split_separator: None,
+                split_merge_template: None,
             }),
         );
         let program = program_with_root(root_block(vec![prompt]));

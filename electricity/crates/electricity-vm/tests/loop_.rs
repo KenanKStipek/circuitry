@@ -157,11 +157,15 @@ fn tool_op(
             expect,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -197,6 +201,7 @@ fn loop_op(
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -256,6 +261,7 @@ async fn run_with_observer(
         &ctx,
         observer,
         &token,
+        false,
     )
     .await
 }
@@ -978,6 +984,7 @@ async fn run_with_adapter(
         &ctx,
         observer,
         &token,
+        false,
     )
     .await
 }
@@ -1146,6 +1153,7 @@ async fn a_cancelled_named_chain_each_keeps_its_completed_passes() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -1234,6 +1242,7 @@ async fn cancelled_nested_loops_both_keep_their_completed_passes() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -1457,6 +1466,7 @@ async fn a_cancelled_tree_loop_still_clears_its_overlay() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -1623,10 +1633,14 @@ fn cancel_once_op(path: EffectPath, name: &str) -> Op {
             description: None,
             group: None,
             prompt_file: None,
+            limited: false,
+            secret_headers: IndexMap::new(),
+            confine_to: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -1700,6 +1714,7 @@ async fn value_on_a_reused_node_survives_a_cancellation_that_skips_the_final_wri
         &ctx,
         &electricity_vm::NullObserver,
         &token,
+        false,
     )
     .await;
     assert!(matches!(result, Err(VmError::Cancelled)));

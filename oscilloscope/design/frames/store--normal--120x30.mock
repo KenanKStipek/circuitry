@@ -1,0 +1,47 @@
+#! tui-mockup 1
+#! size: 120x30
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — store view · area by store
+#! state: normal
+#! theme: catppuccin-mocha
+#! note: data: osi-spike/demo/run2 (events.jsonl, state.json), frozen 3.62 s after run_start; cof 0.1.0 + scripted adapter, so prompts finish instantly and tokens arrive as bursts
+#! note: invented: nothing. ETA reads — because this document has no run history
+#! note: craft-ok CR6 a 14-effect demo run leaves rows free; a real run fills them
+#! note: usual = median of 3 real history runs (demo/hist)
+#! region r1 header 0,0,120,1
+#! region r2 chart 0,1,120,20 Store · Tokens by Store · Area = Tokens Used So Far
+#! region r3 table 0,21,74,7 Largest Stores · ▰ = 50 t
+#! region r4 detail 74,21,46,7 Readings
+#! region r5 keybar 0,29,120,1
+#! focus r2
+#! selected r3 1
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}ochre-desert {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s                                                      {/}{fg.on-accent on:accent.secondary}  STORE  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{border.focus}╭─ {/}{fg.title bold}Store · Tokens by Store · Area = Tokens Used So Far {/}{border.focus}────────────────────────────────────────────────────────────────╮{/}
+{border.focus}│ {/}{fg.default bold on:bg.surface} kind {/}{fg.default on:bg.surface}· 215 t               {/} {fg.title bold on:bg.inset} gate {/}{fg.muted on:bg.inset}· 389 t                                      {/} {accent.primary bold on:bg.inset} ● drafts {/}{fg.muted on:bg.inset}· 261 t                 {/}{border.focus}  │{/}
+{border.focus}│ {/}{fg.default bold on:bg.surface} +6% {/}{fg.muted on:bg.surface}vs usual               {/} {on:bg.inset} {/}{fg.default bold on:bg.surface} reply {/}{fg.default on:bg.surface}· 389 t                                   {/}{on:bg.inset} {/} {on:bg.inset} {/}{fg.default bold on:bg.surface} iter_0 › draft {/}{fg.default on:bg.surface}· 130 t         {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{fg.muted on:bg.surface} ↑212 ↓3                    {/} {on:bg.inset} {/}{status.warning bold on:bg.surface} +47% {/}{fg.muted on:bg.surface}vs usual                                   {/}{on:bg.inset} {/} {on:bg.inset} {/}{accent.primary bold on:bg.surface} -16% {/}{fg.muted on:bg.surface}vs usual                  {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{fg.muted on:bg.surface}                            {/} {on:bg.inset} {/}{fg.muted on:bg.surface} ↑348 ↓41                                        {/}{on:bg.inset} {/} {on:bg.inset} {/}{fg.muted on:bg.surface} ↑118 ↓12                       {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset}                                  {/}{border.focus}  │{/}
+{border.focus}│ {/}{fg.default bold on:bg.surface}                            {/} {on:bg.inset} {/}{fg.default bold on:bg.surface}                                                 {/}{on:bg.inset} {/} {on:bg.inset} {/}{fg.default bold on:bg.surface} iter_1 › draft {/}{fg.default on:bg.surface}· 131 t         {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{accent.primary bold on:bg.surface}                            {/} {on:bg.inset} {/}{accent.primary bold on:bg.surface}                                                 {/}{on:bg.inset} {/} {on:bg.inset} {/}{accent.primary bold on:bg.surface} -14% {/}{fg.muted on:bg.surface}vs usual                  {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{fg.muted on:bg.surface}                            {/} {on:bg.inset} {/}{fg.muted on:bg.surface}                                                 {/}{on:bg.inset} {/} {on:bg.inset} {/}{fg.muted on:bg.surface} ↑118 ↓13                       {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                                 {/}{on:bg.inset} {/}{border.focus} {/}{on:bg.inset} {/}{on:bg.surface}                                {/}{on:bg.inset} {/}{border.focus}  │{/}
+{border.focus}│ {/}{on:bg.surface}                            {/}{border.focus} {/}{on:bg.inset}                                                   {/}{border.focus} {/}{on:bg.inset}                                  {/}{border.focus}  │{/}
+{border.focus}│                                                                                                                      │{/}
+{border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}
+{border.focus}│ {/}{fg.title bold}Totals {/}{fg.default}↑796 ↓69 · {/}{fg.default bold}865 t  +12% {/}{fg.muted}Usual  {/}{fg.default}6/14 {/}{fg.muted}Effects  ETA {/}{fg.default}12:50:52  {/}{fg.muted}Cost {/}{fg.faint}—                                              {/}{border.focus}│{/}
+{border.focus}╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯{/}
+{border.default}╭─ {/}{fg.title bold}Largest Stores · ▰ = 50 t {/}{border.default}────────────────────────────────────────────╮╭─ {/}{fg.title bold}Readings {/}{border.default}─────────────────────────────────╮{/}
+{border.default}│   {/}{table.header bold}STORE                               TOKENS SHARE VS USUAL            {/}{border.default}││ {/}{fg.muted}Largest {/}{fg.default}gate › reply {/}{fg.default bold}389 t {/}{fg.muted}· 45%           {/}{border.default}│{/}
+{border.default}│{/}{accent.primary bold on:selection.bg} ❯ {/}{selection.fg on:selection.bg}gate › reply               {/}{accent.primary on:selection.bg}▰▰▰▰▰▰▰▰  {/}{selection.fg bold on:selection.bg}389 t   {/}{selection.fg on:selection.bg}45%     {/}{status.warning on:selection.bg}+47%            {/}{border.default}││ {/}{fg.muted}Stores  {/}{fg.default}4 with tokens so far               {/}{border.default}│{/}
+{border.default}│   {/}{fg.default}kind                       {/}{accent.primary}▰▰▰▰{/}{fg.faint}▱▱▱▱  {/}{fg.default}215 t   {/}{fg.muted}25%      {/}{fg.default}+6%            {/}{border.default}││ {/}{fg.muted}Ratio   {/}{fg.default}11.5 : 1 sent to received          {/}{border.default}│{/}
+{border.default}│   {/}{fg.default}drafts › iter_1 › draft    {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱  {/}{fg.default}131 t   {/}{fg.muted}15%     {/}{accent.primary}-14%            {/}{border.default}││ {/}{fg.muted}Loop    {/}{fg.default}drafts · 2 of 3 passes have tokens {/}{border.default}│{/}
+{border.default}│   {/}{fg.default}drafts › iter_0 › draft    {/}{accent.primary}▰▰▰{/}{fg.faint}▱▱▱▱▱  {/}{fg.default}130 t   {/}{fg.muted}15%     {/}{accent.primary}-16%            {/}{border.default}││                                            │{/}
+{border.default}╰────────────────────────────────────────────────────────────────────────╯╰────────────────────────────────────────────╯{/}
+{status.success} ✓ {/}{fg.default}gate › reply finished {/}{fg.faint}· ↑348 ↓41 · 0.6s ago{/}
+{keyhint.key bold on:statusbar.bg} ↑↓ {/}{keyhint.desc on:statusbar.bg}Select  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open  {/}{keyhint.key bold on:statusbar.bg}0-3 {/}{keyhint.desc on:statusbar.bg}Screens                                                                      {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}

@@ -1,0 +1,7 @@
+name: stream-scripted-chunks
+adapter: scripted
+model: test
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

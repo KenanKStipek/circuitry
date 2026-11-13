@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #725/#726 (params_json never sets within, even rendered from state)",
+  "description": "A trusted document's params_json is a Mustache template that only becomes the JSON object {\"within\": ...} once rendered from a prior effect's own state, so the compiler's own literal-JSON sniff at compile time never sees it; the dispatch-time check still refuses it, with the same text a literal params_json override gets.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

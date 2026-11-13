@@ -1,0 +1,7 @@
+{
+  "spec_case": "#752",
+  "description": "A top-level `label:` Mustache template, rendered once against the run's own resolved `input.ticket` (a CLI `-e`). `--events`' `run_start` gains `label` right after `orchestration`, and `runtime.last_run.label` appears in `--out`.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "ticket=412"]
+}

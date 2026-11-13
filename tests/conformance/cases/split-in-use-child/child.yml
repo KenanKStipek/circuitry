@@ -1,0 +1,7 @@
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    template: "Summarize: {{input.doc}}"

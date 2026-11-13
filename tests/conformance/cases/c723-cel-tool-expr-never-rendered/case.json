@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #723",
+  "description": "A `cel` tool's `expr` is a literal string, never Mustache-rendered -- a CEL string literal containing `{{...}}` evaluates to that literal text, not a rendered/missing-reference result.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -8,7 +8,7 @@ log:
   ✓ prime.first  0.0s  one
   ▶ prime.second  shell echo two
   ✓ prime.second  0.0s  two
-  ■ run ok  0.0s
+  ■ run solid-pike  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.first: Done skip=None retrying=false

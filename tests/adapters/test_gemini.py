@@ -98,6 +98,7 @@ def test_chat_completion_happy_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="GOOGLE_API_KEY",
         default_model="gemini-2.5-flash",
@@ -122,6 +123,7 @@ def test_chat_completion_missing_api_key_raises(
 ) -> None:
     monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="GOOGLE_API_KEY",
         default_model="gemini-2.5-flash",
@@ -143,6 +145,7 @@ def test_chat_completion_no_auth_for_self_hosted(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="http://localhost:8000/v1",
         api_key_env="",
         default_model="llama3",
@@ -164,6 +167,7 @@ def test_chat_completion_curl_failure_masks_api_key(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="PROVIDER_KEY",
         default_model="m",
@@ -193,6 +197,7 @@ def test_chat_completion_curl_failure_masks_extra_header_secret(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="",
         default_model="m",
@@ -227,6 +232,7 @@ def test_chat_completion_curl_failure_does_not_mask_short_header_values(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="",
         default_model="m",
@@ -253,6 +259,7 @@ def test_chat_completion_curl_failure_does_not_leak_base_url_credentials(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://user:canarypw@example.test/v1",
         api_key_env="",
         default_model="m",
@@ -275,6 +282,7 @@ def test_chat_completion_non_json_response_raises(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="GOOGLE_API_KEY",
         default_model="m",
@@ -295,6 +303,7 @@ def test_chat_completion_empty_choices_returns_empty_text(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="GOOGLE_API_KEY",
         default_model="m",
@@ -316,7 +325,7 @@ def test_gemini_adapter_conformance(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = GeminiAdapter()
+    adapter = GeminiAdapter(streams=False)
     result = adapter.generate(model="gemini-2.5-flash", prompt="ping")
 
     assert result.text == "hi"
@@ -369,6 +378,7 @@ def test_check_dependencies_reports_missing_curl(
     monkeypatch.setattr("shutil.which", lambda name: None)
     monkeypatch.setenv("GOOGLE_API_KEY", "k")
     cfg = OpenAICompatibleConfig(
+        streams=False,
         base_url="https://example.test/v1",
         api_key_env="GOOGLE_API_KEY",
         default_model="m",

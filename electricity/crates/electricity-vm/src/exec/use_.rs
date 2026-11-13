@@ -74,11 +74,13 @@
 
 use crate::exec::live_scope::LiveRoot;
 use crate::exec::{CtxChain, store_err};
-use crate::observer::InstanceId;
+use crate::observer::{InstanceId, ProgressData};
 use crate::params::ParamsCtx;
-use crate::store::Slot;
+use crate::store::{Slot, node_from_entries};
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
-use electricity_bytecode::{EffectPath, ExpectCondition, OnError, Op, Program, UseOp, UseSource};
+use electricity_bytecode::{
+    EffectPath, ExpectCondition, OnError, Op, Program, ResumeMode, UseOp, UseSource,
+};
 use electricity_value::pycompat::PyExc;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
@@ -147,6 +149,82 @@ fn read_key(store: &Store, node: &NodeRef, key: &str) -> Value {
 fn clear_child_record(node: &NodeRef) {
     node.borrow_mut()
         .retain(|key, _| matches!(key, Value::Str(s) if s == "value" || s == "meta"));
+}
+
+/// `core/use.py::_SavedChildRun` (issue #727, #567): what a saved,
+/// unfinished `use` node says about its child's last run -- `--resume`
+/// continues inside the child only when it would run the same document
+/// (`orchestration_sha256`) with the same inputs, compared through
+/// [`saved_form`] (Python's own `_saved_form`'s equivalent: dict
+/// equality is already order-insensitive on both sides, the same as
+/// Python's own `==`, so the one real gap a JSON round trip closes
+/// here is a `Date`/`DateTime`/`Bytes` value -- recorded as a saved
+/// run's own `meta.inputs` can only ever be a JSON-native `Value`
+/// (loaded back off a JSON `--state` file), but a freshly rendered
+/// literal `inputs:` value, from the document's own YAML 1.1 syntax,
+/// still can be one of those three), as the run that left the record;
+/// a child whose output the `use`'s own `expect:` judged false runs
+/// from its start too (reused whole, it would hand the same output to
+/// the same check and fail again on every resume).
+struct SavedChildRun {
+    inputs: Value,
+    orchestration_sha256: Value,
+    expect_failed: bool,
+}
+
+/// `core/use.py::_saved_form` -- *value* as it would read back from a
+/// JSON `--state` file: every `Date`/`DateTime`/`Bytes` leaf (anywhere
+/// in a `Dict`/`List`, however deep) replaced by the same string
+/// [`electricity_json::writer`]'s own `DefaultStr` mode already writes
+/// for it, everything else untouched. No `sort_keys` step of Python's
+/// own version has anything to do here -- `Value::Dict`'s `PartialEq`
+/// is already order-insensitive, matching Python dict equality.
+fn saved_form(value: &Value) -> Value {
+    match value {
+        Value::Bytes(_) | Value::Date(_) | Value::DateTime(..) => Value::Str(value.py_str()),
+        Value::List(items) => Value::List(items.iter().map(saved_form).collect()),
+        Value::Dict(entries) => Value::Dict(
+            entries
+                .iter()
+                .map(|(k, v)| (k.clone(), saved_form(v)))
+                .collect(),
+        ),
+        _ => value.clone(),
+    }
+}
+
+impl SavedChildRun {
+    fn matches(&self, digest: &str, inputs: &Dict) -> bool {
+        if self.expect_failed {
+            return false;
+        }
+        if self.orchestration_sha256 != Value::Str(digest.to_string()) {
+            return false;
+        }
+        saved_form(&self.inputs) == saved_form(&Value::Dict(inputs.clone()))
+    }
+}
+
+/// `core/use.py::_take_child_record` -- every key but `value`/`meta`
+/// *node* carries, removed and returned, preserving each one's own
+/// [`Slot`] (a grafted loop's `last` stays an alias of its own sibling,
+/// not a flattened copy -- see [`graft_child_record`]'s own doc
+/// comment for why that identity matters).
+fn take_child_record(node: &NodeRef) -> IndexMap<Value, Slot> {
+    let keys: Vec<Value> = node
+        .borrow()
+        .iter()
+        .filter(|(key, _)| !matches!(key, Value::Str(s) if s == "value" || s == "meta"))
+        .map(|(key, _)| key.clone())
+        .collect();
+    let mut taken = IndexMap::new();
+    let mut node_map = node.borrow_mut();
+    for key in keys {
+        if let Some(slot) = node_map.shift_remove(&key) {
+            taken.insert(key, slot);
+        }
+    }
+    taken
 }
 
 /// `core/use.py::_child_record_copy` -- the child's effects as one
@@ -478,8 +556,11 @@ fn known_concurrency_group_names(runtime_config: &Value) -> BTreeSet<String> {
 }
 
 /// `runtime.state.record_children` (config), off the same
-/// `runtime_config` value.
-fn record_children_enabled(runtime_config: &Value) -> bool {
+/// `runtime_config` value. `pub(crate)`: `decompose::maybe_decompose`
+/// reads the same setting for its own child graft (issue #672),
+/// the same reuse `core/decompose.py` makes of `core/use.py`'s own
+/// `_record_children_enabled`.
+pub(crate) fn record_children_enabled(runtime_config: &Value) -> bool {
     runtime_config
         .as_dict()
         .and_then(|d| d.get(&Value::Str("state".to_string())))
@@ -753,6 +834,15 @@ async fn attempt_once<R: ParamsCtx>(
     label: &mut String,
     record_children: bool,
     attempt_children: &mut Option<Value>,
+    // `cof run --resume` (#567): what the saved record said about the
+    // run that left it -- `None` unless this is the first attempt of a
+    // resumed `use` whose `runtime.state.record_children` left one.
+    // Not yet taken off *effect_node* (`core/use.py::execute`'s own
+    // `_take_child_record(node)` call happens only after the child's
+    // inputs render and its interface check passes, below -- an error
+    // before that point must leave the saved record in place, since
+    // this attempt never consulted it).
+    resume_record: Option<&SavedChildRun>,
 ) -> Result<(), AttemptProblem> {
     let loaded = load_child(
         name,
@@ -963,6 +1053,28 @@ async fn attempt_once<R: ParamsCtx>(
         }));
     }
 
+    // `cof run --resume` (#567, #590): taken off *effect_node* only now
+    // that the inputs rendered and the interface check above both
+    // succeeded (`core/use.py::execute`'s own ordering) -- unconditionally,
+    // the same as cof's own `_take_child_record` call, whether or not it
+    // ends up matching; the record is gone from the node either way once
+    // this attempt has reached this point. It matches only when
+    // `use_op.resume_mode` is `Continue` (`restart` always drops it, even
+    // on a match) and `SavedChildRun::matches` passes against this
+    // attempt's own freshly rendered inputs and the child's own digest --
+    // `loaded.digest` is `meta.orchestration_sha256`'s own value for this
+    // run (set just above `attempt_once`'s own allowlist check).
+    let resume_child = resume_record.and_then(|saved| {
+        let taken = take_child_record(effect_node);
+        if use_op.resume_mode == ResumeMode::Continue
+            && saved.matches(&loaded.digest, &rendered_inputs)
+        {
+            Some(taken)
+        } else {
+            None
+        }
+    });
+
     let mut initial_state = Dict::new();
     initial_state.insert(
         Value::Str("input".to_string()),
@@ -996,12 +1108,37 @@ async fn attempt_once<R: ParamsCtx>(
     let (child_store, run_result) = run_isolated_inner(
         &child_program,
         Value::Dict(initial_state),
+        resume_child,
         &child_frame,
         &child_run_ctx,
         observer,
         token,
+        true,
     )
     .await;
+
+    // `core/use.py::UseRuntime.execute`'s own `except BaseException`
+    // (issue #727 follow-up): an interrupt is not an `Exception`, so it
+    // never reaches cof's `_collect_child_errors` walk (that only runs
+    // from the success/`except Exception` paths below) -- it grafts
+    // whatever the child got to, when `record_children` asks, and
+    // re-raises with `meta.child_errors` left at the `None` this
+    // attempt's own reset already wrote, and no `meta.attempts` entry
+    // at all (the caller's own `Fatal` propagation never reaches
+    // `write_attempts`). Checked before the `meta.attempts[].children`/
+    // `child_errors` collection below, which only apply to the
+    // `except Exception` cof paths (an ordinary failure, a refusal, a
+    // successful run) this `use` child's own cancellation never takes.
+    if matches!(run_result, Err(VmError::Cancelled)) {
+        if record_children {
+            if let Ok(Some(child_prime_node)) =
+                child_store.child(&child_store.root, &Value::Str(CHILD_ROOT.to_string()))
+            {
+                graft_child_record(effect_node, &child_prime_node);
+            }
+        }
+        return Err(AttemptProblem::Fatal(VmError::Cancelled));
+    }
 
     // `meta.attempts[].children` (issue #659): whenever this attempt
     // actually ran the child and `record_children` is on, whatever it
@@ -1038,7 +1175,7 @@ async fn attempt_once<R: ParamsCtx>(
     }
 
     match run_result {
-        Err(VmError::Cancelled) => return Err(AttemptProblem::Fatal(VmError::Cancelled)),
+        Err(VmError::Cancelled) => unreachable!("handled above, before the child_errors walk"),
         Err(VmError::Refused {
             refusal,
             child_label,
@@ -1276,10 +1413,20 @@ pub(crate) async fn execute_use(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
+    resume_active: bool,
 ) -> Result<(), VmError> {
     let live_root = LiveRoot::new(ctx_chain, store);
     execute_use_with_ctx(
-        op, use_op, store, parent, &live_root, frame, run_ctx, observer, token,
+        op,
+        use_op,
+        store,
+        parent,
+        &live_root,
+        frame,
+        run_ctx,
+        observer,
+        token,
+        resume_active,
     )
     .await
 }
@@ -1305,6 +1452,14 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
+    // `cof run --resume` (issue #727, #567): whether this `use` may
+    // continue inside its child when `runtime.state.record_children`
+    // left a matching saved record -- `core/use.py::UseRuntime.resume`.
+    // Read, below, before this run's own reset ever touches
+    // `meta.inputs`/`meta.orchestration_sha256`/`meta.expect` -- the
+    // exact saved values `_SavedChildRun` reads off the *prior* run's
+    // own node (`UseRuntime.execute`'s own read-before-reset order).
+    resume_active: bool,
 ) -> Result<(), VmError> {
     let name = op
         .name
@@ -1323,6 +1478,24 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     let meta_node = store
         .ensure_dict(&effect_node, Value::Str("meta".to_string()))
         .map_err(store_err)?;
+
+    // `core/use.py::UseRuntime.execute`'s own `saved_child_run` --
+    // read before any reset below touches `meta`. `record_children`
+    // itself doesn't depend on anything this run resets, so it's
+    // resolved here too, once, rather than a second time at its old
+    // call site further down.
+    let record_children = record_children_enabled(run_ctx.runtime_config);
+    let saved_child_run: Option<SavedChildRun> = if resume_active && record_children {
+        let saved_expect = read_key(store, &meta_node, "expect");
+        let expect_failed = matches!(&saved_expect, Value::Dict(d) if !is_truthy(d.get(&Value::Str("result".to_string()))));
+        Some(SavedChildRun {
+            inputs: read_key(store, &meta_node, "inputs"),
+            orchestration_sha256: read_key(store, &meta_node, "orchestration_sha256"),
+            expect_failed,
+        })
+    } else {
+        None
+    };
 
     let legacy_ref = match &use_op.source {
         UseSource::Path(s) | UseSource::Orchestration(s) => Some(s.clone()),
@@ -1366,8 +1539,6 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         return Ok(());
     }
 
-    let record_children = record_children_enabled(run_ctx.runtime_config);
-
     let max_attempts = use_op.retries.max_attempts.max(1);
     let base_backoff_ms = use_op.retries.backoff_ms;
     let mut next_delay_ms = base_backoff_ms;
@@ -1406,6 +1577,20 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         observer.write();
 
         let mut attempt_children: Option<Value> = None;
+        // `core/use.py`'s own `if saved_child_run is not None and
+        // attempt_index == 0`: only the first attempt ever resumes; a
+        // retry reruns the whole child from scratch -- a later attempt
+        // that reaches this point at all has already had its own
+        // record removed by `clear_child_record` above, so this is
+        // `None` for every attempt but the first either way. Not yet
+        // taken off *effect_node* -- `attempt_once` itself does that,
+        // only once the child's inputs render and its interface check
+        // both succeed (that function's own doc comment).
+        let resume_record = if attempt_index == 0 {
+            saved_child_run.as_ref()
+        } else {
+            None
+        };
         let attempt_result = attempt_once(
             op,
             use_op,
@@ -1421,6 +1606,7 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             &mut label,
             record_children,
             &mut attempt_children,
+            resume_record,
         )
         .await;
 
@@ -1605,6 +1791,15 @@ struct ChildObserver<'a> {
     parent: &'a dyn RunObserver,
     root_path: EffectPath,
     child_store: &'a Store,
+    /// Whether a `flow: tree` loop/dynamic inside this child forwards
+    /// its own `dispatch` announcement to *parent* at all -- `true` for
+    /// a `use` child (`core/use.py::UseRuntime.execute`'s own child
+    /// `Store` wires `concurrent_dispatch=_namespaced_dispatch_cb(...)`),
+    /// `false` for a decomposition child (`core/decompose.py::
+    /// _build_child_store` never passes `concurrent_dispatch` at all,
+    /// issue #682): the one difference between the two child shapes
+    /// this one shared wrapper otherwise treats identically.
+    forward_dispatch: bool,
     /// Throttles [`RunObserver::write`]'s own snapshot-and-graft pair
     /// (PR #472): a long loop inside the child
     /// calls `write()` once per leaf write, and a full [`Store::saved`]
@@ -1655,7 +1850,9 @@ impl RunObserver for ChildObserver<'_> {
     // [`Frame::effect_path`], already namespaced under the `use` node.
     // No rewriting needed; forward it unchanged.
     fn dispatch(&self, path: &EffectPath, branches: usize, concurrency: usize) {
-        self.parent.dispatch(path, branches, concurrency);
+        if self.forward_dispatch {
+            self.parent.dispatch(path, branches, concurrency);
+        }
     }
 
     fn write(&self) {
@@ -1725,18 +1922,37 @@ impl RunObserver for ChildObserver<'_> {
     fn clear_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
         self.parent.clear_tree_branches(node_path, branches);
     }
+
+    // A streamed prompt's own progress line already carries its own,
+    // already-namespaced path and the parent's own instance id (both
+    // passed through unchanged, same reasoning as `dispatch`/`report`
+    // above) -- no rewriting needed, just forwarding.
+    fn progress(&self, path: &EffectPath, instance: InstanceId, attempt: u32, data: &ProgressData) {
+        self.parent.progress(path, instance, attempt, data);
+    }
 }
 
 /// [`run_isolated`]'s own private body -- see this module's own doc
 /// comment for why *execute_use* calls this directly instead of the
 /// public, signature-fixed wrapper.
+#[allow(clippy::too_many_arguments)]
 async fn run_isolated_inner(
     program: &Program,
     initial_state: Value,
+    // `cof run --resume` (#567): the taken, still-live-aliased record
+    // [`execute_use`]'s own caller seeds the child root with, when a
+    // saved record matched -- inserted directly as a [`Slot::Node`]
+    // under [`CHILD_ROOT`] after *initial_state* is applied (never
+    // folded into *initial_state* itself, which only ever carries
+    // plain [`Value`]s, incapable of representing a [`Slot::Node`]'s
+    // own aliasing). `Some` also means this run resumes: threaded
+    // straight into `execute_dynamic`'s own `resume_active`.
+    resume_prime: Option<IndexMap<Value, Slot>>,
     frame: &Frame,
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
+    forward_dispatch: bool,
 ) -> (Store, Result<(), VmError>) {
     let child_store = Store::new();
     let mut initial_state = initial_state;
@@ -1745,11 +1961,19 @@ async fn run_isolated_inner(
             child_store.set_leaf(&child_store.root, key, value);
         }
     }
+    let resume_active = resume_prime.is_some();
+    if let Some(prime_entries) = resume_prime {
+        child_store.root.borrow_mut().insert(
+            Value::Str(CHILD_ROOT.to_string()),
+            Slot::Node(node_from_entries(prime_entries)),
+        );
+    }
     let root_path = frame.effect_path(&EffectPath::root());
     let wrapped = ChildObserver {
         parent: observer,
         root_path: root_path.clone(),
         child_store: &child_store,
+        forward_dispatch,
         last_graft: std::cell::Cell::new(None),
     };
     let result = crate::exec::dynamic::execute_dynamic(
@@ -1761,6 +1985,7 @@ async fn run_isolated_inner(
         run_ctx,
         &wrapped,
         token,
+        resume_active,
     )
     .await;
     observer.clear_graft(&root_path);
@@ -1772,6 +1997,14 @@ async fn run_isolated_inner(
 /// `core/use.py::_run_isolated` to port this from: `UseRuntime.execute`
 /// builds its own child `Store` inline, with no separate function of
 /// its own. Shared by `use` (this lane) and decomposition (lane L2).
+///
+/// Returns the [`Store`] *and* the run's own result, always, rather
+/// than discarding the store on an `Err` the way a plain `Result<Store,
+/// VmError>` would: `core/decompose.py::_execute_plan`/
+/// `_execute_split_plan` both graft `runtime.state.record_children`
+/// onto the decomposing node in a `finally`, grafting whatever the
+/// child got to even mid-failure -- the caller needs the store back on
+/// every path to do the same.
 pub async fn run_isolated(
     program: &Program,
     initial_state: Value,
@@ -1779,10 +2012,24 @@ pub async fn run_isolated(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
-) -> Result<Store, VmError> {
-    let (store, result) =
-        run_isolated_inner(program, initial_state, frame, run_ctx, observer, token).await;
-    result.map(|()| store)
+) -> (Store, Result<(), VmError>) {
+    // `false`: never forwards a `dispatch` announcement -- the one
+    // difference from `use`'s own direct call to `run_isolated_inner`
+    // (`ChildObserver::forward_dispatch`'s own doc comment), matching
+    // `core/decompose.py::_build_child_store`'s own omission of
+    // `concurrent_dispatch` (issue #682). `None`: decomposition has no
+    // `--resume` of its own (out of scope, issue #727).
+    run_isolated_inner(
+        program,
+        initial_state,
+        None,
+        frame,
+        run_ctx,
+        observer,
+        token,
+        false,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -1813,6 +2060,7 @@ mod tests {
         let inline_yaml = "\
 effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: parse, input: \"not json\"}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -1836,6 +2084,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -1895,6 +2144,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &mut label,
             true, // record_children
             &mut None,
+            None,
         )
         .await;
 
@@ -1942,6 +2192,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         let mut outputs = indexmap::IndexMap::new();
         outputs.insert("result".to_string(), "prime.inner.value".to_string());
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -1967,6 +2218,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2026,6 +2278,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &mut label,
             false,
             &mut None,
+            None,
         )
         .await;
 
@@ -2135,6 +2388,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     async fn a_uses_model_expect_template_error_is_not_retried_by_the_outer_loop() {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2164,6 +2418,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2209,6 +2464,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &run_ctx,
             &observer,
             &token,
+            false,
         )
         .await
         .expect_err("a TemplateError-class expect failure must still fail the use effect");
@@ -2242,6 +2498,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     async fn a_uses_model_expect_dispatches_with_the_run_adapter_budget() {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2271,6 +2528,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2331,6 +2589,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &mut label,
             false,
             &mut None,
+            None,
         )
         .await;
         assert!(result.is_ok(), "a model expect answered 'yes' must succeed");
@@ -2408,6 +2667,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
     ) -> Result<(), AttemptProblem> {
         let inline_yaml = "effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode: stringify, input: 1}\n";
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 inline_yaml.to_string(),
@@ -2437,6 +2697,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2496,6 +2757,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &mut label,
             false,
             &mut None,
+            None,
         )
         .await
     }
@@ -2645,6 +2907,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             )),
         );
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 "effects: []\n".to_string(),
@@ -2668,6 +2931,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let effect_node = store
             .ensure_dict(&prime, Value::Str("step".to_string()))
@@ -2696,6 +2960,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &mut label,
             false,
             &mut None,
+            None,
         )
         .await
         {
@@ -2739,6 +3004,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             )),
         );
         let use_op = UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Inline(electricity_bytecode::TemplateText::new(
                 "effects: []\n".to_string(),
@@ -2762,6 +3028,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let effect_node = store
             .ensure_dict(&store.root, Value::Str("step".to_string()))
@@ -2790,6 +3057,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             &mut label,
             false,
             &mut None,
+            None,
         )
         .await
         {

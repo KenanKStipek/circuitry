@@ -82,6 +82,8 @@ impl Adapter for ClaudeCodeAdapter {
             prompt.as_bytes().to_vec(),
             Some(workdir.path().to_path_buf()),
             call.token,
+            None,
+            None,
         )
         .await
         .map_err(run_error_to_adapter)?;
@@ -141,6 +143,7 @@ mod tests {
             path,
             timeout_seconds: 5,
             token,
+            on_progress: None,
         }
     }
 
@@ -494,6 +497,7 @@ mod tests {
             // file even on a loaded machine; it hangs far longer.
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("", "hi", &GenerateOptions::default(), &call)

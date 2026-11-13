@@ -53,7 +53,7 @@ def test_openai_adapter_conformance_with_mocked_transport(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OpenAIAdapter()
+    adapter = OpenAIAdapter(streams=False)
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
 
     assert result.text == "hello from openai"
@@ -76,7 +76,7 @@ def test_anthropic_adapter_conformance_with_mocked_transport(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = AnthropicAdapter()
+    adapter = AnthropicAdapter(streams=False)
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
 
     assert result.text == "hello from anthropic"
@@ -98,7 +98,7 @@ def test_ollama_adapter_conformance_with_mocked_transport(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     result = adapter.generate(model="phi3:mini", prompt="ping")
 
     assert result.text == "hello from ollama"
@@ -150,8 +150,8 @@ def test_conformance_validator_surfaces_actionable_contract_mismatch() -> None:
 @pytest.mark.parametrize(
     ("adapter", "error_substring"),
     [
-        (OpenAIAdapter(), "request failed (curl exit 28)"),
-        (AnthropicAdapter(), "request failed (curl exit 28)"),
+        (OpenAIAdapter(streams=False), "request failed (curl exit 28)"),
+        (AnthropicAdapter(streams=False), "request failed (curl exit 28)"),
     ],
 )
 def test_direct_provider_errors_are_actionable(
@@ -184,8 +184,8 @@ def test_direct_provider_errors_are_actionable(
 @pytest.mark.parametrize(
     ("adapter", "env_var"),
     [
-        (OpenAIAdapter(), "OPENAI_API_KEY"),
-        (AnthropicAdapter(), "ANTHROPIC_API_KEY"),
+        (OpenAIAdapter(streams=False), "OPENAI_API_KEY"),
+        (AnthropicAdapter(streams=False), "ANTHROPIC_API_KEY"),
     ],
 )
 def test_direct_provider_curl_failure_masks_api_key(
@@ -221,8 +221,8 @@ def test_direct_provider_curl_failure_masks_api_key(
 @pytest.mark.parametrize(
     ("adapter", "env_var"),
     [
-        (OpenAIAdapter(), "OPENAI_API_KEY"),
-        (AnthropicAdapter(), "ANTHROPIC_API_KEY"),
+        (OpenAIAdapter(streams=False), "OPENAI_API_KEY"),
+        (AnthropicAdapter(streams=False), "ANTHROPIC_API_KEY"),
     ],
     ids=["openai", "anthropic"],
 )
@@ -265,7 +265,7 @@ def test_litellm_errors_are_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.parametrize(
     "adapter",
-    [OpenAIAdapter(), AnthropicAdapter()],
+    [OpenAIAdapter(streams=False), AnthropicAdapter(streams=False)],
     ids=["openai", "anthropic"],
 )
 def test_a_429_response_raises_a_retryable_adapter_call_error(
@@ -301,7 +301,7 @@ def test_a_429_response_raises_a_retryable_adapter_call_error(
 
 @pytest.mark.parametrize(
     "adapter",
-    [OpenAIAdapter(), AnthropicAdapter()],
+    [OpenAIAdapter(streams=False), AnthropicAdapter(streams=False)],
     ids=["openai", "anthropic"],
 )
 def test_a_404_response_raises_a_non_retryable_adapter_call_error(
@@ -344,7 +344,7 @@ def test_ollama_a_connection_failure_raises_a_retryable_adapter_call_error(
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
     with pytest.raises(AdapterCallError) as exc:
-        OllamaAdapter().generate(model="model", prompt="ping")
+        OllamaAdapter(streams=False).generate(model="model", prompt="ping")
 
     assert exc.value.retry_info.retryable is True
 
@@ -400,7 +400,7 @@ def test_non_json_html_response_raises_runtime_error(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = adapter_cls()
+    adapter = adapter_cls(streams=False)
     with pytest.raises(RuntimeError, match="non-JSON response"):
         adapter.generate(model="model", prompt="ping")
 
@@ -417,7 +417,7 @@ def test_ollama_non_json_html_response_raises_runtime_error(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     with pytest.raises(RuntimeError, match="non-JSON response"):
         adapter.generate(model="phi3:mini", prompt="ping")
 
@@ -441,7 +441,7 @@ def test_openai_empty_choices_returns_empty_text(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OpenAIAdapter()
+    adapter = OpenAIAdapter(streams=False)
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
     assert result.text == ""
 
@@ -460,7 +460,7 @@ def test_openai_missing_message_key_returns_empty_text(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OpenAIAdapter()
+    adapter = OpenAIAdapter(streams=False)
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
     assert result.text == ""
 
@@ -479,7 +479,7 @@ def test_openai_missing_usage_returns_none_tokens(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OpenAIAdapter()
+    adapter = OpenAIAdapter(streams=False)
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
     assert result.text == "hi"
     assert result.tokens_sent is None
@@ -500,7 +500,7 @@ def test_anthropic_empty_content_returns_empty_text(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = AnthropicAdapter()
+    adapter = AnthropicAdapter(streams=False)
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
     assert result.text == ""
 
@@ -519,7 +519,7 @@ def test_anthropic_missing_usage_returns_none_tokens(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = AnthropicAdapter()
+    adapter = AnthropicAdapter(streams=False)
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
     assert result.text == "hi"
     assert result.tokens_sent is None
@@ -538,7 +538,7 @@ def test_ollama_missing_response_key_returns_empty_text(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     result = adapter.generate(model="phi3:mini", prompt="ping")
     assert result.text == ""
     assert result.tokens_sent is None
@@ -571,7 +571,7 @@ def test_curl_not_installed_raises_actionable_error(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = adapter_cls()
+    adapter = adapter_cls(streams=False)
     with pytest.raises(RuntimeError, match="curl is not installed"):
         adapter.generate(model="model", prompt="ping")
 
@@ -587,7 +587,7 @@ def test_ollama_curl_not_installed_raises_actionable_error(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     with pytest.raises(RuntimeError, match="curl is not installed"):
         adapter.generate(model="phi3:mini", prompt="ping")
 
@@ -610,7 +610,7 @@ def test_ollama_curl_cmd_carries_the_requested_timeout(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     adapter.generate(model="qwen3.8:27b", prompt="ping", timeout_seconds=300)
 
     cmd = captured["cmd"]
@@ -628,7 +628,7 @@ def test_ollama_exit_7_hint_says_not_reachable(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     with pytest.raises(RuntimeError) as exc_info:
         adapter.generate(model="phi3:mini", prompt="ping")
 
@@ -652,7 +652,7 @@ def test_ollama_exit_7_hint_does_not_leak_base_url_credentials(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter(base_url="http://user:canarypw@example.test:11434")
+    adapter = OllamaAdapter(base_url="http://user:canarypw@example.test:11434", streams=False)
     with pytest.raises(RuntimeError) as exc_info:
         adapter.generate(model="phi3:mini", prompt="ping")
 
@@ -674,7 +674,7 @@ def test_ollama_exit_28_hint_says_timed_out(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     with pytest.raises(RuntimeError) as exc_info:
         adapter.generate(model="qwen3.8:27b", prompt="ping", timeout_seconds=45)
 
@@ -705,7 +705,7 @@ def test_ollama_404_model_not_found_includes_body_and_pull_hint(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = OllamaAdapter()
+    adapter = OllamaAdapter(streams=False)
     with pytest.raises(RuntimeError) as exc_info:
         adapter.generate(model="ghost:latest", prompt="ping")
 
@@ -723,7 +723,7 @@ def test_ollama_404_model_not_found_includes_body_and_pull_hint(
 def test_openai_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
-    adapter = OpenAIAdapter()
+    adapter = OpenAIAdapter(streams=False)
     with pytest.raises(RuntimeError, match="OPENAI_API_KEY"):
         adapter.generate(model="gpt-4o-mini", prompt="ping")
 
@@ -731,7 +731,7 @@ def test_openai_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_anthropic_missing_api_key_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
 
-    adapter = AnthropicAdapter()
+    adapter = AnthropicAdapter(streams=False)
     with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
         adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
 
@@ -763,7 +763,7 @@ def test_api_key_not_leaked_in_error_message(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
-    adapter = adapter_cls()
+    adapter = adapter_cls(streams=False)
     with pytest.raises(RuntimeError) as exc:
         adapter.generate(model="model", prompt="ping")
 

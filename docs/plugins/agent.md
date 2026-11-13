@@ -191,7 +191,8 @@ The form and its rules are a `prompt` effect's [`file: {from: <state path>}`](..
   `params_json` shows them, and at dispatch otherwise.
 
 A string `prompt` behaves as before. electricity checks the form the same way
-when it compiles a document, but does not run the `agent` tool.
+when it compiles a document, and runs the `agent` tool too, with the same
+contract this page describes.
 
 ## The result contract
 
@@ -321,6 +322,13 @@ attempt's session id and transcript, and a watcher shows it as stopped.
 `cof run --resume` reuses a finished node, which has no `meta.live`; it
 reruns an unfinished one, which first removes any stale `meta.live` left
 from before the interruption.
+
+A plain `prompt` effect carries its own, differently-shaped `meta.live`
+while a streaming adapter's reply is still arriving, published the same
+way (`Store.set`, at most once a second) and removed the same way (every
+exit of the attempt) — see ["Streaming adapters and a prompt's live
+progress"](../orchestration-reference.md#streaming-adapters-and-a-prompts-live-progress)
+in the orchestration reference.
 
 ### The transcript's JSONL lines
 

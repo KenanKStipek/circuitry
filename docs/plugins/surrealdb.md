@@ -70,12 +70,14 @@ the bare-payload fallback.
 ## Params
 
 - `mode` (string, default `query`) — `query` | `select` | `create` | `upsert` | `delete`
-- `query` (string, `query`) — SurrealQL statement
+- `query` (string, `query`) — SurrealQL, one statement or several; a failing
+  statement raises, whichever one it is — see [Errors](#errors)
 - `params` (dict, `query`, optional) — bound SurrealQL variables (`$name`)
-- `target` (string, `select`) — table name or record id (aliases: `record`, `table`)
+- `target` (string, `select`) — table name, record id, or record range
+  (`"table:1..10"`) (aliases: `record`, `table`)
 - `table` (string, `create`) + `data` (dict)
 - `record` (string, `upsert`) + `data` (dict)
-- `record` (string, `delete`)
+- `record` (string, `delete`) — record id or record range
 - `namespace` / `database` (string, optional) — override the configured pair
 
 Values are coerced to JSON-safe types (record ids and datetimes become strings)
@@ -130,14 +132,24 @@ Failures map to actionable messages and mark the run `ok=False`:
 | Condition | Message shape |
 | --- | --- |
 | server unreachable | `surrealdb: cannot connect to <url> (...). Is the server running ...` |
+| request timed out | `surrealdb: <url> timed out (...)` |
 | bad credentials | `surrealdb: authentication rejected by <url> (...)` |
 | wrong namespace/database | `surrealdb: USE <ns> <db> failed (...)` |
-| SurrealQL error | `surrealdb <mode> failed: ...` / `SurrealQL error: ...` |
+| SurrealQL error | `surrealdb <mode> failed: <the server's own message>` |
+
+A `query` mode call with more than one SurrealQL statement raises on the
+first one that fails, in statement order — the same statement, and the
+server's own message verbatim, no matter which `surrealdb` SDK major is
+installed. On success `query`'s value is the first statement's own result.
+
+The SDK's own request timeout is disabled, so a slow query is given as long
+as it needs rather than failing partway through; if the underlying transport
+times out anyway, that is reported as "timed out", never as "cannot connect".
 
 ## Running the integration tests
 
 ```bash
-docker run --rm -p 8000:8000 surrealdb/surrealdb:latest start --user root --pass root
+docker run --rm -p 8000:8000 surrealdb/surrealdb:v4.0.1 start --user root --pass root
 
 export CIRCUITRY_RUN_INTEGRATION=1
 export SURREAL_URL=ws://localhost:8000/rpc
@@ -145,13 +157,19 @@ export SURREAL_USER=root SURREAL_PASS=root
 pytest -m integration tests/integration/test_surrealdb_integration.py
 ```
 
-In CI the same suite runs against a SurrealDB container. GitHub `services:`
-entries cannot pass a command, and the SurrealDB image needs `start ...`, so
-the container is launched as a step:
+In CI the same suite runs against a pinned SurrealDB container, once per
+SurrealDB SDK major version the `surrealdb` extra supports
+(`.github/workflows/surrealdb-integration.yml`). GitHub `services:` entries
+cannot pass a command, and the SurrealDB image needs `start ...`, so the
+container is launched as a step:
 
 ```yaml
   surrealdb-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        surrealdb-sdk: ["surrealdb>=2,<3", "surrealdb>=3,<4"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -160,7 +178,7 @@ the container is launched as a step:
 
       - name: Start SurrealDB
         run: |
-          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:latest \
+          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:v4.0.1 \
             start --user root --pass root --bind 0.0.0.0:8000
           for _ in $(seq 1 30); do
             curl -sf http://localhost:8000/health && break
@@ -171,6 +189,7 @@ the container is launched as a step:
         run: |
           pip install -e ".[tools,surrealdb]"
           pip install -r requirements-dev.txt
+          pip install "${{ matrix.surrealdb-sdk }}"
 
       - name: Run SurrealDB integration tests
         env:

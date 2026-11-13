@@ -1,0 +1,20 @@
+interface:
+  inputs:
+    tickets: {type: array, default: ["T-101", "T-102", "T-103", "T-104", "T-105", "T-106"]}
+effects:
+  - name: labels
+    type: loop
+    flow: tree
+    max_concurrency: 2
+    each: {in: input.tickets, as: ticket}
+    body:
+      - name: label
+        type: prompt
+        template: "Label ticket {{ticket}}: bug, feature or question. One word."
+      - name: store
+        type: tool
+        provider: shell
+        params: {command: sleep, args: ["1"], allowed_commands: ["sleep"]}
+  - name: report
+    type: prompt
+    template: "Report the label counts."

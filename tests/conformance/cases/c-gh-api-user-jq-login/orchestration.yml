@@ -1,0 +1,7 @@
+name: c-gh-api-user-jq-login
+effects:
+  - type: tool
+    name: whoami
+    provider: gh
+    params:
+      args: ["api", "user", "--jq", ".login"]

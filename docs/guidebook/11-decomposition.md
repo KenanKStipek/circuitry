@@ -83,7 +83,7 @@ Parts that are planned in parallel, and a merge that puts them in one order.
 
 **Failure.** `on_failure` governs the three real failure paths — the planner failing, an invalid plan, the child execution failing. `route_up`, the default, falls back exactly like the depth ceiling: the original prompt runs on the catch-all band model, the failure is recorded under `meta.decomposition.reason`, and the run lives. **A decomposition attempt can never turn a working run into a failed one.** `fail` propagates like any other effect error, under the effect's own `on_error`. Either way the child's scratch state is discarded whole; nothing partial ever lands at the original path. `respect_explicit` from the routing block covers the fallback too: an effect that pins its own `model:` keeps it when route-up would otherwise substitute one.
 
-**Record.** `meta.decomposition` on the effect node carries the full decision — `{decomposed, outcome, reason, score, threshold, depth, max_depth, plan, chunk_count, yaml, result_path, fallback_model, error}` — whether it decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is absent entirely when the feature never triggered.
+**Record.** `meta.decomposition` on the effect node carries the full decision — `{decomposed, trigger: "score", outcome, reason, score, threshold, depth, max_depth, plan, chunk_count, yaml, result_path, fallback_model, error}` — whether it decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is absent entirely when the feature never triggered. The size trigger (splitting an over-budget prompt into parts, see below) shares this record with `trigger: "size"`.
 
 ## Reading the plans: `--decompose-out`
 
@@ -114,7 +114,38 @@ Decomposition is where the design pays off all at once. The planner can emit a f
 
 **Never reading the plans.** `--decompose-out` costs nothing. The plans are how you learn what the planner thinks your prompts are made of — and where the next library entry comes from.
 
+## The other trigger: size
+
+Score and threshold are a judgement about *difficulty*. "Summarize these 400
+reviews" is not difficult — it scores low, a small model can follow the
+instruction — but it is **big**: the rendered input is bigger than the
+model's context window, and no amount of capability fixes that. That is
+what `runtime.complexity.splitting` is for: a second, independent trigger at
+the same seam, keyed to a token estimate instead of a score, needing no
+`scoring` at all.
+
+When the estimated size of what a prompt is about to send strictly exceeds a
+budget (the effect's own `split.budget_tokens`, or `splitting.models.<model>`/
+`splitting.max_input_tokens`), the runtime slices the template's one largest
+state reference — a list into whole items, a mapping into whole entries, text
+at its own structure — into balanced parts, *generates* (never asks a model
+for) a `loop` running a copy of the prompt over the parts, and merges the
+results back: natively for `text`/array output, through an author-written
+`split.merge.template` reduce prompt otherwise. Deterministic, no planner
+call, same place in the seam, same record (`meta.decomposition`, now
+distinguished by `trigger: "score"`/`"size"`) — and size runs *first*: a part
+is within budget by construction, a planned chunk is not, so checking size
+first means every leaf finally sent fits, whatever the planner does. Each
+part is then an ordinary prompt one level deeper — scored, routed, and
+subject to both triggers again, under the one shared depth counter.
+
+No route-up for size (a bigger model is not a bigger window), so
+`splitting.on_failure` is `run_as_is` or `fail` only. See [Complexity
+Configuration → `splitting`](../complexity-config.md#splitting) for every
+field, the splitting algorithm, and the full failure/merge semantics.
+
 ## See also
 
 - [Complexity Configuration → `decomposition`](../complexity-config.md#decomposition) — every field, error, and the exact `meta.decomposition` record.
+- [Complexity Configuration → `splitting`](../complexity-config.md#splitting) — the size trigger's own fields, algorithm and failure semantics.
 - [`agents/decompose`](../../src/circuitry/curation/agents/decompose.yml) — the planner, as an orchestration you can run.

@@ -228,6 +228,14 @@ pub enum SendError {
     /// target too late to catch at parse time, ...) -- `Display`'s own
     /// text is compared by location, never exactly.
     Other(String),
+    /// [`send_to_sink`]'s own cap: the body (or its declared
+    /// `Content-Length`) is over [`BodySink::max_bytes`] -- `declared`
+    /// is that header's own value when known before any chunk was
+    /// read, `None` when only the running total discovered it.
+    BodyOverCap { declared: Option<usize> },
+    /// [`send_to_sink`]'s own `BodySink::write` failed (never a
+    /// connection problem).
+    Sink(String),
 }
 
 impl std::fmt::Display for SendError {
@@ -245,6 +253,11 @@ impl std::fmt::Display for SendError {
                 )
             }
             SendError::Other(text) => write!(f, "{text}"),
+            SendError::BodyOverCap { declared } => match declared {
+                Some(n) => write!(f, "the response body is {n} bytes, over the cap"),
+                None => write!(f, "the response body is over the cap"),
+            },
+            SendError::Sink(text) => write!(f, "{text}"),
         }
     }
 }
@@ -601,12 +614,176 @@ pub async fn send(
 ) -> Result<RawResponse, SendError> {
     match timeout {
         TimeoutModel::Total(d) => {
-            tokio::time::timeout(d, send_inner(client, target, request, timeout))
+            tokio::time::timeout(d, send_inner(client, target, request, timeout, None, None))
                 .await
                 .unwrap_or(Err(SendError::Timeout))
         }
-        TimeoutModel::PerOperation(_) => send_inner(client, target, request, timeout).await,
+        TimeoutModel::PerOperation(_) => {
+            send_inner(client, target, request, timeout, None, None).await
+        }
     }
+}
+
+/// Like [`send`], but never buffers more than *max_body_bytes* bytes of
+/// the response body -- `http.client`'s own `resp.read(amt)` (urllib),
+/// which returns at most *amt* bytes without raising on a longer body.
+/// A body longer than the cap is silently truncated, never an error --
+/// used by [`crate::systemone`], whose own request already caps how
+/// much state it will send; the response gets the same cap, so a
+/// misbehaving server can't make this allocate without bound.
+/// [`send_to_sink`] is the other shape, for a caller that wants an
+/// error (and nothing kept) instead.
+pub async fn send_capped(
+    client: &HttpClient,
+    target: &ConnectTarget,
+    request: &RawRequest,
+    timeout: TimeoutModel,
+    max_body_bytes: usize,
+) -> Result<RawResponse, SendError> {
+    match timeout {
+        TimeoutModel::Total(d) => tokio::time::timeout(
+            d,
+            send_inner(client, target, request, timeout, None, Some(max_body_bytes)),
+        )
+        .await
+        .unwrap_or(Err(SendError::Timeout)),
+        TimeoutModel::PerOperation(_) => {
+            send_inner(client, target, request, timeout, None, Some(max_body_bytes)).await
+        }
+    }
+}
+
+/// Like [`send`], but calls *on_chunk* with each piece of the response
+/// body as it arrives off the wire, in addition to returning the
+/// complete response exactly as [`send`] would -- electricity's own
+/// in-process equivalent of a streaming `curl` read: the body is never
+/// held back for a caller that wants to drive progress off it, but
+/// the authoritative [`RawResponse`] is still assembled in full, the
+/// same way, so a caller that parses the complete body for its real
+/// result (never the incremental chunks) can't drift from [`send`]'s
+/// own non-streaming callers.
+/// A streaming call's own chunk-arrived callback -- a type alias so
+/// [`send_inner`]'s own parameter list doesn't trip clippy's
+/// `type_complexity` lint.
+type OnChunk<'a> = &'a mut dyn FnMut(&[u8]);
+
+pub async fn send_streaming(
+    client: &HttpClient,
+    target: &ConnectTarget,
+    request: &RawRequest,
+    timeout: TimeoutModel,
+    on_chunk: OnChunk<'_>,
+) -> Result<RawResponse, SendError> {
+    match timeout {
+        TimeoutModel::Total(d) => tokio::time::timeout(
+            d,
+            send_inner(client, target, request, timeout, Some(on_chunk), None),
+        )
+        .await
+        .unwrap_or(Err(SendError::Timeout)),
+        TimeoutModel::PerOperation(_) => {
+            send_inner(client, target, request, timeout, Some(on_chunk), None).await
+        }
+    }
+}
+
+/// [`send_to_sink`]'s own destination -- streamed straight to its real
+/// destination (a file, for `http.rs`'s own `save_to`) as each chunk
+/// arrives, rather than kept in [`RawResponse::body`] like [`OnChunk`]'s
+/// callers get; *max_bytes* is enforced as an error -- never
+/// [`send_capped`]'s silent truncation -- matching `plugins/
+/// http.py::_save_body`'s own `_SAVE_CHUNK_BYTES` loop.
+pub struct BodySink<'a> {
+    pub max_bytes: usize,
+    pub write: &'a mut dyn FnMut(&[u8]) -> Result<(), String>,
+}
+
+/// Like [`send`], but every chunk goes straight to *sink*'s own
+/// `write` as it arrives, and [`RawResponse::body`] is always empty
+/// once this returns successfully -- built on [`send_inner`]'s own
+/// *max_body_bytes* cap (one byte past *sink*'s own `max_bytes`, so
+/// every chunk this function's own *on_chunk* wrapper ever sees is
+/// still the full, untruncated chunk) rather than a parallel body
+/// loop of its own. `Err(SendError::BodyOverCap { declared })` once a
+/// chunk would push *sink* over its own `max_bytes` -- `declared` is
+/// the response's own `Content-Length` when the server sent one,
+/// `None` otherwise -- with nothing written to *sink* for that chunk
+/// or after (whatever it already wrote for earlier chunks is the
+/// caller's own temporary file to delete, exactly as `_save_body`
+/// leaves for its own `finally` block to unlink). `Err(SendError::
+/// Sink(_))` when `write` itself fails (e.g. a disk error) --
+/// `http.rs` maps this the same way as a body-read failure, never a
+/// hard refusal, so the effect's own retries apply.
+pub async fn send_to_sink(
+    client: &HttpClient,
+    target: &ConnectTarget,
+    request: &RawRequest,
+    timeout: TimeoutModel,
+    sink: BodySink<'_>,
+) -> Result<RawResponse, SendError> {
+    let BodySink { max_bytes, write } = sink;
+    let mut total_written: usize = 0;
+    let mut over_cap = false;
+    let mut write_error: Option<String> = None;
+    let mut on_chunk = |chunk: &[u8]| {
+        if over_cap || write_error.is_some() {
+            return;
+        }
+        if total_written.saturating_add(chunk.len()) > max_bytes {
+            over_cap = true;
+            return;
+        }
+        if let Err(text) = write(chunk) {
+            write_error = Some(text);
+            return;
+        }
+        total_written += chunk.len();
+    };
+    // One byte past *max_bytes*, not *max_bytes* itself -- the chunk
+    // that would cross *on_chunk*'s own cap is always still the full,
+    // un-truncated chunk `on_chunk` sees above, since [`send_inner`]'s
+    // own loop can only ever break on *that same* chunk, never one
+    // chunk earlier.
+    let result = match timeout {
+        TimeoutModel::Total(d) => tokio::time::timeout(
+            d,
+            send_inner(
+                client,
+                target,
+                request,
+                timeout,
+                Some(&mut on_chunk),
+                Some(max_bytes.saturating_add(1)),
+            ),
+        )
+        .await
+        .unwrap_or(Err(SendError::Timeout)),
+        TimeoutModel::PerOperation(_) => {
+            send_inner(
+                client,
+                target,
+                request,
+                timeout,
+                Some(&mut on_chunk),
+                Some(max_bytes.saturating_add(1)),
+            )
+            .await
+        }
+    };
+    if let Some(text) = write_error {
+        return Err(SendError::Sink(text));
+    }
+    let mut response = result?;
+    if over_cap {
+        let declared = response
+            .headers
+            .iter()
+            .find(|(name, _)| name == "content-length")
+            .and_then(|(_, value)| value.parse().ok());
+        return Err(SendError::BodyOverCap { declared });
+    }
+    response.body.clear();
+    Ok(response)
 }
 
 async fn send_inner(
@@ -614,6 +791,8 @@ async fn send_inner(
     target: &ConnectTarget,
     request: &RawRequest,
     timeout: TimeoutModel,
+    mut on_chunk: Option<OnChunk<'_>>,
+    max_body_bytes: Option<usize>,
 ) -> Result<RawResponse, SendError> {
     let (connect_deadline, response_deadline, body_deadline) = match timeout {
         TimeoutModel::PerOperation(d) => (d, d, d),
@@ -737,6 +916,11 @@ async fn send_inner(
     // instead and lets the body stand as empty (matching Python's own
     // discarded-partial-read exactly, never the bytes read so far).
     let mut body_error: Option<SendError> = None;
+    // Set once *max_body_bytes* is reached -- `http.client`'s own
+    // `resp.read(amt)` just stops there without raising, so a
+    // `Content-Length` longer than the cap must not read as
+    // [`SendError::IncompleteRead`] below.
+    let mut capped = false;
     loop {
         let frame = match tokio::time::timeout(body_deadline, incoming.frame()).await {
             Ok(frame) => frame,
@@ -749,7 +933,21 @@ async fn send_inner(
             None => break,
             Some(Ok(frame)) => {
                 if let Some(chunk) = frame.data_ref() {
-                    body_bytes.extend_from_slice(chunk);
+                    if let Some(on_chunk) = on_chunk.as_mut() {
+                        on_chunk(chunk);
+                    }
+                    match max_body_bytes {
+                        Some(cap) => {
+                            let remaining = cap.saturating_sub(body_bytes.len());
+                            let take = remaining.min(chunk.len());
+                            body_bytes.extend_from_slice(&chunk[..take]);
+                            if body_bytes.len() >= cap {
+                                capped = true;
+                                break;
+                            }
+                        }
+                        None => body_bytes.extend_from_slice(chunk),
+                    }
                 }
             }
             Some(Err(err)) => {
@@ -773,7 +971,7 @@ async fn send_inner(
     // §6.4.1/§8.6: a response in any of these classes never has a
     // body even when `Content-Length` is still present).
     let never_has_a_body = request.method == "HEAD" || matches!(status, 100..=199 | 204 | 304);
-    if body_error.is_none() {
+    if body_error.is_none() && !capped {
         if let Some(expected) = content_length {
             if !never_has_a_body && body_bytes.len() < expected {
                 body_error = Some(SendError::IncompleteRead {

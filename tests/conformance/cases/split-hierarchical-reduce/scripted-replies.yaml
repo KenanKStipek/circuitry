@@ -1,0 +1,10 @@
+prime.big.parts.iter_0.map:
+  - text: "part0 short reply text"
+prime.big.parts.iter_1.map:
+  - text: "part1 short reply text"
+prime.big.merge.parts_.iter_0.map:
+  - text: "nested0"
+prime.big.merge.parts_.iter_1.map:
+  - text: "nested1"
+prime.big.merge.merge_:
+  - text: "final merged"

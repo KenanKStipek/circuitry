@@ -1,0 +1,12 @@
+name: split-custom-separator
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    split:
+      separator: " | "
+    template: "Summarize: {{input.doc}}"

@@ -31,6 +31,7 @@ Top-level fields of an orchestration YAML file:
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
 | `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
 | `prompts` | object | no | — | Declared prompts — named text any template in the document can splice in with `{{> name}}`. See [Prompt composition](#prompt-composition) |
+| `label` | string | no | — | Mustache template for this run's label, rendered once when the run starts, against `{{input.*}}` only — see [Labelling a Run](#labelling-a-run) |
 
 Other top-level keys: `description` (free text for readers of the file) and two that feed the run's configuration, `runtime:` and `plugins:` (below). Any other key is ignored, and `cof check` says so — see [What `cof check` and `cof run` reject](#what-cof-check-and-cof-run-reject). How much of `runtime:` and `plugins:` applies depends on how the document reached `cof`:
 
@@ -109,6 +110,19 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the final pass's chain survives into `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier pass's own attempts, and its classification, are gone once a retry starts a fresh one |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
+| `split` | object | no | — | `{enabled?: bool, budget_tokens?: int, max_parts?: int, separator?: string, merge?: {template: string}}` — the size trigger's per-effect overlay (see [Complexity Configuration](./complexity-config.md#splitting)). `budget_tokens` splits this effect even with `runtime.complexity.splitting.enabled: false`; `enabled: false` always opts it out. `merge.template` is required for any `prompt_type` other than `text` or an array (`array`, or `json` with an array schema), whose parts the runtime joins/concatenates natively |
+
+When the rendered input exceeds its token budget, the runtime replaces the
+single call with a deterministic fan-out — run through the exact same
+validate/execute path a complexity-decomposed chunk plan does, merged back
+at this effect's own path. The attempt lands at `meta.decomposition`, the
+same key the score trigger (`runtime.complexity.decomposition`) uses,
+distinguished by `trigger: "score"` or `"size"`: a size record carries
+`{decomposed, trigger, estimated_tokens, budget, depth, max_depth, merge,
+split: {path, kind, parts, sizes}, chunk_count, result_path, yaml, outcome,
+reason, error}` and never has `plan`, `fallback_model` or `threshold`. See
+[Complexity Configuration](./complexity-config.md#splitting) for the full
+behaviour and failure semantics.
 
 **Example — text output:**
 ```yaml
@@ -190,6 +204,37 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 
 A slow model needs a longer adapter timeout, `runtime.adapters.ollama.timeout_seconds: 1800` in config: a prompt's `timeout_ms` is capped by the timeout of whichever adapter the attempt actually dispatches to, so it can only shorten the wait — that's `ollama`'s own configured timeout here even when `ollama` isn't the run's default adapter, as long as this prompt's `provider:` (or a fallback) names it. Write `ref` with triple braces (`{{{...}}}`): double braces HTML-escape the value, which breaks a URL with `&` in its query string.
 
+#### Streaming adapters and a prompt's live progress
+
+| adapter | protocol | exact input tokens | exact output tokens |
+|---|---|---|---|
+| `ollama` | `stream: true`, newline-delimited JSON; each line carries a `response` (or `message.content`) delta, the last one `done: true` with `prompt_eval_count`, `eval_count`, `done_reason` | at the end | at the end |
+| the OpenAI-compatible family (`groq`, `openrouter`, ..., see the adapter table above), `openai` | `stream: true` plus `stream_options: {"include_usage": true}`, server-sent events; `choices[0].delta.content` per event, `usage` in the final event, `finish_reason` on the last choice | at the end | at the end |
+| `anthropic` | `stream: true`, server-sent events; `message_start` carries `usage.input_tokens`, `content_block_delta` the text, `message_delta` `usage.output_tokens` and `stop_reason` | at the start | at the end |
+| `litellm`, `replicate`, `watsonx`, `cyberdiner`, `pi`, `claude_code`, `host_claude` | unchanged: one complete reply | — | — |
+| `scripted` | a reply may carry `chunks: [...]`; each chunk is one delta | as the reply says | as the reply says |
+
+Streaming is on by default wherever the table above says so; `runtime.adapters.<name>.stream: false` turns it off for one adapter (a server that misbehaves on a streaming request) and restores that adapter's old, non-streamed request body. `cof check` rejects a non-boolean value. A streamed reply is assembled from its deltas and then handled exactly like a non-streamed one: the text, `tokens_sent`, `tokens_received`, `finish_reason`, the warnings and the error texts are the same either way. A stream that drops or times out fails the attempt with the same classification a dropped or timed-out non-streamed call gets, and partial text is never recorded.
+
+While a prompt effect's own attempt runs — streaming or not — its node carries `meta.live`, published through `Store.set` the same way the `agent` tool's own live progress is (above), removed once the attempt ends (success, failure or cancellation) so a finished node is byte-identical to one without this feature:
+
+| key | meaning |
+|---|---|
+| `v` | schema version, `1` |
+| `attempt` | this attempt's index, `0` for the first — counts every `(adapter, model)` this execution tries, retries included |
+| `adapter`, `model` | what this attempt is talking to |
+| `started_at`, `updated_at` | ISO timestamps |
+| `streaming` | whether this adapter streams; `false` means only `tokens_sent_estimate` and the clock are live |
+| `first_token_at` | when the first delta arrived, `null` before it |
+| `tokens_sent` | the provider's own input count once it has reported one (Anthropic reports it at the start), else `null` |
+| `tokens_sent_estimate` | `ceil(prompt_chars / 4)`, the complexity scorer's own estimate, always present |
+| `tokens_received` | the provider's own output count once reported, else `null` |
+| `tokens_received_estimate` | one per delta received so far — a running estimate, never the final figure |
+| `chars_received` | characters of reply text received so far |
+| `tokens_per_second` | `tokens_received_estimate` over the time since `first_token_at`, `null` until there have been at least two deltas and 500ms have passed since the first one (otherwise the figure is dividing by noise) |
+
+Published once when the attempt starts, once on the first delta, then at most once a second, with a last write when the attempt ends that removes the key — the same cadence and signal safety the `agent` tool's own live publisher already has, reused as is. `--live-state`'s own coalescing applies on top. A retried attempt starts a fresh record, `attempt` one higher. A dry run writes nothing. See "Watching a Run" below for the matching `--events` `progress` line.
+
 #### Recording the prompt text (`runtime.state.prompt_sent`)
 
 Every `prompt` effect records the text it sent in `meta.prompt_sent`, with no cap: a document that sends many large prompts keeps every one of them in its saved state (`--out`, `--live-state`, `--resume`, persistence). `runtime.state.prompt_sent` decides what that one field holds. Like `record_children`, it sits under `runtime.state`, so it applies however the document arrives (config, or the document's own `runtime:` block). A document's `runtime.state` block replaces the config's whole `state` block, so a host cannot impose `prompt_sent` on a document that sets any `runtime.state` key; a document that wants it together with `record_children` sets both.
@@ -262,7 +307,7 @@ A config can give an adapter a name of its own, with settings of its own: a diff
 }}}
 ```
 
-- **The target.** `adapter` names any adapter `cof list --extensions` shows, except `host_claude` (supplied at run time by `circuitry-mcp`, never built from config) — normalised with `.strip().lower()`. Every other key is one of the target's own settings (`base_url`, `default_model`, `timeout_seconds`, and the target's specific keys — `max_tokens`, `api_key_env` where supported, `endpoint`/`api_version`, `account_id`, `api_base`, `replies_file`, cyberdiner's own keys, and the CLI keys above: `binary`, `thinking` for `pi`, `unset_env`, `extra_args`, `env`). An alias starts from nothing: it does not inherit the target's own `runtime.adapters.<target>` entry, and it never changes that entry or another alias's. Keys the target doesn't read are ignored, exactly as on the target's own block.
+- **The target.** `adapter` names any adapter `cof list --extensions` shows, except `host_claude` (supplied at run time by `circuitry-mcp`, never built from config) — normalised with `.strip().lower()`. Every other key is one of the target's own settings (`base_url`, `default_model`, `timeout_seconds`, `stream`, and the target's specific keys — `max_tokens`, `api_key_env` where supported, `endpoint`/`api_version`, `account_id`, `api_base`, `replies_file`, cyberdiner's own keys, and the CLI keys above: `binary`, `thinking` for `pi`, `unset_env`, `extra_args`, `env`). An alias starts from nothing: it does not inherit the target's own `runtime.adapters.<target>` entry, and it never changes that entry or another alias's. Keys the target doesn't read are ignored, exactly as on the target's own block.
 - **Credentials.** An alias uses its target's credential: an alias of `groq` reads `GROQ_API_KEY`. A keyless target (`lmstudio`, `vllm`, `llamacpp`) needs none — several local OpenAI-compatible endpoints in one config need no key at all between them. `api_key_env` works only where the target already accepts it (`nvidia-nim`, `tgi`).
 - **Selecting it.** Anywhere an effect can name an adapter: `provider: claude_alt`, `provider: "claude_alt:claude-sonnet-4-5"`, `provider_fallbacks`, a document's `adapter:`, `default_adapter`, and a profile's `adapter:`/`provider:` overrides. `meta.adapter` and `fallback_attempts[].adapter` record the alias's own name. `enabled_adapters` lists an alias by its own name, like any adapter.
 - **The name it reports.** Warnings, the preflight label (`adapter:<alias>`, carrying the target's `check()` result, e.g. `missing ['env:GROQ_API_KEY']`), and `effective_settings.sources["adapters.<alias>.timeout_seconds"]` all name the alias. A hint that tells you which config key to set names the alias's own block (ollama's unreachable hint becomes `runtime.adapters.<alias>.base_url`). The wire-protocol label in a request failure stays the target's (`OpenAI-compatible request failed …`). A built-in adapter sees no change. For `pi`/`claude_code` specifically, the child's environment is, in order: the caller's environment, minus the always-removed parent-session variables, minus the alias's `unset_env`, then its `env`. Two aliases in one run each give their own child its own `env`; cof's own environment is never changed.
@@ -1070,9 +1115,6 @@ set a literal.
   evaluated again on [`--resume`](#resuming-a-run-cof-run---resume), like any
   other finished effect.
 
-electricity does not run the `cel` tool yet: a document that names it is
-refused with the preview message.
-
 #### Secrets in `http` headers and a subprocess tool's `env`
 
 A credential belongs in host configuration, not in a document's data flow.
@@ -1160,11 +1202,12 @@ host `env` (`runtime.plugins.<name>.env`, see
   document's own `runtime.secrets`, which wins over the host's) or
   `not defined` (`Secrets: billing (host), github (document)`; `--json` adds
   `secret_sources`, by name).
-- **electricity** resolves no secret yet: it refuses a document whose tool
-  params name one, and a run whose tool's host `env` holds one, with the
-  preview message. A host `env` secret for a tool that only a `use` child or
-  a generated plan names fails that effect with the preview message
-  instead, which `on_error` can absorb.
+- **electricity** resolves `runtime.secrets` and `{secret: ...}` the same
+  way: the Keychain, a command or an environment variable, at dispatch, with
+  the same error texts, caching and trust rule. A limited document (a
+  `use: inline` child, or one resolved through a limited parent) that names
+  one, including through a rendered `params_json` only that effect's own
+  dispatch can see, fails the same way `cof check`/`cof run` do.
 
 **Redirects (`http`'s `redirects`).** Python's HTTP client follows a
 redirect with the same headers, which would send a bearer token to whatever
@@ -1241,9 +1284,13 @@ bytes, never decoded, and never kept in state.
   a file, unless the host sets `trust_orchestration_runtime` (which trusts
   every document, so a library entry may then name `save_to` and its
   consent asks about `network` only).
-- **electricity** does not save a body yet: a document whose `http` params
-  name `save_to` is refused with the preview message, and one that
-  `params_json` adds fails that effect with it, before any request.
+- **electricity** saves a response body the same way: `within`, `overwrite`
+  and `max_bytes` with the same texts, streamed to a temporary file next to
+  the target and moved into place only once complete, so a failure
+  (including over `max_bytes`) leaves no file. A limited document's
+  `save_to`/`within` fails at dispatch the same way `cof check`/`cof run`
+  do, including through a rendered `params_json` only that effect's own
+  dispatch can see.
 
 #### Recording parsed stdout (`runtime.state.parsed_stdout`)
 
@@ -1770,6 +1817,41 @@ only after each turn, and `meta.raw` gains `context_tokens`,
 `meta.live` and `meta.raw`, is the effect's own `model` param or, when it
 sets none, the model the CLI reports. See
 [`docs/plugins/agent.md`](./plugins/agent.md#live-progress-while-the-session-runs).
+
+#### A running subprocess tool's live output
+
+While `shell`, every plugin built on the shared subprocess helper
+(`awk`, `gh`, `imagemagick`, and the rest), or `ffmpeg` is still running
+— not every plugin that runs a program (`gpg`, `pdf_render`,
+`diff_patch` and `comfyui` don't publish this); not the `agent` tool,
+which has its own `meta.live` above; not `http`, which has no process —
+its node carries:
+
+```json
+{"v": 1, "started_at": "...", "updated_at": "...",
+ "stdout_tail": "...", "stderr_tail": "...", "stdout_bytes": 0, "stderr_bytes": 0}
+```
+
+`stdout_tail`/`stderr_tail` are each the last 20 lines read so far on
+that stream — the current line counts as the last one of them and shows
+as soon as it has been read, even before a newline ends it — cut, by
+dropping whole lines from the front (never a fragment of one), to stay
+within 4 KiB of UTF-8; a single line longer than that is itself cut to
+its own last 4 KiB first. Decoded separately from, and more loosely
+than, the final `meta.stdout`/`meta.stderr` decode, which this feature
+never touches: invalid bytes are replaced (U+FFFD) rather than failing
+the tail. `stdout_bytes`/`stderr_bytes` are the raw bytes read on each
+stream so far, before that decode — not just the tail, and not the
+decoded text's own length. Each tail goes through the same secret
+scrubbing as the rest of the node, plus, for a secret whose resolved
+value spans more than one line, dropping any tail line that still
+carries a whole line of it (the tail's own bound can otherwise keep part
+of a multi-line secret without ever matching it whole). Published
+through `Store.set` at most once a second, the same way the `agent`
+tool's own `meta.live` is, plus one more publish once output stops for a
+second; removed before the node's final write, so a finished node is
+byte-identical to one without this feature. `--events` gains nothing
+from it.
 
 ---
 
@@ -2326,6 +2408,35 @@ outer binding of the same name.
 
 ---
 
+## Labelling a Run
+
+A run can carry a label: a top-level `label:` Mustache template in the document, rendered once when the run starts, against a context holding only this run's resolved `input.*` — nothing has run yet. `--label "TEXT"` on `cof run` and `electricity run` is literal text, never rendered, that wins over the document's own:
+
+```yaml
+label: "ticket {{input.ticket}}"
+interface:
+  inputs:
+    ticket: {type: string, required: true}
+effects:
+  - type: tool
+    name: t
+    provider: json
+    params: {input: "1"}
+```
+
+```bash
+cof run triage.yml -e ticket=412                 # label: "ticket 412"
+cof run triage.yml -e ticket=412 --label "hotfix" # --label wins: "hotfix"
+```
+
+Either way, the result is cleaned the same way before it is shown anywhere: every whitespace run (line breaks and tabs included) collapses to one space; every control character and escape sequence (an ANSI colour code, an OSC title sequence, ...) is dropped; the result is trimmed and cut at 64 Unicode characters, with nothing appended; an empty result after cleaning means no label. A render failure — a malformed template that reached a run without `cof check` catching it first (below) — prints one warning on stderr and the run continues with no label, the same as every other render failure.
+
+`cof check` rejects a `label:` that isn't a string, and a `label:` whose Mustache syntax doesn't parse, both naming `label` — the same way it rejects every other malformed template, before a run ever starts. `cof run` itself only enforces the type (a non-string `label:` is a structural error, same as any other wrong-typed key); a syntax error that reaches `cof run` anyway degrades to the one warning above instead of failing the run, since a label is display text, not control flow.
+
+Where it shows up: `--events`' `run_start` line gains a `label` field, right after `orchestration`; `runtime.last_run.label` appears in `--out` and `--live-state`. Both are present **only** when the run actually has one, so an existing `--events`/state file with no label is unchanged. `cof run --resume` re-renders the document's label from the resumed run's own inputs, unless `--label` is given on the resuming invocation. Only the root document's `label:` counts — a `use` child's own `label:` is valid in its own file (`cof check` on it alone applies the same rules) but is never read, rendered, or surfaced when that document runs as a child.
+
+---
+
 ## Watching a Run (`cof run --events`)
 
 `cof run --events <file>` (also on `cof run-library`) writes a JSONL stream of
@@ -2338,7 +2449,7 @@ coincide with a coalesced write. `--events` reports every one of them the
 instant it starts, from whichever worker thread runs it:
 
 ```json
-{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
+{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","config":"config.json","engine":"cof 0.2.0","pid":4242}
 {"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
@@ -2351,7 +2462,9 @@ instant it starts, from whichever worker thread runs it:
 | `v` | Format version, `1`. |
 | `seq` | Strictly increasing in file order. |
 | `ts` | Wall-clock UTC, millisecond precision. |
-| `ev` | `run_start`, `dispatch`, `start`, `end`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report` existed still reads the rest of the stream fine. |
+| `ev` | `run_start`, `dispatch`, `start`, `end`, `progress`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so an older reader built before `report`/`progress` existed still reads the rest of the stream fine. |
+| `config` | `run_start` only, between `orchestration` and `engine` — after `label` when the run has one. The `--config` file's name (its last path component), the same form `orchestration` already uses -- `--config some/dir/config.json` writes `"config.json"`, never the directory. `null` when the run was given no `--config` (config discovery can merge more than one file, so there is no single path to name). Always present. |
+| `label` | `run_start` only, right after `orchestration`, present only when the run has one — see [Labelling a Run](#labelling-a-run). Absent (never `null`) with no label. |
 | `id` | Unique per effect *instance* — a pass or a branch each gets its own, so `start`/`end` pair up even when several instances share a path (an unnamed loop body). An `end` whose `start` was not seen on this stream (a double-fire; the start predates this `--events` writer, which cannot happen for `cof` itself but is a rule any reader must handle) carries `id: null`, with no `ms`. |
 | `path` | The absolute state path, as in `--live-state`. |
 | `dispatch` | Sent once by a tree loop or tree `dynamic` before its branches start — the existing `concurrent_dispatch` callback, composed with (never replaced by) this stream. `branches` is the true branch count: the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces — every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)`. A 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. Its `path` is always the absolute path its own `start`/`end` events would use — for a named loop, its own child path (`prime.outer.iter_0.inner` for a tree loop `inner` nested inside a tree loop `outer`'s pass `iter_0`); for an **unnamed** tree loop, which has no name of its own to carry a path, the absolute path of whichever container directly encloses its passes instead (the document root `prime`, a named ancestor, or a named loop's own pass node `prime.outer.iter_0`). Two unnamed tree loops dispatching one after another, at the same nesting depth, report that same path. A tree loop inside a `use` child's own document composes the same way: its `path` nests under the `use` effect's own absolute path exactly like its `start`/`end` events do (`prime.sub.fan` for a loop `fan` at the top of a child run as `sub`), never the child's own unnamespaced `prime.fan`. |
@@ -2359,6 +2472,7 @@ instant it starts, from whichever worker thread runs it:
 | `error` | Present only when `ok` is false: the first 500 characters of the effect's (or run's) error text, exactly as it appears in state. |
 | `signal` | On `run_end` after an interruption: `SIGINT`, `SIGTERM` or `SIGHUP`. |
 | `level`, `message`, `data` | On `report` only: the [`report`](#report) effect's own rendered `level`/`message`/`data`. `data` is omitted when the report has none; when its compact JSON exceeds 16 KiB, `data_truncated` (that size, in bytes) replaces it instead — a named report still keeps the full value in the shadow state regardless. `report` never carries `id`: it never pairs with a `start`/`end`, since it fires neither — it is never counted as work. `path` is the report's own state path when it is named, otherwise the path of the container it runs in, the same fallback `dispatch`'s own `path` uses for an unnamed loop/dynamic. |
+| `ms`, `tokens_received_estimate`, `chars_received`, `tokens_sent`, `tokens_sent_estimate`, `first_token_ms` | On `progress` only: a streaming [`prompt`](#streaming-adapters-and-a-prompts-live-progress) effect's own throttled update, the same figures `meta.live` carries (minus its timestamps and version). `id` is the open `start` instance for `path`, `null` when there is none. `ms` is time since that `start`; `first_token_ms` is `ms` at the first `progress` line for the instance's *current attempt*, held fixed for that attempt and reset when the next attempt (a retry) delivers its own first delta. Emitted only on a publish a delta caused — never on the write that starts or clears `meta.live` — so a non-streaming adapter's event stream is unchanged. |
 
 `run_start` is always the first line. `run_end` is always the last, written
 only after `--live-state`'s own final write — seeing it means that final
@@ -2380,6 +2494,17 @@ from its saved state, instead of starting over. This is a different,
 opt-in behavior from plain `--state`/persistence carryover (above and
 [Loop Iteration Paths](#loop-iteration-paths)), which only seeds a run's
 starting state and reruns every effect regardless of what already finished.
+
+`electricity run` has the same `--state <file> --resume <anything>` and
+`--force` flags, with this section's own skip-and-continue rules applied
+the same way (everything below, `resume: restart` included) — a state
+file either engine wrote resumes on the other. `--resume last`/a run-id
+(the other two rows of the table below) aren't supported: electricity has
+no `--last` stash and `runtime.persistence` stays refused on it, so
+`--resume` always needs `--state <file>` naming the saved state directly—
+given without it, electricity refuses the same way cof's own safety checks
+do (before anything runs, writing no state, exit 1). electricity's own
+`--last` stash is tracked separately (#760).
 
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An
@@ -2492,8 +2617,11 @@ effects after it in the same chain rerun, as after any effect that did not
 resume whole. `resume: continue` is the default and the behaviour described
 above. Only `dynamic` and `use` take the key: `cof check` rejects it on any
 other effect type and rejects any value but `continue` and `restart`.
-electricity has no `--resume`; it checks the key the same way and otherwise
-ignores it.
+electricity checks the key the same way cof does and, since electricity's
+own `--resume` exists (above), honors it too: `resume: restart` runs a
+`use` fresh the same way; on a plain `dynamic`, electricity still only
+checks the key, resuming as `continue` regardless of the value (a
+documented, narrower gap).
 
 **Where the saved state comes from.** `--resume` needs a saved state that
 records each effect's `meta.completed_at`/`meta.error` and

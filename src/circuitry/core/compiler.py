@@ -29,6 +29,8 @@ from .prompt import (
     PromptDefinition,
     PromptType,
     RetryPolicyDef,
+    SplitDef,
+    SplitMergeDef,
 )
 from .prompt_compose import (
     PromptCompositionError,
@@ -75,7 +77,7 @@ EffectDef = (
 _YIELD_FORBIDDEN_KEYS = (
     "prompt_type", "schema", "model", "provider", "provider_fallbacks",
     "params", "retries", "timeout_ms", "deterministic", "assets", "group",
-    "messages",
+    "messages", "split",
 )
 
 _NAME_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -2181,6 +2183,38 @@ def _compile_prompt(
     group_raw = effect.get("group")
     group = group_raw.strip() if isinstance(group_raw, str) and group_raw.strip() else None
 
+    # split: the size trigger's per-effect overlay (#672). cof check's own
+    # schema already enforces the block's shape; this just reads it through.
+    split_raw = effect.get("split")
+    split_def: SplitDef | None = None
+    if isinstance(split_raw, dict):
+        merge_def: SplitMergeDef | None = None
+        merge_raw = split_raw.get("merge")
+        if isinstance(merge_raw, dict) and isinstance(merge_raw.get("template"), str):
+            merge_def = SplitMergeDef(template=merge_raw["template"])
+        enabled_raw = split_raw.get("enabled")
+        budget_raw = split_raw.get("budget_tokens")
+        max_parts_raw = split_raw.get("max_parts")
+        split_def = SplitDef(
+            enabled=enabled_raw if isinstance(enabled_raw, bool) else None,
+            budget_tokens=(
+                int(budget_raw)
+                if isinstance(budget_raw, (int, float)) and not isinstance(budget_raw, bool)
+                else None
+            ),
+            max_parts=(
+                int(max_parts_raw)
+                if isinstance(max_parts_raw, (int, float)) and not isinstance(max_parts_raw, bool)
+                else None
+            ),
+            separator=(
+                split_raw.get("separator")
+                if isinstance(split_raw.get("separator"), str)
+                else None
+            ),
+            merge=merge_def,
+        )
+
     return PromptDefinition(
         name=name,
         template=template,
@@ -2200,4 +2234,5 @@ def _compile_prompt(
         on_error=on_error,
         description=description,
         group=group,
+        split=split_def,
     )

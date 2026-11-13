@@ -1,0 +1,18 @@
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 500
+    reason: Internal Server Error
+    headers:
+      Content-Type: application/json
+    body: '{"error": "try again"}'
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"model":"typesafe-1","usage":{"input_tokens":4,"output_tokens":2},"answers":{"risky":{"type":"noul","noul":0.3,"confidence":0.6}}}'

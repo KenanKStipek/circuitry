@@ -1,0 +1,11 @@
+name: stream-use-child-progress
+adapter: scripted
+model: test
+effects:
+  - type: use
+    name: sub
+    inline: |
+      effects:
+        - type: prompt
+          name: greeting
+          template: "say hello"

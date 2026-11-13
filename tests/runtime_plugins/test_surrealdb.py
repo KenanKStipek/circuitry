@@ -72,6 +72,55 @@ def _install_fake_surrealdb(
     return holder
 
 
+class _FakeBuilder:
+    """Mimics SDK 3.x's builder: nothing runs until ``.execute()``."""
+
+    def __init__(self, run: Callable[[], Any]) -> None:
+        self._run = run
+        self.executed = False
+
+    def execute(self) -> Any:
+        self.executed = True
+        return self._run()
+
+
+class _FakeSurrealBuilderClient(_FakeSurrealClient):
+    """SDK 3.x shape: ``query()`` hands back a builder; the statement is only
+    recorded once ``.execute()`` runs it, so a regression to a bare
+    ``self._client.query(...)`` call (never executed) shows up as a missing
+    entry in ``queries`` instead of passing silently.
+    """
+
+    def __init__(self, url: str) -> None:
+        super().__init__(url)
+        self.builders: list[_FakeBuilder] = []
+
+    def query(self, sql: str, variables: dict[str, Any] | None = None) -> _FakeBuilder:
+        def _run() -> list[Any]:
+            self.queries.append((sql, variables))
+            return [[]]
+
+        builder = _FakeBuilder(_run)
+        self.builders.append(builder)
+        return builder
+
+
+def _install_fake_builder_surrealdb(
+    monkeypatch: pytest.MonkeyPatch,
+) -> dict[str, _FakeSurrealBuilderClient]:
+    fake_mod = types.ModuleType("surrealdb")
+    holder: dict[str, _FakeSurrealBuilderClient] = {}
+
+    def make_client(url: str) -> _FakeSurrealBuilderClient:
+        client = _FakeSurrealBuilderClient(url)
+        holder["c"] = client
+        return client
+
+    fake_mod.Surreal = make_client  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "surrealdb", fake_mod)
+    return holder
+
+
 def _make_context(
     tmp_path: Path, *, run_id: str = "run-1", cfg: dict[str, Any] | None = None
 ) -> PluginContext:
@@ -184,6 +233,33 @@ def test_lifecycle_round_trip_writes_run_and_effect(
     assert updates[0][1]["status"] == "success"
     assert updates[0][1]["run_id"] == "run-1"
     assert client.closed is True
+
+
+def test_lifecycle_round_trip_executes_builder_style_query(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    holder = _install_fake_builder_surrealdb(monkeypatch)
+    plugin = surrealdb_mod.plugin()
+    ctx = _make_context(tmp_path)
+
+    plugin.on_run_start(state={"input": {"user": "Ada"}}, context=ctx)
+    plugin.on_effect_complete(
+        state={},
+        context=ctx,
+        effect_path="prime.greet",
+        effect_result={"value": "hello", "meta": {}},
+    )
+    plugin.on_run_success(state={}, context=ctx)
+
+    client = holder["c"]
+    assert client.builders, "query() never built a builder"
+    assert all(builder.executed for builder in client.builders)
+
+    queries = [q[0] for q in client.queries]
+    assert any("DEFINE TABLE IF NOT EXISTS runs" in q for q in queries)
+    assert any(q.startswith("CREATE runs CONTENT") for q in queries)
+    assert any(q.startswith("CREATE effects CONTENT") for q in queries)
+    assert any(q.startswith("UPDATE runs SET") for q in queries)
 
 
 def test_does_not_implement_on_report() -> None:

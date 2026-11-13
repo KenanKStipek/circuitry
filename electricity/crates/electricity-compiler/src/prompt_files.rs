@@ -293,7 +293,7 @@ pub fn is_dispatch_file(value: &Value) -> bool {
 
 /// `within: {from: input.<name>}`'s path: one non-empty name under `input`,
 /// holding no `.`, whitespace, `{` or `}` -- `_WITHIN_INPUT_PATH`.
-fn is_within_input_path(path: &str) -> bool {
+pub(crate) fn is_within_input_path(path: &str) -> bool {
     let Some(name) = path.strip_prefix("input.") else {
         return false;
     };
@@ -448,6 +448,11 @@ pub struct DispatchFileRead {
     pub path: String,
     pub sha256: String,
     pub chars: usize,
+    /// The resolved `within` directory (`core/prompt_files.py::
+    /// DispatchFileText.within`) -- the `agent` tool's own
+    /// `meta.params_rendered.prompt` record needs it; a `template`/
+    /// message `file` has no equivalent field, so this is unused there.
+    pub within: String,
 }
 
 /// `core/prompt_files.py::read_dispatch_file`, with the two state values
@@ -599,6 +604,7 @@ pub fn read_dispatch_file(
         chars: text.chars().count(),
         sha256: format!("{:x}", Sha256::digest(&bytes)),
         path: resolved.display().to_string(),
+        within: within_dir.display().to_string(),
         text,
     })
 }
