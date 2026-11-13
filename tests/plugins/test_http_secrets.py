@@ -208,6 +208,26 @@ def test_scrub_replaces_prefixed_and_bare_values() -> None:
     }
 
 
+def test_scrub_live_tail_drops_a_line_carrying_part_of_a_multiline_secret() -> None:
+    """#741: ``scrub_live_tail`` is a second pass, on top of ``scrub``'s
+    own exact-value replace, for a multi-line secret value only part of
+    which -- one of its own lines -- ever reaches a single tail line (the
+    tail is itself bounded, so the full multi-line value is never present
+    whole in any one line for ``scrub`` to match). Set directly here,
+    bypassing ``resolve``'s own single-line check, since #741's own tail
+    machinery is meant to stay correct even if a future secret source
+    allows a multi-line value.
+    """
+    values = SecretValues(values={"pem": "-----BEGIN KEY-----\nsecretline\n-----END KEY-----"})
+    text = "building\n-----BEGIN KEY-----\nunrelated output"
+    assert values.scrub_live_tail(text) == "building\nunrelated output"
+    # A line shorter than the minimum is never matched on its own.
+    short = SecretValues(values={"pem": "ab\ncd"})
+    assert short.scrub_live_tail("ab and cd both appear") == "ab and cd both appear"
+    # With no secrets resolved, the text is returned unchanged.
+    assert SecretValues().scrub_live_tail(text) == text
+
+
 def test_a_secret_in_host_env_is_left_out_of_a_plugin_built_for_its_check() -> None:
     cfg = {"env": {"A": "1", "TOKEN": {"secret": "tok"}}}
     assert plugin_env_override(cfg, plugin_name="awk") == {"A": "1"}

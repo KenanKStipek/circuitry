@@ -16,13 +16,14 @@ Config (``runtime.plugins.surrealdb``):
 Params:
   - ``mode``: ``"query" | "select" | "create" | "upsert" | "delete"``
     (default ``"query"``).
-  - ``query`` (query): SurrealQL string.
+  - ``query`` (query): SurrealQL string, which may hold more than one
+    statement; a failing statement raises, whichever one it is.
   - ``params`` (query, optional): dict of SurrealQL variables.
-  - ``target`` (select): table name or record id (``record`` / ``table``
-    accepted as aliases).
+  - ``target`` (select): table name, record id, or record range
+    (``"table:1..10"``) (``record`` / ``table`` accepted as aliases).
   - ``table`` (create) + ``data`` (dict).
   - ``record`` (upsert) + ``data`` (dict).
-  - ``record`` (delete).
+  - ``record`` (delete): record id or record range.
   - ``namespace`` / ``database`` (optional): override the configured pair.
 """
 
@@ -39,6 +40,16 @@ from urllib.parse import urlsplit
 
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
+from ..surrealdb_sdk import (
+    is_record_range,
+    open_client,
+    record_target,
+    run_delete_range,
+    run_query_raw,
+    run_select,
+    run_select_range,
+    run_write,
+)
 from .base import ToolResult
 
 DEFAULT_URL = "ws://localhost:8000/rpc"
@@ -95,13 +106,39 @@ def _credentials() -> dict[str, str]:
     )
 
 
+def _is_timeout_error(exc: BaseException) -> bool:
+    """A request that timed out, as distinct from one that never reached the server.
+
+    SDK 3.x raises its own ``TransportTimeoutError`` for this; SDK 2.x has no
+    request timeout and never raises it. Checked ahead of
+    ``_is_connection_error`` so a slow query is reported as having timed out,
+    not as the server being unreachable.
+    """
+    try:
+        from surrealdb.errors import (
+            TransportTimeoutError,  # type: ignore[import-not-found]
+        )
+    except ImportError:
+        pass
+    else:
+        if isinstance(exc, TransportTimeoutError):
+            return True
+    if isinstance(exc, TimeoutError | socket.timeout):
+        return True
+    text = f"{type(exc).__name__}: {exc}".lower()
+    return "timed out" in text or "timeout" in text
+
+
 def _is_connection_error(exc: BaseException) -> bool:
     """Best-effort split between 'server unreachable' and 'server said no'.
 
     The SDK wraps transport failures in its own exception types, so type
     checks alone under-report; the message sniff catches the wrapped cases.
+    A timeout is never a connection error here -- see ``_is_timeout_error``.
     """
-    if isinstance(exc, ConnectionError | TimeoutError | socket.gaierror | OSError):
+    if _is_timeout_error(exc):
+        return False
+    if isinstance(exc, ConnectionError | socket.gaierror | OSError):
         return True
     text = f"{type(exc).__name__}: {exc}".lower()
     return any(
@@ -109,8 +146,6 @@ def _is_connection_error(exc: BaseException) -> bool:
         for needle in (
             "refused",
             "unreachable",
-            "timed out",
-            "timeout",
             "connection",
             "name or service not known",
             "failed to establish",
@@ -133,16 +168,6 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, list | tuple | set):
         return [_jsonable(item) for item in value]
     return str(value)
-
-
-def _raise_for_statement_errors(mode: str, response: Any) -> None:
-    """SurrealQL statements can fail per-statement without raising."""
-    if not isinstance(response, list):
-        return
-    for entry in response:
-        if isinstance(entry, dict) and str(entry.get("status", "")).upper() == "ERR":
-            detail = entry.get("result") or entry.get("detail") or entry
-            raise RuntimeError(f"surrealdb {mode}: SurrealQL error: {detail}")
 
 
 def _require_str(params: dict[str, Any], keys: tuple[str, ...], *, mode: str) -> str:
@@ -177,26 +202,33 @@ def _build_call(mode: str, params: dict[str, Any]) -> Callable[[Any], Any]:
         vars_dict: dict[str, Any] = dict(variables or {})
 
         def _query(db: Any) -> Any:
-            return db.query(statement, vars_dict) if vars_dict else db.query(statement)
+            response = (
+                db.query_raw(statement, vars_dict) if vars_dict else db.query_raw(statement)
+            )
+            return run_query_raw(response, mode="query")
 
         return _query
 
     if mode == "select":
         target = _require_str(params, ("target", "record", "table"), mode="select")
-        return lambda db: db.select(target)
+        if is_record_range(target):
+            return lambda db: run_select_range(db, target)
+        return lambda db: run_select(db.select(record_target(target)))
 
     if mode == "create":
         table = _require_str(params, ("table", "target"), mode="create")
         data = _require_data(params, mode="create")
-        return lambda db: db.create(table, data)
+        return lambda db: run_write(db.create(record_target(table), data))
 
     if mode == "upsert":
         record = _require_str(params, ("record", "target"), mode="upsert")
         data = _require_data(params, mode="upsert")
-        return lambda db: db.upsert(record, data)
+        return lambda db: run_write(db.upsert(record_target(record), data))
 
     record = _require_str(params, ("record", "target"), mode="delete")
-    return lambda db: db.delete(record)
+    if is_record_range(record):
+        return lambda db: run_delete_range(db, record)
+    return lambda db: run_write(db.delete(record_target(record)))
 
 
 def _signin_scopes(namespace: str, database: str) -> list[dict[str, str]]:
@@ -238,12 +270,14 @@ def _authenticate(
                     db.signin({**creds, **scope})
                     break
                 except Exception as exc:
-                    if _is_connection_error(exc):
+                    if _is_timeout_error(exc) or _is_connection_error(exc):
                         raise
                     last_exc = exc
             else:
                 raise last_exc
     except Exception as exc:
+        if _is_timeout_error(exc):
+            raise RuntimeError(_timed_out(url, exc)) from exc
         if _is_connection_error(exc):
             raise RuntimeError(_unreachable(url, exc)) from exc
         raise RuntimeError(
@@ -258,6 +292,14 @@ def _unreachable(url: str, exc: BaseException) -> str:
         f"surrealdb: cannot connect to {url} ({exc}). Is the server running "
         "and is runtime.plugins.surrealdb.url correct? Start one locally with: "
         "surreal start --user root --pass root"
+    )
+
+
+def _timed_out(url: str, exc: BaseException) -> str:
+    return (
+        f"surrealdb: {url} timed out ({exc}). The request may still be "
+        "running on the server; a slow query may need more time than this "
+        "client allows."
     )
 
 
@@ -279,7 +321,7 @@ class SurrealDBPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
     ) -> ToolResult:
-        del timeout_seconds  # SDK manages its own socket timeouts.
+        del timeout_seconds  # the SDK's own request timeout is disabled -- see open_client().
 
         mode = str(params.get("mode") or "query").lower()
         if mode not in MODES:
@@ -310,8 +352,10 @@ class SurrealDBPlugin:
         creds = _credentials()
 
         try:
-            db = surreal(self.url)
+            db = open_client(surreal, self.url)
         except Exception as exc:
+            if _is_timeout_error(exc):
+                raise RuntimeError(_timed_out(self.url, exc)) from exc
             if _is_connection_error(exc):
                 raise RuntimeError(_unreachable(self.url, exc)) from exc
             raise RuntimeError(f"surrealdb: could not open {self.url} ({exc}).") from exc
@@ -329,11 +373,11 @@ class SurrealDBPlugin:
             try:
                 response = call(db)
             except Exception as exc:
+                if _is_timeout_error(exc):
+                    raise RuntimeError(_timed_out(self.url, exc)) from exc
                 if _is_connection_error(exc):
                     raise RuntimeError(_unreachable(self.url, exc)) from exc
                 raise RuntimeError(f"surrealdb {mode} failed: {exc}") from exc
-
-            _raise_for_statement_errors(mode, response)
         finally:
             close = getattr(db, "close", None)
             if callable(close):

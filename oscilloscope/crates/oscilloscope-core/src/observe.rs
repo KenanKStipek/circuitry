@@ -267,6 +267,17 @@ pub enum Event {
         /// (issue #649) records `null` rather than guessing when it's
         /// absent.
         engine: Option<String>,
+        /// The run's own config path (issue #697), when the engine
+        /// writes one -- neither engine does yet, so this is always
+        /// `None` today; read as optional so osi already picks it up
+        /// the moment either one starts to.
+        config: Option<String>,
+        /// The run's own label (issue #752), when the line carries
+        /// one -- rendered and cleaned by the engine already, but
+        /// kept raw here (uncleaned) all the same: osi cleans every
+        /// label again on its own read, since a file can be written
+        /// by anything, not only an engine that cleaned it first.
+        label: Option<String>,
     },
     /// Sent once by a tree loop or tree dynamic before its branches
     /// start. `branches` is the true total (an `each` loop's item
@@ -312,6 +323,27 @@ pub enum Event {
         data: Option<Value>,
         data_truncated: bool,
     },
+    /// A streaming prompt effect's own throttled update (issue #675,
+    /// `docs/orchestration-reference.md`'s `--events` format table),
+    /// emitted only on a publish a delta actually caused -- never on
+    /// the write that starts or clears `meta.live`, so a non-
+    /// streaming adapter's event stream carries none of these at
+    /// all. `id` is the open `start` instance for `path`, `None` when
+    /// there is none. Carries no `tokens_received`/`tokens_per_
+    /// second`/`streaming`/`attempt` of its own -- a reader with no
+    /// live state to fall back on derives what it can from `ms`/
+    /// `first_token_ms` instead (`model::prompt_live_figures`).
+    Progress {
+        ts: String,
+        id: Option<i64>,
+        path: String,
+        ms: Option<u64>,
+        tokens_received_estimate: Option<u64>,
+        chars_received: Option<u64>,
+        tokens_sent: Option<u64>,
+        tokens_sent_estimate: Option<u64>,
+        first_token_ms: Option<u64>,
+    },
 }
 
 /// `ev: "report"`'s own `level` (electricity's runtime-semantics.md
@@ -340,6 +372,14 @@ pub fn parse_event(value: &Value) -> Option<Event> {
             pid: value.get("pid").and_then(Value::as_i64).map(|p| p as i32),
             engine: value
                 .get("engine")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            config: value
+                .get("config")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            label: value
+                .get("label")
                 .and_then(Value::as_str)
                 .map(str::to_string),
         }),
@@ -376,6 +416,19 @@ pub fn parse_event(value: &Value) -> Option<Event> {
                 .get("signal")
                 .and_then(Value::as_str)
                 .map(str::to_string),
+        }),
+        "progress" => Some(Event::Progress {
+            ts,
+            id: value.get("id").and_then(Value::as_i64),
+            path: value.get("path")?.as_str()?.to_string(),
+            ms: value.get("ms").and_then(Value::as_u64),
+            tokens_received_estimate: value
+                .get("tokens_received_estimate")
+                .and_then(Value::as_u64),
+            chars_received: value.get("chars_received").and_then(Value::as_u64),
+            tokens_sent: value.get("tokens_sent").and_then(Value::as_u64),
+            tokens_sent_estimate: value.get("tokens_sent_estimate").and_then(Value::as_u64),
+            first_token_ms: value.get("first_token_ms").and_then(Value::as_u64),
         }),
         "report" => Some(Event::Report {
             ts,
@@ -647,6 +700,54 @@ mod tests {
         let value: Value =
             serde_json::from_str(r#"{"v":1,"seq":1,"ts":"t","ev":"something_future"}"#).unwrap();
         assert_eq!(parse_event(&value), None);
+    }
+
+    #[test]
+    fn parse_event_reads_a_progress_line() {
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":3,"ts":"t","ev":"progress","id":7,"path":"prime.ask",
+            "ms":1200,"tokens_received_estimate":41,"chars_received":160,
+            "tokens_sent":null,"tokens_sent_estimate":10,"first_token_ms":600}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&value),
+            Some(Event::Progress {
+                ts: "t".to_string(),
+                id: Some(7),
+                path: "prime.ask".to_string(),
+                ms: Some(1200),
+                tokens_received_estimate: Some(41),
+                chars_received: Some(160),
+                tokens_sent: None,
+                tokens_sent_estimate: Some(10),
+                first_token_ms: Some(600),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_event_reads_a_progress_line_with_no_id() {
+        let value: Value = serde_json::from_str(
+            r#"{"v":1,"seq":3,"ts":"t","ev":"progress","id":null,"path":"prime.ask",
+            "ms":100,"tokens_received_estimate":null,"chars_received":0,
+            "tokens_sent":null,"tokens_sent_estimate":10,"first_token_ms":null}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            parse_event(&value),
+            Some(Event::Progress {
+                ts: "t".to_string(),
+                id: None,
+                path: "prime.ask".to_string(),
+                ms: Some(100),
+                tokens_received_estimate: None,
+                chars_received: Some(0),
+                tokens_sent: None,
+                tokens_sent_estimate: Some(10),
+                first_token_ms: None,
+            })
+        );
     }
 
     #[test]

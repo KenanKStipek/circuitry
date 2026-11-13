@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "`runtime.plugins.gh.env` sets `GH_PLUGIN_ENV_PROBE`, which the fake `gh` prints back -- only the configured override could have put it there, since `_sandboxed_env` never puts a variable like it in the subprocess's own inherited environment.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json"
+}

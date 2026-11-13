@@ -39,7 +39,8 @@
           "on_error": "fail",
           "description": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "split": null
         }
       ],
       "flow": "chain",

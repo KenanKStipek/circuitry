@@ -126,10 +126,16 @@ fn plan_prompt(name: &str) -> Op {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
+            split_enabled: None,
+            split_max_parts: None,
+            split_separator: None,
+            split_merge_template: None,
         }))),
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -189,6 +195,7 @@ fn reflector_leaf_with_inner(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -216,6 +223,7 @@ async fn run_reflector(
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -571,6 +579,7 @@ async fn cancellation_during_the_planner_leaves_no_record() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert_eq!(result.unwrap_err(), VmError::Cancelled);

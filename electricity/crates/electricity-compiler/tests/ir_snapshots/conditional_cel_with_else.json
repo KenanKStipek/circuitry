@@ -54,6 +54,11 @@
                                   "retries": null,
                                   "routing_override": null,
                                   "schema": null,
+                                  "split_budget_tokens": null,
+                                  "split_enabled": null,
+                                  "split_max_parts": null,
+                                  "split_merge_template": null,
+                                  "split_separator": null,
                                   "timeout_ms": null
                                 }
                               }
@@ -71,7 +76,8 @@
                               {
                                 "Name": "no_branch"
                               }
-                            ]
+                            ],
+                            "resume_mode": "Continue"
                           }
                         ],
                         "overlay": true
@@ -105,6 +111,11 @@
                                   "retries": null,
                                   "routing_override": null,
                                   "schema": null,
+                                  "split_budget_tokens": null,
+                                  "split_enabled": null,
+                                  "split_max_parts": null,
+                                  "split_merge_template": null,
+                                  "split_separator": null,
                                   "timeout_ms": null
                                 }
                               }
@@ -122,7 +133,8 @@
                               {
                                 "Name": "yes_branch"
                               }
-                            ]
+                            ],
+                            "resume_mode": "Continue"
                           }
                         ],
                         "overlay": true
@@ -142,7 +154,8 @@
                 {
                   "Name": "branch"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -156,7 +169,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

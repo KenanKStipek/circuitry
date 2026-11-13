@@ -1,0 +1,6 @@
+adapter: ollama
+model: demo
+effects:
+  - name: ask
+    type: prompt
+    template: "Say hi."

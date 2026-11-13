@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #682: both triggers active, the planner shielded from the size trigger",
+  "description": "decompose-success's own companion with splitting also enabled and on_failure: fail: the source prompt's own rendered input (under 500 estimated tokens) never splits, but the planner's own prompt -- the source template plus its planning instructions -- is far larger, and would fail outright under on_failure: fail if the planner weren't shielded from the size trigger exactly as it already is from the score trigger. The decomposition itself still runs to a successful merge.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

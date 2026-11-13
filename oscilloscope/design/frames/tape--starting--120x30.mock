@@ -1,0 +1,45 @@
+#! tui-mockup 1
+#! size: 120x30
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — tape · starting
+#! state: starting
+#! theme: catppuccin-mocha
+#! note: data: osi-spike/demo/run2 (events.jsonl, state.json), frozen 3.62 s after run_start; cof 0.1.0 + scripted adapter, so prompts finish instantly and tokens arrive as bursts
+#! note: invented: nothing. ETA reads — because this document has no run history
+#! note: craft-ok CR6 a 14-effect demo run leaves rows free; a real run fills them
+#! note: usual = median of 3 real history runs (demo/hist); ETA = run start + usual wall time
+#! region r1 header 0,0,120,1
+#! region r2 list 0,1,76,27 Tape · 0 Done · 0 Running · 13 Ahead · ▰ = 50 t
+#! region r3 detail 76,1,44,27 Run · Starting
+#! region r4 keybar 0,29,120,1
+#! focus r2
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.muted bold on:statusbar.bg}◌ Starting {/}{fg.default on:statusbar.bg}0.0s                                                                     {/}{fg.on-accent on:accent.secondary}  TAPE  {/}{statusbar.fg on:statusbar.bg}  12:50:47 {/}
+{border.focus}╭─ {/}{fg.default bold}Tape · 0 Done · 0 Running · 13 Ahead · ▰ = 50 t {/}{border.focus}────────────────────────╮{/}{border.default}╭─{/}{fg.default} {/}{fg.default bold}Run · Starting {/}{border.default}─────────────────────────╮{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.muted dim}Engine  {/}{fg.default}cof 0.1.0 · launching            {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.muted dim}  Plan  {/}{fg.default}14 effects · 6 prompts · 5 tools {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.muted dim} Shape  {/}{fg.default}1 decision · 3-pass loop · 2 wide{/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.muted dim} Usual  {/}{fg.default bold}1.3{/}{fg.default} {/}{fg.default bold}kt{/}{fg.default} {/}{fg.muted}·{/}{fg.default} {/}{fg.muted}5.1s{/}{fg.default} {/}{fg.muted}·{/}{fg.default} {/}{fg.muted}median{/}{fg.default} {/}{fg.muted}of{/}{fg.default} {/}{fg.muted}3{/}{fg.default} {/}{fg.muted}runs {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.muted dim}   ETA  {/}{fg.default bold}12:50:52{/}{fg.default} {/}{fg.muted}if{/}{fg.default} {/}{fg.muted}usual                {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.default bold}── First Step ───────────────────────────{/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} kind · prompt · scripted-model           {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.muted}usually 203 t                            {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│                                                                          │{/}{border.default}│{/}{fg.default} {/}{fg.faint}Finished steps stack up above Now.       {/}{border.default}│{/}
+{border.focus}│{/}{border.default}━━{/}{fg.default} {/}{fg.muted bold}Starting · cof 0.1.0 launching · no events yet {/}{border.default}━━━━━━━━━━━━━━━━━━━━━━━━{/}{border.focus}│{/}{border.default}│{/}{fg.default} {/}{fg.faint}Nothing is shown that has not happened.  {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· kind               prompt                      usually 203 t   {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· tests              tool · sleep 3                              {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· gate               if · kind != ""                             {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· gate › reply       prompt                      usually 265 t   {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· drafts             loop · each topic · 3 pass⋯                 {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_0 › draft     prompt                      usually 154 t   {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_0 › pause     tool · sleep 1                              {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_1 › draft     prompt                      usually 153 t   {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_1 › pause     tool · sleep 1                              {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_2 › draft     prompt                      usually 155 t   {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│         {/}{fg.faint}· iter_2 › pause     tool · sleep 1                              {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}│ {/}{fg.default bold}Totals {/}{fg.default}↑0 ↓0 · {/}{fg.default bold}0 t  {/}{fg.default}0/14 {/}{fg.muted}Effects  ETA {/}{fg.default}12:50:52  {/}{fg.muted}Cost {/}{fg.faint}—                   {/}{border.focus}│{/}{border.default}│{/}{fg.default}                                          {/}{border.default}│{/}
+{border.focus}╰──────────────────────────────────────────────────────────────────────────╯{/}{border.default}╰──────────────────────────────────────────╯{/}
+{fg.default} engine launching · waiting for the first event {/}{fg.faint}· cof 0.1.0{/}{fg.default}                                                             {/}
+{accent.primary bold on:statusbar.bg} ↑↓ {/}{fg.default on:statusbar.bg}Select  {/}{accent.primary bold on:statusbar.bg}enter {/}{fg.default on:statusbar.bg}Open  {/}{accent.primary bold on:statusbar.bg}tab {/}{fg.default on:statusbar.bg}Focus  {/}{accent.primary bold on:statusbar.bg}p {/}{fg.default on:statusbar.bg}Previews  {/}{accent.primary bold on:statusbar.bg}t {/}{fg.default on:statusbar.bg}Tokens  {/}{accent.primary bold on:statusbar.bg}0-3 {/}{fg.default on:statusbar.bg}Screens                                     {/}{accent.primary bold on:statusbar.bg}? {/}{fg.default on:statusbar.bg}Help  {/}{accent.primary bold on:statusbar.bg}q {/}{fg.default on:statusbar.bg}Quit {/}

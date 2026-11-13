@@ -1,0 +1,10 @@
+name: split-reference-list-index
+adapter: scripted
+model: m
+interface:
+  inputs:
+    docs: {type: array, required: true}
+effects:
+  - type: prompt
+    name: big
+    template: "Summarize: {{{input.docs.0}}}"

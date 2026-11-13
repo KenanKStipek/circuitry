@@ -54,6 +54,11 @@
                                             "retries": null,
                                             "routing_override": null,
                                             "schema": null,
+                                            "split_budget_tokens": null,
+                                            "split_enabled": null,
+                                            "split_max_parts": null,
+                                            "split_merge_template": null,
+                                            "split_separator": null,
                                             "timeout_ms": null
                                           }
                                         }
@@ -77,7 +82,8 @@
                                         {
                                           "Name": "handle"
                                         }
-                                      ]
+                                      ],
+                                      "resume_mode": "Continue"
                                     }
                                   ],
                                   "overlay": true
@@ -112,7 +118,8 @@
                           {
                             "Name": "inner_loop"
                           }
-                        ]
+                        ],
+                        "resume_mode": "Continue"
                       }
                     ],
                     "overlay": false
@@ -129,7 +136,8 @@
                 {
                   "Name": "group"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -143,7 +151,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

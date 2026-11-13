@@ -1,0 +1,7 @@
+name: stream-anthropic-mock
+adapter: anthropic
+model: test-model
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

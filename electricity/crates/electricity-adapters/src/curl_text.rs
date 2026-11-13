@@ -534,16 +534,28 @@ mod tests {
     }
 
     #[test]
-    fn classify_curl_outcome_is_not_retryable_for_exit_18_or_60() {
-        for code in [18, 60] {
-            let outcome = CurlOutcome {
-                returncode: code,
-                stdout: String::new(),
-                stderr: String::new(),
-                status: None,
-                retry_after: None,
-            };
-            assert!(!classify_curl_outcome(&outcome).retryable, "exit {code}");
-        }
+    fn classify_curl_outcome_is_not_retryable_for_exit_60() {
+        let outcome = CurlOutcome {
+            returncode: 60,
+            stdout: String::new(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        assert!(!classify_curl_outcome(&outcome).retryable);
+    }
+
+    #[test]
+    fn classify_curl_outcome_is_retryable_for_exit_18() {
+        // #674: a premature EOF partway through the body is retryable in
+        // both engines -- `transport::is_retryable_exit`.
+        let outcome = CurlOutcome {
+            returncode: 18,
+            stdout: String::new(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        assert!(classify_curl_outcome(&outcome).retryable);
     }
 }

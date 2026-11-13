@@ -53,7 +53,7 @@ def test_openai_adapter_call_error_carries_error_code(monkeypatch: pytest.Monkey
         _fake_popen(22, json.dumps({"error": {"code": "context_length_exceeded"}})),
     )
     with pytest.raises(AdapterCallError) as exc:
-        OpenAIAdapter().generate(model="m", prompt="x")
+        OpenAIAdapter(streams=False).generate(model="m", prompt="x")
     assert exc.value.error_code == "context_length_exceeded"
 
 
@@ -66,7 +66,9 @@ def test_openai_compatible_adapter_call_error_falls_back_to_type(
             22, json.dumps({"error": {"code": None, "type": "server_error"}}), "HTTP 503"
         ),
     )
-    adapter = build_adapter(adapter_name="vllm", runtime={})
+    adapter = build_adapter(
+        adapter_name="vllm", runtime={"adapters": {"vllm": {"stream": False}}}
+    )
     with pytest.raises(AdapterCallError) as exc:
         adapter.generate(model="m", prompt="x")
     assert exc.value.error_code == "server_error"
@@ -81,7 +83,7 @@ def test_anthropic_adapter_call_error_carries_error_type(
         _fake_popen(22, json.dumps({"type": "error", "error": {"type": "overloaded_error"}})),
     )
     with pytest.raises(AdapterCallError) as exc:
-        AnthropicAdapter().generate(model="m", prompt="x")
+        AnthropicAdapter(streams=False).generate(model="m", prompt="x")
     assert exc.value.error_code == "overloaded_error"
 
 
@@ -93,7 +95,7 @@ def test_ollama_adapter_call_error_has_no_code_for_a_flat_body(
         _fake_popen(22, json.dumps({"error": "model 'm' not found"})),
     )
     with pytest.raises(AdapterCallError) as exc:
-        OllamaAdapter().generate(model="m", prompt="x")
+        OllamaAdapter(streams=False).generate(model="m", prompt="x")
     assert exc.value.error_code is None
 
 

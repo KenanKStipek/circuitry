@@ -1,0 +1,21 @@
+interface:
+  inputs:
+    doc: {type: string, default: "DESIGN.md"}
+effects:
+  - name: outline
+    type: prompt
+    template: "Outline {{input.doc}} in five bullets."
+  - name: read
+    type: tool
+    provider: shell
+    params: {command: sleep, args: ["2"], allowed_commands: ["sleep"]}
+  - name: summary
+    type: prompt
+    template: "Summarize {{input.doc}} in one paragraph."
+  - name: check
+    type: tool
+    provider: shell
+    params: {command: sleep, args: ["1"], allowed_commands: ["sleep"]}
+  - name: final
+    type: prompt
+    template: "Tighten the summary."

@@ -78,11 +78,15 @@ mod tests {
                 expect: None,
                 description: None,
                 group: None,
+                secret_headers: IndexMap::new(),
                 prompt_file: None,
+                limited: false,
+                confine_to: None,
             }))),
             on_error: OnError::Fail,
             labels: None,
             enabled: false,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 

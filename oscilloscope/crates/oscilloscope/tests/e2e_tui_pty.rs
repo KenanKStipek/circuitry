@@ -14,10 +14,7 @@ mod support;
 
 use std::ffi::{OsStr, OsString};
 use std::fs::File;
-use std::io::Write;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
-use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::process::CommandExt;
+use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
@@ -25,123 +22,25 @@ use std::time::{Duration, Instant};
 
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    e2e_enabled, scripted_config, wait_for_step_start, wait_with_timeout, write_doc,
+    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
+    screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
+    wait_for_screen_text, wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
 
-/// Opens a fresh pty pair, unlocked and granted, ready for a child to
-/// use its slave side as its controlling stdio. Returns the master
-/// (kept open for the test's own lifetime; its own `Drop` closes it)
-/// and the slave device's path, re-opened fresh for each of the
-/// child's three standard streams below — a single shared `File`
-/// handle would make all three the same underlying OS file
-/// description, which is not what three independent dup'd fds of a
-/// real terminal ever are.
-fn open_pty() -> (File, PathBuf) {
-    let master_fd = unsafe { libc::posix_openpt(libc::O_RDWR | libc::O_NOCTTY) };
-    assert!(master_fd >= 0, "posix_openpt failed");
-    assert_eq!(unsafe { libc::grantpt(master_fd) }, 0, "grantpt failed");
-    assert_eq!(unsafe { libc::unlockpt(master_fd) }, 0, "unlockpt failed");
-    // Without `FD_CLOEXEC`, `spawn_osi_on_pty`'s own `Command::spawn`
-    // (fork, then exec) would hand osi itself a surviving duplicate
-    // of this exact fd -- a real bug this file's own tests never hit
-    // before, since none of them ever needed the master to actually,
-    // fully close while osi was still alive: osi would then still
-    // hold the pty's master open all on its own even after this
-    // test's own copy is dropped, so the slave side this test cares
-    // about (osi's own stdin/stdout/stderr) would never see the EOF/
-    // write-error a closed master is supposed to cause at all -- the
-    // bug `a_closed_pty_master_with_no_signal_still_exits_promptly_
-    // with_no_leftovers` below exists to catch, found by that exact
-    // test hanging on this exact gap.
-    assert_eq!(
-        unsafe { libc::fcntl(master_fd, libc::F_SETFD, libc::FD_CLOEXEC) },
-        0,
-        "fcntl F_SETFD FD_CLOEXEC failed"
-    );
-
-    let slave_name = unsafe { libc::ptsname(master_fd) };
-    assert!(!slave_name.is_null(), "ptsname failed");
-    let slave_path = unsafe { std::ffi::CStr::from_ptr(slave_name) }
-        .to_str()
-        .expect("ptsname is valid UTF-8")
-        .to_string();
-
-    // A freshly opened pty's own window size defaults to 0x0 until
-    // something sets it -- crossterm's own `terminal::size()` reads
-    // exactly this, so without it every frame a TUI draws lays out
-    // into a zero-area buffer and writes nothing at all beyond the
-    // alternate-screen/cursor sequences every test here already
-    // checks (#494's own regression tests, further down this file,
-    // need the header's actual text, not just those). `TIOCSWINSZ`
-    // on the master fd alone fails ENOTTY on macOS -- it has to go
-    // through an open slave fd, but the size itself belongs to the
-    // pty, not that one fd, so it's still in effect once this one
-    // closes again.
-    {
-        let slave = File::options()
-            .read(true)
-            .write(true)
-            .open(&slave_path)
-            .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
-        let ws = libc::winsize {
-            ws_row: 40,
-            ws_col: 120,
-            ws_xpixel: 0,
-            ws_ypixel: 0,
-        };
-        if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
-            panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
-        }
-        // Not closed: on macOS, the slave side's open-file count
-        // dropping to zero even briefly -- closing this one before
-        // `spawn_osi_on_pty` opens its own three, moments later --
-        // signals a hangup the master side sees as an immediate EOF,
-        // which silently ended `drain_continuously`'s own read loop
-        // before osi ever wrote a single byte. Leaking this one fd
-        // for the rest of the test binary's own short life keeps the
-        // slave's own open count never reaching zero in between.
-        //
-        // Review finding 5 on PR #496: the cost of that is paid by
-        // every test in this file, not just this one -- this leaked
-        // fd stays open for the whole binary's life, so the real
-        // slave fds `spawn_osi_on_pty` opens next are never the last
-        // ones left, and `master` (this pty's own read side) can
-        // never see a real EOF once osi's own three close on exit.
-        // `drain_continuously`'s loop below only ever stops reading
-        // because its read errors (the master itself closing when
-        // this function's own `File` drops at the end of a test),
-        // never because the pipe quietly ran dry -- no test here can
-        // be written the other way, waiting on `master` for EOF to
-        // know osi is done, while this leak stands.
-        std::mem::forget(slave);
-    }
-
-    let master = unsafe { File::from_raw_fd(master_fd as RawFd) };
-    (master, PathBuf::from(slave_path))
-}
-
-/// Drains `master` continuously, from the moment it's called, into a
-/// shared buffer a caller can inspect at any time -- started right
-/// after the pty is opened, *before* the child is even spawned,
-/// rather than only read from in bursts (a redrawing TUI can fill a
-/// pty's own small kernel buffer in well under a second; nothing
-/// draining it would make osi's own writes block, delaying its exit
-/// for however long this test wasn't reading, and risking losing
-/// whatever it tried to write once it finally did get to exit).
-fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
-    let buf = Arc::new(Mutex::new(Vec::new()));
-    let shared = Arc::clone(&buf);
-    std::thread::spawn(move || {
-        use std::io::Read;
-        let mut chunk = [0u8; 4096];
-        loop {
-            match master.read(&mut chunk) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => shared.lock().unwrap().extend_from_slice(&chunk[..n]),
+/// The `(row, col)` of the first `glyph` character on whichever grid
+/// row contains `line_needle` -- so a colour check reads the same
+/// cell its own text check already found, not a coordinate guessed
+/// from the layout.
+fn find_glyph(grid: &[String], line_needle: &str, glyph: char) -> Option<(usize, usize)> {
+    for (row, line) in grid.iter().enumerate() {
+        if line.contains(line_needle) {
+            if let Some(col) = line.chars().position(|c| c == glyph) {
+                return Some((row, col));
             }
         }
-    });
-    buf
+    }
+    None
 }
 
 /// Waits until `pattern` has appeared anywhere in `buf` so far, or
@@ -231,133 +130,6 @@ fn wait_for_pattern_on_master(master: &mut File, pattern: &[u8], timeout: Durati
     );
 }
 
-/// Writes `bytes` to the pty's master side, i.e. exactly what a key
-/// press on a real terminal would deliver to osi's own raw-mode
-/// stdin — used to send `q` (review finding K1: the TUI now stays
-/// open on a run's own final state until asked to leave) and a raw
-/// Ctrl-C byte (finding K3: raw mode disables the kernel's own
-/// `ISIG`, so `\x03` reaches osi as a plain byte, not a real SIGINT,
-/// exactly as it would on a human's own terminal).
-fn send_bytes(master: &mut File, bytes: &[u8]) {
-    master.write_all(bytes).expect("write to pty master");
-    master.flush().expect("flush pty master");
-}
-
-fn open_slave(path: &std::path::Path) -> OwnedFd {
-    // On Linux, a process that has
-    // called `setsid()` (no controlling terminal of its own yet) and
-    // then opens a tty device *by path* auto-acquires it as its
-    // controlling terminal, same as a bare `open()` + no `O_NOCTTY`
-    // always has on historical SysV ttys -- `osi` itself never asks
-    // for one (`TerminalGuard::enter` only `tcgetattr`/`tcsetattr`s an
-    // already-open fd), so the three slave opens below, each handed
-    // to the spawned `osi` as a *fresh* stdio fd rather than a dup of
-    // one already-open one, must say so explicitly: a real SIGHUP
-    // test (`a_forwarded_sighup_in_the_tui_exits_129`) sends the
-    // signal directly to osi's own pid regardless, but the whole
-    // *point* of the lost-terminal tests below is a slave that was
-    // never, ever a controlling terminal for anyone.
-    let file = File::options()
-        .read(true)
-        .write(true)
-        .custom_flags(libc::O_NOCTTY)
-        .open(path)
-        .unwrap_or_else(|e| panic!("opening pty slave {path:?}: {e}"));
-    OwnedFd::from(file)
-}
-
-fn stdio_from_slave(path: &std::path::Path) -> Stdio {
-    let fd = open_slave(path);
-    Stdio::from(fd)
-}
-
-/// Spawns `osi` with every one of its standard streams attached to
-/// the pty's slave side, in its own process group (the same
-/// isolation `osi` itself gives `cof`, and the lane rule this
-/// repository's tests all follow: "signals only to processes you
-/// started, in their own session").
-fn spawn_osi_on_pty(
-    home: &TestHome,
-    slave_path: &std::path::Path,
-    args: &[&OsStr],
-) -> std::process::Child {
-    spawn_osi_on_pty_with_env(home, slave_path, args, &[])
-}
-
-/// [`spawn_osi_on_pty`], with extra environment variables set on the
-/// spawned `osi` before it starts -- the final-drain regression test
-/// below (#494) needs its own fake engine on `PATH` and a few
-/// variables that fake engine itself reads, neither of which any
-/// other caller here needs.
-fn spawn_osi_on_pty_with_env(
-    home: &TestHome,
-    slave_path: &std::path::Path,
-    args: &[&OsStr],
-    extra_env: &[(&str, &OsStr)],
-) -> std::process::Child {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_osi"));
-    cmd.args(args);
-    cmd.env("HOME", home.path());
-    cmd.env("TERM", "xterm-256color");
-    // Issue #649: a bare `HOME` override isn't enough on its own --
-    // an inherited `XDG_STATE_HOME` or `OSI_HISTORY_DIR` would still
-    // point history at the real directory.
-    cmd.env("OSI_HISTORY_DIR", home.path().join("history"));
-    for key in [
-        "OPENAI_API_KEY",
-        "ANTHROPIC_API_KEY",
-        "CYBERDINER_TOKEN",
-        "CYBERDINER_EXPO_URL",
-        "XDG_STATE_HOME",
-        "OSI_HISTORY",
-        // `effective_log_mode` (DESIGN.md §6.2) forces the plain
-        // stream whenever `CI` is set, which GitHub Actions sets for
-        // every job regardless of what osi's own stdout actually is
-        // -- without removing it here, this whole test file always
-        // exercised the plain path on CI, pty and all, and never the
-        // TUI it exists to test (caught by the real CI run, not by
-        // this machine, which never had `CI` set to begin with).
-        "CI",
-    ] {
-        cmd.env_remove(key);
-    }
-    for (key, value) in extra_env {
-        cmd.env(key, value);
-    }
-    cmd.stdin(stdio_from_slave(slave_path));
-    cmd.stdout(stdio_from_slave(slave_path));
-    cmd.stderr(stdio_from_slave(slave_path));
-    // `setsid()`, not merely
-    // `setpgid(0, 0)` -- matching how a real terminal-launching
-    // driver spawns its own child (Python's own `start_new_session=
-    // True`), and the only
-    // way osi ends up with *no controlling terminal at all* rather
-    // than merely its own process group within the test harness's
-    // own session. A `setsid` call from a `pre_exec` closure was once
-    // suspected of making the spawned child permanently unreapable by
-    // this test's own `std::process::Child` on macOS; re-checked
-    // directly (a minimal repro spawning `/bin/sleep` this same way,
-    // `try_wait`-polled to completion) and found to reap normally --
-    // every pty test in this file below still reaps `osi` the same
-    // way regardless. A plain tty slave fd (no explicit `TIOCSCTTY`,
-    // and now `O_NOCTTY` on top, `open_slave`'s own doc comment) is
-    // still enough for `crossterm::terminal::enable_raw_mode`'s own
-    // `tcgetattr`/`tcsetattr`, which only need an open fd referring
-    // to some tty device, not a controlling-terminal relationship --
-    // this isolation is here for the same reason `osi` itself gives
-    // `cof` its own (DESIGN.md §4.1), so a signal sent to just this
-    // pid never reaches the test harness's own session either.
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
-    cmd.spawn().expect("spawn osi on a pty")
-}
-
 #[test]
 fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     if !e2e_enabled() {
@@ -431,10 +203,392 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #626: `0`/`2` switch screens during a live run, and the
-/// screen each one draws actually changes on screen -- the overview
-/// (its own `now`/`time`/`flow`/`cost` panes) on `0`, screen 2's own
-/// orchestration pane on `2`.
+/// Issue #704: once a run has ended, `↓` moves the selection to
+/// another finished row, `enter` opens it full-screen, and `]` steps
+/// to the next effect in plan order -- the full-screen title changes
+/// to name it, proving the key actually moved the selection rather
+/// than just redrawing the same step.
+#[test]
+fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    assert!(
+        screen.contains("alpha") && screen.contains("beta") && screen.contains("gamma"),
+        "expected all three rows on the ended Tape; screen:\n{screen}"
+    );
+
+    // The run's just ended: the selection starts on the last row the
+    // plan ran (issue #704 rule 1's own default target, "gamma"
+    // here) and the detail pane shows the run summary -- two ↑
+    // actually move the selection, landing on "alpha", never back on
+    // "gamma" itself (which would show the summary again, the same
+    // as any other selection landing back on that exact row does).
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[A\x1b[A");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Tape \u{b7} "),
+        "expected enter to open the full-screen step; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("alpha \u{b7} Selected"),
+        "expected alpha's own full-screen step; screen:\n{screen}"
+    );
+
+    // `]` steps to the next effect in plan order -- "beta", never
+    // "gamma" (the run's own default end target, two steps further).
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"]");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "beta \u{b7} Selected",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("beta \u{b7} Selected"),
+        "expected stepping to reach the next effect; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #716: `Tab` moves focus from the Tape's own list to its
+/// detail pane -- down-arrow then scrolls the pane while the list's
+/// own selection stays exactly where it was, proven by the detail
+/// pane's own title (`breadcrumb (dot) Selected`) still naming the
+/// same row; `Tab` again gives down-arrow back to the list, which
+/// now does move the selection, naming the next row in plan order
+/// instead.
+#[test]
+fn tab_focuses_the_detail_pane_and_down_scrolls_it_while_the_list_stays() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[A\x1b[A");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "alpha \u{b7} Selected",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("alpha \u{b7} Selected"),
+        "expected alpha selected before Tab; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\t");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[B");
+    std::thread::sleep(SIGNAL_DELAY);
+    let screen = support::screen_grid(&captured_buf.lock().unwrap(), 120, 40).join("\n");
+    assert!(
+        screen.contains("alpha \u{b7} Selected"),
+        "expected the list's own selection to stay on alpha while the pane has focus; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"\t");
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[B");
+    let screen = wait_for_screen_text(
+        &captured_buf,
+        "beta \u{b7} Selected",
+        Duration::from_secs(10),
+    );
+    assert!(
+        screen.contains("beta \u{b7} Selected"),
+        "expected down-arrow to move the list's own selection again once Tab gave it back; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #710: while a run is live, the Tape's own Now band sits at
+/// the list's own vertical centre -- `(L - h) / 2` rows down from the
+/// list's own first content row, `L` the list's own height (33, at
+/// this pty's own 120x40: the Tape's inner area is 35 rows, less 2
+/// for the rule and Totals row) and `h` the Now area's own (2 here:
+/// the band line plus the one plain tool step actually running, no
+/// preview or slots rule) -- rounding down on an uneven split, which
+/// this one isn't. The window pads blank above instead of drifting
+/// with the run's own progress: none of this three-step chain's own
+/// past ever reaches the 15 rows 120x40 needs above the band, so the
+/// band sits at the same row (absolute row 17: row 0 the header, row
+/// 1 the pane's own top border, then 15 more) whichever of the three
+/// steps happens to be the one running when this reads the screen.
+/// Every wait here (the alternate screen opening, the first step
+/// starting, the TUI drawing alpha's own row as running, `Ended`,
+/// the exit wait) is its own named step with its own cap, summing
+/// to 95s; the run itself finishes in about 3s.
+#[test]
+fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: beta\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n  - name: gamma\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"1\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    const ALTERNATE_SCREEN_WAIT: Duration = Duration::from_secs(20);
+    const FIRST_STEP_WAIT: Duration = Duration::from_secs(20);
+    const RUNNING_ROW_WAIT: Duration = Duration::from_secs(5);
+    const ENDED_WAIT: Duration = Duration::from_secs(20);
+    const EXIT_WAIT: Duration = Duration::from_secs(30);
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", ALTERNATE_SCREEN_WAIT);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.alpha",
+        FIRST_STEP_WAIT,
+    );
+    // The engine's own start event can land before the TUI has drawn
+    // the matching frame -- wait for alpha's own running row, not a
+    // fixed delay, so a slow draw under load doesn't read the screen
+    // one frame too early.
+    wait_for_screen_text(&captured_buf, "\u{25cf} alpha", RUNNING_ROW_WAIT);
+
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60);
+    let now_row = screen
+        .iter()
+        .position(|line| line.contains("\u{2501}\u{2501} Now"))
+        .unwrap_or_else(|| panic!("expected a Now band on screen; got:\n{}", screen.join("\n")));
+    assert_eq!(
+        now_row,
+        2 + 15,
+        "expected the Now band centred at row 17; screen:\n{}",
+        screen.join("\n")
+    );
+
+    wait_for_pattern(&captured_buf, b"Ended", ENDED_WAIT);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, EXIT_WAIT);
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// A run this `osi` launched has a registry entry while it's live --
+/// named by its own document and run directory in bare `osi`'s own
+/// non-TTY list too -- and that entry is gone once the run ends.
+/// Every wait here (two 20s pattern waits, a 10s poll, a 10s wait for
+/// `Ended`, a 30s exit wait) is its own named step with its own cap;
+/// none of them is a bare sleep, and none shares a cap with any
+/// other.
+#[test]
+fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+
+    let runs_dir = home.path().join("runs");
+    // The entry is written once `run_start` is known, not instantly
+    // at spawn -- polled rather than slept for a fixed delay, capped
+    // at the 10s deadline just below (this step's own cap, not an
+    // overall one shared with any other wait in this test).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut entries = Vec::new();
+    while Instant::now() < deadline {
+        entries = std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.flatten().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !entries.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one registry entry while the run is live, in {runs_dir:?}"
+    );
+    let entry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
+    assert_eq!(entry["engine"], "cof");
+    assert_eq!(
+        std::fs::canonicalize(entry["run_dir"].as_str().unwrap()).unwrap(),
+        std::fs::canonicalize(out_dir.path()).unwrap()
+    );
+    assert_eq!(
+        entry["launcher"].as_str().unwrap(),
+        format!("osi {}", env!("CARGO_PKG_VERSION"))
+    );
+
+    // Bare `osi`, without a TTY, lists this same run while it's
+    // still live -- the content check the registry entry's own
+    // assertions above can't give: a liveness or process-scan defect
+    // that makes a real `cof` run look dead (or unmatched) would
+    // prune the entry above right out from under this list, or never
+    // list it via the scan either.
+    let discover = osi_command(&home)
+        .current_dir(work.path())
+        .output()
+        .expect("spawn bare osi");
+    assert!(discover.status.success());
+    let discover_stdout = String::from_utf8_lossy(&discover.stdout);
+    let discover_line = discover_stdout
+        .lines()
+        .find(|l| l.contains("do.yml"))
+        .unwrap_or_else(|| panic!("expected a line naming do.yml, got:\n{discover_stdout}"));
+    assert!(discover_line.contains("cof"));
+    assert!(
+        discover_line.contains(&out_dir.path().display().to_string())
+            || std::fs::canonicalize(out_dir.path())
+                .is_ok_and(|p| discover_line.contains(&p.display().to_string())),
+        "expected the run directory in: {discover_line}"
+    );
+    assert_eq!(
+        std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.count())
+            .unwrap_or(0),
+        1,
+        "discovery must not have disturbed the still-live entry"
+    );
+
+    // `q` opens a confirm-cancel dialog instead of quitting outright
+    // as long as osi's own `child.try_wait()` hasn't yet observed the
+    // engine exit -- waited out here on the header's own `Ended`
+    // (the same fix #694 already gave the slow-streaming tests
+    // above), rather than fighting that dialog from a test with no
+    // plan to assert on it.
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(10));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+
+    std::thread::sleep(Duration::from_millis(200));
+    let remaining = std::fs::read_dir(&runs_dir)
+        .map(|rd| rd.count())
+        .unwrap_or(0);
+    assert_eq!(
+        remaining, 0,
+        "expected the registry entry to be gone once the run ended"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #626 (updated by #678): `0`/`2` switch screens during a
+/// live run, and the screen each one draws actually changes on
+/// screen -- the Tape (its own list and Totals row) on `0`, screen
+/// 2's own orchestration pane on `2`.
 #[test]
 fn screen_keys_switch_screens_during_a_live_run() {
     if !e2e_enabled() {
@@ -472,32 +626,40 @@ fn screen_keys_switch_screens_during_a_live_run() {
     );
     std::thread::sleep(SIGNAL_DELAY);
 
-    // Default is the overview; this run is still live. Checked
-    // against the whole buffer so far, since nothing has been sent
-    // yet for a key press to have changed anything after.
+    // Default is the Tape; this run is still live. Checked against
+    // the whole buffer so far, since nothing has been sent yet for a
+    // key press to have changed anything after.
     {
         let captured = captured_buf.lock().unwrap().clone();
         let rendered = String::from_utf8_lossy(&captured);
         assert!(
-            rendered.contains("now") && rendered.contains("time") && rendered.contains("cost"),
-            "expected the overview's own panes on screen; got:\n{rendered:?}"
+            rendered.contains("Run Started") && rendered.contains("Totals"),
+            "expected the Tape's own list and Totals row on screen; got:\n{rendered:?}"
         );
     }
 
     // Every check from here on reads only what arrived *after* its
     // own key -- "flow" is in the header's own tab on every screen,
-    // and "cost"/"now"/"time" were already drawn once by the overview
-    // above, so searching the whole cumulative buffer again could
+    // so searching the whole cumulative buffer again for it could
     // never actually fail, key press or not.
     let before_2 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"2");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_2..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        // A key press only redraws the cells that changed (the `· 0/2 · ▰ = 50 t` part of the title
+        // keeps its columns from the Tape's own title), and a styled run is split by escapes in the raw
+        // stream, so neither the bytes after the key nor the raw bytes can be searched for the title:
+        // replay everything drawn so far onto a screen and read that. `Flow ·` is the rail pane's
+        // own title, drawn only on the Flow screen.
         assert!(
-            rendered.contains("flow ("),
-            "expected the Flow screen's own flow pane after pressing 2; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_2,
+            "pressing 2 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Flow \u{b7}"),
+            "expected the Flow screen's own rail pane after pressing 2; screen:\n{screen}"
         );
     }
 
@@ -505,11 +667,16 @@ fn screen_keys_switch_screens_during_a_live_run() {
     send_bytes(&mut master, b"0");
     std::thread::sleep(Duration::from_millis(500));
     {
-        let after = captured_buf.lock().unwrap()[before_0..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        // Same replay; `Tape ·` is the Tape's own pane title (the Totals row is on every screen now).
         assert!(
-            rendered.contains("flow") && rendered.contains("cost"),
-            "expected the overview's own cards back after pressing 0; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_0,
+            "pressing 0 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Tape \u{b7}"),
+            "expected the Tape's own list back after pressing 0; screen:\n{screen}"
         );
     }
 
@@ -528,11 +695,13 @@ fn screen_keys_switch_screens_during_a_live_run() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #632: `3` opens the Cost screen during a live run, and its
-/// own treemap and largest-stores table actually show the prompt
-/// that already finished.
+/// Issue #695: `3` opens the Store screen during a live run, with
+/// the finished prompt's own tile on the area diagram and its own
+/// row in the Largest Stores table; `↑↓` move the table's cursor,
+/// `enter` opens the selected store's own step full-screen and
+/// `esc` returns.
 #[test]
-fn pressing_3_during_a_live_run_opens_the_cost_screen() {
+fn pressing_3_during_a_live_run_opens_the_store_screen() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
@@ -543,12 +712,12 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
     let replies = write_doc(
         work.path(),
         "replies.yaml",
-        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\nprime.again:\n  - text: \"hi again\"\n    tokens_sent: 2\n    tokens_received: 4\n",
     );
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: again\n    type: prompt\n    template: \"hi again\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
     );
     let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
 
@@ -575,23 +744,81 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
 
     let before_3 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"3");
-    std::thread::sleep(Duration::from_millis(500));
+    wait_for_pattern_since(&captured_buf, before_3, b"STORE", Duration::from_secs(10));
     {
-        let after = captured_buf.lock().unwrap()[before_3..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            rendered.contains("tokens by store"),
-            "expected the Cost screen's own treemap after pressing 3; got:\n{rendered:?}"
+            screen.contains("STORE"),
+            "expected the Store screen's own chip after pressing 3; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("largest stores"),
-            "expected the Cost screen's own table after pressing 3; got:\n{rendered:?}"
+            screen.contains("Largest Stores"),
+            "expected the Largest Stores table after pressing 3; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("ask"),
-            "expected the finished prompt's own store to show somewhere on the Cost screen; got:\n{rendered:?}"
+            screen.contains("ask · 8 t"),
+            "expected the finished prompt's own tile or row, with its own tokens, to show on the Store screen; screen:\n{screen}"
         );
     }
+
+    // Two token-bearing stores (`ask` and `again`), so `↓`/`↑` has
+    // somewhere to actually move the cursor to -- a single-row table
+    // would let the cursor stay put and still pass a check that only
+    // looks for *some* redraw, which the ticking clock alone already
+    // guarantees.
+    let before_down = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b[B");
+    wait_for_pattern_since(
+        &captured_buf,
+        before_down,
+        b"again",
+        Duration::from_secs(10),
+    );
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        let cursor_on_again = screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("again"));
+        assert!(
+            cursor_on_again,
+            "expected ↓ to move the table's own cursor onto `again`; screen:\n{screen}"
+        );
+    }
+
+    let before_up = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b[A");
+    wait_for_pattern_since(&captured_buf, before_up, b"ask", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        let cursor_on_ask = screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again"));
+        assert!(
+            cursor_on_ask,
+            "expected ↑ to move the table's own cursor back onto `ask`; screen:\n{screen}"
+        );
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(400));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_enter,
+            "pressing ⏎ drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Selected"),
+            "expected ⏎ to open the selected store's own step full-screen; screen:\n{screen}"
+        );
+    }
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(400));
 
     // `q` while still running asks first; confirming both cancels
     // and leaves once the engine actually exits.
@@ -608,10 +835,174 @@ fn pressing_3_during_a_live_run_opens_the_cost_screen() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #635's own acceptance item: pressing `2` during a live `cof`
-/// run of a document with a named `if` opens the Flow screen with
-/// the decision's own `◆` row and a matching story line, and `s`
-/// swaps the selected pane for the state tree.
+/// 100 columns and up at 30 rows and up shows the Largest Stores
+/// table beside Readings; below 30 rows (still 100 columns and up)
+/// Readings drops and the table keeps three rows; so does dropping
+/// below 100 columns on width alone, with 30 rows to spare -- all
+/// three picked up on the TUI's own next redraw, with no key needed.
+#[test]
+fn resizing_the_store_screen_drops_readings_below_30_rows() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    resize_pty(&slave_path, 120, 30);
+    let before_3 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"3");
+    wait_for_pattern_since(
+        &captured_buf,
+        before_3,
+        b"Readings",
+        Duration::from_secs(10),
+    );
+
+    let before_resize = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 120, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_resize,
+            "resizing to 120x24 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            !screen.contains("Readings"),
+            "expected the Readings pane gone below 30 rows; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("Largest Stores"),
+            "expected the table still shown below 30 rows; screen:\n{screen}"
+        );
+    }
+
+    // 80-99 columns drops Readings too, on width alone -- back to 30
+    // rows (plenty), but narrow enough that the chart/table pane no
+    // longer has room for a second pane beside it.
+    let before_narrow = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 90, 30);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_narrow,
+            "resizing to 90x30 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            !screen.contains("Readings"),
+            "expected the Readings pane gone below 100 columns; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("Largest Stores"),
+            "expected the table still shown below 100 columns; screen:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// §4: below 80 columns only the Tape is offered -- shrinking the
+/// terminal while the Store is on screen bounces straight back to
+/// the Tape, picked up on the TUI's own next redraw with no key
+/// needed.
+#[test]
+fn resizing_below_80_columns_bounces_store_back_to_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"3");
+    wait_for_pattern(&captured_buf, b"STORE", Duration::from_secs(10));
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    wait_for_pattern_since(&captured_buf, before_60, b"Tape", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Tape"),
+            "expected the Tape's own panel title once the terminal is too narrow for Store; screen:\n{screen}"
+        );
+        assert!(
+            !screen.contains("STORE"),
+            "the Store must not still be offered below 80 columns; screen:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #691's own acceptance item: pressing `2` during a live
+/// `cof` run of a document with a named `if` opens the Flow screen
+/// with the decision's own `◆` row and a matching story line;
+/// `→`/`←` scroll the rail and turn follow off, then back on once
+/// the scroll lands Now back in view; `⏎` opens the selection
+/// full-screen and back; `f` toggles follow (the title's own `·
+/// Following` marker); `?` opens Flow's own Help listing §4's own
+/// keys, `esc` closes it. Every check reads the replayed screen
+/// (`support::screen_grid`), not the raw byte stream, since a
+/// differential redraw only retransmits the cells that changed.
 #[test]
 fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     if !e2e_enabled() {
@@ -649,50 +1040,120 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     );
     std::thread::sleep(SIGNAL_DELAY);
 
-    let before_2 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"2");
-    // `meta.branch` lands on the live state once cof writes it (ahead
-    // of `slow` itself starting, DESIGN.md §1.2), but the TUI only
-    // picks it up on its own next live-state poll -- waited for
-    // directly, rather than a fixed sleep guessing how long that
-    // takes.
-    wait_for_pattern(&captured_buf, "→ then".as_bytes(), Duration::from_secs(10));
+    // The Tape's own detail pane can already show `→ then` before the
+    // key lands, so the arrival of the Flow screen is read from the
+    // replayed screen itself: its rail pane's title (`Flow ·`) is
+    // drawn on no other screen. `meta.branch` reaches the live state
+    // once cof writes it, and the TUI picks it up on its next poll, so
+    // the decision row is polled for the same way rather than guessed
+    // with a fixed sleep.
+    let screen = wait_for_screen_text(&captured_buf, "Flow \u{b7}", Duration::from_secs(10));
+    assert!(
+        screen.contains("Flow \u{b7}"),
+        "expected the Flow screen's own rail pane after pressing 2; screen:\n{screen}"
+    );
+    let screen = wait_for_screen_text(&captured_buf, "◆", Duration::from_secs(10));
     {
-        let after = captured_buf.lock().unwrap()[before_2..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
         assert!(
-            rendered.contains("◆"),
-            "expected the named if's own decision row after pressing 2; got:\n{rendered:?}"
+            screen.contains("◆"),
+            "expected the named if's own decision row after pressing 2; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("gate"),
-            "expected gate's own row after pressing 2; got:\n{rendered:?}"
+            screen.contains("gate"),
+            "expected gate's own row after pressing 2; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("story"),
-            "expected the story pane's own border title after pressing 2; got:\n{rendered:?}"
+            screen.contains("Story"),
+            "expected the Story pane's own border title after pressing 2; screen:\n{screen}"
         );
     }
 
-    let before_s = captured_buf.lock().unwrap().len();
-    send_bytes(&mut master, b"s");
-    std::thread::sleep(Duration::from_millis(500));
+    // → scrolls the rail; this fixture's own rail (three stations)
+    // fits well within the replay's own width regardless, so Now
+    // never actually leaves view and follow resumes on the very
+    // next redraw -- the follow-off/land-back cycle itself is a
+    // buffer-level unit test (`keys::tests::flow_up_down_turns_
+    // follow_off_and_back_on_the_same_way_the_tape_does`); this only
+    // checks that neither key breaks the screen.
+    let before_right = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b[C");
+    std::thread::sleep(Duration::from_millis(400));
+    assert!(
+        captured_buf.lock().unwrap().len() > before_right,
+        "pressing → drew nothing at all"
+    );
+    send_bytes(&mut master, b"\x1b[D");
+    std::thread::sleep(Duration::from_millis(400));
     {
-        let after = captured_buf.lock().unwrap()[before_s..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        // A differential redraw only retransmits changed cells
-        // (`a_fast_exiting_engine_shows_the_real_ok_ending_not_
-        // aborted`'s own comment, below): the border title's own
-        // leading " s" can coincidentally already match the
-        // previous frame's " selected " title at the same cell and
-        // style, leaving only "tate" actually retransmitted --
-        // checked for instead of the full word for exactly that
-        // reason.
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            rendered.contains("tate"),
-            "expected the state tree's own border title in the selected pane's own place after pressing s; got:\n{rendered:?}"
+            screen.contains("Following"),
+            "expected follow to be back on after ← lands Now back in view; screen:\n{screen}"
         );
     }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_enter,
+            "pressing ⏎ drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Selected"),
+            "expected ⏎ to open the selection full-screen; screen:\n{screen}"
+        );
+    }
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(500));
+
+    // Toggling follow off then back on nets back to the same
+    // title (`· Following` present once more) -- a live run's own
+    // continuous spinner redraws regardless of either key, so the
+    // single off state in between is not a reliable thing for a
+    // real PTY to observe; the off state itself is a buffer-level
+    // unit test (`keys::tests::flow_left_right_scroll_and_turn_
+    // follow_off`).
+    let before_f = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"f");
+    std::thread::sleep(Duration::from_millis(300));
+    send_bytes(&mut master, b"f");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_f,
+            "expected f to redraw the title"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Following"),
+            "expected f twice to net back to the same title; screen:\n{screen}"
+        );
+    }
+
+    let before_help = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"?");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_help,
+            "pressing ? drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Help") && screen.contains("select a station"),
+            "expected ? to open the Flow's own Help; screen:\n{screen}"
+        );
+    }
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(500));
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
@@ -707,13 +1168,12 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #650: pressing `1` opens the Time screen during a live
-/// run, which shows a running row's own bar and the now line;
-/// `⏎` on a finished loop row expands it into one row per pass;
-/// `+` and `=` zoom the axis and fit it back without the screen
-/// breaking.
+/// Issue #691's own acceptance item: `↓`/`↑` select a lane on the
+/// Flow screen over a live tree loop's own passes, turning follow
+/// off and back on the same way the Tape's own land-back rule
+/// does; `+`/`-` open and fold the selected fork's own lanes.
 #[test]
-fn pressing_1_during_a_live_run_opens_the_time_screen() {
+fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
@@ -724,7 +1184,7 @@ fn pressing_1_during_a_live_run_opens_the_time_screen() {
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - type: tool\n    name: items\n    provider: json\n    params: {mode: parse, input: \"[1, 2]\"}\n  - type: loop\n    name: fan\n    each: {in: prime.items.value, as: item}\n    body:\n      - type: tool\n        name: nap\n        provider: shell\n        params:\n          command: echo\n          args: [\"x\"]\n          allowed_commands: [\"echo\"]\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+        "interface:\n  inputs:\n    items: {type: array, default: [\"a\", \"b\", \"c\", \"d\"]}\neffects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n    flow: tree\n    max_concurrency: 1\n    body:\n      - name: slow\n        type: tool\n        provider: shell\n        params:\n          command: tail\n          args: [\"-f\", \"/dev/null\"]\n          allowed_commands: [\"tail\"]\n",
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
@@ -744,77 +1204,61 @@ fn pressing_1_during_a_live_run_opens_the_time_screen() {
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
     wait_for_step_start(
         &out_dir.path().join("events.jsonl"),
-        "prime.slow",
+        "prime.fan.iter_0.slow",
         Duration::from_secs(20),
     );
     std::thread::sleep(SIGNAL_DELAY);
 
-    let before_1 = captured_buf.lock().unwrap().len();
-    send_bytes(&mut master, b"1");
-    wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
+    let before_2 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"2");
+    wait_for_pattern_since(&captured_buf, before_2, b"fan", Duration::from_secs(10));
     {
-        let after = captured_buf.lock().unwrap()[before_1..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            rendered.contains("timeline"),
-            "expected the timeline pane's own border title after pressing 1; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains('┃'),
-            "expected the now line on the running row's own bar; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains("slow"),
-            "expected the running step's own row; got:\n{rendered:?}"
+            screen.contains("fan") && screen.contains("4 lanes"),
+            "expected the loop's own folded lane band after pressing 2; screen:\n{screen}"
         );
     }
 
-    // Turns follow off, then jumps to the first row (`prime`) and
-    // down twice to land on `fan` deterministically (`items` is the
-    // one step before it) -- more robust than counting rows up from
-    // the running step, since whether `fan`'s own two passes fold
-    // into one "quick steps" summary or stay separate rows isn't
-    // this test's concern. Each key is its own write, with enough of
-    // a pause after for a redraw to land before the next.
-    for key in [&b"f"[..], b"g", b"j", b"j"] {
-        send_bytes(&mut master, key);
-        std::thread::sleep(Duration::from_millis(400));
-    }
-
-    let before_enter = captured_buf.lock().unwrap().len();
-    send_bytes(&mut master, b"\r");
-    wait_for_pattern_since(
-        &captured_buf,
-        before_enter,
-        b"pass 1",
-        Duration::from_secs(10),
-    );
-    {
-        let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains("pass 1") && rendered.contains("pass 2"),
-            "expected one row per pass after ⏎ on the loop row; got:\n{rendered:?}"
-        );
-    }
-
-    // A live run's own spinner and clock redraw every ~300ms
-    // regardless of what `+`/`=` do, so a mere non-empty incremental
-    // diff here would prove nothing about the axis itself --
-    // `pressing_plus_then_equals_changes_the_timelines_own_tick_
-    // labels`, on an already-finished run where nothing else can
-    // cause a redraw, is what actually proves that. This just checks
-    // neither key breaks the screen entirely on a still-running one.
+    // `+` opens three lanes; the fork then draws real lane content
+    // (a station per open lane) instead of the folded band alone.
+    let before_plus = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"+");
-    std::thread::sleep(Duration::from_millis(300));
-    send_bytes(&mut master, b"=");
-    std::thread::sleep(Duration::from_millis(300));
+    std::thread::sleep(Duration::from_millis(500));
     {
-        let snapshot = captured_buf.lock().unwrap().clone();
-        let rendered = String::from_utf8_lossy(&snapshot);
         assert!(
-            rendered.contains("timeline"),
-            "the timeline pane must still be showing after + and =; got:\n{rendered:?}"
+            captured_buf.lock().unwrap().len() > before_plus,
+            "pressing + drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("slow"),
+            "expected an open lane's own station after pressing +; screen:\n{screen}"
+        );
+    }
+
+    // `↓` selects the next lane; `↑` selects back.
+    send_bytes(&mut master, b"\x1b[B");
+    std::thread::sleep(Duration::from_millis(400));
+    send_bytes(&mut master, b"\x1b[A");
+    std::thread::sleep(Duration::from_millis(400));
+
+    // `-` folds the lanes back into their own band.
+    let before_minus = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"-");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_minus,
+            "pressing - drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("lanes +"),
+            "expected the folded band back after pressing -; screen:\n{screen}"
         );
     }
 
@@ -828,6 +1272,268 @@ fn pressing_1_during_a_live_run_opens_the_time_screen() {
         "osi should exit 130 (cancelled), got {status:?}"
     );
 
+    assert_no_leftover_process(work.path());
+}
+
+/// §4: at 80×24 the Flow's own Story pane drops, and every loop's
+/// own lanes fold into their own band regardless of lane count,
+/// picked up on the TUI's own next redraw with no key needed; below
+/// 80 columns the Flow isn't offered at all, bouncing to the Tape
+/// the same way the Signal does.
+#[test]
+fn resizing_the_flow_screen_drops_the_story_pane_then_bounces_to_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_2 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"2");
+    wait_for_pattern_since(&captured_buf, before_2, b"Story", Duration::from_secs(10));
+
+    let before_80 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        assert!(
+            captured_buf.lock().unwrap().len() > before_80,
+            "resizing to 80x24 drew nothing at all"
+        );
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            !screen.contains("Story"),
+            "expected the Story pane gone at 80x24; screen:\n{screen}"
+        );
+        assert!(
+            screen.contains("slow"),
+            "expected the running station's own name still shown at 80x24; screen:\n{screen}"
+        );
+    }
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    wait_for_pattern_since(&captured_buf, before_60, b"Tape", Duration::from_secs(10));
+    {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        assert!(
+            screen.contains("Tape"),
+            "expected the Tape's own panel title once the terminal is too narrow for Flow; screen:\n{screen}"
+        );
+        assert!(
+            !screen.contains("Flow"),
+            "Flow must not still be offered below 80 columns; screen:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #688: pressing `1` opens the Signal screen during a live
+/// run, with the Now sweep on the trace and the running step's own
+/// name below it; `←`/`→` scrub the cursor and `n` returns it to
+/// Now; `+`/`-` zoom the column width; `⏎` opens the step under the
+/// cursor full-screen and `esc` returns; `0` goes back to the Tape.
+#[test]
+fn pressing_1_during_a_live_run_opens_the_signal_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, _slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"1");
+    // The replayed screen, not the bytes drawn since the key press: a
+    // screen switch redraws only the cells that changed, so text that
+    // sits in the same cells on both screens is never sent again.
+    let screen = wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(10));
+    assert!(
+        screen.contains("SIGNAL"),
+        "expected the Signal screen's own chip after pressing 1; got:\n{screen}"
+    );
+    assert!(
+        screen.contains('┃'),
+        "expected the Now sweep on the trace; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("slow"),
+        "expected the running step's own row; got:\n{screen}"
+    );
+
+    // Scrub left, then right, then zoom in and out, then back to
+    // Now -- this fixture's own single, always-running step gives
+    // no second step for a scrub to change the selection to, and a
+    // live run's own spinner redraws regardless of any key here, so
+    // this only checks that none of these keys breaks the screen;
+    // the cursor's own distinct rendering, separate from the Now
+    // sweep, is a buffer-level unit test (`tui.rs`'s own
+    // `a_scrubbed_cursor_is_drawn_distinctly_from_the_now_sweep`).
+    for key in [&b"\x1b[D"[..], b"\x1b[C", b"+", b"-", b"n"] {
+        send_bytes(&mut master, key);
+        std::thread::sleep(Duration::from_millis(300));
+    }
+    {
+        let snapshot = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&snapshot);
+        assert!(
+            rendered.contains("Signal"),
+            "the Signal screen must still be showing after scrub/zoom/n; got:\n{rendered:?}"
+        );
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    std::thread::sleep(Duration::from_millis(300));
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+    {
+        let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Signal"),
+            "expected the Signal screen back after ⏎ then esc; got:\n{rendered:?}"
+        );
+    }
+
+    let before_0 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"0");
+    wait_for_pattern_since(&captured_buf, before_0, b"TAPE", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_0..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("TAPE"),
+            "expected the Tape's own chip after pressing 0; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+
+    assert_no_leftover_process(work.path());
+}
+
+/// 120×30 and up shows the Now pane with Readings beside it;
+/// 80-119 drops Readings and keeps the Now pane's own running rows
+/// alone -- picked up on the TUI's own next redraw, with no key of
+/// its own needed.
+#[test]
+fn resizing_the_signal_screen_drops_readings_at_80_columns() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"Readings", Duration::from_secs(10));
+
+    let before_80 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        let after = captured_buf.lock().unwrap()[before_80..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            !rendered.contains("Readings"),
+            "expected the Readings pane gone at 80x24; got:\n{rendered:?}"
+        );
+        assert!(
+            rendered.contains("slow"),
+            "expected the running row's own name still shown at 80x24; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// §4: below 80 columns only the Tape is offered -- shrinking the
+/// terminal while Signal is on screen bounces straight back to the
+/// Tape, picked up on the TUI's own next redraw with no key needed.
+#[test]
+fn resizing_below_80_columns_bounces_signal_back_to_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"1");
+    wait_for_pattern(&captured_buf, b"SIGNAL", Duration::from_secs(10));
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    // The header band's own chip is past the right edge at 60
+    // columns and never drawn at all -- true of the Tape's own too,
+    // not something this resize changes -- so the Tape's own panel
+    // title is the one piece of chrome at this width that still
+    // says which screen is on.
+    wait_for_pattern_since(&captured_buf, before_60, b"Tape", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_60..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Tape"),
+            "expected the Tape's own panel title once the terminal is too narrow for Signal; got:\n{rendered:?}"
+        );
+        assert!(
+            !rendered.contains("Signal"),
+            "Signal must not still be offered below 80 columns; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
     assert_no_leftover_process(work.path());
 }
 
@@ -1528,12 +2234,12 @@ fn osi_watch_renders_in_the_tui_and_exits_cleanly() {
     assert_no_leftover_process(work.path());
 }
 
-/// Issue #632: `3` opens the Cost screen under `osi watch` too, not
-/// only a live `osi <doc>` run -- `osi watch` owns no engine of its
-/// own, so the run this attaches to is a separate, still-running
-/// `cof` process this test spawns and cleans up itself.
+/// Issue #695: `3` opens the Store screen under `osi watch` too,
+/// not only a live `osi <doc>` run -- `osi watch` owns no engine of
+/// its own, so the run this attaches to is a separate, still-
+/// running `cof` process this test spawns and cleans up itself.
 #[test]
-fn pressing_3_during_osi_watch_of_a_live_run_opens_the_cost_screen() {
+fn pressing_3_during_osi_watch_of_a_live_run_opens_the_store_screen() {
     if !e2e_enabled() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
@@ -1594,21 +2300,21 @@ fn pressing_3_during_osi_watch_of_a_live_run_opens_the_cost_screen() {
 
     let before_3 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"3");
-    std::thread::sleep(Duration::from_millis(500));
+    wait_for_pattern_since(&captured_buf, before_3, b"STORE", Duration::from_secs(10));
     {
-        let after = captured_buf.lock().unwrap()[before_3..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
         assert!(
-            rendered.contains("tokens by store"),
-            "expected the Cost screen's own treemap after pressing 3 under osi watch; got:\n{rendered:?}"
+            screen.contains("STORE"),
+            "expected the Store screen's own chip after pressing 3 under osi watch; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("largest stores"),
-            "expected the Cost screen's own table after pressing 3 under osi watch; got:\n{rendered:?}"
+            screen.contains("Largest Stores"),
+            "expected the Largest Stores table after pressing 3 under osi watch; screen:\n{screen}"
         );
         assert!(
-            rendered.contains("ask"),
-            "expected the finished prompt's own store to show on the Cost screen; got:\n{rendered:?}"
+            screen.contains("ask · 8 t"),
+            "expected the finished prompt's own store, with its own tokens, to show on the Store screen; screen:\n{screen}"
         );
     }
 
@@ -1624,6 +2330,122 @@ fn pressing_3_during_osi_watch_of_a_live_run_opens_the_cost_screen() {
 
     assert_no_leftover_process(work.path());
 }
+
+/// `osi watch` writes its own registry entry for a run it did not
+/// launch (a separate, still-running `cof` process this test spawns
+/// directly), and removes it again on detach -- while the watched
+/// run itself keeps running underneath.
+#[test]
+fn osi_watch_writes_its_own_registry_entry_and_removes_it_on_detach() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+    let events_path = run_dir.path().join("events.jsonl");
+
+    let mut cof = Command::new("cof");
+    cof.arg("run")
+        .arg(&doc)
+        .arg("--config")
+        .arg(&config)
+        .arg("--quiet")
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--events")
+        .arg(&events_path)
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        cof.env_remove(key);
+    }
+    let mut cof_child = cof.spawn().expect("spawn cof");
+
+    wait_for_step_start(&events_path, "prime.slow", Duration::from_secs(20));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let run_dir_arg = run_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+
+    let runs_dir = home.path().join("runs");
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut entries = Vec::new();
+    while Instant::now() < deadline {
+        entries = std::fs::read_dir(&runs_dir)
+            .map(|rd| rd.flatten().collect::<Vec<_>>())
+            .unwrap_or_default();
+        if !entries.is_empty() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    assert_eq!(
+        entries.len(),
+        1,
+        "expected exactly one registry entry while the watch is live, in {runs_dir:?}"
+    );
+    let entry: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
+    assert_eq!(
+        entry["launcher"].as_str().unwrap(),
+        format!("osi {} watch", env!("CARGO_PKG_VERSION"))
+    );
+
+    // `q` under `osi watch` detaches immediately -- the watched
+    // `cof` process keeps running underneath, this test's own to
+    // kill and clean up after.
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi watch should exit 0, got {status:?}");
+
+    let remaining = std::fs::read_dir(&runs_dir)
+        .map(|rd| rd.count())
+        .unwrap_or(0);
+    assert_eq!(
+        remaining, 0,
+        "expected the watch's own registry entry to be gone once it detached"
+    );
+
+    let _ = cof_child.kill();
+    let _ = cof_child.wait();
+
+    assert_no_leftover_process(work.path());
+}
+
+// Issue #698 (design v1 part 5): the Select screen's own PTY tests
+// (two live runs listed, exactly one attaching straight away, no
+// live runs showing the empty Select's Recent Runs table, and the
+// `esc` round trip back to Select) live in their own file,
+// `e2e_tui_pty_select.rs` -- every one of them reads `discover_runs`'s
+// own machine-wide `ps` scan, which would also see any `cof`/
+// `electricity` process another test in *this* file's own thread
+// pool happens to have live at the same moment (`cargo test` runs
+// each test binary in turn, but a single binary's own `#[test]`
+// functions run concurrently across threads by default); kept to a
+// file with nothing else in it, serialised among themselves with a
+// shared lock, they see a clean process table instead.
 
 /// A fake engine standing in for a real `cof`/`electricity`, used
 /// only by the two regression tests below (#494): parses out the one
@@ -1884,182 +2706,801 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         !rendered.contains("aborted"),
         "the TUI showed the finished run as aborted instead of failed; got:\n{rendered:?}"
     );
-    // The header's own status span starts a fresh styled run right
-    // at the word `failed` -- an SGR sequence (ending `m`) directly
-    // followed by the literal text, rather than every other place
-    // `failed` appears in this buffer (the plan/log rows and the
-    // error text print it mid-line, after a cursor-position escape
-    // or a plain space, never straight out of an `m`). Checking for
-    // that shape, rather than crossterm's own exact SGR encoding for
-    // `Color::Red` (review finding 3 on PR #496), survives a
-    // dependency bump that changes how a color is encoded without
-    // losing what this assertion is actually for.
+    // The Tape's own header band (issue #678) carries the status
+    // glyph and word together, `✗ Failed` -- the icon trace just
+    // ahead of it is in the same failed colour now (§9's settled
+    // icon-in-the-word-osi rule), so ratatui's own diff can reuse
+    // that run's SGR code across the cursor jump between them
+    // rather than emitting a fresh one right before the glyph.
     assert!(
-        rendered.contains("mfailed"),
+        rendered.contains("✗ Failed"),
         "the TUI never showed the header's own failed status; got:\n{rendered:?}"
     );
 
     assert_no_leftover_process(work.path());
 }
 
-/// The screen a terminal would show after `bytes`, replayed onto a
-/// `rows` x `cols` grid. osi's renderer writes absolute cursor moves
-/// (`ESC [ row ; col H`), colour codes, mode switches and text, and
-/// each frame redraws only the cells that changed, so reading labels
-/// straight off the stream sees fragments of them. Replaying it gives
-/// the real screen, whatever cells a frame happened to redraw.
-fn screen_grid(bytes: &[u8], rows: usize, cols: usize) -> Vec<Vec<char>> {
-    let text = String::from_utf8_lossy(bytes);
-    let mut grid = vec![vec![' '; cols]; rows];
-    let (mut r, mut c) = (0usize, 0usize);
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\x1b' {
-            match chars.next() {
-                Some('[') => {
-                    let mut params = String::new();
-                    let mut fin = None;
-                    for p in chars.by_ref() {
-                        if p.is_ascii_alphabetic() || p == '@' || p == '~' {
-                            fin = Some(p);
-                            break;
-                        }
-                        params.push(p);
-                    }
-                    match fin {
-                        Some('H') | Some('f') => {
-                            let mut it = params
-                                .split(';')
-                                .map(|n| n.parse::<usize>().unwrap_or(1).max(1));
-                            r = it.next().unwrap_or(1) - 1;
-                            c = it.next().unwrap_or(1) - 1;
-                        }
-                        Some('J') if params == "2" => {
-                            for row in grid.iter_mut() {
-                                row.fill(' ');
-                            }
-                        }
-                        Some('K') if params.is_empty() || params == "0" => {
-                            if let Some(row) = grid.get_mut(r) {
-                                for cell in row.iter_mut().skip(c) {
-                                    *cell = ' ';
-                                }
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-                Some(']') => {
-                    // An operating-system command runs to BEL or ESC \.
-                    while let Some(p) = chars.next() {
-                        if p == '\x07' {
-                            break;
-                        }
-                        if p == '\x1b' {
-                            chars.next();
-                            break;
-                        }
-                    }
-                }
-                Some('(') | Some(')') => {
-                    chars.next();
-                }
-                _ => {}
-            }
-            continue;
-        }
-        match ch {
-            '\r' => c = 0,
-            '\n' => r += 1,
-            _ if ch.is_control() => {}
-            _ => {
-                if r < rows && c < cols {
-                    grid[r][c] = ch;
-                }
-                c += 1;
-            }
-        }
-    }
-    grid
-}
-
-/// The tick labels on the Time screen's clock axis: the row right
-/// under the timeline box's own top border, read off a replayed
-/// screen. The header and the start columns hold clock times too, so
-/// only that row is read.
-fn axis_tick_labels(bytes: &[u8]) -> Vec<String> {
-    let grid = screen_grid(bytes, 40, 120);
-    let Some(top) = grid
-        .iter()
-        .position(|row| row.iter().collect::<String>().contains("┌ timeline"))
-    else {
-        return Vec::new();
+/// Resizes an already-open pty's own window (issue #678's four size
+/// classes): `TIOCSWINSZ` on a freshly opened slave fd, the same way
+/// `open_pty` sets the initial size -- the kernel delivers `SIGWINCH`
+/// to the pty's own foreground process group on its own, which is
+/// what tells crossterm's `event::read()` (osi's own event loop) a
+/// resize happened at all, with no signal of this test's own to send.
+fn resize_pty(slave_path: &Path, cols: u16, rows: u16) {
+    let slave = File::options()
+        .read(true)
+        .write(true)
+        .open(slave_path)
+        .unwrap_or_else(|e| panic!("opening pty slave {slave_path:?} for TIOCSWINSZ: {e}"));
+    let ws = libc::winsize {
+        ws_row: rows,
+        ws_col: cols,
+        ws_xpixel: 0,
+        ws_ypixel: 0,
     };
-    let Some(label_row) = grid.get(top + 1) else {
-        return Vec::new();
-    };
-    label_row
-        .iter()
-        .collect::<String>()
-        .split(|ch: char| !(ch.is_ascii_digit() || ch == ':' || ch == '-'))
-        .filter(|tok| tok.len() >= 5 && tok.contains(':'))
-        .map(str::to_string)
-        .collect()
-}
-
-/// Polls the replayed screen until `ok` holds for its axis labels,
-/// returning the last labels seen either way.
-fn wait_for_axis_labels(
-    captured: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
-    ok: impl Fn(&[String]) -> bool,
-) -> Vec<String> {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
-    loop {
-        let labels = axis_tick_labels(&captured.lock().unwrap());
-        if ok(&labels) || std::time::Instant::now() > deadline {
-            return labels;
-        }
-        std::thread::sleep(Duration::from_millis(100));
+    if unsafe { libc::ioctl(slave.as_raw_fd(), libc::TIOCSWINSZ as _, &ws) } != 0 {
+        panic!("TIOCSWINSZ failed: {}", std::io::Error::last_os_error());
     }
 }
 
-/// Issue #650's own `+`/`=` keys zoom the Time screen's own axis in
-/// and fit it back -- on a run that has already finished, so nothing
-/// else (a ticking clock, a spinner) can cause the screen to redraw
-/// at all, proves each key really did change the axis's own tick
-/// labels, not merely produce *some* unrelated output.
+fn spawn_scripted_run_on_tape(
+    home: &TestHome,
+    work: &Path,
+    out_dir: &Path,
+) -> (File, PathBuf, std::process::Child, Arc<Mutex<Vec<u8>>>) {
+    let doc = write_doc(
+        work,
+        "do.yml",
+        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let config = write_doc(work, "config.json", SCRIPTED_CONFIG);
+    let (master, slave_path) = open_pty();
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.as_os_str();
+    let child = spawn_osi_on_pty(
+        home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+    (master, slave_path, child, captured_buf)
+}
+
+/// Issue #678's own key map: `p` toggles the Tape's prompt previews
+/// off and back on -- a finished prompt's own preview line (`›`)
+/// disappears, then reappears.
 #[test]
-fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
+fn pressing_p_on_the_tape_toggles_previews() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
-    let bin_dir = tempfile::tempdir().unwrap();
-    write_engine_double(bin_dir.path(), "electricity");
-
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: a\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"a\"]}\n  - name: b\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"b\"]}\n  - name: c\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"c\"]}\n",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
     );
-    let config = write_doc(work.path(), "config.json", ELECTRICITY_CONFIG);
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
 
-    let events = concat!(
-        "{\"v\":1,\"seq\":0,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"run_start\",\"run_id\":\"r\"}\n",
-        "{\"v\":1,\"seq\":1,\"ts\":\"2024-01-01T00:00:00Z\",\"ev\":\"start\",\"id\":1,\"path\":\"prime.a\"}\n",
-        "{\"v\":1,\"seq\":2,\"ts\":\"2024-01-01T00:01:40Z\",\"ev\":\"end\",\"id\":1,\"path\":\"prime.a\",\"ok\":true,\"ms\":100000}\n",
-        "{\"v\":1,\"seq\":3,\"ts\":\"2024-01-01T00:01:40Z\",\"ev\":\"start\",\"id\":2,\"path\":\"prime.b\"}\n",
-        "{\"v\":1,\"seq\":4,\"ts\":\"2024-01-01T00:03:20Z\",\"ev\":\"end\",\"id\":2,\"path\":\"prime.b\",\"ok\":true,\"ms\":100000}\n",
-        "{\"v\":1,\"seq\":5,\"ts\":\"2024-01-01T00:03:20Z\",\"ev\":\"start\",\"id\":3,\"path\":\"prime.c\"}\n",
-        "{\"v\":1,\"seq\":6,\"ts\":\"2024-01-01T00:05:00Z\",\"ev\":\"end\",\"id\":3,\"path\":\"prime.c\",\"ok\":true,\"ms\":100000}\n",
-        "{\"v\":1,\"seq\":7,\"ts\":\"2024-01-01T00:05:00Z\",\"ev\":\"run_end\",\"ok\":true}\n",
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains('\u{203a}'),
+            "expected a preview line (\u{203a}) with previews on by default; got:\n{rendered:?}"
+        );
+    }
+
+    let before_p = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"p");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_p..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            !rendered.contains('\u{203a}'),
+            "expected no preview line after turning previews off; got:\n{rendered:?}"
+        );
+    }
+
+    let before_p2 = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"p");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_p2..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains('\u{203a}'),
+            "expected the preview line back after pressing p again; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
     );
-    let state = concat!(
-        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2024-01-01T00:05:00Z\",",
-        "\"totals\":{\"wall_time_s\":300.0,\"effects_run\":4,\"tokens_sent\":0,\"tokens_received\":0,\"cost_usd\":0.0}}},",
-        "\"prime\":{\"value\":true,\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:05:00Z\",\"error\":null,\"flow\":\"chain\"},",
-        "\"a\":{\"value\":\"a\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:00:00Z\",\"completed_at\":\"2024-01-01T00:01:40Z\",\"exit_code\":0,\"provider\":\"shell\"}},",
-        "\"b\":{\"value\":\"b\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:01:40Z\",\"completed_at\":\"2024-01-01T00:03:20Z\",\"exit_code\":0,\"provider\":\"shell\"}},",
-        "\"c\":{\"value\":\"c\\n\",\"meta\":{\"created_at\":\"2024-01-01T00:03:20Z\",\"completed_at\":\"2024-01-01T00:05:00Z\",\"exit_code\":0,\"provider\":\"shell\"}}}}",
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own key map: `t` on the Tape swaps the token column
+/// for the deviation-from-usual view -- a finished row's own bar
+/// (`\u{25b0}`) gives way to a `\u{2014}` (no history yet), and `t` again
+/// brings the bar back.
+#[test]
+fn pressing_t_on_the_tape_toggles_the_tokens_view() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains('\u{25b0}'),
+            "expected the fixed-scale bar by default; got:\n{rendered:?}"
+        );
+    }
+
+    let before_t = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"t");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_t..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("vs Usual") || rendered.contains('\u{2014}'),
+            "expected the deviation view's own title or dash after pressing t; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: the Help overlay opens over the Tape on its Keys page
+/// (the key bar's own keys, including the movement aliases and
+/// `/`/`e` the key bar itself does not show), and `←→` reaches its
+/// Key page (§3.7's glyph/line/colour legend). Closing it (any key,
+/// `esc` included) is checked directly against `keys::App::
+/// handle_key`, with no pty involved, by `keys::tests::esc_closes_
+/// the_help_overlay`.
+#[test]
+fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+    // Below the room the merged page (issue #738) needs, the Tape's
+    // own Help stays paged -- this test is about that fallback, not
+    // the default 120x40 pty, which already has room to merge.
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(300));
+
+    // `?` opens on the Keys page, the same order the merged page reads in.
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+    assert!(
+        screen.contains("tokens:") && screen.contains("usual"),
+        "expected the Tape's own t key listed; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("filter rows") && screen.contains("errors only"),
+        "expected the movement aliases' own / and e rows; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, "\x1b[C".as_bytes());
+    let screen = wait_for_screen_text(&captured_buf, "done · failed", Duration::from_secs(10));
+    assert!(
+        screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
+        "expected the Key page's own title; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("running · ahead"),
+        "expected the Key page's own glyph legend; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, "\x1b[D".as_bytes());
+    wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: at 120x30 the Tape's own Help has the room to merge
+/// its keys and its Key onto one page -- the title carries no page
+/// suffix, both halves show together, and `T` still cycles the
+/// theme (and its own banner) with the overlay open.
+#[test]
+fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+    resize_pty(&slave_path, 120, 30);
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Tape", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
+        "expected the merged page's own title, with no page suffix; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("select a row") && screen.contains("tokens:"),
+        "expected §4's own Tape keys on the merged page; got:\n{screen}"
+    );
+    assert!(
+        screen.contains("done · failed") && screen.contains("running · ahead"),
+        "expected §3.7's own glyph legend on the merged page; got:\n{screen}"
+    );
+
+    // Issue #738: a Key symbol's own cell colour changes with the
+    // theme, not only the text around it staying put -- this reads the
+    // same cell's own colour before and after T, at whatever colour
+    // depth the test terminal's own `COLORTERM` makes osi pick.
+    let before_bytes = captured_buf.lock().unwrap().clone();
+    let before_grid = screen_grid(&before_bytes, 200, 60);
+    let (glyph_row, glyph_col) =
+        find_glyph(&before_grid, "done · failed", '✓').unwrap_or_else(|| {
+            panic!("expected a ✓ cell on the \"done · failed\" row:\n{before_grid:?}")
+        });
+    let before_fg = screen_grid_fg(&before_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    assert!(
+        before_fg.is_some(),
+        "expected the ✓ Key symbol to carry a colour of its own before T"
+    );
+
+    send_bytes(&mut master, b"T");
+    let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
+    assert!(
+        screen.contains("Key"),
+        "expected the Help overlay to stay open after T; got:\n{screen}"
+    );
+    let after_bytes = captured_buf.lock().unwrap().clone();
+    let after_grid = screen_grid(&after_bytes, 200, 60);
+    let (glyph_row, glyph_col) =
+        find_glyph(&after_grid, "done · failed", '✓').unwrap_or_else(|| {
+            panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
+        });
+    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    assert_ne!(
+        before_fg, after_fg,
+        "expected the ✓ Key symbol's own cell colour to change after T, not just the text around it"
+    );
+
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #738: `?` on the Signal, the Flow and the Store each show
+/// that screen's own Help, named in the title, with that screen's
+/// own Key -- not the Tape's.
+#[test]
+fn the_help_overlay_lists_each_other_screens_own_key() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, _slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    send_bytes(&mut master, b"1");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Signal", Duration::from_secs(10));
+    assert!(
+        screen.contains("scrub the cursor") && screen.contains("finished prompt"),
+        "expected the Signal's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"2");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Flow", Duration::from_secs(10));
+    assert!(
+        screen.contains("select a station") && screen.contains("a station: done"),
+        "expected the Flow's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"3");
+    send_bytes(&mut master, b"?");
+    let screen = wait_for_screen_text(&captured_buf, "Help · Store", Duration::from_secs(10));
+    assert!(
+        screen.contains("select a row") && screen.contains("area is its share of tokens"),
+        "expected the Store's own keys and Key; got:\n{screen}"
+    );
+    send_bytes(&mut master, b"\x1b");
+    std::thread::sleep(Duration::from_millis(300));
+
+    send_bytes(&mut master, b"0");
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own size classes: 120×30 (list beside its detail
+/// pane) → 80×24 (list alone, no detail pane) → 60×24 (glyph, name
+/// and the token column only) → 60×16 (too small) and back up again
+/// -- each resize picked up on the TUI's own next redraw, with no key
+/// of its own needed.
+#[test]
+fn resizing_through_the_tapes_four_size_classes_and_back() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("Selected"),
+            "expected the detail pane's own title at 120x30; got:\n{rendered:?}"
+        );
+    }
+
+    let before_80 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 80, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        let after = captured_buf.lock().unwrap()[before_80..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            !rendered.contains("Selected"),
+            "expected the detail pane gone at 80x24; got:\n{rendered:?}"
+        );
+    }
+
+    let before_60 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 24);
+    std::thread::sleep(Duration::from_millis(600));
+    {
+        let after = captured_buf.lock().unwrap()[before_60..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("slow"),
+            "expected the running row's own name at 60x24; got:\n{rendered:?}"
+        );
+    }
+
+    let before_too_small = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 60, 16);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_too_small,
+        b"needs",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_too_small..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("needs") && rendered.contains("log"),
+            "expected the too-small notice naming the minimum and --log; got:\n{rendered:?}"
+        );
+    }
+
+    let before_back = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 120, 30);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_back,
+        b"Selected",
+        Duration::from_secs(10),
+    );
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own key map: `↑`/`↓` move the Tape's own selection
+/// (off the running row `follow` picked by default, onto the
+/// finished `ask` prompt above it), `enter` opens that row's own
+/// step full-screen (the list's own bordered title, always `Tape
+/// · …`, disappears -- `draw_tape` skips `draw_tape_list` entirely
+/// while full-screen), and `esc` closes it back to the normal
+/// side-by-side layout.
+#[test]
+fn arrow_keys_enter_and_esc_move_and_open_a_step_on_the_tape() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 3\n    tokens_received: 5\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("Tape \u{b7}"),
+            "expected the list's own bordered title before any key; got:\n{rendered:?}"
+        );
+    }
+
+    let before_up = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b[A");
+    wait_for_pattern_since(&captured_buf, before_up, b"ask", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_up..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("ask"),
+            "expected the detail pane to follow the selection up onto ask; got:\n{rendered:?}"
+        );
+    }
+
+    let before_enter = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\r");
+    wait_for_pattern_since(
+        &captured_buf,
+        before_enter,
+        b"Prompt Sent",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_enter..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Prompt Sent"),
+            "expected the full-screen step view's own content; got:\n{rendered:?}"
+        );
+        assert!(
+            !rendered.contains("Tape \u{b7}"),
+            "expected the list's own bordered title gone while full-screen; got:\n{rendered:?}"
+        );
+    }
+
+    let before_esc = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"\x1b");
+    wait_for_pattern_since(&captured_buf, before_esc, b"Tape", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_esc..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Tape \u{b7}"),
+            "expected the list's own bordered title back after esc; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own key map: `c` cancels the run after a
+/// confirmation, the same as `q` does, but never quits osi itself --
+/// the TUI stays up afterward, now showing the run's own Ended state,
+/// until a later `q` actually exits it.
+#[test]
+fn pressing_c_cancels_the_run_without_quitting_the_tui() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, _slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_c = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"c");
+    wait_for_pattern_since(&captured_buf, before_c, b"ancel", Duration::from_secs(10));
+    {
+        let after = captured_buf.lock().unwrap()[before_c..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.to_lowercase().contains("cancel"),
+            "expected the cancel confirmation dialog; got:\n{rendered:?}"
+        );
+    }
+
+    let before_y = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"y");
+    wait_for_pattern_since(&captured_buf, before_y, b"Ended", Duration::from_secs(20));
+    {
+        let after = captured_buf.lock().unwrap()[before_y..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Ended"),
+            "expected the Tape to show the run's own Ended state after cancelling; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should still exit 130 (the run itself was cancelled); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #678's own §5: the detail pane stays down to 100 columns,
+/// not just 120 -- only below 100 does the Tape drop to one pane.
+#[test]
+fn the_tapes_detail_pane_still_shows_at_100x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_100 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 100, 30);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_100,
+        b"Selected",
+        Duration::from_secs(10),
+    );
+    {
+        let after = captured_buf.lock().unwrap()[before_100..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        assert!(
+            rendered.contains("Selected"),
+            "expected the detail pane's own title at 100x30; got:\n{rendered:?}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #675's acceptance: a slow-streaming prompt's running row
+/// shows its own live token figures growing, then settles to the
+/// exact ones once it finishes. A raw loopback server stands in for
+/// a real `ollama`, answering with newline-delimited JSON deltas on
+/// its own real delay -- the scripted adapter's own `chunks` deliver
+/// every delta at once, with no delay between them to observe at
+/// all.
+fn spawn_slow_ollama_mock() -> std::net::SocketAddr {
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    std::thread::spawn(move || {
+        let Ok((mut stream, _)) = listener.accept() else {
+            return;
+        };
+        let mut buf = [0u8; 8192];
+        let _ = stream.read(&mut buf);
+        // Nothing streamed yet -- the running row reads "waiting for
+        // the first token" for as long as this lasts.
+        std::thread::sleep(Duration::from_millis(1500));
+        let _ = stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: application/x-ndjson\r\nConnection: close\r\n\r\n",
+        );
+        let _ = stream.write_all(b"{\"model\":\"demo\",\"response\":\"Thanks \",\"done\":false}\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(1200));
+        let _ = stream
+            .write_all(b"{\"model\":\"demo\",\"response\":\"for the report.\",\"done\":false}\n");
+        let _ = stream.flush();
+        std::thread::sleep(Duration::from_millis(300));
+        let _ = stream.write_all(
+            b"{\"model\":\"demo\",\"response\":\"\",\"done\":true,\"done_reason\":\"stop\",\"prompt_eval_count\":8,\"eval_count\":4}\n",
+        );
+        let _ = stream.flush();
+    });
+    addr
+}
+
+#[test]
+fn a_slow_streaming_prompt_shows_live_token_figures_then_settles() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let addr = spawn_slow_ollama_mock();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: ask\n    type: prompt\n    template: \"Say hi.\"\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"ollama\",\"default_model\":\"demo\",\"runtime\":{{\"adapters\":{{\"ollama\":{{\"base_url\":\"http://{addr}\"}}}}}}}}"
+        ),
     );
 
     let (master, slave_path) = open_pty();
@@ -2069,8 +3510,87 @@ fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let path_env = path_with(bin_dir.path());
-    let child = spawn_osi_on_pty_with_env(
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_pattern(&captured_buf, "t/s".as_bytes(), Duration::from_secs(10));
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2193}\u{2248}"),
+            "expected the running row's own received estimate marker while streaming; got:\n{rendered:?}"
+        );
+    }
+
+    wait_for_pattern(
+        &captured_buf,
+        "\u{2191}8 \u{2193}4".as_bytes(),
+        Duration::from_secs(20),
+    );
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2191}8 \u{2193}4"),
+            "expected the finished prompt's own exact token figures (prompt_eval_count 8, eval_count 4); got:\n{rendered:?}"
+        );
+    }
+
+    // The prompt's final figures land a moment before the run itself
+    // ends, and `q` on a run that is still live only asks for a
+    // confirmation this test never answers: wait for the header's own
+    // `Ended` first. Every wait is its own named step, so a slow runner
+    // fails on the step that lagged rather than on the exit.
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// [`a_slow_streaming_prompt_shows_live_token_figures_then_settles`],
+/// against a real `electricity` build instead of `cof`: the same
+/// mock, the same document, the same figures, since both engines
+/// write the identical `meta.live` shape (issue #674's PR #683) and
+/// drive `on_progress` from the same NDJSON deltas (`run_curl_
+/// streaming`'s own `on_line`).
+#[test]
+fn a_slow_streaming_prompt_shows_live_token_figures_then_settles_on_electricity() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let addr = spawn_slow_ollama_mock();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: ask\n    type: prompt\n    template: \"Say hi.\"\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"ollama\",\"default_model\":\"demo\",\"runtime\":{{\"adapters\":{{\"ollama\":{{\"base_url\":\"http://{addr}\"}}}}}}}}"
+        ),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
         &home,
         &slave_path,
         &[
@@ -2081,48 +3601,809 @@ fn pressing_plus_then_equals_changes_the_timelines_own_tick_labels() {
             OsStr::new("--out-dir"),
             out_dir_arg,
         ],
-        &[
-            ("PATH", path_env.as_os_str()),
-            ("OSI_DOUBLE_EVENTS", OsStr::new(events)),
-            ("OSI_DOUBLE_STATE", OsStr::new(state)),
-            ("OSI_DOUBLE_EXIT", OsStr::new("0")),
-        ],
     );
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    // The double sleeps briefly before writing its own complete,
-    // already-finished run in one burst (same timing
-    // `a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted`
-    // relies on) -- settled well before switching screens, so `1`'s
-    // own incremental redraw below is the Time screen's first paint,
-    // not still catching up on the run's own ending.
-    std::thread::sleep(Duration::from_millis(1500));
-    send_bytes(&mut master, b"1");
-    wait_for_pattern(&captured_buf, b"timeline", Duration::from_secs(10));
-    let labels_before = wait_for_axis_labels(&captured_buf, |l| !l.is_empty());
+    wait_for_pattern(&captured_buf, "t/s".as_bytes(), Duration::from_secs(10));
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2193}\u{2248}"),
+            "expected the running row's own received estimate marker while streaming; got:\n{rendered:?}"
+        );
+    }
+
+    wait_for_pattern(
+        &captured_buf,
+        "\u{2191}8 \u{2193}4".as_bytes(),
+        Duration::from_secs(20),
+    );
+    {
+        let captured = captured_buf.lock().unwrap().clone();
+        let rendered = String::from_utf8_lossy(&captured);
+        assert!(
+            rendered.contains("\u{2191}8 \u{2193}4"),
+            "expected the finished prompt's own exact token figures (prompt_eval_count 8, eval_count 4); got:\n{rendered:?}"
+        );
+    }
+
+    // The prompt's final figures land a moment before the run itself
+    // ends, and `q` on a run that is still live only asks for a
+    // confirmation this test never answers: wait for the header's own
+    // `Ended` first. Every wait is its own named step, so a slow runner
+    // fails on the step that lagged rather than on the exit.
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #703's own PTY acceptance item: a running agent session
+/// (the reference `fake_pi.py`, issue #637) shows its turn and
+/// current tool right on the Tape's own row while it runs, and
+/// `enter` opens the one shared Agent block with the transcript tail
+/// growing as further tool calls start. Every wait below is its own
+/// named step with its own cap, never a bare sleep.
+#[test]
+fn a_running_agent_shows_its_turn_and_tool_live_and_the_block_grows_on_enter() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let fake_pi = std::fs::canonicalize(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/agent_live_fakes/fake_pi.py"),
+    )
+    .expect("fake_pi.py exists");
+    // An absolute transcript path -- the agent tool writes it
+    // relative to its own `cwd`, which this test's own `cof`
+    // process never sets to `work.path()` itself, so a relative name
+    // here would otherwise land wherever the test binary's own
+    // process happened to start from.
+    let transcript_path = work.path().join("agent_transcript.jsonl");
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        &format!(
+            "effects:\n  - name: fixer\n    type: tool\n    provider: agent\n    params:\n      engine: pi\n      prompt: \"Fix the bug.\"\n      tools: [read, bash, edit]\n      transcript: {}\n",
+            transcript_path.display()
+        ),
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &serde_json::json!({
+            "default_adapter": "scripted",
+            "default_model": "scripted-model",
+            "runtime": {
+                "adapters": {"scripted": {}},
+                "plugins": {"agent": {"pi": {"binary": fake_pi.to_string_lossy()}}},
+            },
+        })
+        .to_string(),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.fixer",
+        Duration::from_secs(20),
+    );
+
+    // The fake's own first tool call (`bash`) starts right after its
+    // first turn's `message_end`, well before that call's own 2.5s
+    // sleep ends -- the Tape row must show the turn and that running
+    // tool while it's still in flight, not just the session's own
+    // elapsed time.
+    let screen = wait_for_screen_text(&captured_buf, "turn 1", Duration::from_secs(15));
     assert!(
-        !labels_before.is_empty(),
-        "the Time screen's axis shows no tick labels"
+        screen.contains("turn 1"),
+        "expected the running turn on the Tape row; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("bash"),
+        "expected the running tool on the Tape row; screen:\n{screen}"
     );
 
-    send_bytes(&mut master, b"+");
-    let labels_after_plus = wait_for_axis_labels(&captured_buf, |l| l != labels_before.as_slice());
-    assert_ne!(
-        labels_after_plus, labels_before,
-        "+ must zoom the axis in and change its tick labels"
+    // At this width (120 columns) the Tape's own list and its
+    // detail pane already share the screen while following, so the
+    // list's own title ("Tape \u{b7} ") is the one thing `enter`'s own
+    // full-screen step view removes -- its own detail pane already
+    // drew Asked/Turn beside the list, so checking for those alone
+    // after `enter` would prove nothing `enter` itself did.
+    assert!(
+        screen.contains("Tape \u{b7} "),
+        "expected the Tape's own list before \u{23ce}; screen:\n{screen}"
+    );
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text_gone(&captured_buf, "Tape \u{b7} ", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Tape \u{b7} "),
+        "expected \u{23ce} to open the full-screen step, dropping the list's own title; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("Asked"),
+        "expected the Agent block's own Asked field after \u{23ce}; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("Turn"),
+        "expected the Agent block's own Turn field after \u{23ce}; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{203a} bash"),
+        "expected the first tool call in the transcript tail; screen:\n{screen}"
     );
 
-    send_bytes(&mut master, b"=");
-    let labels_after_equals =
-        wait_for_axis_labels(&captured_buf, |l| l == labels_before.as_slice());
-    assert_eq!(
-        labels_after_equals, labels_before,
-        "= must fit the whole run again, back to the same tick labels as before +"
+    // The transcript tail grows: the second tool call (`edit`)
+    // appears once its own turn starts, well after the first screen
+    // above was captured -- the tail's own `\u{203a}`-prefixed line,
+    // never the Tools field's own `edit \u{d7}1`, which would already
+    // match without the tail growing at all.
+    let screen = wait_for_screen_text(&captured_buf, "\u{203a} edit", Duration::from_secs(15));
+    assert!(
+        screen.contains("\u{203a} edit"),
+        "expected the transcript tail to grow with the second tool call; screen:\n{screen}"
+    );
+
+    // The run ends on its own (the fake needs no signal); `q` leaves
+    // the now-finished screen the same way every other test here
+    // does.
+    wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(30));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+/// The Totals row's own token figure, parsed out of a replayed
+/// screen -- `" ↑<sent> ↓<received> · <total> t "`
+/// (`tui::draw_totals_row`), read as the figure right after the
+/// row's own `·`, the same one a human reads as the run's tokens so
+/// far. `None` before the Totals row has drawn at all.
+fn totals_tokens(screen: &str) -> Option<u64> {
+    let line = screen.lines().find(|l| l.contains("Totals"))?;
+    let after_dot = line.split('·').nth(1)?;
+    let digits: String = after_dot
+        .trim_start()
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == ',')
+        .collect();
+    digits.replace(',', "").parse().ok()
+}
+
+/// Whether events_path already carries an end event for step_path --
+/// used to confirm a growth the Totals row showed was actually
+/// observed while the step was still running, not merely after it
+/// had already finished (a slow poll could otherwise still pass the
+/// "it grew" assertion with nothing left running at all).
+fn step_has_ended(events_path: &Path, step_path: &str) -> bool {
+    let Ok(text) = std::fs::read_to_string(events_path) else {
+        return false;
+    };
+    text.lines().any(|line| {
+        if line.trim().is_empty() {
+            return false;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            return false;
+        };
+        value.get("ev").and_then(|v| v.as_str()) == Some("end")
+            && value.get("path").and_then(|v| v.as_str()) == Some(step_path)
+    })
+}
+
+/// Polls the replayed screen until the Totals row's own token figure
+/// reads strictly above `above`, bounded at `timeout` -- panics with
+/// the last screen it saw if it never does, same shape as
+/// `wait_for_screen_text`.
+fn wait_for_totals_tokens_above(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    above: u64,
+    timeout: Duration,
+) -> (String, u64) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = support::screen_grid(&whole, 200, 60).join("\n");
+        if let Some(tokens) = totals_tokens(&screen) {
+            if tokens > above {
+                return (screen, tokens);
+            }
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "the Totals row never grew past {above} within {timeout:?}; last screen:\n{screen}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
+}
+
+/// Issue #702's acceptance item: a PTY test with the fake `pi` used
+/// by the recorded `agent_live_pi` fixture -- the Totals row's own
+/// token figure grows while the agent tool runs (its own two tool
+/// calls, ~5s total), not only once the step finishes.
+#[test]
+fn the_totals_row_grows_while_an_agent_session_runs() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let fake_pi = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/agent_live_fakes/fake_pi.py")
+        .canonicalize()
+        .expect("fake_pi.py must exist");
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: fixer\n    type: tool\n    provider: agent\n    params:\n      engine: pi\n      prompt: \"Fix the bug.\"\n      tools: [read, bash, edit]\n",
+    );
+    let config = write_doc(
+        work.path(),
+        "config.json",
+        &format!(
+            "{{\"default_adapter\":\"scripted\",\"default_model\":\"scripted-model\",\"runtime\":{{\"plugins\":{{\"agent\":{{\"pi\":{{\"binary\":{:?}}}}}}}}}}}",
+            fake_pi.to_string_lossy()
+        ),
+    );
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    let events_path = out_dir.path().join("events.jsonl");
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(&events_path, "prime.fixer", Duration::from_secs(20));
+    // Named, polling waits capped by a generous deadline, never a
+    // fixed sleep: the fake's own two tool calls together run for
+    // only ~5s, so 20s per wait leaves ample room under load while
+    // still failing well short of the outer per-test timeout.
+    let (early, early_tokens) =
+        wait_for_totals_tokens_above(&captured_buf, 0, Duration::from_secs(20));
+    assert!(
+        !step_has_ended(&events_path, "prime.fixer"),
+        "the agent should still be running the moment the Totals row first counts it:\n{early}"
+    );
+
+    let (later, later_tokens) =
+        wait_for_totals_tokens_above(&captured_buf, early_tokens, Duration::from_secs(20));
+    assert!(
+        !step_has_ended(&events_path, "prime.fixer"),
+        "the agent should still be running when the Totals row grows further: {early_tokens} then {later_tokens}:\n{later}"
+    );
+
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(30));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #715: a count of 1,000 or more never shows a thousands
+/// separator, on any screen -- three scripted prompts total 1,234,
+/// 35,000,000 and 1,200,000,000 tokens between sent and received, so
+/// the Tape, Signal, Flow and Store all draw at least one figure deep
+/// in `kt`/`Mt`/`Gt` territory.
+#[test]
+fn large_token_figures_never_show_thousands_separators_on_any_screen() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.small:\n  - text: \"ok\"\n    tokens_sent: 234\n    tokens_received: 1000\nprime.million:\n  - text: \"ok\"\n    tokens_sent: 5000000\n    tokens_received: 30000000\nprime.billion:\n  - text: \"ok\"\n    tokens_sent: 200000000\n    tokens_received: 1000000000\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: small\n    type: prompt\n    template: \"hi\"\n  - name: million\n    type: prompt\n    template: \"hi\"\n  - name: billion\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_pattern(&captured_buf, "Ended".as_bytes(), Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let tape = wait_for_screen_text(&captured_buf, "TAPE", Duration::from_secs(10));
+    assert_no_thousands_separator(&tape, "Tape");
+
+    send_bytes(&mut master, b"1");
+    let signal = wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(10));
+    assert_no_thousands_separator(&signal, "Signal");
+
+    send_bytes(&mut master, b"2");
+    let flow = wait_for_screen_text(&captured_buf, "FLOW", Duration::from_secs(10));
+    assert_no_thousands_separator(&flow, "Flow");
+
+    send_bytes(&mut master, b"3");
+    let store = wait_for_screen_text(&captured_buf, "STORE", Duration::from_secs(10));
+    assert_no_thousands_separator(&store, "Store");
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #741: while a `shell` step is still running, its own Tape
+/// detail pane shows `meta.live`'s bounded stdout tail as a
+/// `── Output (live) ───` section -- read off the replayed screen
+/// (`support::screen_grid`), never the bytes drawn since a key, the
+/// same rule every other PTY test here follows.
+#[test]
+fn a_running_shell_steps_detail_pane_shows_its_live_output() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    // Prints "tick-1" (built with arithmetic expansion, never that
+    // literal text in the command line itself -- the Tape's own
+    // Command field would otherwise satisfy a plain `contains("tick-
+    // 1")` from the argv text alone, before the subprocess has ever
+    // run), pauses long enough for the test to observe it mid-run,
+    // then prints "tick-2" and exits -- the pause is what keeps this
+    // step `Running` (not already `Ended`) while the assertion below
+    // runs.
+    // A trivial second step follows `work` so the run's own
+    // default end-of-run selection (the last plan row -- the same
+    // rule `after_a_run_ends_down_and_enter_browse_a_row_and_
+    // bracket_steps_to_the_next` relies on) lands on it, never on
+    // `work` itself; one ↑ then reaches `work`'s own detail pane
+    // instead of the run-level summary a selection matching the
+    // last-reached row always shows.
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: work\n    type: tool\n    provider: shell\n    params:\n      command: bash\n      args: [\"-c\", \"echo tick-$((1)); sleep 6; echo tick-$((2))\"]\n      allowed_commands: [\"bash\"]\n  - name: after\n    type: tool\n    provider: uuid\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "── Output (live) ", Duration::from_secs(20));
+    assert!(
+        screen.contains("── Output (live) "),
+        "expected a live Output section while the step still runs; screen:\n{screen}"
+    );
+    assert!(screen.contains("tick-1"), "screen:\n{screen}");
+    assert!(!screen.contains("tick-2"), "screen:\n{screen}");
+
+    wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[A");
+    let screen = wait_for_screen_text(&captured_buf, "work · Selected", Duration::from_secs(10));
+    assert!(
+        !screen.contains("Output (live)"),
+        "expected the live section gone once the step finished; screen:\n{screen}"
+    );
+    assert!(screen.contains("── Output "), "screen:\n{screen}");
+    assert!(
+        screen.contains("tick-1") && screen.contains("tick-2"),
+        "screen:\n{screen}"
     );
 
     send_bytes(&mut master, b"q");
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// A comma with a digit on both sides is a thousands separator in
+/// every token figure this screen ever draws -- nothing else in the
+/// chrome puts a digit directly against a comma, and no axis label
+/// ever carries one either (`format_shared_axis_label` only ever
+/// prints a plain count or a `k`-scaled one, never a comma).
+fn assert_no_thousands_separator(screen: &str, screen_name: &str) {
+    let chars: Vec<char> = screen.chars().collect();
+    for (i, &c) in chars.iter().enumerate() {
+        if c != ',' || i == 0 || i + 1 >= chars.len() {
+            continue;
+        }
+        assert!(
+            !(chars[i - 1].is_ascii_digit() && chars[i + 1].is_ascii_digit()),
+            "expected no thousands-separated token figure on the {screen_name} screen; screen:\n{screen}"
+        );
+    }
+}
+
+/// Issue #737's own document: the Now area's own tree over a real
+/// live run with a loop inside a loop, each wide enough to run more
+/// than one pass at once, plus a plain step beside them -- no row
+/// marked running sits above the Now band, two distinct `files`
+/// loops each read their own `2 of 2 Slots Busy`, their own labels
+/// stay distinct, and their own queued count drops from three to one
+/// as the first wave of passes finishes.
+#[test]
+fn nested_loops_now_area_is_a_tree_with_no_running_row_above_the_band() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "interface:\n  inputs:\n    groups: {type: array, default: [\"a\", \"b\"]}\n    files: {type: array, default: [1, 2, 3, 4, 5]}\neffects:\n  - name: setup\n    type: tool\n    provider: shell\n    params: {command: sleep, args: [\"1\"], allowed_commands: [\"sleep\"]}\n  - name: work\n    type: dynamic\n    flow: tree\n    effects:\n      - name: groups\n        type: loop\n        flow: tree\n        max_concurrency: 2\n        each: {in: input.groups, as: g}\n        body:\n          - name: files\n            type: loop\n            flow: tree\n            max_concurrency: 2\n            each: {in: input.files, as: f}\n            body:\n              - name: build\n                type: dynamic\n                effects:\n                  - name: compile\n                    type: tool\n                    provider: shell\n                    params: {command: sleep, args: [\"4\"], allowed_commands: [\"sleep\"]}\n                  - name: check\n                    type: tool\n                    provider: shell\n                    params: {command: sleep, args: [\"2\"], allowed_commands: [\"sleep\"]}\n      - name: watcher\n        type: tool\n        provider: shell\n        params: {command: sleep, args: [\"40\"], allowed_commands: [\"sleep\"]}\n  - name: done\n    type: tool\n    provider: shell\n    params: {command: echo, args: [\"done\"], allowed_commands: [\"echo\"]}\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.work.groups.iter_0.files.iter_0.build.compile",
+        Duration::from_secs(20),
+    );
+    resize_pty(&slave_path, 187, 56);
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let early = wait_for_screen_text(&captured_buf, "Passes Queued", Duration::from_secs(10));
+    assert_now_area_has_no_running_row_above_the_band(&early);
+    let busy_lines: Vec<&str> = early.lines().filter(|l| l.contains("Slots Busy")).collect();
+    assert!(
+        busy_lines.len() >= 3,
+        "expected the groups loop and both files loops each to read their own Slots Busy; got:\n{early}"
+    );
+    for want in ["iter_0", "iter_1"] {
+        assert!(
+            busy_lines
+                .iter()
+                .any(|l| l.contains(want) && l.contains("files") && l.contains("2 of 2")),
+            "expected a '{want} › files' loop row reading '2 of 2'; got:\n{early}"
+        );
+    }
+    assert!(
+        busy_lines
+            .iter()
+            .filter(|l| l.contains("files"))
+            .any(|l| l.contains("3 Passes Queued")),
+        "expected a files loop to read 3 Passes Queued before its first wave finishes; got:\n{early}"
+    );
+    assert_tree_rows_are_distinct(&early);
+
+    // Once the second wave (`iter_2`) of *both* files loops has
+    // started -- not just one of them, so a laggard loop can never
+    // make this flake -- each still-running files loop reads one
+    // pass left queued, never three.
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.work.groups.iter_0.files.iter_2.build.compile",
+        Duration::from_secs(15),
+    );
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.work.groups.iter_1.files.iter_2.build.compile",
+        Duration::from_secs(15),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+    let later = wait_for_screen_text(&captured_buf, "1 Pass Queued", Duration::from_secs(10));
+    assert_now_area_has_no_running_row_above_the_band(&later);
+    let later_busy_lines: Vec<&str> = later.lines().filter(|l| l.contains("Slots Busy")).collect();
+    assert!(
+        later_busy_lines
+            .iter()
+            .filter(|l| l.contains("files"))
+            .all(|l| !l.contains("3 Passes Queued") && !l.contains("2 Passes Queued")),
+        "expected every files loop to read at most one pass queued once both second waves have started; got:\n{later}"
+    );
+    assert!(
+        later_busy_lines
+            .iter()
+            .filter(|l| l.contains("files"))
+            .any(|l| l.contains("1 Pass Queued")),
+        "expected a files loop to read 1 Pass Queued; got:\n{later}"
+    );
+    assert_tree_rows_are_distinct(&later);
+
+    // The document's own `watcher` (a 40s sleep, well past every
+    // loop pass above) is what the run's own end actually waits on.
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(60));
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #739: a finished prompt whose reply is JSON reads a short
+/// summary on the Tape row, never raw JSON -- an object with a
+/// `summary` field, an object of lists (its own first keys), an
+/// array of strings (its own count, then the first item's own first
+/// words), a plain-text reply that merely holds JSON as a string
+/// (parsed and summarised the same as if it had arrived typed), and
+/// ordinary plain text (kept to today's first-words rule, unaffected).
+#[test]
+fn json_replies_read_as_short_summaries_not_raw_json() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        r#"prime.plan:
+  - {text: '{"summary": "Parser fixed."}', tokens_sent: 120, tokens_received: 30}
+prime.edits:
+  - {text: '{"edits": [1, 2], "files": [1, 2, 3]}', tokens_sent: 150, tokens_received: 40}
+prime.items:
+  - {text: '["first item text", "second"]', tokens_sent: 90, tokens_received: 12}
+prime.stringjson:
+  - {text: '{"summary": "Parsed ok."}', tokens_sent: 70, tokens_received: 10}
+prime.plain:
+  - {text: "Hello there. More words follow.", tokens_sent: 20, tokens_received: 3}
+"#,
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"adapter: scripted
+model: scripted-model
+effects:
+  - name: plan
+    type: prompt
+    prompt_type: json
+    template: "plan"
+    schema: {type: object}
+  - name: edits
+    type: prompt
+    prompt_type: json
+    template: "edits"
+    schema: {type: object}
+  - name: items
+    type: prompt
+    prompt_type: json
+    template: "items"
+    schema: {type: array}
+  - name: stringjson
+    type: prompt
+    template: "stringjson"
+  - name: plain
+    type: prompt
+    template: "plain"
+  - name: slow
+    type: tool
+    provider: shell
+    params:
+      command: tail
+      args: ["-f", "/dev/null"]
+      allowed_commands: ["tail"]
+"#,
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60).join("\n");
+
+    let row_text = |name: &str| -> String {
+        screen
+            .lines()
+            .find(|l| l.contains(&format!("✓ {name}")))
+            .map(|l| l.trim_end().to_string())
+            .unwrap_or_default()
+    };
+
+    let rows = [
+        ("plan", row_text("plan")),
+        ("edits", row_text("edits")),
+        ("items", row_text("items")),
+        ("stringjson", row_text("stringjson")),
+        ("plain", row_text("plain")),
+    ];
+    for (name, row) in &rows {
+        assert!(
+            !row.is_empty(),
+            "expected a finished row for {name}; screen:\n{screen}"
+        );
+        assert!(
+            !row.contains("{\"") && !row.contains("[\""),
+            "expected {name}'s own row to read a summary, never raw JSON; row: {row:?}"
+        );
+    }
+    let row = |name: &str| rows.iter().find(|(n, _)| *n == name).unwrap().1.as_str();
+
+    assert!(
+        row("plan").contains("Parser fixed."),
+        "expected plan's own summary field to lead; row: {:?}",
+        row("plan")
+    );
+    // The composite "first keys" result is never cut itself, only
+    // by the row's own real column downstream (DESIGN.md) -- at this
+    // width that leaves `edits`' own first key, `files`' second one
+    // cut away, same as any other reply long enough to hit the same
+    // column.
+    assert!(
+        row("edits").contains("edits 2 item"),
+        "expected edits' own first key; row: {:?}",
+        row("edits")
+    );
+    assert!(
+        row("items").contains("2 items") && row("items").contains("first"),
+        "expected items' own count and first item's own words; row: {:?}",
+        row("items")
+    );
+    assert!(
+        row("stringjson").contains("Parsed ok."),
+        "expected a plain-text reply holding JSON to be parsed and summarised; row: {:?}",
+        row("stringjson")
+    );
+    assert!(
+        row("plain").contains("Hello there."),
+        "expected plain text to keep its own first-words rule; row: {:?}",
+        row("plain")
+    );
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled), got {status:?}"
+    );
 
     assert_no_leftover_process(work.path());
+}
+
+/// No two running *loops* in the Now area's own tree (between the
+/// `━━ Now` band and the first row ahead) read the same line -- the
+/// list pane's own half only, the same cut
+/// [`assert_now_area_has_no_running_row_above_the_band`] already
+/// makes. A running *leaf*'s own relative label may legitimately
+/// coincide across two different loops (`iter_0 › build › compile`
+/// under both `iter_0 › files` and `iter_1 › files`, the same way
+/// two files in two different folders can share a name), so only a
+/// loop's own line -- `⟳` -- is ever checked here.
+fn assert_tree_rows_are_distinct(screen: &str) {
+    let lines: Vec<&str> = screen.lines().collect();
+    let now_row = lines
+        .iter()
+        .position(|l| l.contains("━━ Now"))
+        .unwrap_or_else(|| panic!("expected a Now band on screen; got:\n{screen}"));
+    let tree: Vec<&str> = lines[now_row + 1..]
+        .iter()
+        .map(|l| l.split("││").next().unwrap_or(l))
+        .take_while(|l| l.contains('●') || l.contains('⟳'))
+        .filter(|l| l.contains('⟳'))
+        .collect();
+    let mut seen = std::collections::HashSet::new();
+    for line in &tree {
+        assert!(
+            seen.insert(*line),
+            "two running loops read the same line {line:?}; got:\n{screen}"
+        );
+    }
+}
+
+/// No row marked running (`●`) sits above the `━━ Now` band -- every
+/// running row, loop or leaf, is the Now area's own tree below it.
+/// Only the Tape's own list pane counts: the header's and the
+/// detail pane's own `● Running` status words are not Tape rows at
+/// all, so every line is cut at the list pane's own right edge (the
+/// first `││`, the border between it and the detail pane) first.
+fn assert_now_area_has_no_running_row_above_the_band(screen: &str) {
+    let lines: Vec<&str> = screen.lines().collect();
+    let list_start = lines
+        .iter()
+        .position(|l| l.contains("╭─ Tape"))
+        .unwrap_or_else(|| panic!("expected the Tape's own pane on screen; got:\n{screen}"));
+    let now_row = lines
+        .iter()
+        .position(|l| l.contains("━━ Now"))
+        .unwrap_or_else(|| panic!("expected a Now band on screen; got:\n{screen}"));
+    let above: Vec<&str> = lines[list_start + 1..now_row]
+        .iter()
+        .map(|l| l.split("││").next().unwrap_or(l))
+        .filter(|l| l.contains('●'))
+        .collect();
+    assert!(
+        above.is_empty(),
+        "expected no running row above the Now band; got:\n{above:?}\nscreen:\n{screen}"
+    );
 }

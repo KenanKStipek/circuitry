@@ -108,6 +108,13 @@ reply that reports none. Python's own `int` is unbounded; electricity's token co
 `i64`-bounded, a documented divergence — a count beyond that range is a load-time error
 there, with a message Python has no equivalent of, rather than a silent truncation.
 
+**`chunks` (issue #674/#676).** A text reply may carry a `chunks: [str, ...]` list instead
+of (or alongside) `text`; both engines' own scripted adapter deliver each entry as one
+delta through the calling prompt's `on_progress` before the reply completes, so
+`meta.live`/`--events`' own `progress` line have something deterministic to show. `text`,
+when also given, must equal the concatenation of `chunks`; omitted, it defaults to that
+concatenation (`chunks: null` is absent, exactly like a missing key, on both engines).
+
 ### 4.2 An error reply
 
 ```yaml

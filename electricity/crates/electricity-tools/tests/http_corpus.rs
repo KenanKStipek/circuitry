@@ -96,6 +96,14 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         config: &NONE,
         token,
         armed: false,
+        secret_headers: &[],
+        scrub: None,
+        on_live: None,
+        on_agent_live: None,
+        agent_attempt: 1,
+        agent_earlier_attempts: None,
+        limited: false,
+        confine_to: None,
     }
 }
 
@@ -564,6 +572,14 @@ async fn end_to_end_cases_match_cpython() {
             config: &NONE,
             token: &token,
             armed: false,
+            secret_headers: &[],
+            scrub: None,
+            on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
+            limited: false,
+            confine_to: None,
         };
         let result = electricity_tools::http::HttpPlugin
             .execute(dict_params(params_vec), &call_with_timeout)

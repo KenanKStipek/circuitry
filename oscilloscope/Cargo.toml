@@ -2,6 +2,14 @@
 resolver = "3"
 members = ["crates/*"]
 
+# Copied from ../electricity/Cargo.toml: osi depends on electricity-compiler/
+# electricity-bytecode by path, which pull in electricity-cel, so this
+# workspace needs the same vendored `cel` (`../electricity/vendor/cel`,
+# `../electricity/vendor/cel/VENDORING.md`) a `[patch.crates-io]` is
+# per-workspace, not inherited through a path dependency.
+[patch.crates-io]
+cel = { path = "../electricity/vendor/cel" }
+
 [workspace.package]
 version = "0.1.0"
 edition = "2024"

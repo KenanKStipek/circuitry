@@ -1,0 +1,7 @@
+name: c723-cel-tool-params-json-not-accepted
+effects:
+  - type: tool
+    name: gate
+    provider: cel
+    params: {expr: "true"}
+    params_json: '{"strict": true}'

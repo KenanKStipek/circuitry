@@ -1,0 +1,21 @@
+name: c-systemone-state-file-within
+interface:
+  inputs:
+    state_file:
+      type: string
+      required: true
+    within:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: decide
+    provider: systemone
+    params:
+      model: typesafe-1
+      state_file: {from: input.state_file}
+      within: {from: input.within}
+      questions:
+        risky:
+          type: noul
+          instructions: "Does this change risk data loss?"

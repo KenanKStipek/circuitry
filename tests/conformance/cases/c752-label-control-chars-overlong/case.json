@@ -1,0 +1,7 @@
+{
+  "spec_case": "#752",
+  "description": "`label:` renders entirely from an `-e` value carrying an ANSI colour escape and a bare BEL, then padded past 64 characters: the control characters and escape sequence are dropped and the result is cut at 64 characters.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": ["-e", "raw=a\u001b[31mb\u0007cxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
+}

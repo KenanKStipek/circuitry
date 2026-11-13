@@ -973,3 +973,908 @@ fn a_ten_thousand_hop_ref_chain_in_a_prompt_schema_never_overflows_the_main_thre
         "maximum recursion depth exceeded while calling a Python object"
     );
 }
+
+/// `electricity run <doc>` (issue #728): the same document the legacy
+/// positional form runs, with `--config` given explicitly, succeeds
+/// with the same stdout contract (no `--out`: the state JSON on
+/// stdout).
+#[test]
+fn run_subcommand_with_an_explicit_config_succeeds() {
+    let (mut cmd, home) = command("run-sub-explicit-config");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(payload["input"].is_object());
+}
+
+/// A document whose own path resolves inside the library cache
+/// directory is gated on capability consent exactly as a library-name
+/// run would be (issue #337's own anti-bypass rule, ported for issue
+/// #728) -- refused with `cof`'s own text and exit code with no
+/// `--allow-capabilities`, then allowed once it covers what the
+/// document needs.
+#[test]
+fn run_subcommand_refuses_a_shell_document_inside_the_library_cache_path() {
+    let (mut cmd, home) = command("run-sub-cache-path-refused");
+    let cache_dir = home.path.join("cache");
+    let library_dir = cache_dir.join("circuitry").join("library").join("src");
+    fs::create_dir_all(&library_dir).unwrap();
+    let doc = library_dir.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: ok\n    type: tool\n    provider: shell\n    \
+         params: {command: 'true', allowed_commands: ['true']}\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    cmd.env("XDG_CACHE_HOME", &cache_dir);
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    // The label is the path exactly as given on the command line, not
+    // resolved/canonicalized -- matching `cof run`'s own
+    // `str(orchestration_path)` (the `is_cache_path` *check* resolves
+    // symlinks to find the cache directory; the refusal's own label
+    // does not).
+    assert_eq!(
+        error,
+        format!(
+            "'{}' needs capabilities nobody has consented to: shell. Run `cof trust {}` to \
+             review and approve it, or pass `--allow-capabilities shell` for a scripted/CI \
+             run.",
+            doc.display(),
+            doc.display(),
+        )
+    );
+}
+
+/// Same document and cache path as above, this time with
+/// `--allow-capabilities shell` -- the run proceeds, and the installed
+/// ceiling (`runtime.effective_settings.runtime._capability_ceiling`)
+/// records what was actually consented, sorted, matching `cof run`'s
+/// own `install_capability_ceiling`.
+#[test]
+fn run_subcommand_allows_a_shell_document_inside_the_library_cache_path_with_allow_capabilities() {
+    let (mut cmd, home) = command("run-sub-cache-path-allowed");
+    let cache_dir = home.path.join("cache");
+    let library_dir = cache_dir.join("circuitry").join("library").join("src");
+    fs::create_dir_all(&library_dir).unwrap();
+    let doc = library_dir.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: ok\n    type: tool\n    provider: shell\n    \
+         params: {command: 'true', allowed_commands: ['true']}\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    cmd.env("XDG_CACHE_HOME", &cache_dir);
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--allow-capabilities",
+            "shell",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        state["runtime"]["effective_settings"]["runtime"]["_capability_ceiling"],
+        serde_json::json!(["shell"])
+    );
+}
+
+/// A path run *outside* the library cache directory is never gated,
+/// `--allow-capabilities` or not (every other test above already runs
+/// a `shell` document this way without it) -- `_capability_ceiling` is
+/// absent, not an empty list, the same as before issue #728's own
+/// cache-path gate existed at all.
+#[test]
+fn run_subcommand_installs_no_capability_ceiling_outside_the_cache_path() {
+    let (mut cmd, home) = command("run-sub-no-cache-path-ceiling");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: ok\n    type: tool\n    provider: shell\n    \
+         params: {command: 'true', allowed_commands: ['true']}\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        state["runtime"]["effective_settings"]["runtime"]
+            .get("_capability_ceiling")
+            .is_none()
+    );
+}
+
+/// `--allow-capabilities`/`--adapter`/`--quiet` (issue #728): all three
+/// parse and don't themselves change an ordinary run's outcome.
+#[test]
+fn run_subcommand_accepts_allow_capabilities_adapter_and_quiet() {
+    let (mut cmd, home) = command("run-sub-new-flags");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--allow-capabilities",
+            "shell,network",
+            "--adapter",
+            "claude_code",
+            "--quiet",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    // `--adapter` actually ranked as the `cli` source, beating the
+    // config's own `default_adapter` ("ollama", `SANE_DEFAULTS`) --
+    // not merely parsed and dropped.
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        state["runtime"]["effective_settings"]["adapter"],
+        "claude_code"
+    );
+    assert_eq!(
+        state["runtime"]["effective_settings"]["sources"]["adapter"],
+        "cli"
+    );
+}
+
+/// `electricity run` with no orchestration positional (issue #728):
+/// `cof run`'s own "Missing orchestration" text, on stdout, exit 1 --
+/// not a usage error (exit 2), since the positional stands in for
+/// `--last` there (not implemented here -- #727's own scope).
+#[test]
+fn run_subcommand_with_no_orchestration_fails_with_cofs_own_text_and_exit_one() {
+    let (mut cmd, home) = command("run-sub-missing-orchestration");
+    let config = home.config("{}");
+    let output = cmd
+        .args(["run", "--config", config.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout,
+        "Error: Missing orchestration. Use --last or provide a path/name.\n"
+    );
+}
+
+/// `--resume last` with no `--state <file>` (issue #727): `cof run`'s
+/// own `_resolve_resume_state` fails this with a `typer.BadParameter`
+/// the caller re-raises as `typer.Exit(code=1)` -- a pre-run refusal,
+/// exit 1, writing no `--out` at all, never a raw CLI usage error
+/// (exit 2).
+#[test]
+fn run_subcommand_resume_last_with_no_state_is_refused_with_exit_one_and_writes_nothing() {
+    let (mut cmd, home) = command("run-sub-resume-last-no-state");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--resume",
+            "last",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(error.contains("--last stash"), "{error}");
+    assert!(error.contains("--state <file>"), "{error}");
+    assert!(!out.exists());
+}
+
+/// `--resume <run-id>` with no `--state <file>` (issue #727): cof's own
+/// run-id lookup needs `runtime.persistence`, which stays refused on
+/// electricity -- refused the same way as `--resume last` above, not a
+/// usage error either.
+#[test]
+fn run_subcommand_resume_run_id_with_no_state_is_refused_with_exit_one_and_writes_nothing() {
+    let (mut cmd, home) = command("run-sub-resume-run-id-no-state");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--resume",
+            "01234567-89ab-cdef-0123-456789abcdef",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let error = payload["error"].as_str().unwrap();
+    assert!(error.contains("runtime.persistence"), "{error}");
+    assert!(error.contains("--state <file>"), "{error}");
+    assert!(!out.exists());
+}
+
+/// `cli/app.py::run_cmd`'s own `_print_run_warnings(cfg.resolution_
+/// warnings())` runs between "Orchestration not found" and its own
+/// `Tip: ...` line -- a discovered-but-skipped project config's
+/// warning must still reach stderr when the run ends this early, not
+/// only on one that gets far enough to reach the ordinary
+/// `print_stderr_contract` copy of the same text.
+#[test]
+fn run_subcommand_still_prints_a_config_warning_when_the_orchestration_is_not_found() {
+    let (mut cmd, home) = command("run-sub-missing-doc-config-warning");
+    let cwd = home.path.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("circuitry.config.json"),
+        r#"{"default_model": "from-project"}"#,
+    )
+    .unwrap();
+    let output = cmd
+        .current_dir(&cwd)
+        .args(["run", "no-such-doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(stdout, "Error: Orchestration not found: no-such-doc.yml\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Warning: Skipped project config"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("not trusted"), "{stderr}");
+}
+
+/// Config discovery (issue #728): with no `--config`, `CIRCUITRY_CONFIG`
+/// is honored, same order as `cli/config.py::resolve_config`.
+#[test]
+fn run_subcommand_discovers_config_via_circuitry_config_env_var() {
+    let (mut cmd, home) = command("run-sub-circuitry-config-env");
+    let config = home.config(r#"{"default_model": "from-env-var"}"#);
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    cmd.env("CIRCUITRY_CONFIG", config.to_str().unwrap());
+    let output = cmd.args(["run", doc.to_str().unwrap()]).output().unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    // Not just the exit code -- the discovered file's own setting must
+    // actually have been applied, not merely ignored without failing.
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        state["runtime"]["effective_settings"]["model"],
+        "from-env-var"
+    );
+}
+
+/// A discovered project config (`circuitry.config.json` in the working
+/// directory) with no trust store entry and no
+/// `CIRCUITRY_TRUST_PROJECT_CONFIG` is skipped, with the same warning
+/// text `cli/config_trust.py::ProjectConfigStatus.skip_warning` writes
+/// (issue #728's config-discovery branch). The run still succeeds (the
+/// built-in defaults apply instead).
+#[test]
+fn run_subcommand_skips_an_untrusted_discovered_project_config() {
+    let (mut cmd, home) = command("run-sub-untrusted-project-config");
+    let cwd = home.path.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    let project_config = cwd.join("circuitry.config.json");
+    fs::write(&project_config, r#"{"default_model": "from-project"}"#).unwrap();
+    let doc = cwd.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .current_dir(&cwd)
+        .args(["run", "doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    // `std::env::current_dir()` inside the child resolves any symlink
+    // in the path (e.g. macOS's `/var` -> `/private/var`), so the
+    // message's own path is compared against the canonicalized form,
+    // not the possibly-unresolved one this test built *cwd* from.
+    let resolved = fs::canonicalize(&project_config).unwrap();
+    let expected = format!(
+        "Skipped project config {}: it is not trusted, so none of its settings apply. Review \
+         it, then run `cof trust {}` to apply it.",
+        resolved.display(),
+        resolved.display(),
+    );
+    assert!(stderr.contains(&expected), "{stderr}");
+    // The skip isn't merely reported -- the skipped file's setting must
+    // not have been applied either; the built-in default model stands.
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_ne!(
+        state["runtime"]["effective_settings"]["model"],
+        "from-project"
+    );
+}
+
+/// `CIRCUITRY_TRUST_PROJECT_CONFIG` (issue #728's config-discovery
+/// branch) trusts a discovered project config with no store entry at
+/// all, and so it applies silently (no skip warning).
+#[test]
+fn run_subcommand_env_var_trusts_a_discovered_project_config() {
+    let (mut cmd, home) = command("run-sub-env-trusted-project-config");
+    let cwd = home.path.join("cwd");
+    fs::create_dir_all(&cwd).unwrap();
+    fs::write(
+        cwd.join("circuitry.config.json"),
+        r#"{"default_model": "from-project"}"#,
+    )
+    .unwrap();
+    let doc = cwd.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    cmd.env("CIRCUITRY_TRUST_PROJECT_CONFIG", "1");
+    let output = cmd
+        .current_dir(&cwd)
+        .args(["run", "doc.yml"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!stderr.contains("Skipped project config"), "{stderr}");
+    // Trusted, not just unreported-as-skipped -- the project config's
+    // own setting was actually applied.
+    let state: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        state["runtime"]["effective_settings"]["model"],
+        "from-project"
+    );
+}
+
+/// `electricity run <doc> --bogus` (issue #728): an unknown option
+/// under the new subcommand is still a usage error, exit 2, with the
+/// same `Error: No such option: --bogus` core `cof run` itself prints
+/// (inside its own Rich panel -- DESIGN.md's own row on why the rest
+/// of that panel isn't reproduced).
+#[test]
+fn run_subcommand_unknown_flag_is_a_usage_error() {
+    let (mut cmd, home) = command("run-sub-unknown-flag");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args(["run", doc.to_str().unwrap(), "--bogus"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Error: No such option: --bogus"),
+        "stderr: {stderr}"
+    );
+}
+
+/// `cof run` has no `-V`/`--version`/`-h` of its own -- each is itself
+/// an unrecognized option there, unlike the legacy form (issue #728's
+/// own review).
+#[test]
+fn run_subcommand_rejects_short_version_and_help_flags() {
+    for flag in ["-V", "--version", "-h"] {
+        let (mut cmd, home) = command(&format!("run-sub-no-{}", flag.trim_start_matches('-')));
+        let doc = home.path.join("doc.yml");
+        fs::write(&doc, "effects: []\n").unwrap();
+        let output = cmd
+            .args(["run", doc.to_str().unwrap(), flag])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{flag}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("Error: No such option: {flag}")),
+            "{flag} stderr: {stderr}"
+        );
+    }
+}
+
+/// `-c`/`-o` are `cof run`'s own short aliases for `--config`/`--out`.
+#[test]
+fn run_subcommand_accepts_short_config_and_out_aliases() {
+    let (mut cmd, home) = command("run-sub-short-aliases");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let config = home.config("{}");
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "-c",
+            config.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.exists(), "status: {:?}", output.status);
+}
+
+/// `-s` is `--state`'s own short alias (issue #727), matching cof's.
+#[test]
+fn run_subcommand_accepts_short_state_alias() {
+    let (mut cmd, home) = command("run-sub-short-state-alias");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let out = home.path.join("out.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+    let saved_a = {
+        let state: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+        state["prime"]["a"]["value"].clone()
+    };
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let resumed_out = home.path.join("resumed.json");
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "-s",
+            out.to_str().unwrap(),
+            "--resume",
+            "state",
+            "-o",
+            resumed_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    let resumed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&resumed_out).unwrap()).unwrap();
+    assert_eq!(
+        resumed["prime"]["a"]["value"], saved_a,
+        "-s named the same state file --state would -- the already-finished effect was skipped"
+    );
+}
+
+/// DESIGN.md §6.8: `--resume` with no explicit `--out` of its own
+/// defaults `--out` to the `--state` file itself -- so a resumed run
+/// writes back to the exact file it resumed from, with no `--out` on
+/// the command line at all.
+#[test]
+fn run_subcommand_resume_with_no_out_writes_back_to_the_state_file() {
+    let (mut cmd, home) = command("run-sub-resume-out-default");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let state_path = home.path.join("state.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            state_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+    let first_mtime = fs::metadata(&state_path).unwrap().modified().unwrap();
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--state",
+            state_path.to_str().unwrap(),
+            "--resume",
+            "state",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    // No --out at all, and yet stdout is empty (the "no --out" success
+    // contract would otherwise print the state there instead) -- the
+    // only place the final state could have gone is back into the
+    // file --state itself named.
+    assert!(second.stdout.is_empty(), "{:?}", second.stdout);
+    let second_mtime = fs::metadata(&state_path).unwrap().modified().unwrap();
+    assert!(
+        second_mtime >= first_mtime,
+        "the --state file was never written back to"
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(state["prime"]["a"]["meta"]["completed_at"].is_string());
+}
+
+/// The legacy form's own first positional already is the config path
+/// -- `--config`/`-c` there is rejected as redundant rather than
+/// silently ignored (issue #728's own review).
+#[test]
+fn legacy_form_rejects_an_explicit_config_flag() {
+    let (mut cmd, home) = command("legacy-rejects-config-flag");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}
+
+/// `--help`'s own usage text names every option `electricity run`
+/// accepts (issue #728) -- ties the help text to the actual parser the
+/// way `usage_text_matches_supported_current_for_every_gated_effect_type`
+/// already ties it to `Supported::current()`.
+#[test]
+fn help_text_names_every_run_subcommand_option() {
+    let (mut cmd, _home) = command("help-run-options");
+    let output = cmd.arg("--help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("electricity run <orchestration.yml>"));
+    for flag in [
+        "--config",
+        "--allow-capabilities",
+        "--adapter",
+        "--label",
+        "--quiet",
+    ] {
+        assert!(stdout.contains(flag), "--help is missing {flag}: {stdout}");
+    }
+}
+
+/// `label:` in the document, rendered once against this run's inputs
+/// (#752): `--out`'s `runtime.last_run.label` and `--events`' own
+/// `run_start.label` (right after `orchestration`) both carry it.
+#[test]
+fn run_subcommand_renders_the_document_label_from_an_input() {
+    let (mut cmd, home) = command("run-sub-label-from-input");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: 'ticket {{input.ticket}}'\n\
+         interface:\n  inputs:\n    ticket: {type: string, default: '42'}\n\
+         effects:\n  - type: tool\n    name: t\n    provider: json\n    \
+         params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["runtime"]["last_run"]["label"], "ticket 42");
+    let events_text = fs::read_to_string(&events).unwrap();
+    let run_start_line = events_text.lines().next().unwrap();
+    let run_start: serde_json::Value = serde_json::from_str(run_start_line).unwrap();
+    assert_eq!(run_start["label"], "ticket 42");
+    // Checked against the raw line text, not `serde_json::Value`'s own
+    // key iteration -- without the `preserve_order` feature (not enabled
+    // in this crate's `Cargo.toml`), its `Value::Object` is a sorted
+    // map, not insertion order.
+    let expected_fragment = "\"orchestration\":\"doc.yml\",\"label\":\"ticket 42\",\"config\":";
+    assert!(
+        run_start_line.contains(expected_fragment),
+        "{run_start_line}"
+    );
+}
+
+/// `--label` is literal text, never rendered, and wins over the
+/// document's own `label:` (#752).
+#[test]
+fn run_subcommand_label_flag_overrides_the_document_and_is_not_rendered() {
+    let (mut cmd, home) = command("run-sub-label-flag-wins");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: 'from the document'\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--label",
+            "{{input.ticket}}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["runtime"]["last_run"]["label"], "{{input.ticket}}");
+}
+
+/// A missing input renders empty -- no label, no warning (#752).
+#[test]
+fn run_subcommand_missing_input_is_no_label_no_warning() {
+    let (mut cmd, home) = command("run-sub-label-missing-input");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: '{{input.ticket}}'\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert!(state["runtime"]["last_run"].get("label").is_none());
+}
+
+/// A malformed `label:` template warns once, on stderr, and the run
+/// still succeeds -- the same text `cof run` prints (#752).
+#[test]
+fn run_subcommand_malformed_label_template_warns_once_and_succeeds() {
+    let (mut cmd, home) = command("run-sub-label-malformed");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: '{{#open'\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.trim(),
+        "Warning: label: malformed Mustache template: unclosed tag at line 1; the run \
+         continues without a label."
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert!(state["runtime"]["last_run"].get("label").is_none());
+}
+
+/// A non-string `label:` is a structural-check error, same as any
+/// other wrong-typed top-level key (#752) -- never a warning.
+#[test]
+fn run_subcommand_non_string_label_is_a_structural_error() {
+    let (mut cmd, home) = command("run-sub-label-non-string");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: 123\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        payload["error"],
+        "Orchestration validation failed:\n  - label: 123 is not of type 'string'"
+    );
+}
+
+/// Control characters and an overlong label are cleaned the same way
+/// `cof run` cleans them (#752).
+#[test]
+fn run_subcommand_cleans_control_characters_and_overlong_labels() {
+    let (mut cmd, home) = command("run-sub-label-control-chars");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: \"{{input.raw}}\"\n\
+         interface:\n  inputs:\n    raw: {type: string, required: true}\n\
+         effects:\n  - type: tool\n    name: t\n    provider: json\n    \
+         params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let raw = format!("a\x1b[31mb\x07c{}", "x".repeat(70));
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "-e",
+            &format!("raw={raw}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let label = state["runtime"]["last_run"]["label"].as_str().unwrap();
+    let expected: String = format!("abc{}", "x".repeat(70)).chars().take(64).collect();
+    assert_eq!(label, expected);
+    assert_eq!(label.chars().count(), 64);
+}
+
+/// Only the root document's `label:` counts -- a `use` child's own is
+/// never read, rendered, or surfaced (#752).
+#[test]
+fn run_subcommand_use_childs_label_is_ignored() {
+    let (mut cmd, home) = command("run-sub-label-use-child-ignored");
+    let config = home.config("{}");
+    fs::write(
+        home.path.join("child.yml"),
+        "label: 'child label should never surface'\neffects:\n  - type: tool\n    \
+         name: ct\n    provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let doc = home.path.join("parent.yml");
+    fs::write(
+        &doc,
+        "label: 'parent label'\neffects:\n  - type: use\n    name: child_use\n    \
+         path: child.yml\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["runtime"]["last_run"]["label"], "parent label");
+}
+
+/// The legacy `electricity <config.json> <doc>` form has no `--label`
+/// of its own -- an unrecognized option there, same as any other.
+#[test]
+fn legacy_form_does_not_accept_label_flag() {
+    let (mut cmd, home) = command("legacy-rejects-label-flag");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--label",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+}

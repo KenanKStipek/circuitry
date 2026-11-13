@@ -28,7 +28,12 @@ from ..core.effect_identity import current_call_path
 from ..core.yaml_load import load_yaml
 from ..preflight import CheckResult
 from ._retry import AdapterCallError, RetryInfo, status_is_retryable
-from .base import GenerateOptions, GenerateResult, ignored_options_warning
+from .base import (
+    GenerateOptions,
+    GenerateProgress,
+    GenerateResult,
+    ignored_options_warning,
+)
 
 #: Named error kinds a reply can carry, each mapping onto the runtime's own
 #: retry classification (``core.adapters._retry``) — the same distinction a
@@ -114,6 +119,10 @@ def _register_for_leftover_export(adapter: ScriptedAdapter) -> None:
 @dataclass(frozen=True)
 class _Reply:
     text: str | None = None
+    #: One delta per entry, delivered in order before the reply completes
+    #: (electricity/docs/spec/scripted-replies.md: a python-only key).
+    #: ``text``, when also given, must equal their concatenation.
+    chunks: tuple[str, ...] | None = None
     tokens_sent: int | None = None
     tokens_received: int | None = None
     finish_reason: str | None = None
@@ -142,7 +151,9 @@ def _load_raw(path: Path) -> Any:
 #: Keys a text reply / an error mapping may carry — anything else is a
 #: load-time error (a typo like ``token_sent`` must not silently drop the
 #: count it was meant to set).
-_TEXT_REPLY_KEYS = frozenset({"text", "tokens_sent", "tokens_received", "finish_reason"})
+_TEXT_REPLY_KEYS = frozenset(
+    {"text", "chunks", "tokens_sent", "tokens_received", "finish_reason"}
+)
 _ERROR_KEYS = frozenset({"kind", "status", "message", "code"})
 
 
@@ -220,11 +231,36 @@ def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
             )
         return _parse_error(entry, path=path, index=index, source=source)
     _reject_unknown_keys(entry, _TEXT_REPLY_KEYS, path=path, index=index, source=source)
+    raw_chunks = entry.get("chunks")
+    chunks: tuple[str, ...] | None = None
+    if raw_chunks is not None:
+        if (
+            not isinstance(raw_chunks, list)
+            or not raw_chunks
+            or not all(isinstance(c, str) for c in raw_chunks)
+        ):
+            raise ScriptedRepliesError(
+                f"{source}: reply {index} for path '{path}': 'chunks' must be a "
+                "non-empty list of strings"
+            )
+        chunks = tuple(raw_chunks)
     text = entry.get("text")
-    if not isinstance(text, str):
+    if text is None:
+        if chunks is None:
+            raise ScriptedRepliesError(
+                f"{source}: reply {index} for path '{path}' needs a string "
+                "'text' (or 'chunks'), or an 'error'"
+            )
+        text = "".join(chunks)
+    elif not isinstance(text, str):
         raise ScriptedRepliesError(
             f"{source}: reply {index} for path '{path}' needs a string "
             "'text', or an 'error'"
+        )
+    elif chunks is not None and text != "".join(chunks):
+        raise ScriptedRepliesError(
+            f"{source}: reply {index} for path '{path}': 'text' does not equal "
+            "the concatenation of 'chunks'"
         )
     for key in ("tokens_sent", "tokens_received"):
         value = entry.get(key)
@@ -239,6 +275,7 @@ def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
         )
     return _Reply(
         text=text,
+        chunks=chunks,
         tokens_sent=entry.get("tokens_sent"),
         tokens_received=entry.get("tokens_received"),
         finish_reason=finish_reason,
@@ -289,6 +326,10 @@ class ScriptedAdapter:
 
     name: str = "scripted"
     replies_file: str = "scripted-replies.yaml"
+    #: Whether this adapter calls ``on_progress``; always ``True`` -- a
+    #: reply with no ``chunks`` simply never calls it, the way a
+    #: non-streaming real adapter never does.
+    streams: bool = True
     _lock: threading.Lock = field(default_factory=threading.Lock, repr=False, compare=False)
     _queues: dict[str, list[_Reply]] | None = field(
         default=None, repr=False, compare=False
@@ -362,6 +403,10 @@ class ScriptedAdapter:
             raise AdapterCallError(
                 message, retry_info=_retry_info(reply), error_code=reply.error_code
             )
+        on_progress = options.on_progress if options is not None else None
+        if reply.chunks is not None and on_progress is not None:
+            for chunk in reply.chunks:
+                on_progress(GenerateProgress(delta_chars=len(chunk), delta_count=1))
         return GenerateResult(
             text=reply.text or "",
             raw={"path": path},

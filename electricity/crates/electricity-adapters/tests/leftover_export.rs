@@ -88,6 +88,7 @@ async fn load_via_generate_one(adapter: &dyn Adapter, path_str: &str) {
         path: &path,
         timeout_seconds: 30,
         token: &token,
+        on_progress: None,
     };
     adapter
         .generate("m", "p", &GenerateOptions::default(), &call)

@@ -1,0 +1,11 @@
+name: split-opt-out
+adapter: scripted
+model: m
+interface:
+  inputs:
+    doc: {type: string, required: true}
+effects:
+  - type: prompt
+    name: big
+    split: {enabled: false}
+    template: "Summarize: {{input.doc}}"

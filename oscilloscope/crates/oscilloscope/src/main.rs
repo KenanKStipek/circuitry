@@ -24,6 +24,7 @@ mod highlight;
 mod history_io;
 mod icon;
 mod keys;
+mod registry_io;
 mod terminal;
 mod theme;
 mod tui;
@@ -55,14 +56,22 @@ const ABOUT: &str = "\
 osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
-  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log]
-  osi watch <dir | state.live.json> [--plan doc.yml]";
+  osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log] [--label TEXT]
+  osi watch <dir | state.live.json> [--plan doc.yml]
+
+With no orchestration, on a TTY with no --log: finds the orchestrations already running on this machine (the run
+registry, a process scan, and any state.live.json in the current directory) and attaches to the only one, or shows
+a Select screen to choose among several, or a Recent Runs table from history with none. Without a TTY, or with
+--log, it instead prints one line per running orchestration and exits 0.";
 
 #[derive(Parser, Debug)]
 #[command(name = "osi", version = VERSION, about = ABOUT)]
 struct RunArgs {
-    /// The orchestration document to run (YAML or JSON).
-    orchestration: String,
+    /// The orchestration document to run (YAML or JSON). With none,
+    /// on a TTY with no `--log` osi opens the Select screen instead
+    /// (issue #698); without a TTY, or with `--log`, it lists the
+    /// orchestrations already running on this machine and exits 0.
+    orchestration: Option<String>,
     /// The engine's own config (JSON), passed through unchanged. With
     /// none, the engine resolves its own default (DESIGN.md §4).
     config: Option<String>,
@@ -85,8 +94,8 @@ struct RunArgs {
     /// line. Can't be combined with `--log`.
     #[arg(long)]
     glance: bool,
-    /// Switches off the update highlights and the scope icon's
-    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's own trace: the header draws a
+    /// still frame in its place instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
@@ -98,6 +107,13 @@ struct RunArgs {
     /// same.
     #[arg(long)]
     no_history: bool,
+    /// Literal text for this run's own label (issue #752), passed
+    /// through to the engine unchanged -- wins over the document's
+    /// own `label:` template. Shown in place of the run's generated
+    /// name wherever one is shown, from the first frame; `osi watch`
+    /// has no `--label` of its own, since it never launches anything.
+    #[arg(long, value_name = "TEXT")]
+    label: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -137,8 +153,8 @@ struct WatchArgs {
     /// own command on a timer instead of leaving one process attached.
     #[arg(long)]
     once: bool,
-    /// Switches off the update highlights and the scope icon's
-    /// trace: both draw a still frame instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's own trace: the header draws a
+    /// still frame in its place instead (DESIGN.md §6.3).
     #[arg(long)]
     no_animation: bool,
     /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
@@ -182,6 +198,49 @@ enum EngineChoice {
 /// means `do_run`/`do_watch` hand off to the TUI instead (§6.3).
 fn effective_log_mode(explicit: bool) -> bool {
     explicit || !std::io::stdout().is_terminal() || std::env::var_os("CI").is_some()
+}
+
+/// `OSI_PROCESS_SCAN=0`: list only the run registry, skipping the
+/// process scan and the current-directory source entirely -- for
+/// tests and a shared machine where a process scan would otherwise
+/// find orchestrations this osi never launched or watched.
+fn process_scan_enabled() -> bool {
+    std::env::var("OSI_PROCESS_SCAN").as_deref() != Ok("0")
+}
+
+/// Bare `osi` with no orchestration, without a TTY (or with
+/// `--log`): finds the runs on this machine (the registry plus a
+/// process scan plus a `state.live.json` scan of the current
+/// directory) and prints one plain line each, then exits 0 -- a
+/// script's own discovery answer, without reading the registry
+/// itself. Never opens a terminal, never blocks.
+fn print_discovered_runs() -> ExitCode {
+    let scan_enabled = process_scan_enabled();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let runs = oscilloscope_core::discovery::discover_runs(
+        registry_io::resolve_runs_dir().as_deref(),
+        &oscilloscope_core::registry::RealLiveness,
+        if scan_enabled {
+            &oscilloscope_core::discovery::RealProcessScanner
+        } else {
+            &oscilloscope_core::discovery::NullProcessScanner
+        },
+        &oscilloscope_core::discovery::RealProcessCwd,
+        scan_enabled.then_some(cwd.as_path()),
+        std::time::SystemTime::now(),
+    );
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
+    for (run, name) in runs.iter().zip(names.iter()) {
+        println!(
+            "{}",
+            oscilloscope_core::discovery::format_plain_line(run, name.as_deref())
+        );
+    }
+    ExitCode::from(0)
 }
 
 /// The real system zone (issue #613: "the binary uses the local
@@ -355,6 +414,32 @@ fn engine_capability_notice(caps: &EngineCaps, engine_name: &str) -> Option<Stri
     }
 }
 
+/// `do_run`'s own notice for `osi <doc> --label TEXT` against an
+/// engine whose `--help` never mentioned `--label` at all (issue
+/// #752): `--label` is simply never passed to it (`CofEngine`/
+/// `ElectricityEngine::command`'s own `self.caps.label` check), so
+/// nothing the engine writes -- `run_start`, `runtime.last_run` --
+/// ever carries this run's own label; osi still shows it everywhere
+/// it shows a run's name today, from `RunSpec::label` alone, so this
+/// is purely informational, never a reason to withhold the label
+/// osi can perfectly well show on its own. `None` with no `--label`
+/// given at all, or with a timed-out/missing probe (whichever more
+/// specific notice [`engine_capability_notice`] already prints for
+/// those covers this too, rather than piling a second, redundant
+/// notice with the same root cause on top of it).
+fn label_capability_notice(
+    caps: &EngineCaps,
+    engine_name: &str,
+    label_given: bool,
+) -> Option<String> {
+    if !label_given || caps.label || caps.missing || caps.timed_out {
+        return None;
+    }
+    Some(format!(
+        "osi: this {engine_name} has no --label: showing it in osi only"
+    ))
+}
+
 /// `oscilloscope_core::plan::compile`, mirroring `cof`'s own config
 /// discovery (issue #433) when `config` is `None`: `$HOME` and osi's
 /// own current directory are read here, at this one real call site,
@@ -432,6 +517,8 @@ fn supervise_plain(
     model: &mut RunModel,
     plan: &PlanTree,
     signals: &mut Option<SignalWatcher>,
+    registry: &mut registry_io::RegistryHandle,
+    orchestration: &str,
 ) -> std::process::ExitStatus {
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
@@ -464,6 +551,7 @@ fn supervise_plain(
             print_line(out, clock, None, &format!("engine: {line}"));
         }
         drain_observations(out, clock, live_poller, events_tailer, differ, model, plan);
+        registry.ensure_written(model, orchestration);
 
         if let Ok(Some(status)) = child.try_wait() {
             return status;
@@ -587,6 +675,7 @@ fn run_glance(
     no_animation: bool,
     history: &history_io::HistoryHandle,
     engine_name: &str,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -595,6 +684,12 @@ fn run_glance(
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
     let mut current_state: Option<serde_json::Value> = None;
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
@@ -629,6 +724,7 @@ fn run_glance(
             &mut model,
             &plan,
         );
+        registry.ensure_written(&model, &document);
         if let Some(state) = state {
             current_state = Some(state);
         }
@@ -734,6 +830,7 @@ fn watch_document_name(state: Option<&serde_json::Value>, fallback: &str) -> Str
 /// an abort). `--once` skips the loop entirely: one read, one line,
 /// exit 0, for a tmux status line that runs its own command on a
 /// timer instead.
+#[allow(clippy::too_many_arguments)]
 fn watch_glance(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -742,6 +839,7 @@ fn watch_glance(
     no_animation: bool,
     once: bool,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let start = Instant::now();
     let zone = LocalZone;
@@ -824,6 +922,10 @@ fn watch_glance(
         if state.is_some() {
             last_state = state;
         }
+        registry.ensure_written(
+            &model,
+            &watch_document_name(last_state.as_ref(), &fallback_document),
+        );
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -940,6 +1042,19 @@ fn do_run(args: RunArgs) -> ExitCode {
         return ExitCode::from(2);
     }
 
+    // No document at all. On a TTY with no `--log`, bare `osi` opens
+    // the Select screen (issue #698): it attaches straight away
+    // with exactly one running orchestration, lists several, or
+    // shows the empty Select with Recent Runs from history with
+    // none. Without a TTY, or with `--log`, osi finds what's
+    // already running instead and prints it, same as always.
+    let Some(orchestration_arg) = args.orchestration.clone() else {
+        if effective_log_mode(args.log) {
+            return print_discovered_runs();
+        }
+        return run_select(theme_name, args.no_animation, args.no_history);
+    };
+
     // Registered before *anything* else in this function, not just
     // before spawning the engine (F13): `build_engine`'s own `cof run
     // --help` detection, and compiling the plan, both run a blocking
@@ -952,12 +1067,8 @@ fn do_run(args: RunArgs) -> ExitCode {
     // either not yet started, or started and now unsupervised.
     let mut signals = SignalWatcher::new().ok();
 
-    let orchestration = PathBuf::from(&args.orchestration);
+    let orchestration = PathBuf::from(&orchestration_arg);
     let config = args.config.as_ref().map(PathBuf::from);
-    let history = history_io::HistoryHandle::for_run(
-        history_io::resolve_history_dir(args.no_history),
-        history_io::resolve_run_document_path(&orchestration),
-    );
 
     if args.engine == EngineChoice::Electricity {
         if let Some(cfg) = &config {
@@ -978,7 +1089,41 @@ fn do_run(args: RunArgs) -> ExitCode {
         config,
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
+        label: args.label.clone(),
     };
+    // `config` recorded in history exactly as given on the command
+    // line, never resolved further; `run_dir` made absolute so
+    // "Recent Runs" can still open it later regardless of osi's own
+    // cwd at that later time.
+    let history = history_io::HistoryHandle::for_run(
+        history_io::resolve_history_dir(args.no_history),
+        history_io::resolve_run_document_path(&orchestration),
+        args.config.clone(),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    // Written once this run's own `run_start` is known
+    // (`RegistryHandle::ensure_written`, called on every rebuild
+    // below), removed again when `registry` itself is dropped at
+    // the end of this function, or earlier once the engine's exit is
+    // actually observed -- covering the run's own end and every
+    // signal path the same way.
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        spec.config.as_deref(),
+        Some(match args.engine {
+            EngineChoice::Cof => "cof",
+            EngineChoice::Electricity => "electricity",
+        }),
+        format!("osi {}", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &spec.events_path(),
+        &spec.live_state_path(),
+        false,
+    );
 
     let engine = build_engine(args.engine, &mut signals);
     // Review finding 2 on #458: a Ctrl-C landing during the probe
@@ -993,6 +1138,11 @@ fn do_run(args: RunArgs) -> ExitCode {
         return exit_early(code);
     }
     if let Some(notice) = engine_capability_notice(&engine.caps(), engine.name()) {
+        eprintln!("{notice}");
+    }
+    if let Some(notice) =
+        label_capability_notice(&engine.caps(), engine.name(), spec.label.is_some())
+    {
         eprintln!("{notice}");
     }
 
@@ -1098,11 +1248,12 @@ fn do_run(args: RunArgs) -> ExitCode {
             spec,
             plan,
             run_dir,
-            args.orchestration.clone(),
+            orchestration_arg.clone(),
             signals,
             args.no_animation,
             &history,
             engine.name(),
+            &mut registry,
         );
     }
 
@@ -1117,12 +1268,13 @@ fn do_run(args: RunArgs) -> ExitCode {
             plan,
             run_dir,
             is_default_dir,
-            args.orchestration.clone(),
+            orchestration_arg.clone(),
             engine.name().to_string(),
             signals,
             args.no_animation,
             theme_name,
             &history,
+            &mut registry,
         );
     }
 
@@ -1134,6 +1286,12 @@ fn do_run(args: RunArgs) -> ExitCode {
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
 
     let exit_status = supervise_plain(
         &mut out,
@@ -1146,6 +1304,8 @@ fn do_run(args: RunArgs) -> ExitCode {
         &mut model,
         &plan,
         &mut signals,
+        &mut registry,
+        &orchestration.to_string_lossy(),
     );
 
     // Join the tee threads before draining anything further (F6): the
@@ -1632,7 +1792,15 @@ fn stdin_hung_up() -> bool {
 /// (`std::process::exit`, after its own normal cleanup) the moment
 /// its own main loop decides to leave, taking the stuck thread down
 /// with it without needing any cooperation from it at all.
-fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
+/// The channel [`spawn_event_reader`] hands back -- named so a
+/// function that takes one as a parameter (rather than spawning its
+/// own) doesn't have to spell out the full `Receiver<...>` type
+/// itself (issue #698: the Select screen and an attached run share
+/// exactly one of these for the whole process, passed by ownership
+/// between the two, never two reader threads at once).
+type EventReader = std::sync::mpsc::Receiver<std::io::Result<CEvent>>;
+
+fn spawn_event_reader() -> EventReader {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         loop {
@@ -1658,28 +1826,39 @@ fn spawn_event_reader() -> std::sync::mpsc::Receiver<std::io::Result<CEvent>> {
 /// is actually looking at once they tab onto `Pane::Details` itself
 /// to scroll it -- including a named report's own row, which never
 /// has an orchestration-tree row of its own at all to select instead.
-/// Screen 0's own model (issue #626), built only while it's actually
+/// Issue #704 rule 1: the Tape's own default selection the instant
+/// a run ends -- the handled failure's own row when the run has
+/// one (worth pointing at even though the run itself still
+/// succeeded), else the last row the plan runs, right next to the
+/// head rule's own place in the list.
+fn tape_run_end_default_target(rows: &[oscilloscope_core::render::Row]) -> Option<String> {
+    rows.iter()
+        .find(|r| r.status.kind == oscilloscope_core::model::StatusKind::FailedHandled)
+        .or_else(|| rows.last())
+        .map(|r| r.path.clone())
+}
+
+/// Screen 0's own model (issue #678), built only while it's actually
 /// on display -- the performance rule ("models for screens not on
 /// display aren't built"). `flatten_state` runs again here rather
 /// than threading `RenderState`'s own internal `flat` map out of
 /// `render::build` just for this -- it's the same O(state size) walk
 /// `build` itself already does on every rebuild, and this only adds
-/// a second one while the overview is the screen being shown.
-fn build_overview_if_active(
+/// a second one while the Tape is the screen being shown.
+fn build_tape_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
     plan: &oscilloscope_core::plan::PlanTree,
     model: &oscilloscope_core::model::RunModel,
     state: Option<&serde_json::Value>,
-    log_lines: &[String],
     now: &str,
-) -> Option<oscilloscope_core::screens::Overview> {
-    if app.screen != oscilloscope_core::screens::Screen::Overview {
+) -> Option<oscilloscope_core::screens::TapeScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Tape {
         return None;
     }
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-    Some(oscilloscope_core::screens::build_overview(
+    Some(oscilloscope_core::screens::build_tape(
         &render_state.rows,
         &render_state.unfolded_rows,
         &render_state.header,
@@ -1687,63 +1866,55 @@ fn build_overview_if_active(
         plan,
         model,
         state,
-        &render_state.token_bar,
-        log_lines,
         app.selected_path.as_deref(),
+        app.tape_previews_on,
         now,
     ))
 }
 
-/// Screen 3's own model (issue #632), built only while it's actually
-/// on display -- the same performance rule `build_overview_if_active`
-/// follows, and rebuilt at the same points that one is (a rebuild, or
-/// a key that could have changed the screen, the measure or the
-/// zoom). `statuses` comes straight from `render_state.unfolded_rows`
-/// rather than a second `RunModel::observe` call: every path the
-/// by-store tree could ever ask about already has a row (and so a
-/// status) there, since `render::build_rows` walks the identical
-/// path universe.
-fn build_cost_screen_if_active(
+/// Screen 3's own model (issue #695, design v1 part 4, replacing
+/// Cost), built only while it's actually on display -- the same
+/// performance rule `build_tape_if_active` follows. `kinds` comes
+/// straight from `render_state.unfolded_rows` rather than a second
+/// `RunModel::observe` call: every path the store tree could ever
+/// ask about already has a row (and so a kind) there, since
+/// `render::build_rows` walks the identical path universe.
+fn build_store_screen_if_active(
     app: &App,
     render_state: &oscilloscope_core::render::RenderState,
-    state: Option<&serde_json::Value>,
+    plan: &oscilloscope_core::plan::PlanTree,
     model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
     now: &str,
-) -> Option<oscilloscope_core::screens::CostScreen> {
-    if app.screen != oscilloscope_core::screens::Screen::Cost {
+) -> Option<oscilloscope_core::store::StoreScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Store {
         return None;
     }
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-    let statuses: std::collections::BTreeMap<String, oscilloscope_core::model::RowStatus> =
-        render_state
-            .unfolded_rows
-            .iter()
-            .map(|r| (r.path.clone(), r.status.clone()))
-            .collect();
     let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
         render_state
             .unfolded_rows
             .iter()
             .map(|r| (r.path.clone(), r.kind))
             .collect();
-    Some(oscilloscope_core::screens::build_cost_screen(
-        &render_state.rows,
+    Some(oscilloscope_core::store::build_store(
+        &render_state.unfolded_rows,
         &render_state.header,
         &flat,
-        &statuses,
         &kinds,
-        state,
-        app.cost_measure,
+        plan,
         model,
+        state,
+        "prime",
         now,
-        tui::PHASE_GLYPHS.len(),
+        app.selected_path.as_deref(),
     ))
 }
 
 /// Screen 2's own model (issue #635), built only while it's actually
-/// on display -- the same performance rule `build_overview_if_active`/
-/// `build_cost_screen_if_active` already follow.
+/// on display -- the same performance rule `build_tape_if_active`/
+/// `build_store_screen_if_active` already follow.
 #[allow(clippy::too_many_arguments)]
 fn build_flow_screen_if_active(
     app: &App,
@@ -1760,41 +1931,36 @@ fn build_flow_screen_if_active(
     let empty = serde_json::Value::Null;
     let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
     let selected_path = details_selection_path(app);
-    Some(oscilloscope_core::screens::build_flow_screen(
-        &render_state.rows,
+    // A root or follow-chosen selection counts as "nothing selected"
+    // for `build_flow`'s own default-pass fallback: `app.selected_path`
+    // is never actually `None` in the real app (the redraw loop
+    // always fills an empty selection with the root's own path), and
+    // while following, the selection is wherever the Tree-wide follow
+    // rule put it, not a real Flow-level choice -- either one should
+    // still land on the rail's own sensible default pass, not the
+    // root's own step pane or whatever leaf follow happens to be on.
+    let root_path = render_state.unfolded_rows.first().map(|r| r.path.as_str());
+    // Issue #704 rule 2: once the run has ended there is nothing left
+    // to follow, so `app.follow` sitting on from before (nobody ever
+    // turned it off) must no longer override a real selection with
+    // `default_follow_path`, which itself finds nothing running and
+    // returns `None` -- the Flow must show whatever the selection
+    // actually is then, the same as every other screen already does
+    // post-run.
+    let still_running = render_state.header.status == RunStatus::Running;
+    let flow_selected_path =
+        if (app.follow && still_running) || selected_path.as_deref() == root_path {
+            // Issue #703's rule 5: following lands on whichever step is
+            // actually running, not only on the default pass -- `None`
+            // (the default-pass fallback below) only when the running
+            // step is itself inside a loop pass, or nothing is running.
+            oscilloscope_core::screens::default_follow_path(&render_state.unfolded_rows)
+                .map(str::to_string)
+        } else {
+            selected_path
+        };
+    Some(oscilloscope_core::screens::build_flow(
         &render_state.unfolded_rows,
-        &flat,
-        plan,
-        model,
-        state,
-        story,
-        selected_path.as_deref(),
-        &LocalZone,
-        render_state.header.run_end_ts.as_deref(),
-        now,
-    ))
-}
-
-/// Screen 1's own model (issue #650), built only while it's actually
-/// on display -- the same performance rule the other three screens'
-/// own `_if_active` builders follow.
-#[allow(clippy::too_many_arguments)]
-fn build_time_screen_if_active(
-    app: &App,
-    render_state: &oscilloscope_core::render::RenderState,
-    plan: &oscilloscope_core::plan::PlanTree,
-    model: &oscilloscope_core::model::RunModel,
-    state: Option<&serde_json::Value>,
-    story: &[oscilloscope_core::diff::LogLine],
-    now: &str,
-) -> Option<oscilloscope_core::screens::TimeScreen> {
-    if app.screen != oscilloscope_core::screens::Screen::Time {
-        return None;
-    }
-    let empty = serde_json::Value::Null;
-    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
-    let selected_path = details_selection_path(app);
-    Some(oscilloscope_core::screens::build_time_screen(
         &render_state.rows,
         &flat,
         plan,
@@ -1802,37 +1968,64 @@ fn build_time_screen_if_active(
         &render_state.header,
         state,
         story,
-        selected_path.as_deref(),
-        &app.time_expanded_loops,
+        flow_selected_path.as_deref(),
+        &LocalZone,
+        render_state.header.run_end_ts.as_deref(),
         now,
     ))
 }
 
-/// Issue #637 (extended by #650 to screen 1): the transcript path for
-/// whichever step is actually on screen right now -- the overview's
-/// own focused step (running, last-finished, or an ended run's own
-/// stopped agent) on screen 0, Flow's and Time's own selected step on
-/// screens 2 and 1 -- `None` on every other screen. Tails a finished
-/// agent's own `meta.raw.transcript` too, not just a running one's
-/// `meta.live.transcript` -- the Time screen's zoom pane (issue #650)
-/// is the first thing that ever shows a finished agent's own bands,
-/// which need the transcript the same way a running one's do.
+/// Screen 1's own model (issue #688, design v1 part 2), built only
+/// while it's actually on display -- the same performance rule the
+/// other three screens' own `_if_active` builders follow.
+fn build_signal_screen_if_active(
+    app: &App,
+    render_state: &oscilloscope_core::render::RenderState,
+    plan: &oscilloscope_core::plan::PlanTree,
+    model: &oscilloscope_core::model::RunModel,
+    state: Option<&serde_json::Value>,
+    now: &str,
+) -> Option<oscilloscope_core::screens::SignalScreen> {
+    if app.screen != oscilloscope_core::screens::Screen::Signal {
+        return None;
+    }
+    let empty = serde_json::Value::Null;
+    let flat = oscilloscope_core::model::flatten_state(state.unwrap_or(&empty));
+    Some(oscilloscope_core::screens::build_signal(
+        &render_state.rows,
+        &render_state.unfolded_rows,
+        &render_state.header,
+        &flat,
+        plan,
+        model,
+        state,
+        app.signal_column_ms,
+        app.signal_cursor_col,
+        app.selected_path.as_deref(),
+        now,
+    ))
+}
+
+/// Issue #637 (extended by #688 to screen 1, #678 to screen 0, #703
+/// to screen 3): the transcript path for whichever step is actually
+/// on screen right now -- the Tape's own selected step on screen 0,
+/// Flow's and Signal's own selected step on screens 2 and 1, the
+/// Store's own selected step on screen 3 -- `None` on every other
+/// screen. Tails a finished agent's own `meta.raw.transcript` too,
+/// not just a running one's `meta.live.transcript`.
 fn focused_agent_transcript_path(
     app: &App,
-    overview: Option<&oscilloscope_core::screens::Overview>,
+    tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
-    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
+    signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
+    store_screen: Option<&oscilloscope_core::store::StoreScreen>,
 ) -> Option<String> {
-    use oscilloscope_core::screens::{FocusDetail, NowFocus, Screen};
+    use oscilloscope_core::screens::{FocusDetail, Screen};
     let step = match app.screen {
-        Screen::Overview => overview.and_then(|o| match &o.now_pane.focus {
-            NowFocus::Running(step, _) | NowFocus::LastFinished(step) => Some(step),
-            NowFocus::Ended(summary) => summary.stopped_agent.as_ref(),
-            _ => None,
-        }),
-        Screen::Flow => flow_screen.and_then(|f| f.selected.as_ref()),
-        Screen::Time => time_screen.and_then(|t| t.selected.as_ref()),
-        _ => None,
+        Screen::Tape => tape_screen.and_then(|t| t.selected.as_ref()),
+        Screen::Flow => flow_screen.and_then(|f| f.selected_step.as_ref()),
+        Screen::Signal => signal_screen.and_then(|t| t.selected.as_ref()),
+        Screen::Store => store_screen.and_then(|t| t.selected.as_ref()),
     }?;
     match &step.detail {
         FocusDetail::Agent {
@@ -1865,35 +2058,49 @@ fn focused_agent_transcript_path(
 struct TranscriptTailCache {
     path: Option<String>,
     len: Option<u64>,
+    bound: Option<u64>,
     view: Option<oscilloscope_core::transcript::TranscriptView>,
 }
 
 /// Tails the one step's transcript this frame actually needs
 /// (`focused_agent_transcript_path`), bounded to the last 64 KiB
-/// (DESIGN.md, issue #637) -- switching focus to a different step
-/// (or off a screen that shows one at all) costs nothing more than
-/// this call simply returning `None` next time; no file is ever
-/// opened for a step that isn't the one on screen.
+/// (DESIGN.md, issue #637), or the whole file while the full-screen
+/// step is open (issue #704 rule 4, "nothing is cut": a transcript
+/// longer than 64 KiB has lines the compact pane never showed
+/// anyway, but the full-screen view, scrollable and reading every
+/// other section in full already, must not cut this one alone) --
+/// switching focus to a different step (or off a screen that shows
+/// one at all) costs nothing more than this call simply returning
+/// `None` next time; no file is ever opened for a step that isn't
+/// the one on screen.
 fn tail_focused_transcript(
     app: &App,
-    overview: Option<&oscilloscope_core::screens::Overview>,
+    tape_screen: Option<&oscilloscope_core::screens::TapeScreen>,
     flow_screen: Option<&oscilloscope_core::screens::FlowScreen>,
-    time_screen: Option<&oscilloscope_core::screens::TimeScreen>,
+    signal_screen: Option<&oscilloscope_core::screens::SignalScreen>,
+    store_screen: Option<&oscilloscope_core::store::StoreScreen>,
     cache: &mut TranscriptTailCache,
 ) -> Option<oscilloscope_core::transcript::TranscriptView> {
-    let path = focused_agent_transcript_path(app, overview, flow_screen, time_screen)?;
+    let path =
+        focused_agent_transcript_path(app, tape_screen, flow_screen, signal_screen, store_screen)?;
+    let bound = if app.tape_fullscreen_step {
+        u64::MAX
+    } else {
+        TRANSCRIPT_TAIL_BYTES
+    };
     let len = std::fs::metadata(&path).ok().map(|m| m.len());
-    if cache.path.as_deref() == Some(path.as_str()) && cache.len == len {
+    if cache.path.as_deref() == Some(path.as_str())
+        && cache.len == len
+        && cache.bound == Some(bound)
+    {
         return cache.view.clone();
     }
-    let lines = tail_transcript_lines(Path::new(&path), TRANSCRIPT_TAIL_BYTES);
-    let truncated = oscilloscope_core::observe::transcript_tail_truncated(
-        Path::new(&path),
-        TRANSCRIPT_TAIL_BYTES,
-    );
+    let lines = tail_transcript_lines(Path::new(&path), bound);
+    let truncated = oscilloscope_core::observe::transcript_tail_truncated(Path::new(&path), bound);
     let view = oscilloscope_core::transcript::build_transcript_view(&lines, truncated);
     cache.path = Some(path);
     cache.len = len;
+    cache.bound = Some(bound);
     cache.view = Some(view.clone());
     Some(view)
 }
@@ -1961,11 +2168,22 @@ fn run_tui(
     no_animation: bool,
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
+    registry: &mut registry_io::RegistryHandle,
 ) -> ExitCode {
     let mut live_poller = LiveStatePoller::new(spec.live_state_path());
     let mut events_tailer = EventsTailer::new(spec.events_path());
     let mut differ = Differ::new();
     let mut model = RunModel::new();
+    // Issue #752: `--label`'s own cleaned value shows from this
+    // run's very first frame, as a fallback below `run_start` and
+    // the state file's own label, in both the header and the exit
+    // summary.
+    let label_hint = spec
+        .label
+        .as_deref()
+        .and_then(oscilloscope_core::names::clean_label);
+    differ.set_label_hint(label_hint.clone());
+    model.set_label_hint(label_hint);
     let mut clock = Clock::new();
     let mut log_lines: Vec<String> = Vec::new();
     // Finding 4: a plain running count of every line ever pushed,
@@ -1982,7 +2200,6 @@ fn run_tui(
     let start = Instant::now();
 
     let mut app = App::new(false);
-    let mut cost_layout = tui::CostLayoutCache::default();
     let mut signal_count: u32 = 0;
     let mut kill_deadline: Option<Instant> = None;
 
@@ -2039,6 +2256,8 @@ fn run_tui(
                 &mut model,
                 &plan,
                 &mut signals,
+                registry,
+                &document,
             );
             let code = finish_run(
                 &mut out,
@@ -2113,20 +2332,20 @@ fn run_tui(
         &plan,
         &now_str,
     );
-    let mut overview = build_overview_if_active(
+    let mut tape_screen = build_tape_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         current_state.as_ref(),
-        &log_lines,
         &now_str,
     );
-    let mut cost_screen = build_cost_screen_if_active(
+    let mut store_screen = build_store_screen_if_active(
         &app,
         &render_state,
-        current_state.as_ref(),
+        &plan,
         &model,
+        current_state.as_ref(),
         &now_str,
     );
     let mut flow_screen = build_flow_screen_if_active(
@@ -2138,21 +2357,21 @@ fn run_tui(
         &story,
         &now_str,
     );
-    let mut time_screen = build_time_screen_if_active(
+    let mut signal_screen = build_signal_screen_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         current_state.as_ref(),
-        &story,
         &now_str,
     );
     let mut transcript_cache = TranscriptTailCache::default();
     let mut transcript_view = tail_focused_transcript(
         &app,
-        overview.as_ref(),
+        tape_screen.as_ref(),
         flow_screen.as_ref(),
-        time_screen.as_ref(),
+        signal_screen.as_ref(),
+        store_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- `prev_render_state`
@@ -2230,6 +2449,7 @@ fn run_tui(
                 &mut model,
                 &plan,
             );
+            registry.ensure_written(&model, &document);
             needs_rebuild |= !lines.is_empty();
             needs_draw |= !lines.is_empty();
             for line in &lines {
@@ -2328,6 +2548,16 @@ fn run_tui(
                 }
             }
             app.reconcile_folding(&render_state.rows);
+            app.flow_rows = render_state.unfolded_rows.clone();
+            // Issue #704 rule 1: moves the Tape's own selection to
+            // the Run End row the instant the run ends -- before the
+            // fallback below, which would otherwise land it on the
+            // first row instead on an attach to an already-ended run
+            // that never had a selection of its own yet.
+            app.tape_select_run_end_once(
+                render_state.header.status == RunStatus::Running,
+                tape_run_end_default_target(&render_state.rows),
+            );
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
@@ -2337,20 +2567,20 @@ fn run_tui(
             // pane's own focus reads that selection, so building it
             // earlier left it a tick stale on the very frame follow
             // first lands on a target.
-            overview = build_overview_if_active(
+            tape_screen = build_tape_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 current_state.as_ref(),
-                &log_lines,
                 &now_str,
             );
-            cost_screen = build_cost_screen_if_active(
+            store_screen = build_store_screen_if_active(
                 &app,
                 &render_state,
-                current_state.as_ref(),
+                &plan,
                 &model,
+                current_state.as_ref(),
                 &now_str,
             );
             flow_screen = build_flow_screen_if_active(
@@ -2362,20 +2592,20 @@ fn run_tui(
                 &story,
                 &now_str,
             );
-            time_screen = build_time_screen_if_active(
+            signal_screen = build_signal_screen_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 current_state.as_ref(),
-                &story,
                 &now_str,
             );
             transcript_view = tail_focused_transcript(
                 &app,
-                overview.as_ref(),
+                tape_screen.as_ref(),
                 flow_screen.as_ref(),
-                time_screen.as_ref(),
+                signal_screen.as_ref(),
+                store_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
@@ -2383,35 +2613,24 @@ fn run_tui(
         // only and the selection itself can change on a key alone),
         // but cheaply — against whatever `render_state.rows` the last
         // rebuild above left cached, not a fresh one every tick.
-        // Issue #635: on the Flow screen, movement must land only
-        // on a row the Flow pane actually draws, never on a step
-        // hidden under an untaken branch or merged into its own
-        // single-pass loop row -- `visible_rows_for_flow` narrows the
-        // same real-`Row` list every other screen moves over to
-        // exactly those. Issue #650: the same rule, for the Time
-        // screen's own collapsed loop rows. `visible_rows_for_flow`
-        // returns owned rows (issue #643's first follow-up: an
-        // unnamed `if`'s own synthesised decision has no real `Row`
-        // of its own to borrow), so `flow_owned` holds them for as
-        // long as `visible`'s own references into it need to live.
-        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
-            == oscilloscope_core::screens::Screen::Flow
-        {
-            flow_screen
-                .as_ref()
-                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
-                .unwrap_or_default()
+        // Issue #691 (design v1 part 3): the Flow screen's own
+        // `↑↓` moves over `RowKind::Pass`, not this list -- it needs
+        // only the plain, unfiltered `rows` the rail itself is built
+        // from, the same as the Store's own table rows are built
+        // from (issue #695), not this one.
+        let tape_owned: Vec<oscilloscope_core::render::Row> =
+            if app.screen == oscilloscope_core::screens::Screen::Tape {
+                tape_screen
+                    .as_ref()
+                    .map(keys::visible_rows_for_tape)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+        let visible = if app.screen == oscilloscope_core::screens::Screen::Tape {
+            tape_owned.iter().collect()
         } else {
-            Vec::new()
-        };
-        let visible = match (&flow_screen, &time_screen) {
-            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                flow_owned.iter().collect()
-            }
-            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
-                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
-            }
-            _ => keys::visible_rows(&render_state.rows, &app),
+            keys::visible_rows(&render_state.rows, &app)
         };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
@@ -2438,17 +2657,17 @@ fn run_tui(
                             )
                             .is_some()
                         });
-                        let cost_tree: &[oscilloscope_core::treemap::TreemapNode] = cost_screen
+                        let store_rows: Vec<String> = store_screen
                             .as_ref()
-                            .map(|c| c.tree.as_slice())
-                            .unwrap_or(&[]);
+                            .map(|s| s.table.iter().map(|r| r.path.clone()).collect())
+                            .unwrap_or_default();
                         match app.handle_key(
                             key,
                             &visible,
                             &state_visible,
                             running,
                             has_prompt_sent,
-                            cost_tree,
+                            &store_rows,
                         ) {
                             keys::Action::Cancel => {
                                 cancel_once(
@@ -2524,7 +2743,13 @@ fn run_tui(
                                     Some(Instant::now() + std::time::Duration::from_secs(2));
                             }
                             keys::Action::Quit => break 'tui,
-                            keys::Action::None => {}
+                            // `App::opened_from_select` is never set
+                            // true on this loop's own `app` (only
+                            // `run_tui_watch`'s does, for a run
+                            // attached from the Select screen), so
+                            // `handle_key` never actually returns
+                            // this here.
+                            keys::Action::BackToSelect | keys::Action::None => {}
                         }
                         needs_rebuild = true;
                         needs_draw = true;
@@ -2539,20 +2764,20 @@ fn run_tui(
                         // redraw wide. `render_state` itself needs no
                         // refresh here: nothing a key does changes
                         // what it holds.
-                        overview = build_overview_if_active(
+                        tape_screen = build_tape_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             current_state.as_ref(),
-                            &log_lines,
                             &now_str,
                         );
-                        cost_screen = build_cost_screen_if_active(
+                        store_screen = build_store_screen_if_active(
                             &app,
                             &render_state,
-                            current_state.as_ref(),
+                            &plan,
                             &model,
+                            current_state.as_ref(),
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -2564,20 +2789,20 @@ fn run_tui(
                             &story,
                             &now_str,
                         );
-                        time_screen = build_time_screen_if_active(
+                        signal_screen = build_signal_screen_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             current_state.as_ref(),
-                            &story,
                             &now_str,
                         );
                         transcript_view = tail_focused_transcript(
                             &app,
-                            overview.as_ref(),
+                            tape_screen.as_ref(),
                             flow_screen.as_ref(),
-                            time_screen.as_ref(),
+                            signal_screen.as_ref(),
+                            store_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -2604,17 +2829,17 @@ fn run_tui(
         }
 
         // Issue #535's own redraw rule: while any highlight is
-        // fading, or the run is live with animation on (so the scope
-        // icon's own trace keeps moving), mark the frame dirty every
-        // tick -- the existing `REDRAW_INTERVAL` cap still paces the
-        // actual draw. With neither, this adds no redraws beyond what
-        // was already dirty. Finding 1: this sets only `needs_draw`,
-        // never `needs_rebuild` -- an animation-only tick has nothing
-        // new to rebuild from.
+        // While the run is live, with animation on, the scope icon's
+        // own trace keeps moving -- mark the frame dirty every tick
+        // so it does, the existing `REDRAW_INTERVAL` cap still pacing
+        // the actual draw; once the run has ended, this adds no
+        // redraws beyond what was already dirty. This sets only
+        // `needs_draw`, never `needs_rebuild` -- an animation-only
+        // tick has nothing new to rebuild from.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
-            if highlights.has_active(highlight_now) || exit_status.is_none() {
+            if exit_status.is_none() {
                 needs_draw = true;
             }
         }
@@ -2629,9 +2854,6 @@ fn run_tui(
                 .map(|_| resolved_theme.theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &resolved_theme.theme,
-                highlights: &highlights,
-                now: highlight_now,
-                color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
                 no_animation,
@@ -2642,18 +2864,16 @@ fn run_tui(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    next_log_seq,
                     &mut app,
                     current_state.as_ref(),
                     &ctx,
                     icon_frame,
                     &now_str,
-                    overview.as_ref(),
-                    cost_screen.as_ref(),
+                    tape_screen.as_ref(),
+                    store_screen.as_ref(),
                     flow_screen.as_ref(),
-                    time_screen.as_ref(),
+                    signal_screen.as_ref(),
                     transcript_view.as_ref(),
-                    &mut cost_layout,
                 );
             });
             last_draw = Instant::now();
@@ -2677,6 +2897,12 @@ fn run_tui(
             if let Ok(Some(status)) = child.try_wait() {
                 exit_status = Some(status);
                 exit_status_ts = Some(now_rfc3339());
+                // The entry is removed the moment the engine's own
+                // exit is seen, not only once this loop itself ends
+                // (`registry`'s own `Drop`) -- otherwise it would
+                // still name a live run for as long as the finished
+                // screen stays open.
+                registry.remove();
                 // #494: the engine already exited, but its last
                 // events and its final live-state write (DESIGN.md
                 // §1.1) can still land after the poll above that just
@@ -2778,6 +3004,7 @@ fn run_tui(
     // cleanup and final output, removes any doubt that anything else
     // could ever end up waiting on that thread first.
     let _ = out.flush();
+    registry.remove();
     std::process::exit(i32::from(code));
 }
 
@@ -3025,6 +3252,8 @@ fn supervise_plain_watch(
     plan: &PlanTree,
     run_dir: &Path,
     signals: &mut Option<SignalWatcher>,
+    registry: &mut registry_io::RegistryHandle,
+    fallback_document: &str,
 ) -> (Option<serde_json::Value>, Option<ForwardSignal>) {
     let mut last_state: Option<serde_json::Value> = None;
     let mut warned_no_events = false;
@@ -3042,6 +3271,10 @@ fn supervise_plain_watch(
         {
             last_state = Some(state);
         }
+        registry.ensure_written(
+            model,
+            &watch_document_name(last_state.as_ref(), fallback_document),
+        );
         if last_state
             .as_ref()
             .is_some_and(oscilloscope_core::model::run_ended)
@@ -3158,6 +3391,29 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     let history = history_io::HistoryHandle::for_watch(
         history_io::resolve_history_dir(args.no_history),
         args.plan.clone(),
+        args.config
+            .as_ref()
+            .map(|c| c.to_string_lossy().into_owned()),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    // `osi watch` writes an entry too (`launcher: "osi <version>
+    // watch"`), the same way `osi <doc>` does -- unless a launcher's
+    // own entry for this same run already exists and is live, in
+    // which case this handle writes (and so removes) nothing, so a
+    // watch of a run another `osi` launched never overwrites it.
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        args.config.as_deref(),
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
+        true,
     );
 
     // Issue #626: `--glance` wins over both the TUI and `--log`,
@@ -3171,6 +3427,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.no_animation,
             args.once,
             &history,
+            &mut registry,
         );
     }
 
@@ -3178,7 +3435,7 @@ fn do_watch(args: WatchArgs) -> ExitCode {
     // this one just detaches (§6.3), since watch owns no engine of
     // its own to ever cancel.
     if !effective_log_mode(args.log) {
-        return run_tui_watch(
+        return match run_tui_watch(
             run_dir,
             live_state_path,
             plan,
@@ -3186,7 +3443,19 @@ fn do_watch(args: WatchArgs) -> ExitCode {
             args.no_animation,
             theme_name,
             &history,
-        );
+            &mut registry,
+            spawn_event_reader(),
+            false,
+            true,
+            oscilloscope_core::screens::Screen::Tape,
+        ) {
+            WatchOutcome::Exited(code, _) => code,
+            // `opened_from_select` is false here, so `run_tui_watch`
+            // never actually returns this for a plain `osi watch`.
+            WatchOutcome::BackToSelect(..) => {
+                unreachable!("a plain `osi watch` never opens from the Select screen")
+            }
+        };
     }
 
     let mut clock = Clock::new();
@@ -3214,6 +3483,8 @@ fn do_watch(args: WatchArgs) -> ExitCode {
         &plan,
         &run_dir,
         &mut signals,
+        &mut registry,
+        &args.target,
     );
 
     let code = finish_watch(
@@ -3246,6 +3517,31 @@ fn do_watch(args: WatchArgs) -> ExitCode {
 /// detach back to the shell the instant `run_ended`/a dead pid is
 /// first noticed, which used to show the finished screen for about
 /// one redraw before leaving on its own.
+/// What [`run_tui_watch`] leaves its caller to do once its own loop
+/// ends -- `Exited` for a plain `osi watch`'s own detach/abort
+/// (`do_watch`'s only path), `BackToSelect` for a Select-opened
+/// run's own `esc` (issue #698, §2.5), carrying the one event-reader
+/// thread (`EventReader`) back so the Select loop can reuse it
+/// rather than spawning a second one (`spawn_event_reader`'s own
+/// doc comment: never more than one, for the whole process).
+/// `Exited`'s own second field is `finish_watch`'s plain-text output,
+/// buffered rather than written straight to stdout whenever
+/// `manage_terminal` is false (issue #698): the Select loop's own
+/// alternate screen is still up at that point, so `run_select`
+/// prints this only once its `TerminalGuard` has actually dropped --
+/// empty for `do_watch`'s own path, which writes it directly instead
+/// (nothing left to defer to, since it calls `std::process::exit`
+/// before this type is ever constructed on that path).
+enum WatchOutcome {
+    Exited(ExitCode, Vec<u8>),
+    /// Issue #714: carries the theme this leg ended on, so the
+    /// Select/All/Combined loop it returns to keeps drawing in
+    /// whatever the user last cycled to here, rather than
+    /// reverting to what it started this leg with.
+    BackToSelect(EventReader, theme::ThemeName),
+}
+
+#[allow(clippy::too_many_arguments)]
 fn run_tui_watch(
     run_dir: PathBuf,
     live_state_path: PathBuf,
@@ -3254,7 +3550,12 @@ fn run_tui_watch(
     no_animation: bool,
     mut theme_name: theme::ThemeName,
     history: &history_io::HistoryHandle,
-) -> ExitCode {
+    registry: &mut registry_io::RegistryHandle,
+    event_rx: EventReader,
+    opened_from_select: bool,
+    manage_terminal: bool,
+    starting_screen: oscilloscope_core::screens::Screen,
+) -> WatchOutcome {
     let mut live_poller = LiveStatePoller::new(&live_state_path);
     let mut events_tailer = EventsTailer::new(run_dir.join("events.jsonl"));
     let mut differ = Differ::new();
@@ -3273,10 +3574,17 @@ fn run_tui_watch(
     // Finding 15: `q` on a still-live run is a voluntary detach, not
     // an abort.
     let mut detached_while_live = false;
+    // Issue #698: set once `esc` leaves this loop for the Select
+    // screen rather than for the process to exit.
+    let mut back_to_select = false;
     let start = Instant::now();
 
     let mut app = App::new(true);
-    let mut cost_layout = tui::CostLayoutCache::default();
+    app.opened_from_select = opened_from_select;
+    // Issue #698, §4: opened from the All grid, this attach starts
+    // on whichever screen every tile was already showing there --
+    // never a bare `osi` or a Select attach's own Tape default.
+    app.screen = starting_screen;
 
     let color_mode = theme::ColorMode::from_env();
     let mut resolved_theme = theme::resolve(theme_name, color_mode);
@@ -3298,10 +3606,33 @@ fn run_tui_watch(
     )> = None;
     let mut theme_banner_until: Option<Instant> = None;
 
-    let guard_and_terminal = TerminalGuard::enter()
-        .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
-    let (_guard, mut terminal) = match guard_and_terminal {
-        Ok(pair) => pair,
+    // Issue #698: a run attached from the Select screen shares the
+    // Select loop's own `TerminalGuard` rather than leaving raw mode
+    // and the alternate screen only to re-enter them here -- toggling
+    // either twice in the same process, on a real pty, was observed
+    // to leave the terminal's own write side returning EIO for the
+    // rest of the process (never exercised before this feature: every
+    // earlier caller of `TerminalGuard::enter` only ever did so once).
+    // Only the `Terminal` itself (no raw-mode/alt-screen ioctls, no
+    // fallback path of its own) is ever created fresh here in that
+    // case; `_guard` stays `None`, and this function returns instead
+    // of calling `std::process::exit`, so the caller that owns the
+    // real guard also owns tearing it down.
+    let (_guard, guard_and_terminal) = if manage_terminal {
+        let pair = TerminalGuard::enter()
+            .and_then(|g| Terminal::new(CrosstermBackend::new(std::io::stdout())).map(|t| (g, t)));
+        match pair {
+            Ok((g, t)) => (Some(g), Ok(t)),
+            Err(err) => (None, Err(err)),
+        }
+    } else {
+        (
+            None,
+            Terminal::new(CrosstermBackend::new(std::io::stdout())),
+        )
+    };
+    let mut terminal = match guard_and_terminal {
+        Ok(t) => t,
         Err(err) => {
             // Finding 14: actually watches via the same stop-
             // condition loop `do_watch` uses, rather than reporting
@@ -3319,6 +3650,8 @@ fn run_tui_watch(
                 &plan,
                 &run_dir,
                 &mut signals,
+                registry,
+                &fallback_document,
             );
             let code = finish_watch(
                 &mut out,
@@ -3335,15 +3668,30 @@ fn run_tui_watch(
                 history,
             );
             let _ = writeln!(out, "exit {code}");
-            return ExitCode::from(code as u8);
+            // No TUI ever started here, Select screen included
+            // (issue #698: a Select-opened run that can't even open
+            // a terminal has nowhere left to show Select on either) --
+            // `registry`'s own `Drop` removes its entry once whichever
+            // caller owns it returns (`do_watch` when `manage_terminal`,
+            // `attach_discovered_run`/`attach_recent_run` otherwise),
+            // since this branch, unlike the tail below, never calls
+            // `std::process::exit` on any path.
+            return WatchOutcome::Exited(ExitCode::from(code as u8), Vec::new());
         }
     };
+    if !manage_terminal {
+        // This `Terminal` is fresh (built on the Select loop's own,
+        // already-active `TerminalGuard` above), but the real screen
+        // underneath it may still carry whatever Select itself last
+        // drew there -- cleared for the same reason `run_select_
+        // screen`'s own fresh `Terminal` is, so the first frame drawn
+        // below doesn't leave that behind under the new content.
+        let _ = terminal.clear();
+    }
 
-    // Design: crossterm's own blocking
-    // `event::read()` runs on its own thread from here on, never
-    // this one -- see `spawn_event_reader`'s own doc comment.
-    let event_rx = spawn_event_reader();
-
+    // Design: crossterm's own blocking `event::read()` runs on its
+    // own thread -- `event_rx` is the caller's own, never a second
+    // one spawned here (issue #698's own `EventReader` doc comment).
     let mut last_draw = Instant::now() - REDRAW_INTERVAL;
     let mut last_rebuild = Instant::now() - RENDER_REBUILD_INTERVAL;
     // Finding 1: see `run_tui`'s own comment above.
@@ -3386,17 +3734,22 @@ fn run_tui_watch(
         &plan,
         &now_str,
     );
-    let mut overview = build_overview_if_active(
+    let mut tape_screen = build_tape_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         last_state.as_ref(),
-        &log_lines,
         &now_str,
     );
-    let mut cost_screen =
-        build_cost_screen_if_active(&app, &render_state, last_state.as_ref(), &model, &now_str);
+    let mut store_screen = build_store_screen_if_active(
+        &app,
+        &render_state,
+        &plan,
+        &model,
+        last_state.as_ref(),
+        &now_str,
+    );
     let mut flow_screen = build_flow_screen_if_active(
         &app,
         &render_state,
@@ -3406,21 +3759,21 @@ fn run_tui_watch(
         &story,
         &now_str,
     );
-    let mut time_screen = build_time_screen_if_active(
+    let mut signal_screen = build_signal_screen_if_active(
         &app,
         &render_state,
         &plan,
         &model,
         last_state.as_ref(),
-        &story,
         &now_str,
     );
     let mut transcript_cache = TranscriptTailCache::default();
     let mut transcript_view = tail_focused_transcript(
         &app,
-        overview.as_ref(),
+        tape_screen.as_ref(),
         flow_screen.as_ref(),
-        time_screen.as_ref(),
+        signal_screen.as_ref(),
+        store_screen.as_ref(),
         &mut transcript_cache,
     );
     // Finding 3: no `mark_highlights` call here -- see `run_tui`'s
@@ -3466,6 +3819,10 @@ fn run_tui_watch(
                 needs_rebuild = true;
                 needs_draw = true;
             }
+            registry.ensure_written(
+                &model,
+                &watch_document_name(last_state.as_ref(), &fallback_document),
+            );
 
             if last_state
                 .as_ref()
@@ -3504,6 +3861,12 @@ fn run_tui_watch(
                 }
             }
             if ended {
+                // The entry is removed the moment the watched run's
+                // own end is seen this way, not only once this loop
+                // itself ends (`registry`'s own `Drop`) -- otherwise
+                // it would still name a live run for as long as the
+                // finished screen stays open.
+                registry.remove();
                 // #494: the same shared final drain every path that
                 // reaches a run's end takes, regardless of which of
                 // the three stop conditions above just tripped --
@@ -3629,26 +3992,31 @@ fn run_tui_watch(
                 }
             }
             app.reconcile_folding(&render_state.rows);
+            app.flow_rows = render_state.unfolded_rows.clone();
+            app.tape_select_run_end_once(
+                render_state.header.status == RunStatus::Running,
+                tape_run_end_default_target(&render_state.rows),
+            );
             if app.selected_path.is_none() {
                 let first = render_state.rows.first().map(|r| r.path.clone());
                 app.select_tree_path_keeping_details(first);
             }
             // See `run_tui`'s own comment above -- built after
             // follow updated the selection, not before.
-            overview = build_overview_if_active(
+            tape_screen = build_tape_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 last_state.as_ref(),
-                &log_lines,
                 &now_str,
             );
-            cost_screen = build_cost_screen_if_active(
+            store_screen = build_store_screen_if_active(
                 &app,
                 &render_state,
-                last_state.as_ref(),
+                &plan,
                 &model,
+                last_state.as_ref(),
                 &now_str,
             );
             flow_screen = build_flow_screen_if_active(
@@ -3660,43 +4028,38 @@ fn run_tui_watch(
                 &story,
                 &now_str,
             );
-            time_screen = build_time_screen_if_active(
+            signal_screen = build_signal_screen_if_active(
                 &app,
                 &render_state,
                 &plan,
                 &model,
                 last_state.as_ref(),
-                &story,
                 &now_str,
             );
             transcript_view = tail_focused_transcript(
                 &app,
-                overview.as_ref(),
+                tape_screen.as_ref(),
                 flow_screen.as_ref(),
-                time_screen.as_ref(),
+                signal_screen.as_ref(),
+                store_screen.as_ref(),
                 &mut transcript_cache,
             );
         }
-        // Issue #635/#650: same narrowing as `osi <doc>`'s own main
-        // loop -- see the comment there.
-        let flow_owned: Vec<oscilloscope_core::render::Row> = if app.screen
-            == oscilloscope_core::screens::Screen::Flow
-        {
-            flow_screen
-                .as_ref()
-                .map(|screen| keys::visible_rows_for_flow(&render_state.rows, &screen.rows, &app))
-                .unwrap_or_default()
+        // Issue #691: same as `osi <doc>`'s own main loop -- see the
+        // comment there.
+        let tape_owned: Vec<oscilloscope_core::render::Row> =
+            if app.screen == oscilloscope_core::screens::Screen::Tape {
+                tape_screen
+                    .as_ref()
+                    .map(keys::visible_rows_for_tape)
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+        let visible = if app.screen == oscilloscope_core::screens::Screen::Tape {
+            tape_owned.iter().collect()
         } else {
-            Vec::new()
-        };
-        let visible = match (&flow_screen, &time_screen) {
-            (Some(_), _) if app.screen == oscilloscope_core::screens::Screen::Flow => {
-                flow_owned.iter().collect()
-            }
-            (_, Some(screen)) if app.screen == oscilloscope_core::screens::Screen::Time => {
-                keys::visible_rows_for_time(&render_state.rows, &screen.rows, &app)
-            }
-            _ => keys::visible_rows(&render_state.rows, &app),
+            keys::visible_rows(&render_state.rows, &app)
         };
         let state_visible = keys::visible_state_rows(&render_state.state_rows, &app);
 
@@ -3727,17 +4090,17 @@ fn run_tui_watch(
                             )
                             .is_some()
                         });
-                        let cost_tree: &[oscilloscope_core::treemap::TreemapNode] = cost_screen
+                        let store_rows: Vec<String> = store_screen
                             .as_ref()
-                            .map(|c| c.tree.as_slice())
-                            .unwrap_or(&[]);
+                            .map(|s| s.table.iter().map(|r| r.path.clone()).collect())
+                            .unwrap_or_default();
                         match app.handle_key(
                             key,
                             &visible,
                             &state_visible,
                             false,
                             has_prompt_sent,
-                            cost_tree,
+                            &store_rows,
                         ) {
                             keys::Action::Quit => {
                                 // Finding 15: `q` while the watched
@@ -3755,6 +4118,18 @@ fn run_tui_watch(
                             // would, not the final state's own code.
                             keys::Action::CtrlC => {
                                 local_signal = Some(ForwardSignal::Int);
+                                break 'tui;
+                            }
+                            // Issue #698 (§2.5): `esc` on a run
+                            // attached from the Select screen
+                            // returns there -- the same voluntary
+                            // detach `q` already is, just leaving
+                            // this loop for the Select loop to pick
+                            // back up instead of for the process to
+                            // exit.
+                            keys::Action::BackToSelect => {
+                                detached_while_live = !ended;
+                                back_to_select = true;
                                 break 'tui;
                             }
                             keys::Action::CycleTheme => {
@@ -3791,20 +4166,20 @@ fn run_tui_watch(
                         // See `run_tui`'s own comment above --
                         // refreshes the overview for this same
                         // frame's draw, not next iteration's.
-                        overview = build_overview_if_active(
+                        tape_screen = build_tape_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             last_state.as_ref(),
-                            &log_lines,
                             &now_str,
                         );
-                        cost_screen = build_cost_screen_if_active(
+                        store_screen = build_store_screen_if_active(
                             &app,
                             &render_state,
-                            last_state.as_ref(),
+                            &plan,
                             &model,
+                            last_state.as_ref(),
                             &now_str,
                         );
                         flow_screen = build_flow_screen_if_active(
@@ -3816,20 +4191,20 @@ fn run_tui_watch(
                             &story,
                             &now_str,
                         );
-                        time_screen = build_time_screen_if_active(
+                        signal_screen = build_signal_screen_if_active(
                             &app,
                             &render_state,
                             &plan,
                             &model,
                             last_state.as_ref(),
-                            &story,
                             &now_str,
                         );
                         transcript_view = tail_focused_transcript(
                             &app,
-                            overview.as_ref(),
+                            tape_screen.as_ref(),
                             flow_screen.as_ref(),
-                            time_screen.as_ref(),
+                            signal_screen.as_ref(),
+                            store_screen.as_ref(),
                             &mut transcript_cache,
                         );
                     }
@@ -3851,11 +4226,11 @@ fn run_tui_watch(
             break 'tui;
         }
 
-        // Finding 1: this sets only `needs_draw`, same as `run_tui`.
+        // This sets only `needs_draw`, same as `run_tui`.
         let highlight_now = Instant::now();
         if !no_animation {
             highlights.prune(highlight_now);
-            if highlights.has_active(highlight_now) || !ended {
+            if !ended {
                 needs_draw = true;
             }
         }
@@ -3870,9 +4245,6 @@ fn run_tui_watch(
                 .map(|_| resolved_theme.theme.name.as_str());
             let ctx = tui::DrawCtx {
                 theme: &resolved_theme.theme,
-                highlights: &highlights,
-                now: highlight_now,
-                color_mode,
                 theme_banner: banner,
                 zone: &LocalZone,
                 no_animation,
@@ -3883,18 +4255,16 @@ fn run_tui_watch(
                     &render_state,
                     details.as_ref(),
                     &log_lines,
-                    next_log_seq,
                     &mut app,
                     last_state.as_ref(),
                     &ctx,
                     icon_frame,
                     &now_str,
-                    overview.as_ref(),
-                    cost_screen.as_ref(),
+                    tape_screen.as_ref(),
+                    store_screen.as_ref(),
                     flow_screen.as_ref(),
-                    time_screen.as_ref(),
+                    signal_screen.as_ref(),
                     transcript_view.as_ref(),
-                    &mut cost_layout,
                 );
             });
             last_draw = Instant::now();
@@ -3919,28 +4289,1594 @@ fn run_tui_watch(
     drop(_guard);
     flush_history_notices(history);
 
-    let stdout = std::io::stdout();
-    let mut out = stdout.lock();
-    let code = finish_watch(
-        &mut out,
-        &mut clock,
-        &mut live_poller,
-        &mut events_tailer,
-        &mut differ,
-        &mut model,
-        &plan,
-        &run_dir,
-        &mut last_state,
-        local_signal,
-        detached_while_live,
-        history,
-    );
-    let _ = writeln!(out, "exit {code}");
-    // Design -- see `run_tui`'s own matching
-    // tail for why this ends the process explicitly rather than just
-    // returning.
-    let _ = out.flush();
+    // Issue #698: `manage_terminal` false means the Select loop's own
+    // alternate screen is still up at this point (its `TerminalGuard`
+    // is `run_select`'s own, not this function's) -- `finish_watch`'s
+    // own summary and `exit {code}` line are buffered here instead of
+    // written straight to stdout, so they never land, broken across
+    // lines by raw mode's own disabled carriage return, over whatever
+    // Select or the next attach draws. A `back_to_select` return
+    // discards the buffer (Select redraws the whole screen anyway);
+    // `run_select`'s own tail prints it, once its `TerminalGuard` has
+    // actually dropped, only on the final `Exited` return below.
+    let (code, pending_output): (u8, Vec<u8>) = if manage_terminal {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let code = finish_watch(
+            &mut out,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+            &run_dir,
+            &mut last_state,
+            local_signal,
+            detached_while_live,
+            history,
+        );
+        let _ = writeln!(out, "exit {code}");
+        let _ = out.flush();
+        (code, Vec::new())
+    } else {
+        let mut buf = Vec::new();
+        let code = finish_watch(
+            &mut buf,
+            &mut clock,
+            &mut live_poller,
+            &mut events_tailer,
+            &mut differ,
+            &mut model,
+            &plan,
+            &run_dir,
+            &mut last_state,
+            local_signal,
+            detached_while_live,
+            history,
+        );
+        let _ = writeln!(buf, "exit {code}");
+        (code, buf)
+    };
+    registry.remove();
+    // Issue #698: a run attached from the Select screen hands the
+    // event-reader thread back rather than ending the process, so
+    // the Select loop can pick it back up -- a plain `osi watch`
+    // (`opened_from_select` false, `back_to_select` therefore never
+    // set) still ends the process explicitly here, same as `run_tui`'s
+    // own matching tail.
+    if back_to_select {
+        return WatchOutcome::BackToSelect(event_rx, theme_name);
+    }
+    if !manage_terminal {
+        // The Select loop owns the real `TerminalGuard` and the
+        // process's own exit either way (`run_select`'s own tail) --
+        // this attach never owned either.
+        return WatchOutcome::Exited(ExitCode::from(code), pending_output);
+    }
     std::process::exit(i32::from(code));
+}
+
+/// Bare `osi` with no document, on a TTY without `--log` (issue
+/// #698, §2.5): attaches straight away with exactly one running
+/// orchestration, otherwise opens the interactive Select screen --
+/// several running, or none at all.
+fn run_select(theme_name: theme::ThemeName, no_animation: bool, no_history: bool) -> ExitCode {
+    let runs = discover_running();
+    if oscilloscope_core::select::shape_for_run_count(runs.len())
+        == oscilloscope_core::select::Shape::AttachSingle
+    {
+        return match attach_discovered_run(
+            &runs[0],
+            false,
+            no_animation,
+            theme_name,
+            no_history,
+            spawn_event_reader(),
+            oscilloscope_core::screens::Screen::Tape,
+        ) {
+            WatchOutcome::Exited(code, _) => code,
+            WatchOutcome::BackToSelect(..) => {
+                unreachable!("bare osi's own single-run attach never opens from Select")
+            }
+        };
+    }
+    // One `TerminalGuard` for the whole Select<->Attach lifecycle,
+    // never re-entered: toggling raw mode and the alternate screen
+    // off and back on, on a real terminal, was observed to leave
+    // its own write side returning an I/O error for the rest of the
+    // process (`run_tui_watch`'s own `manage_terminal` doc comment).
+    let guard = match TerminalGuard::enter() {
+        Ok(g) => g,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return ExitCode::from(1);
+        }
+    };
+    let mut event_rx = spawn_event_reader();
+    // The cursor starts on the first
+    // run, not `All` -- `run_select_screen` itself still decides that
+    // default (it alone knows, at the moment it first draws, whether
+    // the running list or the empty Recent Runs table is showing);
+    // `None` only for this very first call. Every leg after that
+    // carries the cursor `run_select_screen` last ended on
+    // (`Some`), so `esc` back from a run doesn't lose whichever row
+    // was under it.
+    let mut cursor: Option<usize> = None;
+    // Issue #714: `T` is one value shared by every leg of this
+    // loop -- each call below both reads and, once it returns,
+    // overwrites this same binding, so a cycle on any screen
+    // survives the round trip back to Select.
+    let mut theme_name = theme_name;
+    let (code, pending_output) = loop {
+        let (action, reader, last_cursor, new_theme) =
+            run_select_screen(no_history, theme_name, event_rx, cursor);
+        cursor = Some(last_cursor);
+        theme_name = new_theme;
+        let outcome = match action {
+            SelectAction::Quit(code) => break (code, Vec::new()),
+            SelectAction::AttachRun(run) => attach_discovered_run(
+                &run,
+                true,
+                no_animation,
+                theme_name,
+                no_history,
+                reader,
+                oscilloscope_core::screens::Screen::Tape,
+            ),
+            SelectAction::AttachRecent(row) => {
+                attach_recent_run(&row, no_animation, theme_name, no_history, reader)
+            }
+            SelectAction::OpenAll => run_all_loop(no_history, theme_name, no_animation, reader),
+        };
+        match outcome {
+            WatchOutcome::Exited(code, output) => break (code, output),
+            WatchOutcome::BackToSelect(reader, new_theme) => {
+                event_rx = reader;
+                theme_name = new_theme;
+            }
+        }
+    };
+    drop(guard);
+    // `run_tui_watch`'s own tail buffers `finish_watch`'s output
+    // rather than writing it onto the alternate screen this loop's
+    // own `TerminalGuard` still has open at that point (issue #698) --
+    // printed here, onto the real terminal, only once that guard has
+    // actually dropped.
+    if !pending_output.is_empty() {
+        let stdout = std::io::stdout();
+        let mut out = stdout.lock();
+        let _ = out.write_all(&pending_output);
+        let _ = out.flush();
+    }
+    code
+}
+
+/// A locally received signal's own exit code (DESIGN.md §4.1): the
+/// standard 128+signal convention, shared with `watch_exit_code`'s
+/// own local-signal case so the two can never drift apart.
+fn forward_signal_exit_code(signal: ForwardSignal) -> u8 {
+    match signal {
+        ForwardSignal::Int => 130,
+        ForwardSignal::Term => 143,
+        ForwardSignal::Hup => 129,
+    }
+}
+
+/// A cheap check for whether the empty Select's own Recent Runs
+/// table might be stale, without re-reading and re-parsing every
+/// history record on every refresh tick (issue #698) -- `None` with
+/// history off (`--no-history`/`OSI_HISTORY=off`) or nothing recorded
+/// yet.
+fn history_signature(no_history: bool) -> Option<std::time::SystemTime> {
+    history_io::resolve_history_dir(no_history)
+        .as_deref()
+        .and_then(oscilloscope_core::history::history_dir_signature)
+}
+
+/// The registry plus a process scan plus a `state.live.json` scan of
+/// the current directory (§7.2) -- the same three sources
+/// [`print_discovered_runs`] prints, used here to decide which of
+/// the Select screen's own three shapes bare `osi` shows.
+fn discover_running() -> Vec<oscilloscope_core::discovery::DiscoveredRun> {
+    let scan_enabled = process_scan_enabled();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    oscilloscope_core::discovery::discover_runs(
+        registry_io::resolve_runs_dir().as_deref(),
+        &oscilloscope_core::registry::RealLiveness,
+        if scan_enabled {
+            &oscilloscope_core::discovery::RealProcessScanner
+        } else {
+            &oscilloscope_core::discovery::NullProcessScanner
+        },
+        &oscilloscope_core::discovery::RealProcessCwd,
+        scan_enabled.then_some(cwd.as_path()),
+        std::time::SystemTime::now(),
+    )
+}
+
+/// Every finished run recorded in history, across every document
+/// (issue #698: the empty Select's own Recent Runs table) -- `[]`
+/// with history off
+/// (`--no-history`/`OSI_HISTORY=off`) or none recorded yet.
+fn read_recent_runs(no_history: bool) -> Vec<oscilloscope_core::select::RecentRow> {
+    let records = history_io::resolve_history_dir(no_history)
+        .as_deref()
+        .map(oscilloscope_core::history::read_all_records)
+        .unwrap_or_default();
+    oscilloscope_core::select::build_recent_rows(&records, &|dir: &str| Path::new(dir).is_dir())
+}
+
+/// What the Select screen's own loop ([`run_select_screen`]) decided
+/// once a key actually ended it -- `AttachRun`/`AttachRecent` carry
+/// the chosen row by value since the loop's own borrow of `runs`/
+/// `recent` ends with it.
+enum SelectAction {
+    Quit(ExitCode),
+    AttachRun(oscilloscope_core::discovery::DiscoveredRun),
+    AttachRecent(oscilloscope_core::select::RecentRow),
+    /// `enter` on the `All` row (issue #698's All screen).
+    OpenAll,
+}
+
+/// The list refreshes every two seconds while Select is open (§7.2).
+const SELECT_REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+
+/// The Select screen's own key/redraw loop (issue #698, §2.5/§4): its
+/// own terminal session, entered and left independently of any
+/// attached run's (`run_select`'s own loop re-enters this every time
+/// an attached run's own `esc` comes back) -- `event_rx` is handed
+/// back either way, never a second reader thread spawned for it.
+/// `initial_cursor` is `run_select`'s own, carried across every leg
+/// of the round trip; the cursor this call ends on is handed back
+/// the same way, for the next leg to start from. `None` only for the
+/// very first call of the whole process: the cursor's own default
+/// (the first run, or row 0 of the empty Recent Runs table) depends
+/// on which of the two this call itself discovers, so there is no
+/// one fixed default `run_select` could pre-compute on its own.
+fn run_select_screen(
+    no_history: bool,
+    mut theme_name: theme::ThemeName,
+    event_rx: EventReader,
+    initial_cursor: Option<usize>,
+) -> (SelectAction, EventReader, usize, theme::ThemeName) {
+    // `run_select`'s own `TerminalGuard` is already active for the
+    // whole Select<->Attach lifecycle -- only a fresh `Terminal`
+    // (ratatui's own diffing state, no raw-mode/alt-screen ioctls of
+    // its own) is ever created here. Cleared right away: its own
+    // buffers start blank, but the real screen underneath may still
+    // carry whatever an attached run last drew there (issue #698) --
+    // without this, the first draw below would only send the cells
+    // that differ from blank, leaving that old content on screen
+    // underneath the new one.
+    let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return (
+                SelectAction::Quit(ExitCode::from(1)),
+                event_rx,
+                initial_cursor.unwrap_or(0),
+                theme_name,
+            );
+        }
+    };
+    let _ = terminal.clear();
+    let color_mode = theme::ColorMode::from_env();
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    let mut theme = resolved_theme.theme;
+    let mut theme_banner_until: Option<Instant> = None;
+
+    let mut runs = discover_running();
+    let mut recent = if runs.is_empty() {
+        read_recent_runs(no_history)
+    } else {
+        Vec::new()
+    };
+    let mut recent_signature = if runs.is_empty() {
+        history_signature(no_history)
+    } else {
+        None
+    };
+    let initial_max_index = if runs.is_empty() {
+        recent.len().saturating_sub(1)
+    } else {
+        runs.len()
+    };
+    // The cursor starts on the first
+    // run, not `All` -- row 1, since row 0 is `All`; the empty
+    // Recent Runs table has no such row, so its own first entry is
+    // row 0.
+    let default_cursor = if runs.is_empty() { 0 } else { 1 };
+    let mut select_state = keys::SelectState::new(
+        initial_cursor
+            .unwrap_or(default_cursor)
+            .min(initial_max_index),
+    );
+    let mut last_refresh = Instant::now();
+    let mut signals = SignalWatcher::new().ok();
+    let mut needs_draw = true;
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut lost_terminal = false;
+
+    let outcome = 'select: loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                break 'select SelectAction::Quit(ExitCode::from(forward_signal_exit_code(sig)));
+            }
+        }
+        if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
+            runs = discover_running();
+            if runs.is_empty() {
+                let signature = history_signature(no_history);
+                if signature != recent_signature || recent.is_empty() {
+                    recent = read_recent_runs(no_history);
+                }
+                recent_signature = signature;
+            } else {
+                recent = Vec::new();
+                recent_signature = None;
+            }
+            let max_index = if runs.is_empty() {
+                recent.len().saturating_sub(1)
+            } else {
+                runs.len()
+            };
+            select_state.cursor = select_state.cursor.min(max_index);
+            last_refresh = Instant::now();
+            needs_draw = true;
+        }
+
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        let max_index = if runs.is_empty() {
+                            recent.len().saturating_sub(1)
+                        } else {
+                            runs.len()
+                        };
+                        let cursor_recent_openable = runs.is_empty()
+                            && recent
+                                .get(select_state.cursor)
+                                .is_some_and(|row| row.openable);
+                        match select_state.handle_key(
+                            key.code,
+                            key.modifiers,
+                            runs.is_empty(),
+                            max_index,
+                            cursor_recent_openable,
+                        ) {
+                            keys::SelectKeyOutcome::Quit(code) => {
+                                break 'select SelectAction::Quit(ExitCode::from(code));
+                            }
+                            keys::SelectKeyOutcome::OpenAll => {
+                                break 'select SelectAction::OpenAll;
+                            }
+                            keys::SelectKeyOutcome::AttachRun(idx) => {
+                                if let Some(run) = runs.get(idx) {
+                                    break 'select SelectAction::AttachRun(run.clone());
+                                }
+                            }
+                            keys::SelectKeyOutcome::AttachRecent(idx) => {
+                                if let Some(row) = recent.get(idx) {
+                                    break 'select SelectAction::AttachRecent(row.clone());
+                                }
+                            }
+                            keys::SelectKeyOutcome::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                theme = resolved_theme.theme;
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
+                            keys::SelectKeyOutcome::None => {}
+                        }
+                        needs_draw = true;
+                    }
+                    CEvent::Resize(_, _) => needs_draw = true,
+                    _ => {}
+                },
+            }
+        }
+        if terminal_gone {
+            lost_terminal = true;
+            break 'select SelectAction::Quit(ExitCode::from(0));
+        }
+
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let now_str = now_rfc3339();
+            let rows = oscilloscope_core::select::build_rows(&runs);
+            let banner = theme_banner_until
+                .filter(|&until| Instant::now() < until)
+                .map(|_| theme.name.as_str());
+            let ctx = tui::DrawCtx {
+                theme: &theme,
+                theme_banner: banner,
+                zone: &LocalZone,
+                no_animation: true,
+            };
+            let drew = terminal.draw(|f| {
+                let body = if runs.is_empty() {
+                    tui::SelectBody::Empty(&recent)
+                } else {
+                    tui::SelectBody::Running(&rows)
+                };
+                tui::draw_select(
+                    f,
+                    &body,
+                    select_state.cursor,
+                    &now_str,
+                    process_scan_enabled(),
+                    &ctx,
+                );
+                if select_state.help_open {
+                    tui::draw_select_help(f, &ctx);
+                }
+            });
+            last_draw = Instant::now();
+            needs_draw = false;
+            if drew.is_err() {
+                lost_terminal = true;
+                break 'select SelectAction::Quit(ExitCode::from(0));
+            }
+        }
+    };
+
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
+    (outcome, event_rx, select_state.cursor, theme_name)
+}
+
+/// Attaches to a [`oscilloscope_core::discovery::DiscoveredRun`] the
+/// same way `osi watch <run_dir>` would (issue #698, §2.5): read-
+/// only, `c` inert. Used both for bare `osi`'s own single-run case
+/// (`opened_from_select` false, `esc` then does nothing) and for a
+/// row chosen on the Select screen (`opened_from_select` true, `esc`
+/// returns there).
+#[allow(clippy::too_many_arguments)]
+fn attach_discovered_run(
+    run: &oscilloscope_core::discovery::DiscoveredRun,
+    opened_from_select: bool,
+    no_animation: bool,
+    theme_name: theme::ThemeName,
+    no_history: bool,
+    event_rx: EventReader,
+    starting_screen: oscilloscope_core::screens::Screen,
+) -> WatchOutcome {
+    let Some(run_dir) = run.run_dir.clone() else {
+        // Nothing `discover_runs` itself ever returns reaches this --
+        // every source it reads always knows a run directory -- but
+        // there is nowhere left to watch without one.
+        return WatchOutcome::Exited(ExitCode::from(1), Vec::new());
+    };
+    let live_state_path = run
+        .live_state
+        .clone()
+        .unwrap_or_else(|| run_dir.join("state.live.json"));
+    let fallback_document = run
+        .orchestration
+        .clone()
+        .unwrap_or_else(|| run_dir.display().to_string());
+    // The registry entry's own config, else `run_start`'s (not yet
+    // known at attach time -- the plan
+    // compiled from it, like `--plan`, needs a document path this
+    // function has no reason to resolve on its own), else the
+    // process arguments -- already folded into `run.config` by
+    // whichever source `discover_runs` found this run through.
+    let config =
+        oscilloscope_core::registry::resolve_attached_config(run.config.as_deref(), None, None)
+            .map(str::to_string);
+    let plan_fallback = run.orchestration.as_ref().map(PathBuf::from);
+    let history = history_io::HistoryHandle::for_watch(
+        history_io::resolve_history_dir(no_history),
+        plan_fallback,
+        config.clone(),
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        config.as_deref().map(Path::new),
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
+        true,
+    );
+    run_tui_watch(
+        run_dir,
+        live_state_path,
+        PlanTree::empty(),
+        fallback_document,
+        no_animation,
+        theme_name,
+        &history,
+        &mut registry,
+        event_rx,
+        opened_from_select,
+        // Bare `osi`'s own single-run case (`opened_from_select`
+        // false) is self-contained, exactly like `osi watch` --
+        // only a Select-opened attach shares the Select loop's own
+        // `TerminalGuard` instead of managing one of its own.
+        !opened_from_select,
+        starting_screen,
+    )
+}
+
+/// Attaches to a finished run named by the empty Select screen's own
+/// Recent Runs table (issue #698): `osi watch <run_dir>`
+/// read-only, with no `--config` of its own (the table never records
+/// one it would attach with -- only the history record's own,
+/// already shown in the CONFIG column).
+fn attach_recent_run(
+    row: &oscilloscope_core::select::RecentRow,
+    no_animation: bool,
+    theme_name: theme::ThemeName,
+    no_history: bool,
+    event_rx: EventReader,
+) -> WatchOutcome {
+    let Some(run_dir) = row.run_dir.as_ref().map(PathBuf::from) else {
+        // `build_recent_rows` already marks this `gone`, and
+        // `run_select_screen` never lets `enter` reach here for one
+        // -- nothing left to open either way.
+        return WatchOutcome::Exited(ExitCode::from(1), Vec::new());
+    };
+    let live_state_path = run_dir.join("state.live.json");
+    let history = history_io::HistoryHandle::for_watch(
+        history_io::resolve_history_dir(no_history),
+        None,
+        None,
+        Some(
+            history_io::absolute_path(&run_dir)
+                .to_string_lossy()
+                .into_owned(),
+        ),
+    );
+    let mut registry = registry_io::RegistryHandle::new(
+        registry_io::resolve_runs_dir(),
+        None,
+        None,
+        format!("osi {} watch", env!("CARGO_PKG_VERSION")),
+        &run_dir,
+        &run_dir.join("events.jsonl"),
+        &live_state_path,
+        true,
+    );
+    run_tui_watch(
+        run_dir,
+        live_state_path,
+        PlanTree::empty(),
+        row.document_label.clone(),
+        no_animation,
+        theme_name,
+        &history,
+        &mut registry,
+        event_rx,
+        true,
+        // Only reachable from the Select loop, which owns the real
+        // `TerminalGuard` for the whole session.
+        false,
+        oscilloscope_core::screens::Screen::Tape,
+    )
+}
+
+/// One All screen tile's own ingestion (issue #698, §2.6): the same
+/// live-state poller/events tailer/differ/[`RunModel`] a single-run
+/// attach keeps, plus the compiled plan from the registry's own
+/// orchestration/config paths -- unlike a Select-opened single-run
+/// attach (`attach_discovered_run`'s own `PlanTree::empty()`), a
+/// tile needs the real plan to show its own rows ahead at all. A
+/// document that no longer compiles (edited or removed since this
+/// osi discovered the run) falls back to the same empty plan a
+/// single-run attach already accepts; observations alone still
+/// carry the tile's own finished and running rows.
+struct AllRunSlot {
+    run: oscilloscope_core::discovery::DiscoveredRun,
+    document_label: String,
+    config_label: Option<String>,
+    /// This run's own short name (issue #717), already
+    /// disambiguated against every other slot by
+    /// [`disambiguate_tile_labels`] -- `None` until that runs, and
+    /// until this run's own `run_id` is known.
+    name: Option<String>,
+    plan: PlanTree,
+    model: RunModel,
+    live_poller: LiveStatePoller,
+    events_tailer: EventsTailer,
+    differ: Differ,
+    last_state: Option<serde_json::Value>,
+}
+
+fn path_basename(path: &str) -> String {
+    Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+/// A run's own identity across a refresh (issue #698's own slot
+/// reconciliation): its own `--live-state` path, the same key
+/// `discover_runs` itself already dedups two sightings of the same
+/// run by -- falling back to the run directory only for the rare
+/// discovered run with no live-state path of its own at all.
+fn slot_key(run: &oscilloscope_core::discovery::DiscoveredRun) -> Option<&Path> {
+    run.live_state.as_deref().or(run.run_dir.as_deref())
+}
+
+/// The pure core of the All screen's own per-redraw reconciliation:
+/// for each of `runs` (in order), the index into `existing` it
+/// matches by [`slot_key`], or `None` for a run with no existing
+/// slot to carry over -- a run with no key of its own (`slot_key`
+/// returning `None`) never matches anything, including another
+/// keyless run, so it always starts a fresh slot rather than
+/// silently sharing one with an unrelated run. Each existing slot
+/// matches at most once: a repeat of the same key among `runs`
+/// (never real, since `discover_runs` already dedups to one entry
+/// per key) still only consumes its own match the first time.
+fn match_existing_slots<'a>(
+    existing: &[Option<&'a Path>],
+    runs: &[Option<&'a Path>],
+) -> Vec<Option<usize>> {
+    let mut taken = vec![false; existing.len()];
+    runs.iter()
+        .map(|run_key| {
+            let run_key = (*run_key)?;
+            existing
+                .iter()
+                .enumerate()
+                .find(|(i, key)| !taken[*i] && **key == Some(run_key))
+                .map(|(i, _)| {
+                    taken[i] = true;
+                    i
+                })
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod all_run_slot_tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn match_existing_slots_carries_over_a_run_found_at_the_same_key() {
+        let a = Path::new("/run/a/state.live.json");
+        let b = Path::new("/run/b/state.live.json");
+        let existing = [Some(a), Some(b)];
+        let runs = [Some(b), Some(a)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(1), Some(0)]);
+    }
+
+    #[test]
+    fn match_existing_slots_starts_fresh_for_a_run_with_no_existing_match() {
+        let a = Path::new("/run/a/state.live.json");
+        let c = Path::new("/run/c/state.live.json");
+        let existing = [Some(a)];
+        let runs = [Some(a), Some(c)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(0), None]);
+    }
+
+    #[test]
+    fn match_existing_slots_drops_a_run_that_ended() {
+        let a = Path::new("/run/a/state.live.json");
+        let b = Path::new("/run/b/state.live.json");
+        let existing = [Some(a), Some(b)];
+        // `b` has ended; only `a` is still running.
+        let runs = [Some(a)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(0)]);
+    }
+
+    #[test]
+    fn match_existing_slots_never_matches_two_keyless_runs_to_each_other() {
+        let existing: [Option<&Path>; 1] = [None];
+        let runs: [Option<&Path>; 1] = [None];
+        assert_eq!(match_existing_slots(&existing, &runs), [None]);
+    }
+
+    #[test]
+    fn all_grid_info_shows_one_run_per_page_when_only_one_cell_fits_at_all() {
+        // 80 columns -> one 56-wide tile column; a 20-row body ->
+        // one tile row too: capacity 1, so every page shows one
+        // real run, never a reserved "... n more" slot standing in
+        // for every run with nothing real drawn.
+        let (grid, page_count, page_offset, page_run_count, more_count) =
+            all_grid_info(3, 80, 23, 0);
+        assert_eq!(grid.columns, 1);
+        assert_eq!(grid.rows, 1);
+        assert_eq!(page_count, 3);
+        assert_eq!(page_offset, 0);
+        assert_eq!(page_run_count, 1);
+        assert_eq!(more_count, 2);
+    }
+
+    #[test]
+    fn all_grid_info_one_cell_last_page_has_no_more() {
+        let (_grid, page_count, page_offset, page_run_count, more_count) =
+            all_grid_info(3, 80, 23, 2);
+        assert_eq!(page_count, 3);
+        assert_eq!(page_offset, 2);
+        assert_eq!(page_run_count, 1);
+        assert_eq!(more_count, 0);
+    }
+
+    #[test]
+    fn match_existing_slots_matches_each_existing_slot_at_most_once() {
+        let a = Path::new("/run/a/state.live.json");
+        let existing = [Some(a)];
+        // Never real (`discover_runs` already dedups to one entry
+        // per key), but the matcher still only lets the first of
+        // two runs sharing a key claim the existing slot.
+        let runs = [Some(a), Some(a)];
+        assert_eq!(match_existing_slots(&existing, &runs), [Some(0), None]);
+    }
+
+    #[test]
+    fn update_run_recompiles_the_plan_once_the_orchestration_is_first_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(&doc, "effects: []\n").unwrap();
+        // The live-state-in-cwd source: a run first found with
+        // neither an orchestration nor a config path known yet.
+        let found_bare = oscilloscope_core::discovery::DiscoveredRun {
+            run_id: None,
+            orchestration: None,
+            config: None,
+            engine: None,
+            pid: None,
+            launcher: None,
+            run_dir: Some(dir.path().to_path_buf()),
+            events: None,
+            live_state: None,
+            started_at: None,
+            label: None,
+        };
+        let mut slot = AllRunSlot::new(found_bare);
+        assert_eq!(slot.document_label, "—");
+        assert!(!slot.plan.has_plan(), "an empty plan has nothing yet");
+        let now_named = oscilloscope_core::discovery::DiscoveredRun {
+            orchestration: Some(doc.to_str().unwrap().to_string()),
+            ..slot.run.clone()
+        };
+        slot.update_run(now_named);
+        assert_eq!(slot.document_label, "do.yml");
+        assert!(
+            slot.plan.has_plan(),
+            "the plan should compile once the document is known"
+        );
+    }
+
+    #[test]
+    fn update_run_never_recompiles_the_plan_when_nothing_changed() {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(&doc, "effects: []\n").unwrap();
+        let run = oscilloscope_core::discovery::DiscoveredRun {
+            run_id: None,
+            orchestration: Some(doc.to_str().unwrap().to_string()),
+            config: None,
+            engine: None,
+            pid: None,
+            launcher: None,
+            run_dir: Some(dir.path().to_path_buf()),
+            events: None,
+            live_state: None,
+            started_at: None,
+            label: None,
+        };
+        let mut slot = AllRunSlot::new(run.clone());
+        let plan_ptr_before = std::ptr::addr_of!(slot.plan);
+        slot.update_run(run);
+        // Same `plan` field, never rebuilt: comparing the address is
+        // enough since `update_run` only ever reassigns it wholesale
+        // on a real change, never mutates it in place.
+        assert_eq!(plan_ptr_before, std::ptr::addr_of!(slot.plan));
+    }
+
+    #[test]
+    fn disambiguate_tile_document_labels_adds_the_parent_directory_only_on_a_real_collision() {
+        let run = |orchestration: &str| oscilloscope_core::discovery::DiscoveredRun {
+            run_id: None,
+            orchestration: Some(orchestration.to_string()),
+            config: None,
+            engine: None,
+            pid: None,
+            launcher: None,
+            run_dir: None,
+            events: None,
+            live_state: None,
+            started_at: None,
+            label: None,
+        };
+        let mut slots = vec![
+            AllRunSlot::new(run("/a/triage.yml")),
+            AllRunSlot::new(run("/b/triage.yml")),
+            AllRunSlot::new(run("/c/digest.yml")),
+        ];
+        disambiguate_tile_labels(&mut slots);
+        assert_eq!(slots[0].document_label, "a/triage.yml");
+        assert_eq!(slots[1].document_label, "b/triage.yml");
+        assert_eq!(
+            slots[2].document_label, "digest.yml",
+            "the one without a collision stays a plain basename"
+        );
+    }
+}
+
+impl AllRunSlot {
+    fn new(run: oscilloscope_core::discovery::DiscoveredRun) -> Self {
+        let run_dir = run.run_dir.clone().unwrap_or_else(|| PathBuf::from("."));
+        let events_path = run
+            .events
+            .clone()
+            .unwrap_or_else(|| run_dir.join("events.jsonl"));
+        let live_state_path = run
+            .live_state
+            .clone()
+            .unwrap_or_else(|| run_dir.join("state.live.json"));
+        let (document_label, config_label, plan) = Self::resolve_document_config_plan(&run);
+        AllRunSlot {
+            run,
+            document_label,
+            config_label,
+            name: None,
+            plan,
+            model: RunModel::new(),
+            live_poller: LiveStatePoller::new(&live_state_path),
+            events_tailer: EventsTailer::new(events_path),
+            differ: Differ::new(),
+            last_state: None,
+        }
+    }
+
+    /// This run's own document label, config label and compiled
+    /// plan, straight off its own orchestration/config paths --
+    /// shared by [`Self::new`] and [`Self::update_run`], so a slot
+    /// matched to a refreshed run that only now knows its own
+    /// document (the live-state-in-cwd source, before its own
+    /// events have named one) recompiles the same way a fresh slot
+    /// would, rather than keeping `—` and an empty plan forever.
+    fn resolve_document_config_plan(
+        run: &oscilloscope_core::discovery::DiscoveredRun,
+    ) -> (String, Option<String>, PlanTree) {
+        let document_label = run
+            .orchestration
+            .as_deref()
+            .map(path_basename)
+            .unwrap_or_else(|| "—".to_string());
+        let config_label = run.config.as_deref().map(path_basename);
+        let plan = run
+            .orchestration
+            .as_deref()
+            .and_then(|doc| {
+                let doc_path = PathBuf::from(doc);
+                let config_path = run.config.as_deref().map(PathBuf::from);
+                let inputs = oscilloscope_core::plan::parse_inputs(&[]).unwrap_or_default();
+                oscilloscope_core::plan::compile(&doc_path, config_path.as_deref(), &inputs)
+                    .ok()
+                    .map(|program| PlanTree::from_program(&program))
+            })
+            .unwrap_or_else(PlanTree::empty);
+        (document_label, config_label, plan)
+    }
+
+    /// Matches a refreshed [`DiscoveredRun`] to this already-live
+    /// slot (`main.rs`'s own refresh loop, every [`SELECT_REFRESH_
+    /// INTERVAL`]): the document label, config label and plan are
+    /// only ever recomputed when the orchestration or config path
+    /// has actually changed since the last refresh -- most commonly
+    /// never, but always true the first time a run first found with
+    /// neither (the live-state-in-cwd source) finally has one, which
+    /// a plain `self.run = run` would otherwise leave stuck at `—`
+    /// with no rows ahead for the rest of the run.
+    fn update_run(&mut self, run: oscilloscope_core::discovery::DiscoveredRun) {
+        if run.orchestration != self.run.orchestration || run.config != self.run.config {
+            let (document_label, config_label, plan) = Self::resolve_document_config_plan(&run);
+            self.document_label = document_label;
+            self.config_label = config_label;
+            self.plan = plan;
+        }
+        self.run = run;
+    }
+
+    fn tick(&mut self) {
+        let (_lines, state) = observe_tick(
+            &mut self.live_poller,
+            &mut self.events_tailer,
+            &mut self.differ,
+            &mut self.model,
+            &self.plan,
+        );
+        if let Some(state) = state {
+            self.last_state = Some(state);
+        }
+    }
+
+    fn build(
+        &mut self,
+        screen: oscilloscope_core::screens::Screen,
+        now: &str,
+        run_index: usize,
+    ) -> tui::AllTile {
+        let engine_label = self.run.engine.clone().unwrap_or_else(|| "cof".to_string());
+        let render = oscilloscope_core::multi::build_tile(
+            &self.document_label,
+            &engine_label,
+            &self.plan,
+            &mut self.model,
+            self.last_state.as_ref(),
+            screen,
+            &LocalZone,
+            now,
+        );
+        tui::AllTile {
+            document_label: self.document_label.clone(),
+            config_label: self.config_label.clone(),
+            name: self.name.clone(),
+            render,
+            run_index,
+        }
+    }
+
+    /// This run's own [`CombinedSlotData`] (issue #698's `u`): the
+    /// same `Row`/flattened-state pair `build` already builds for a
+    /// tile, independent of whichever screen the grid's own tiles
+    /// are showing -- the Combined Signal always reads every run's
+    /// own Signal-shaped data, regardless.
+    fn build_combined_slot_data(&mut self, now: &str) -> CombinedSlotData {
+        let engine_label = self.run.engine.clone().unwrap_or_else(|| "cof".to_string());
+        let rendered = oscilloscope_core::render::build_folded(
+            &self.document_label,
+            &engine_label,
+            &self.plan,
+            &mut self.model,
+            self.last_state.as_ref(),
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        let empty = serde_json::Value::Null;
+        let flat =
+            oscilloscope_core::model::flatten_state(self.last_state.as_ref().unwrap_or(&empty));
+        CombinedSlotData {
+            document_label: self.document_label.clone(),
+            config_label: self.config_label.clone(),
+            engine_label,
+            rendered,
+            flat,
+        }
+    }
+}
+
+/// One run's own [`oscilloscope_core::render::RenderState`] and
+/// flattened state, held together just long enough to build this
+/// redraw's own
+/// [`oscilloscope_core::combined::CombinedRunInput`] slice from --
+/// the input itself only ever borrows into this, never owns a copy.
+struct CombinedSlotData {
+    document_label: String,
+    config_label: Option<String>,
+    engine_label: String,
+    rendered: oscilloscope_core::render::RenderState,
+    flat: std::collections::BTreeMap<String, oscilloscope_core::model::NodeMeta>,
+}
+
+/// The grid geometry and this page's own slice of `run_count` runs
+/// (issue #698, §2.6/§5): the body height already has the header
+/// band, status line and key bar subtracted. `page` is clamped to
+/// the real page count, so a resize (or a run ending) that shrinks
+/// the grid never leaves it pointing past the end.
+fn all_grid_info(
+    run_count: usize,
+    width: u16,
+    height: u16,
+    page: usize,
+) -> (
+    oscilloscope_core::multi::GridLayout,
+    usize,
+    usize,
+    usize,
+    usize,
+) {
+    let body_height = height.saturating_sub(3);
+    let grid = oscilloscope_core::multi::tile_grid(run_count, width, body_height);
+    let page_size = grid.page_size.max(1);
+    let page_count = run_count.div_ceil(page_size).max(1);
+    let page = page.min(page_count - 1);
+    let page_offset = page * page_size;
+    let page_run_count = run_count.saturating_sub(page_offset).min(page_size);
+    let more_count = if page + 1 < page_count {
+        run_count.saturating_sub(page_offset + page_run_count)
+    } else {
+        0
+    };
+    (grid, page_count, page_offset, page_run_count, more_count)
+}
+
+/// The All screen's own loop (issue #698, §2.6): an outer round
+/// trip the same shape as [`run_select`]'s own -- each leg draws
+/// the grid until `enter` opens a focused run (through
+/// [`attach_discovered_run`], exactly as Select opens one, so `esc`
+/// from it comes back to the *next* leg's own fresh grid rather
+/// than to Select); `esc` on the grid itself, or `q` anywhere,
+/// leaves this loop for good.
+fn run_all_loop(
+    no_history: bool,
+    // Issue #714: shared across every leg below, the same way
+    // `run_select`'s own binding is.
+    mut theme_name: theme::ThemeName,
+    no_animation: bool,
+    mut event_rx: EventReader,
+) -> WatchOutcome {
+    let mut all_state = keys::AllState::new();
+    loop {
+        let (action, reader, new_theme) =
+            run_all_grid_screen(no_history, theme_name, event_rx, &mut all_state);
+        event_rx = reader;
+        theme_name = new_theme;
+        match action {
+            AllAction::Quit(code) => {
+                return WatchOutcome::Exited(ExitCode::from(code), Vec::new());
+            }
+            AllAction::BackToSelect => return WatchOutcome::BackToSelect(event_rx, theme_name),
+            AllAction::Open(run) => {
+                match attach_discovered_run(
+                    &run,
+                    true,
+                    no_animation,
+                    theme_name,
+                    no_history,
+                    event_rx,
+                    all_state.screen,
+                ) {
+                    WatchOutcome::Exited(code, output) => {
+                        return WatchOutcome::Exited(code, output);
+                    }
+                    WatchOutcome::BackToSelect(reader, new_theme) => {
+                        event_rx = reader;
+                        theme_name = new_theme;
+                    }
+                }
+            }
+            AllAction::Combined => 'combined: loop {
+                let (action, reader, new_theme) =
+                    run_combined_signal_leg(theme_name, event_rx, &mut all_state);
+                event_rx = reader;
+                theme_name = new_theme;
+                match action {
+                    CombinedLegAction::Quit(code) => {
+                        return WatchOutcome::Exited(ExitCode::from(code), Vec::new());
+                    }
+                    CombinedLegAction::BackToTiles => break 'combined,
+                    CombinedLegAction::Open(run) => {
+                        // `enter` on the Per Run table always
+                        // opens that run on its Signal screen,
+                        // whatever the grid's own tiles happen to
+                        // be showing -- and `esc` from it comes
+                        // back to a fresh Combined leg, not the
+                        // grid, since this loop (not `run_all_
+                        // loop`'s own outer one) is what re-enters
+                        // on `BackToSelect`.
+                        match attach_discovered_run(
+                            &run,
+                            true,
+                            no_animation,
+                            theme_name,
+                            no_history,
+                            event_rx,
+                            oscilloscope_core::screens::Screen::Signal,
+                        ) {
+                            WatchOutcome::Exited(code, output) => {
+                                return WatchOutcome::Exited(code, output);
+                            }
+                            WatchOutcome::BackToSelect(reader, new_theme) => {
+                                event_rx = reader;
+                                theme_name = new_theme;
+                            }
+                        }
+                    }
+                }
+            },
+        }
+    }
+}
+
+/// What one leg of [`run_all_grid_screen`]'s own loop decided.
+enum AllAction {
+    Quit(u8),
+    BackToSelect,
+    Open(Box<oscilloscope_core::discovery::DiscoveredRun>),
+    /// `u`: the Combined Signal.
+    Combined,
+}
+
+/// Tells two tiles with the same document and config basenames
+/// apart the same way Select's own running list does (issue #698:
+/// "basenames everywhere", the parent directory added only when two
+/// rows would read identically) -- two slots that happen to watch
+/// the same document from different directories would otherwise
+/// draw identical tile bands, with nothing on screen to tell them
+/// apart at all. Also sets each slot's own short name (issue #717),
+/// disambiguated the same way across every running slot, not just
+/// `slots`'s own current page.
+fn disambiguate_tile_labels(slots: &mut [AllRunSlot]) {
+    let runs: Vec<oscilloscope_core::discovery::DiscoveredRun> =
+        slots.iter().map(|s| s.run.clone()).collect();
+    let config_labels: Vec<Option<String>> = slots.iter().map(|s| s.config_label.clone()).collect();
+    let labels = oscilloscope_core::select::disambiguated_document_labels(&runs, &config_labels);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
+    for ((slot, label), name) in slots.iter_mut().zip(labels).zip(names) {
+        slot.document_label = label;
+        slot.name = name;
+    }
+}
+
+/// One leg of the All screen's own grid (issue #698): its own fresh
+/// `Terminal` on `run_select`'s already-active `TerminalGuard`,
+/// exactly like [`run_select_screen`]'s own -- re-entered every time
+/// an opened run's own `esc` comes back, which is also the only
+/// time this needs a fresh one at all (the real screen underneath
+/// otherwise still carries this same loop's own last frame).
+///
+/// `no_history` is accepted, not read: a tile's own "usual"/ETA
+/// figures (unlike a single-run attach's own `apply_history_eta`)
+/// aren't wired to history yet -- every tile reads `ETA — · no
+/// history yet` regardless, same as a run with none at all.
+fn run_all_grid_screen(
+    _no_history: bool,
+    mut theme_name: theme::ThemeName,
+    event_rx: EventReader,
+    all_state: &mut keys::AllState,
+) -> (AllAction, EventReader, theme::ThemeName) {
+    let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return (AllAction::Quit(1), event_rx, theme_name);
+        }
+    };
+    let _ = terminal.clear();
+    let color_mode = theme::ColorMode::from_env();
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    let mut theme = resolved_theme.theme;
+    let mut theme_banner_until: Option<Instant> = None;
+
+    let mut runs = discover_running();
+    let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    disambiguate_tile_labels(&mut slots);
+    let mut last_refresh = Instant::now();
+    let mut signals = SignalWatcher::new().ok();
+    let mut needs_draw = true;
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut lost_terminal = false;
+
+    let outcome = 'all: loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                break 'all AllAction::Quit(forward_signal_exit_code(sig));
+            }
+        }
+        if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
+            runs = discover_running();
+            let existing_keys: Vec<Option<&Path>> =
+                slots.iter().map(|s| slot_key(&s.run)).collect();
+            let run_keys: Vec<Option<&Path>> = runs.iter().map(slot_key).collect();
+            let matches = match_existing_slots(&existing_keys, &run_keys);
+            let mut existing: Vec<Option<AllRunSlot>> = slots.into_iter().map(Some).collect();
+            let mut new_slots = Vec::with_capacity(runs.len());
+            for (run, matched) in runs.iter().zip(matches) {
+                match matched.and_then(|i| existing[i].take()) {
+                    Some(mut slot) => {
+                        slot.update_run(run.clone());
+                        new_slots.push(slot);
+                    }
+                    None => new_slots.push(AllRunSlot::new(run.clone())),
+                }
+            }
+            slots = new_slots;
+            disambiguate_tile_labels(&mut slots);
+            last_refresh = Instant::now();
+            needs_draw = true;
+        }
+        for slot in &mut slots {
+            slot.tick();
+        }
+        needs_draw |= !slots.is_empty();
+
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        let size = terminal.size().unwrap_or_default();
+                        let (grid, page_count, page_offset, page_run_count, _more) =
+                            all_grid_info(runs.len(), size.width, size.height, all_state.page);
+                        all_state.page = all_state.page.min(page_count.saturating_sub(1));
+                        match all_state.handle_key(
+                            key.code,
+                            key.modifiers,
+                            grid.columns,
+                            page_run_count,
+                            page_count,
+                        ) {
+                            keys::AllKeyOutcome::Quit(code) => break 'all AllAction::Quit(code),
+                            keys::AllKeyOutcome::BackToSelect => {
+                                break 'all AllAction::BackToSelect;
+                            }
+                            keys::AllKeyOutcome::Open(focus) => {
+                                if let Some(run) = runs.get(page_offset + focus) {
+                                    break 'all AllAction::Open(Box::new(run.clone()));
+                                }
+                            }
+                            keys::AllKeyOutcome::Combined => break 'all AllAction::Combined,
+                            keys::AllKeyOutcome::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                theme = resolved_theme.theme;
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
+                            keys::AllKeyOutcome::None => {}
+                        }
+                        needs_draw = true;
+                    }
+                    CEvent::Resize(_, _) => needs_draw = true,
+                    _ => {}
+                },
+            }
+        }
+        if terminal_gone {
+            lost_terminal = true;
+            break 'all AllAction::Quit(0);
+        }
+
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let now_str = now_rfc3339();
+            let size = terminal.size().unwrap_or_default();
+            let (grid, page_count, page_offset, page_run_count, more_count) =
+                all_grid_info(runs.len(), size.width, size.height, all_state.page);
+            all_state.page = all_state.page.min(page_count.saturating_sub(1));
+            all_state.focus = all_state.focus.min(page_run_count.saturating_sub(1));
+            let banner = theme_banner_until
+                .filter(|&until| Instant::now() < until)
+                .map(|_| theme.name.as_str());
+            let ctx = tui::DrawCtx {
+                theme: &theme,
+                theme_banner: banner,
+                zone: &LocalZone,
+                no_animation: true,
+            };
+            // Every slot, not only this page's own -- the header's
+            // own elapsed time, the status line and the Signal
+            // tiles' own shared scale all read across every run
+            // regardless of paging (issue #698, §3.2), never just
+            // whichever page happens to be on screen.
+            let mut all_tiles: Vec<tui::AllTile> = slots
+                .iter_mut()
+                .enumerate()
+                .map(|(i, slot)| slot.build(all_state.screen, &now_str, i))
+                .collect();
+            if all_state.screen == oscilloscope_core::screens::Screen::Signal {
+                let largest_sent = all_tiles
+                    .iter()
+                    .map(|t| t.render.largest_sent)
+                    .max()
+                    .unwrap_or(0);
+                let largest_received = all_tiles
+                    .iter()
+                    .map(|t| t.render.largest_received)
+                    .max()
+                    .unwrap_or(0);
+                all_state.shared_sent_top = oscilloscope_core::multi::shared_signal_axis_top(
+                    largest_sent,
+                    all_state.shared_sent_top,
+                );
+                all_state.shared_received_top = oscilloscope_core::multi::shared_signal_axis_top(
+                    largest_received,
+                    all_state.shared_received_top,
+                );
+                for tile in &mut all_tiles {
+                    if let oscilloscope_core::multi::TileScreen::Signal(s) = &mut tile.render.screen
+                    {
+                        s.sent_axis_top = all_state.shared_sent_top;
+                        s.received_axis_top = all_state.shared_received_top;
+                    }
+                }
+            }
+            let status_entries: Vec<(
+                String,
+                Option<oscilloscope_core::screens::SignalLastFinished>,
+            )> = all_tiles
+                .iter()
+                .map(|t| (t.document_label.clone(), t.render.last_finished.clone()))
+                .collect();
+            let status_line =
+                oscilloscope_core::multi::newest_finished_across_runs(&status_entries);
+            let elapsed_s = all_tiles
+                .iter()
+                .map(|t| t.render.header.elapsed_s)
+                .fold(0.0_f64, f64::max);
+            let running_count = runs.len();
+            let tiles = &all_tiles[page_offset..page_offset + page_run_count];
+            let status_note = all_state.combined_too_small_note.take();
+            let drew = terminal.draw(|f| {
+                tui::draw_all(
+                    f,
+                    f.area(),
+                    tiles,
+                    grid,
+                    all_state.focus,
+                    more_count,
+                    all_state.screen,
+                    running_count,
+                    status_line.as_ref().map(|(d, lf)| (d.as_str(), lf)),
+                    elapsed_s,
+                    status_note.as_deref(),
+                    &now_str,
+                    &ctx,
+                );
+                if all_state.help_open {
+                    tui::draw_all_help(f, &ctx);
+                }
+            });
+            last_draw = Instant::now();
+            needs_draw = false;
+            if drew.is_err() {
+                lost_terminal = true;
+                break 'all AllAction::Quit(0);
+            }
+        }
+    };
+
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
+    (outcome, event_rx, theme_name)
+}
+
+/// What one leg of [`run_combined_signal_leg`]'s own loop decided.
+enum CombinedLegAction {
+    Quit(u8),
+    /// `esc`: back to the tiles.
+    BackToTiles,
+    Open(Box<oscilloscope_core::discovery::DiscoveredRun>),
+}
+
+/// One leg of the Combined Signal's own screen (issue #698, `u`):
+/// the same shape as [`run_all_grid_screen`]'s own leg -- a fresh
+/// `Terminal` and a fresh set of [`AllRunSlot`]s every time this is
+/// re-entered, which is also the only time it needs to be (an
+/// opened run's own `esc` comes back to a fresh leg, never one
+/// carrying stale ticker state across the round trip).
+fn run_combined_signal_leg(
+    mut theme_name: theme::ThemeName,
+    event_rx: EventReader,
+    all_state: &mut keys::AllState,
+) -> (CombinedLegAction, EventReader, theme::ThemeName) {
+    let mut terminal = match Terminal::new(CrosstermBackend::new(std::io::stdout())) {
+        Ok(t) => t,
+        Err(err) => {
+            eprintln!("osi: couldn't start the TUI ({err})");
+            return (CombinedLegAction::Quit(1), event_rx, theme_name);
+        }
+    };
+    let _ = terminal.clear();
+    let color_mode = theme::ColorMode::from_env();
+    let mut resolved_theme = theme::resolve(theme_name, color_mode);
+    let mut theme = resolved_theme.theme;
+    let mut theme_banner_until: Option<Instant> = None;
+
+    let mut runs = discover_running();
+    let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    disambiguate_tile_labels(&mut slots);
+    let mut combined_state = keys::CombinedState::new();
+    let mut last_refresh = Instant::now();
+    let mut signals = SignalWatcher::new().ok();
+    let mut needs_draw = true;
+    let mut last_draw = Instant::now() - REDRAW_INTERVAL;
+    let mut lost_terminal = false;
+    let mut last_now_col = 0usize;
+    let mut last_max_col = 0usize;
+
+    let outcome = 'combined: loop {
+        if let Some(watcher) = signals.as_mut() {
+            if let Some(sig) = watcher.pending().into_iter().next() {
+                break 'combined CombinedLegAction::Quit(forward_signal_exit_code(sig));
+            }
+        }
+        if last_refresh.elapsed() >= SELECT_REFRESH_INTERVAL {
+            runs = discover_running();
+            let existing_keys: Vec<Option<&Path>> =
+                slots.iter().map(|s| slot_key(&s.run)).collect();
+            let run_keys: Vec<Option<&Path>> = runs.iter().map(slot_key).collect();
+            let matches = match_existing_slots(&existing_keys, &run_keys);
+            let mut existing: Vec<Option<AllRunSlot>> = slots.into_iter().map(Some).collect();
+            let mut new_slots = Vec::with_capacity(runs.len());
+            for (run, matched) in runs.iter().zip(matches) {
+                match matched.and_then(|i| existing[i].take()) {
+                    Some(mut slot) => {
+                        slot.update_run(run.clone());
+                        new_slots.push(slot);
+                    }
+                    None => new_slots.push(AllRunSlot::new(run.clone())),
+                }
+            }
+            slots = new_slots;
+            disambiguate_tile_labels(&mut slots);
+            combined_state.cursor_run =
+                combined_state.cursor_run.min(slots.len().saturating_sub(1));
+            last_refresh = Instant::now();
+            needs_draw = true;
+        }
+        for slot in &mut slots {
+            slot.tick();
+        }
+        needs_draw |= !slots.is_empty();
+
+        let mut terminal_gone = stdin_hung_up();
+        if !terminal_gone {
+            match event_rx.recv_timeout(KEY_POLL_INTERVAL) {
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => terminal_gone = true,
+                Ok(Err(_)) => terminal_gone = true,
+                Ok(Ok(ev)) => match ev {
+                    CEvent::Key(key) if key.kind == KeyEventKind::Press => {
+                        match combined_state.handle_key(
+                            key.code,
+                            key.modifiers,
+                            slots.len(),
+                            last_now_col,
+                            last_max_col,
+                        ) {
+                            keys::CombinedKeyOutcome::Quit(code) => {
+                                break 'combined CombinedLegAction::Quit(code);
+                            }
+                            keys::CombinedKeyOutcome::BackToTiles => {
+                                break 'combined CombinedLegAction::BackToTiles;
+                            }
+                            keys::CombinedKeyOutcome::Open(index) => {
+                                if let Some(run) = runs.get(index) {
+                                    break 'combined CombinedLegAction::Open(Box::new(run.clone()));
+                                }
+                            }
+                            keys::CombinedKeyOutcome::CycleTheme => {
+                                theme_name = theme_name.next();
+                                resolved_theme = theme::resolve(theme_name, color_mode);
+                                theme = resolved_theme.theme;
+                                theme_banner_until =
+                                    Some(Instant::now() + std::time::Duration::from_secs(2));
+                            }
+                            keys::CombinedKeyOutcome::None => {}
+                        }
+                        needs_draw = true;
+                    }
+                    CEvent::Resize(_, _) => needs_draw = true,
+                    _ => {}
+                },
+            }
+        }
+        if terminal_gone {
+            lost_terminal = true;
+            break 'combined CombinedLegAction::Quit(0);
+        }
+
+        if needs_draw && last_draw.elapsed() >= REDRAW_INTERVAL {
+            let term_size = terminal.size().unwrap_or_default();
+            let min_height = tui::combined_min_height(slots.len());
+            if term_size.width < tui::COMBINED_MIN_WIDTH || term_size.height < min_height {
+                all_state.combined_too_small_note = Some(format!(
+                    "Combined Signal needs {}x{} · this terminal is {}x{}",
+                    tui::COMBINED_MIN_WIDTH,
+                    min_height,
+                    term_size.width,
+                    term_size.height
+                ));
+                break 'combined CombinedLegAction::BackToTiles;
+            }
+            let now_str = now_rfc3339();
+            let slot_data: Vec<CombinedSlotData> = slots
+                .iter_mut()
+                .map(|s| s.build_combined_slot_data(&now_str))
+                .collect();
+            let inputs: Vec<oscilloscope_core::combined::CombinedRunInput> = slot_data
+                .iter()
+                .zip(slots.iter())
+                .map(|(d, s)| oscilloscope_core::combined::CombinedRunInput {
+                    document_label: d.document_label.clone(),
+                    config_label: d.config_label.clone(),
+                    engine_label: d.engine_label.clone(),
+                    rows: &d.rendered.unfolded_rows,
+                    flat: &d.flat,
+                    plan: &s.plan,
+                    model: &s.model,
+                    header: &d.rendered.header,
+                })
+                .collect();
+            let anchor = oscilloscope_core::combined::earliest_run_start(
+                inputs
+                    .iter()
+                    .filter_map(|i| i.header.run_start_ts.as_deref()),
+            )
+            .unwrap_or(now_str.as_str())
+            .to_string();
+            let screen = oscilloscope_core::combined::build_combined_signal(
+                &inputs,
+                &anchor,
+                all_state.combined_sent_top,
+                all_state.combined_received_top,
+                &now_str,
+                combined_state.scrub_col,
+            );
+            all_state.combined_sent_top = screen.sent_axis_top;
+            all_state.combined_received_top = screen.received_axis_top;
+            last_now_col = screen.now_col;
+            // The scrub cursor never moves past Now -- there's
+            // nothing ahead of it to scrub to.
+            last_max_col = screen.now_col;
+            combined_state.cursor_run = combined_state
+                .cursor_run
+                .min(screen.runs.len().saturating_sub(1));
+            let banner = theme_banner_until
+                .filter(|&until| Instant::now() < until)
+                .map(|_| theme.name.as_str());
+            let ctx = tui::DrawCtx {
+                theme: &theme,
+                theme_banner: banner,
+                zone: &LocalZone,
+                no_animation: true,
+            };
+            let drew = terminal.draw(|f| {
+                tui::draw_combined_signal(
+                    f,
+                    f.area(),
+                    &screen,
+                    combined_state.cursor_run,
+                    combined_state.scrub_col,
+                    &now_str,
+                    &ctx,
+                );
+                if combined_state.help_open {
+                    tui::draw_combined_signal_help(f, &ctx);
+                }
+            });
+            last_draw = Instant::now();
+            needs_draw = false;
+            if drew.is_err() {
+                lost_terminal = true;
+                break 'combined CombinedLegAction::Quit(0);
+            }
+        }
+    };
+
+    if lost_terminal {
+        std::mem::forget(terminal);
+    } else {
+        drop(terminal);
+    }
+    (outcome, event_rx, theme_name)
 }
 
 /// The common ending every `osi watch` session reaches, however its
@@ -4060,11 +5996,7 @@ fn watch_exit_code(
     last_state: &Option<serde_json::Value>,
 ) -> u8 {
     if let Some(sig) = local_signal {
-        match sig {
-            ForwardSignal::Int => 130,
-            ForwardSignal::Term => 143,
-            ForwardSignal::Hup => 129,
-        }
+        forward_signal_exit_code(sig)
     } else if let Some(signal) = model.run_end_signal() {
         exit_code_for_signal_name(signal).unwrap_or(1) as u8
     } else {
@@ -4108,8 +6040,8 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
             Err(err) => report_clap_error(err),
         }
     } else {
-        match RunArgs::try_parse_from(args) {
-            Ok(args) => do_run(args),
+        match RunArgs::try_parse_from(args.clone()) {
+            Ok(parsed) => do_run(parsed),
             Err(err) => report_clap_error(err),
         }
     }
@@ -4127,22 +6059,28 @@ mod tests {
     use super::*;
 
     fn agent_running_state_for_transcript_path_test() -> serde_json::Value {
+        // Issue #704 rule 2: the Store only lists a step as a store
+        // at all once it has tokens of its own -- a running agent's
+        // own live estimate counts, the same figure its Tape row
+        // already shows, so `fix` needs one here too for the
+        // Store's own selection to resolve to it rather than falling
+        // through to "nothing has tokens yet".
         serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
             "fix": {"value": null, "meta": {"created_at": "2026-01-01T00:00:00Z", "completed_at": null,
                 "provider": "agent",
-                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z"}
+                "live": {"transcript": "/tmp/agent-live-path-test.jsonl", "updated_at": "2026-01-01T00:00:00Z",
+                    "tokens_sent": 12, "tokens_received": 34}
             }}
         }})
     }
 
-    /// Issue #637 (extended by #650 to screen 1): transcript tailing
-    /// only ever happens for the one step actually on screen -- the
-    /// overview's own focused step on screen 0, Flow's selected step
-    /// on screen 2, Time's selected step on screen 1, and nothing at
-    /// all on screen 3, even though the very same agent step exists
-    /// in state either way.
+    /// Issue #637 (extended by #688 to screen 1, #703 to screen 3):
+    /// transcript tailing only ever happens for the one step
+    /// actually on screen -- the overview's own focused step on
+    /// screen 0, Flow's selected step on screen 2, Signal's selected
+    /// step on screen 1, the Store's own selected step on screen 3.
     #[test]
-    fn focused_agent_transcript_path_is_none_off_the_overview_flow_and_time_screens() {
+    fn focused_agent_transcript_path_is_none_off_the_overview_flow_and_signal_screens() {
         let plan = PlanTree::empty();
         let mut model = RunModel::new();
         let state = agent_running_state_for_transcript_path_test();
@@ -4160,7 +6098,7 @@ mod tests {
             true,
             &Default::default(),
         );
-        let overview = oscilloscope_core::screens::build_overview(
+        let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
             &rendered.unfolded_rows,
             &rendered.header,
@@ -4168,17 +6106,17 @@ mod tests {
             &plan,
             &model,
             Some(&state),
-            &rendered.token_bar,
-            &[],
-            None,
+            Some("prime.fix"),
+            true,
             "2026-01-01T00:00:01Z",
         );
-        let flow_screen = oscilloscope_core::screens::build_flow_screen(
-            &rendered.rows,
+        let flow_screen = oscilloscope_core::screens::build_flow(
             &rendered.unfolded_rows,
+            &rendered.rows,
             &flat,
             &plan,
             &model,
+            &rendered.header,
             Some(&state),
             &[],
             Some("prime.fix"),
@@ -4186,27 +6124,47 @@ mod tests {
             rendered.header.run_end_ts.as_deref(),
             "2026-01-01T00:00:01Z",
         );
-        let time_screen = oscilloscope_core::screens::build_time_screen(
+        let signal_screen = oscilloscope_core::screens::build_signal(
             &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
             &flat,
             &plan,
             &model,
-            &rendered.header,
             Some(&state),
-            &[],
-            Some("prime.fix"),
-            &Default::default(),
+            100,
+            None,
+            None,
             "2026-01-01T00:00:01Z",
+        );
+        let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
+            rendered
+                .unfolded_rows
+                .iter()
+                .map(|r| (r.path.clone(), r.kind))
+                .collect();
+        let store_screen = oscilloscope_core::store::build_store(
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &kinds,
+            &plan,
+            &model,
+            Some(&state),
+            "prime",
+            "2026-01-01T00:00:01Z",
+            Some("prime.fix"),
         );
 
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Overview;
+        app.screen = oscilloscope_core::screens::Screen::Tape;
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
@@ -4215,34 +6173,37 @@ mod tests {
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
 
-        app.screen = oscilloscope_core::screens::Screen::Time;
+        app.screen = oscilloscope_core::screens::Screen::Signal;
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
             Some("/tmp/agent-live-path-test.jsonl".to_string())
         );
 
-        app.screen = oscilloscope_core::screens::Screen::Cost;
+        app.screen = oscilloscope_core::screens::Screen::Store;
         assert_eq!(
             focused_agent_transcript_path(
                 &app,
-                Some(&overview),
+                Some(&tape_screen),
                 Some(&flow_screen),
-                Some(&time_screen)
+                Some(&signal_screen),
+                Some(&store_screen),
             ),
-            None,
-            "no screen but overview/flow/time ever names a transcript to tail"
+            Some("/tmp/agent-live-path-test.jsonl".to_string()),
+            "the Store's own full-screen step gets the same transcript tail"
         );
     }
 
@@ -4271,7 +6232,7 @@ mod tests {
             true,
             &Default::default(),
         );
-        let overview = oscilloscope_core::screens::build_overview(
+        let tape_screen = oscilloscope_core::screens::build_tape(
             &rendered.rows,
             &rendered.unfolded_rows,
             &rendered.header,
@@ -4279,15 +6240,14 @@ mod tests {
             &plan,
             &model,
             Some(&state),
-            &rendered.token_bar,
-            &[],
-            None,
+            Some("prime.fix"),
+            true,
             "t2",
         );
         let mut app = App::new(false);
-        app.screen = oscilloscope_core::screens::Screen::Overview;
+        app.screen = oscilloscope_core::screens::Screen::Tape;
         assert_eq!(
-            focused_agent_transcript_path(&app, Some(&overview), None, None),
+            focused_agent_transcript_path(&app, Some(&tape_screen), None, None, None),
             None
         );
     }
@@ -4681,14 +6641,7 @@ mod tests {
             baseline_exists,
         );
         assert!(
-            highlights
-                .style_for(
-                    "log:3",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some(),
+            highlights.is_active("log:3", now),
             "a line pushed after the first frame must still highlight"
         );
     }
@@ -4705,40 +6658,13 @@ mod tests {
         let mut prev_total = 0u64;
         mark_new_log_lines(&mut highlights, &mut prev_total, 3, false, true);
         let now = Instant::now();
-        assert!(
-            highlights
-                .style_for(
-                    "log:0",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some()
-        );
-        assert!(
-            highlights
-                .style_for(
-                    "log:2",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some()
-        );
+        assert!(highlights.is_active("log:0", now));
+        assert!(highlights.is_active("log:2", now));
         assert_eq!(prev_total, 3);
 
         // A second call only marks what's new since the last one.
         mark_new_log_lines(&mut highlights, &mut prev_total, 5, false, true);
-        assert!(
-            highlights
-                .style_for(
-                    "log:3",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some()
-        );
+        assert!(highlights.is_active("log:3", now));
         assert_eq!(prev_total, 5);
 
         // `--no-animation` still advances `prev_total`, marks nothing.
@@ -4770,14 +6696,7 @@ mod tests {
         // Once a baseline exists, a line pushed after it still marks.
         mark_new_log_lines(&mut highlights, &mut prev_total, 6, false, true);
         assert!(
-            highlights
-                .style_for(
-                    "log:5",
-                    now,
-                    &theme::Theme::for_name(theme::ThemeName::Terminal),
-                    theme::ColorMode::TrueColor
-                )
-                .is_some(),
+            highlights.is_active("log:5", now),
             "a line pushed after the first frame must still highlight"
         );
         assert_eq!(prev_total, 6);
@@ -4877,7 +6796,7 @@ mod tests {
         assert!(rendered.contains("Puts the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
         assert!(rendered.contains("Shows only the header line"));
-        assert!(rendered.contains("Switches off the update highlights"));
+        assert!(rendered.contains("Switches off the scope icon's own trace"));
         assert!(rendered.contains("The colour theme"));
         assert!(rendered.contains("Turns run history off"));
         // Finding 10: `--theme`'s possible values (a derived
@@ -4979,15 +6898,21 @@ mod tests {
         // then leaves an `osi-*` temp directory behind.
         let parsed = RunArgs::try_parse_from(args(&["-e", "k=v", "--log", "do-thing.yml"]));
         let parsed = parsed.expect("flags before the positional should parse");
-        assert_eq!(parsed.orchestration, "do-thing.yml");
+        assert_eq!(parsed.orchestration, Some("do-thing.yml".to_string()));
         assert_eq!(parsed.set, vec!["k=v".to_string()]);
         assert!(parsed.log);
     }
 
-    #[test]
-    fn no_args_is_a_usage_error() {
-        assert_eq!(run(args(&[])), ExitCode::from(2));
-    }
+    // `no_args_is_a_usage_error` is gone: no orchestration, without
+    // a TTY, now lists what's running instead of erroring --
+    // `print_discovered_runs` reads the real process environment
+    // (`OSI_RUNS_DIR` and friends) through
+    // `registry_io::resolve_runs_dir`, which this crate's own unit
+    // tests never override (no test here sets a process-wide env
+    // var, since `cargo test` runs many of them concurrently); the
+    // e2e suite covers the exit code with an isolated `OSI_RUNS_DIR`
+    // instead (`tests/cli_streams.rs`'s own TTY/non-TTY tests, and
+    // `tests/e2e_tui_pty.rs`'s registry tests).
 
     #[test]
     fn a_signal_already_pending_before_the_spawn_gives_its_exit_code_with_no_spawn() {
@@ -5165,7 +7090,7 @@ mod tests {
             &mut last_state,
             None,
             true,
-            &history_io::HistoryHandle::for_watch(None, None),
+            &history_io::HistoryHandle::for_watch(None, None, None, None),
         );
         assert_eq!(code, 0);
         let text = String::from_utf8(buf).unwrap();
@@ -5228,6 +7153,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (_lines, final_state, _) = drain_until_ended(
@@ -5301,6 +7227,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (lines, final_state, _) = drain_until_ended(
@@ -5389,6 +7316,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (lines, final_state, _) = drain_until_ended(
@@ -5402,9 +7330,7 @@ mod tests {
         assert!(final_state.is_some());
         assert!(!differ.has_pending_ends());
         assert!(
-            lines
-                .iter()
-                .any(|l| l.text == "✓ prime.ask  0.1s  ↑3 t ↓5 t"),
+            lines.iter().any(|l| l.text == "✓ prime.ask  0.1s  ↑3 ↓5"),
             "held line must resolve with its real tokens, not ok or nothing: {lines:?}"
         );
     }
@@ -5563,6 +7489,7 @@ mod tests {
         let timed_out = EngineCaps {
             events: false,
             live_state: true,
+            label: false,
             missing: false,
             timed_out: true,
         };
@@ -5574,6 +7501,7 @@ mod tests {
         let no_events = EngineCaps {
             events: false,
             live_state: true,
+            label: false,
             missing: false,
             timed_out: false,
         };
@@ -5585,6 +7513,7 @@ mod tests {
         let fully_capable = EngineCaps {
             events: true,
             live_state: true,
+            label: true,
             missing: false,
             timed_out: false,
         };
@@ -5593,6 +7522,7 @@ mod tests {
         let missing = EngineCaps {
             events: false,
             live_state: false,
+            label: false,
             missing: true,
             timed_out: false,
         };
@@ -5600,6 +7530,56 @@ mod tests {
             engine_capability_notice(&missing, "cof"),
             None,
             "a missing binary gets its own, more specific error once the spawn fails"
+        );
+    }
+
+    #[test]
+    fn label_capability_notice_only_fires_with_a_label_against_an_engine_with_no_label_support() {
+        let no_label = EngineCaps {
+            events: true,
+            live_state: true,
+            label: false,
+            missing: false,
+            timed_out: false,
+        };
+        assert_eq!(
+            label_capability_notice(&no_label, "cof", true).as_deref(),
+            Some("osi: this cof has no --label: showing it in osi only")
+        );
+        assert_eq!(
+            label_capability_notice(&no_label, "cof", false),
+            None,
+            "no --label given at all: nothing to notice about"
+        );
+
+        let has_label = EngineCaps {
+            label: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&has_label, "cof", true),
+            None,
+            "the engine supports --label: nothing to notice about"
+        );
+
+        let timed_out = EngineCaps {
+            timed_out: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&timed_out, "cof", true),
+            None,
+            "the probe's own notice already covers a timed-out --help"
+        );
+
+        let missing = EngineCaps {
+            missing: true,
+            ..no_label
+        };
+        assert_eq!(
+            label_capability_notice(&missing, "cof", true),
+            None,
+            "the later spawn failure already covers a missing binary"
         );
     }
 
@@ -5715,6 +7695,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: run_dir.clone(),
+            label: None,
         };
         std::fs::write(
             spec.live_state_path(),
@@ -5788,7 +7769,10 @@ mod tests {
 
         let text = String::from_utf8(buf).unwrap();
         let printed: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
-        assert!(printed.last().unwrap().contains("■ run ok"), "{printed:?}");
+        assert!(
+            printed.last().unwrap().contains("■ run") && printed.last().unwrap().contains("ok"),
+            "{printed:?}"
+        );
         assert!(
             printed[printed.len() - 2].contains("✓ prime.hello"),
             "{printed:?}"
@@ -5854,7 +7838,10 @@ mod tests {
 
         let text = String::from_utf8(buf).unwrap();
         let printed: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
-        assert!(printed.last().unwrap().contains("■ run ok"), "{printed:?}");
+        assert!(
+            printed.last().unwrap().contains("■ run") && printed.last().unwrap().contains("ok"),
+            "{printed:?}"
+        );
         assert!(
             printed[printed.len() - 2].contains("✓ prime.hello"),
             "{printed:?}"
@@ -5905,6 +7892,54 @@ mod tests {
         assert_eq!(
             line.text,
             "■ run failed: Orchestration validation failed: bad type  0.0s"
+        );
+    }
+
+    /// Issue #691's own follow-up: the real redraw loop never leaves
+    /// `app.selected_path` as `None` (it fills an empty selection
+    /// with the root's own path), so a root selection must still
+    /// count as "nothing selected" for `build_flow`'s own
+    /// default-pass fallback -- otherwise the rail never opens on
+    /// its own default pass in a real run at all.
+    #[test]
+    fn flow_screen_lands_on_its_own_default_pass_when_only_the_root_is_selected() {
+        let plan = PlanTree::empty();
+        let mut model = RunModel::new();
+        let state = serde_json::json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "fan": {"value": null, "meta": {"completed_at": null, "progress": {"done": 0, "total": 2}},
+                "iter_0": {
+                    "nap": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+                }
+            }
+        }});
+        let render_state = oscilloscope_core::render::build(
+            "do.yml",
+            "watch",
+            &plan,
+            &mut model,
+            Some(&state),
+            ProcessState::Running,
+            0.0,
+            "t0",
+            &[],
+        );
+        let mut app = App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Flow;
+        app.follow = false;
+        app.selected_path = render_state.unfolded_rows.first().map(|r| r.path.clone());
+        let flow_screen = build_flow_screen_if_active(
+            &app,
+            &render_state,
+            &plan,
+            &model,
+            Some(&state),
+            &[],
+            "t0",
+        )
+        .expect("Flow is the active screen");
+        assert!(
+            flow_screen.selected_pass.is_some(),
+            "a root selection must still land on the rail's own default pass: {flow_screen:?}"
         );
     }
 }

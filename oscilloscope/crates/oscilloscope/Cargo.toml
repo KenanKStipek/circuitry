@@ -54,6 +54,10 @@ libc = "0.2"
 [dev-dependencies]
 tempfile = "3"
 insta = "1"
+# Only for the Tape's own frame goldens (issue #678), which compile
+# `design/fixtures/demo.yml` the same way `oscilloscope-core`'s own
+# `plan::compile` signature needs.
+indexmap = "2"
 # Only for the TUI's own golden tests, which build a small plan by
 # hand the same way oscilloscope-core's own plan.rs tests do (K4):
 # no new code path exercises these two outside `#[cfg(test)]`.

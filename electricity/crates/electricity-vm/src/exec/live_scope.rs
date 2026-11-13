@@ -308,6 +308,14 @@ impl ParamsCtx for LiveRoot<'_> {
             }
         }
     }
+
+    /// A `cel` tool effect's own state -- the same narrowed read
+    /// [`build_cel_state`] gives an `if`/`while` CEL condition at this
+    /// position, rather than [`ScopeRoot::whole`]'s own full snapshot
+    /// (issue #723).
+    fn cel_state(&self, expr: &str) -> Value {
+        build_cel_state(self.chain, self.store, expr)
+    }
 }
 
 /// Python list indexing (negative indices count from the end) -- `None`

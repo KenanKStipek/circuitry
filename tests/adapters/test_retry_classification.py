@@ -58,10 +58,19 @@ def test_curl_exit_22_with_a_5xx_status_line_is_retryable() -> None:
 
 
 def test_curl_connection_level_exit_codes_are_retryable_without_a_status() -> None:
-    for code in (6, 7, 28, 35, 52, 56):
+    for code in (6, 7, 18, 28, 35, 52, 56):
         info = classify_curl_exit(code, "")
         assert info.retryable is True, code
         assert info.status is None
+
+
+def test_curl_exit_18_a_premature_eof_is_retryable() -> None:
+    # A mid-stream disconnect (#674) takes this shape -- it must retry the
+    # same way any other dropped connection does, in both engines
+    # (electricity's own `transport::is_retryable_exit` matches).
+    info = classify_curl_exit(18, "curl: (18) transfer closed with outstanding read data remaining")
+    assert info.retryable is True
+    assert info.status is None
 
 
 def test_curl_unknown_nonzero_exit_is_not_retryable() -> None:

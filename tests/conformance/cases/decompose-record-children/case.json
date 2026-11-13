@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #672 R9: runtime.state.record_children keeps the score trigger's child grafted under the decomposing node",
+  "description": "Same plan as decompose-success, with runtime.state.record_children: true -- the plan's own declared effects (a, b, merge) are grafted alongside value/meta on prime.big, on both engines (score decomposition's own record_children graft is ported to electricity's maybe_decompose by this change).",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

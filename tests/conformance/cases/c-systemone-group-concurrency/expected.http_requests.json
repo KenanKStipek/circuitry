@@ -1,0 +1,66 @@
+[
+  {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "application/json"
+      ],
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "content-length",
+        "127"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\":\"typesafe-1\",\"state\":\"diff a\",\"questions\":{\"risky\":{\"type\":\"noul\",\"instructions\":\"Does this change risk data loss?\"}}}"
+  },
+  {
+    "method": "POST",
+    "path": "/v1/systemone",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "application/json"
+      ],
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "content-length",
+        "127"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": "{\"model\":\"typesafe-1\",\"state\":\"diff b\",\"questions\":{\"risky\":{\"type\":\"noul\",\"instructions\":\"Does this change risk data loss?\"}}}"
+  }
+]

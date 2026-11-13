@@ -4,16 +4,15 @@
 //! which Ollama is *not* routed through (ruling 1: this adapter talks
 //! Ollama's own wire format, never the `/v1` compatibility shim).
 
-use crate::config::{cfg_value_or, rstrip_base_url};
-use crate::curl_text::{
-    classify_curl_outcome_with_error_code, curl_failure_message, parse_error_body, redact_host_url,
-};
-use crate::transport::{CurlOutcome, TransportFailure, run_curl};
+use crate::config::{cfg_value_or, rstrip_base_url, stream_flag};
+use crate::curl_text::{curl_failure_message, parse_error_body, redact_host_url};
+use crate::transport::{CurlOutcome, TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
 use electricity_value::{Dict, Value};
 use electricity_vm::adapter::{
-    Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateResult, PyExc,
+    Adapter, AdapterError, CallContext, CheckResult, GenerateOptions, GenerateProgress,
+    GenerateResult, PyExc,
 };
 use electricity_vm::retry::RetryInfo;
 use std::time::Duration;
@@ -78,10 +77,11 @@ pub fn build_request(
     model: &str,
     prompt: &str,
     options: &GenerateOptions,
+    stream: bool,
 ) -> Result<(&'static str, Dict), AdapterError> {
     let mut payload = Dict::new();
     dict_insert(&mut payload, "model", Value::Str(model.to_string()));
-    dict_insert(&mut payload, "stream", Value::Bool(false));
+    dict_insert(&mut payload, "stream", Value::Bool(stream));
 
     let mut images_b64: Vec<Value> = Vec::new();
     for image in &options.images {
@@ -224,10 +224,113 @@ fn attribute_error(value: &Value, attribute: &str) -> AdapterError {
     }
 }
 
-/// The pure half of [`Adapter::generate`] -- everything after
-/// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
-/// own scripted `(returncode, stdout, stderr)` triples
-/// (`tests/adapter_corpus.rs`).
+/// `adapters/ollama.py::_delta_text` -- never raises: a `message`
+/// field that isn't a dict, or whose `content` isn't a string, and a
+/// `response` field that isn't a string, all fall through to `"""`.
+fn delta_text(dict: &Dict) -> String {
+    match dict.get(&Value::Str("message".to_string())) {
+        Some(Value::Dict(message_dict)) => {
+            match message_dict.get(&Value::Str("content".to_string())) {
+                Some(Value::Str(s)) => s.clone(),
+                _ => String::new(),
+            }
+        }
+        _ => match dict.get(&Value::Str("response".to_string())) {
+            Some(Value::Str(s)) => s.clone(),
+            _ => String::new(),
+        },
+    }
+}
+
+/// `adapters/ollama.py::_result_from_final` -- the one place both the
+/// streamed and non-streamed paths build their result, so they can't
+/// drift. Fails only when *raw* itself isn't a dict (Python's own
+/// `raw.get(...)` raising `AttributeError`) -- *text* is always
+/// already a plain string by the time it gets here ([`delta_text`]
+/// never raises), so this never fails on its account.
+fn result_from_final(raw: Value, text: String) -> Result<GenerateResult, AdapterError> {
+    let (tokens_sent, tokens_received, finish_reason) = {
+        let dict = raw.as_dict().ok_or_else(|| attribute_error(&raw, "get"))?;
+        let int_if_pyint = |value: Option<&Value>| -> Option<i64> {
+            match value {
+                Some(v @ (Value::Int(_) | Value::Bool(_))) => {
+                    electricity_value::pycompat::py_int(v).ok()
+                }
+                _ => None,
+            }
+        };
+        let tokens_sent = int_if_pyint(dict.get(&Value::Str("prompt_eval_count".to_string())));
+        let tokens_received = int_if_pyint(dict.get(&Value::Str("eval_count".to_string())));
+        let finish_reason = match dict.get(&Value::Str("done_reason".to_string())) {
+            Some(Value::Str(s)) => Some(s.clone()),
+            _ => None,
+        };
+        (tokens_sent, tokens_received, finish_reason)
+    };
+    Ok(GenerateResult {
+        text: electricity_value::pycompat::py_strip(&text).to_string(),
+        raw,
+        tokens_sent,
+        tokens_received,
+        finish_reason,
+        warnings: Vec::new(),
+        cost_usd: None,
+    })
+}
+
+/// `adapters/ollama.py::_raise_curl_failure` -- shared by the
+/// streamed and non-streamed failure paths. On the streaming path, a
+/// non-22 failure (timeout, disconnect, ...) leaves whatever the
+/// model had already answered in *outcome*'s own stdout (curl's
+/// `--no-buffer` equivalent flushes it there as it arrives) -- only a
+/// complete HTTP response (22) has a body worth reporting; anything
+/// else fails with the same text a non-streamed call's own empty
+/// stdout would give, never the model's own partial reply.
+fn curl_failure_error(
+    name: &str,
+    outcome: &CurlOutcome,
+    model: &str,
+    timeout_seconds: u32,
+    base_url: &str,
+    url: &str,
+    streaming: bool,
+) -> AdapterError {
+    let hint = ollama_hint(
+        name,
+        outcome.returncode,
+        timeout_seconds,
+        model,
+        &outcome.stdout,
+        base_url,
+    );
+    let stdout_for_message: &str = if outcome.returncode == 22 || !streaming {
+        &outcome.stdout
+    } else {
+        ""
+    };
+    let message = curl_failure_message(
+        "ollama",
+        (!model.is_empty()).then_some(model),
+        url,
+        outcome.returncode,
+        stdout_for_message,
+        &outcome.stderr,
+        &hint,
+        &[],
+    );
+    let mut retry = crate::curl_text::classify_curl_outcome(outcome);
+    retry.error_code = crate::curl_text::curl_error_code(stdout_for_message, &[]);
+    AdapterError {
+        message,
+        retry,
+        py_class: PyExc::AdapterCallError,
+    }
+}
+
+/// The pure half of [`Adapter::generate`]'s non-streaming path --
+/// everything after [`run_curl`] returns, replayed by
+/// `generate_adapter_corpus.py`'s own scripted `(returncode, stdout,
+/// stderr)` triples (`tests/adapter_corpus.rs`).
 pub fn interpret_outcome(
     name: &str,
     outcome: &CurlOutcome,
@@ -237,82 +340,209 @@ pub fn interpret_outcome(
     url: &str,
 ) -> Result<GenerateResult, AdapterError> {
     if outcome.returncode != 0 {
-        let hint = ollama_hint(
+        return Err(curl_failure_error(
             name,
-            outcome.returncode,
-            timeout_seconds,
+            outcome,
             model,
-            &outcome.stdout,
+            timeout_seconds,
             base_url,
-        );
+            url,
+            false,
+        ));
+    }
+    let raw =
+        electricity_json::loads(&outcome.stdout).map_err(|_| non_json_error(&outcome.stdout))?;
+    let dict = raw
+        .as_dict()
+        .ok_or_else(|| attribute_error(&raw, "get"))?
+        .clone();
+    let text = delta_text(&dict);
+    result_from_final(raw, text)
+}
+
+/// `adapters/ollama.py::_parse_ndjson_stream` -- `(final_raw, text,
+/// saw_done, error)` from a completed NDJSON streaming body, parsed
+/// in full. `final_raw` stays `{}` (empty) when no line carried a
+/// recognisable dict event at all -- [`interpret_streaming_outcome`]
+/// reads that as "the server answered with one plain JSON body
+/// instead of NDJSON", same as Python.
+struct NdjsonStream {
+    final_raw: Value,
+    text: String,
+    saw_done: bool,
+    error: Option<Value>,
+}
+
+fn parse_ndjson_stream(stdout: &str) -> NdjsonStream {
+    let mut final_raw = Value::Dict(Dict::new());
+    let mut text = String::new();
+    let mut saw_done = false;
+    let mut error: Option<Value> = None;
+    for raw_line in electricity_value::pycompat::py_splitlines(stdout) {
+        let line = electricity_value::pycompat::py_strip(&raw_line);
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(event) = electricity_json::loads(line) else {
+            continue;
+        };
+        let Some(dict) = event.as_dict() else {
+            continue;
+        };
+        let line_error = dict
+            .get(&Value::Str("error".to_string()))
+            .filter(|v| !matches!(v, Value::None));
+        if line_error.is_some() && error.is_none() {
+            error = line_error.cloned();
+            continue;
+        }
+        if matches!(
+            dict.get(&Value::Str("done".to_string())),
+            Some(Value::Bool(true))
+        ) {
+            saw_done = true;
+        }
+        let delta = delta_text(dict);
+        if !delta.is_empty() {
+            text.push_str(&delta);
+        }
+        final_raw = event.clone();
+    }
+    NdjsonStream {
+        final_raw,
+        text,
+        saw_done,
+        error,
+    }
+}
+
+fn is_empty_dict(value: &Value) -> bool {
+    matches!(value, Value::Dict(d) if d.is_empty())
+}
+
+/// `adapters/ollama.py::OllamaAdapter._curl_json_streaming`'s own
+/// `on_line` closure -- drives *on_progress* from each NDJSON line as
+/// it arrives; never the source of the final result, which is parsed
+/// from the complete body once the call finishes
+/// ([`parse_ndjson_stream`]), exactly the way the non-streamed path
+/// parses its one JSON object.
+fn stream_on_line(line: &str, on_progress: Option<&dyn Fn(GenerateProgress)>) {
+    let Some(on_progress) = on_progress else {
+        return;
+    };
+    let line = line.trim();
+    if line.is_empty() {
+        return;
+    }
+    let Ok(event) = electricity_json::loads(line) else {
+        return;
+    };
+    let Some(dict) = event.as_dict() else {
+        return;
+    };
+    let has_error = dict
+        .get(&Value::Str("error".to_string()))
+        .is_some_and(|v| !matches!(v, Value::None));
+    if has_error {
+        return;
+    }
+    let delta = delta_text(dict);
+    if !delta.is_empty() {
+        on_progress(GenerateProgress {
+            delta_chars: delta.chars().count(),
+            delta_count: 1,
+            tokens_sent: None,
+            tokens_received: None,
+        });
+    }
+}
+
+/// The pure half of [`Adapter::generate`]'s streaming path --
+/// everything after [`run_curl_streaming`] returns.
+pub fn interpret_streaming_outcome(
+    name: &str,
+    outcome: &CurlOutcome,
+    model: &str,
+    timeout_seconds: u32,
+    base_url: &str,
+    url: &str,
+) -> Result<GenerateResult, AdapterError> {
+    if outcome.returncode != 0 {
+        return Err(curl_failure_error(
+            name,
+            outcome,
+            model,
+            timeout_seconds,
+            base_url,
+            url,
+            true,
+        ));
+    }
+
+    let parsed = parse_ndjson_stream(&outcome.stdout);
+
+    if is_empty_dict(&parsed.final_raw) && parsed.error.is_none() {
+        // The server answered a streaming request with one plain JSON
+        // body instead of NDJSON -- parse the whole body the
+        // non-streamed way, so the two paths can't drift apart.
+        let raw = electricity_json::loads(&outcome.stdout)
+            .map_err(|_| non_json_error(&outcome.stdout))?;
+        let dict = raw
+            .as_dict()
+            .ok_or_else(|| attribute_error(&raw, "get"))?
+            .clone();
+        let text = delta_text(&dict);
+        return result_from_final(raw, text);
+    }
+
+    if let Some(error) = parsed.error {
+        let mut error_dict = Dict::new();
+        dict_insert(&mut error_dict, "error", error);
+        let error_body = electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT)
+            .unwrap_or_default();
         let message = curl_failure_message(
             "ollama",
             (!model.is_empty()).then_some(model),
             url,
-            outcome.returncode,
-            &outcome.stdout,
-            &outcome.stderr,
-            &hint,
+            22,
+            &error_body,
+            "",
+            "",
             &[],
         );
         return Err(AdapterError {
             message,
-            retry: classify_curl_outcome_with_error_code(outcome, &[]),
+            retry: RetryInfo {
+                error_code: crate::curl_text::curl_error_code(&error_body, &[]),
+                ..RetryInfo::not_retryable()
+            },
             py_class: PyExc::AdapterCallError,
         });
     }
 
-    let raw =
-        electricity_json::loads(&outcome.stdout).map_err(|_| non_json_error(&outcome.stdout))?;
-    let dict = raw.as_dict().ok_or_else(|| attribute_error(&raw, "get"))?;
+    if !parsed.saw_done {
+        // The stream ended (exit 0) without ever delivering a `done:
+        // true` line -- the connection closed, or the server stopped
+        // writing, partway through the reply. Classified the same way
+        // an actual mid-stream disconnect (exit 18) is.
+        let message = curl_failure_message(
+            "ollama",
+            (!model.is_empty()).then_some(model),
+            url,
+            18,
+            "",
+            "curl: (18) transfer closed with outstanding read data remaining",
+            "",
+            &[],
+        );
+        return Err(AdapterError {
+            message,
+            retry: RetryInfo::retryable(),
+            py_class: PyExc::AdapterCallError,
+        });
+    }
 
-    let message_field = dict.get(&Value::Str("message".to_string()));
-    let text_value = match message_field {
-        Some(Value::Dict(message_dict)) => message_dict
-            .get(&Value::Str("content".to_string()))
-            .cloned(),
-        _ => dict.get(&Value::Str("response".to_string())).cloned(),
-    };
-    // `(text or "").strip()`: a falsy value (including `None`/absent)
-    // becomes `""`; a truthy non-`str` raises CPython's own
-    // `AttributeError` for `.strip()`.
-    let text = match &text_value {
-        None => String::new(),
-        Some(value) if !crate::config::value_is_truthy(value) => String::new(),
-        Some(Value::Str(s)) => electricity_value::pycompat::py_strip(s).to_string(),
-        Some(other) => {
-            return Err(AdapterError {
-                message: format!("'{}' object has no attribute 'strip'", other.type_name()),
-                retry: RetryInfo::not_retryable(),
-                py_class: PyExc::AttributeError,
-            });
-        }
-    };
-
-    let int_if_pyint = |value: Option<&Value>| -> Option<i64> {
-        match value {
-            Some(v @ (Value::Int(_) | Value::Bool(_))) => {
-                electricity_value::pycompat::py_int(v).ok()
-            }
-            _ => None,
-        }
-    };
-    let tokens_sent = int_if_pyint(dict.get(&Value::Str("prompt_eval_count".to_string())));
-    let tokens_received = int_if_pyint(dict.get(&Value::Str("eval_count".to_string())));
-    let finish_reason = match dict.get(&Value::Str("done_reason".to_string())) {
-        Some(Value::Str(s)) => Some(s.clone()),
-        _ => None,
-    };
-
-    Ok(GenerateResult {
-        text,
-        raw,
-        tokens_sent,
-        tokens_received,
-        finish_reason,
-        warnings: Vec::new(),
-        cost_usd: None,
-    })
+    result_from_final(parsed.final_raw, parsed.text)
 }
 
 fn transport_failure_error(failure: TransportFailure) -> AdapterError {
@@ -340,6 +570,9 @@ pub struct OllamaAdapter {
     /// `self.base_url.rstrip("/")` is the very first thing `generate()`
     /// touches, so a bad value fails immediately there too.
     pub base_url: Value,
+    /// Whether this instance sends `stream: true`; the instance-level
+    /// override for `runtime.adapters.<name>.stream: false`.
+    pub streams: bool,
 }
 
 #[async_trait(?Send)]
@@ -355,7 +588,7 @@ impl Adapter for OllamaAdapter {
         options: &GenerateOptions,
         call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
-        let (endpoint, payload) = build_request(model, prompt, options)?;
+        let (endpoint, payload) = build_request(model, prompt, options, self.streams)?;
         // `self.base_url.rstrip("/")` is a plain `Value::Str` by the
         // time this is ever reached for real work below: this closure
         // only runs if [`rstrip_base_url`] already raised.
@@ -376,17 +609,43 @@ impl Adapter for OllamaAdapter {
                     py_class: PyExc::TypeError,
                 }
             })?;
-        let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
+        if self.streams {
+            let on_progress = call.on_progress;
+            let mut on_line = |line: &str| stream_on_line(line, on_progress);
+            let outcome = run_curl_streaming(
+                &url,
+                &headers,
+                Some(&body),
+                call.timeout_seconds,
+                &mut on_line,
+            )
             .await
             .map_err(transport_failure_error)?;
-        interpret_outcome(
-            &self.name,
-            &outcome,
-            model,
-            call.timeout_seconds,
-            &raw_base_url,
-            &url,
-        )
+            interpret_streaming_outcome(
+                &self.name,
+                &outcome,
+                model,
+                call.timeout_seconds,
+                &raw_base_url,
+                &url,
+            )
+        } else {
+            let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
+                .await
+                .map_err(transport_failure_error)?;
+            interpret_outcome(
+                &self.name,
+                &outcome,
+                model,
+                call.timeout_seconds,
+                &raw_base_url,
+                &url,
+            )
+        }
+    }
+
+    fn streams(&self) -> bool {
+        self.streams
     }
 
     async fn check(&self) -> CheckResult {
@@ -440,6 +699,7 @@ pub fn build_ollama(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
     Ok(Box::new(OllamaAdapter {
         name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "http://localhost:11434"),
+        streams: stream_flag(cfg, name)?,
     }))
 }
 
@@ -457,12 +717,14 @@ mod tests {
             path,
             timeout_seconds: 5,
             token,
+            on_progress: None,
         }
     }
 
     #[test]
     fn build_request_uses_generate_for_a_template_prompt() {
-        let (endpoint, payload) = build_request("m", "hello", &GenerateOptions::default()).unwrap();
+        let (endpoint, payload) =
+            build_request("m", "hello", &GenerateOptions::default(), false).unwrap();
         assert_eq!(endpoint, "/api/generate");
         assert_eq!(
             payload.get(&Value::Str("prompt".to_string())),
@@ -486,7 +748,7 @@ mod tests {
             ],
             ..GenerateOptions::default()
         };
-        let (endpoint, payload) = build_request("m", "hello", &options).unwrap();
+        let (endpoint, payload) = build_request("m", "hello", &options, false).unwrap();
         assert_eq!(endpoint, "/api/chat");
         let messages = payload
             .get(&Value::Str("messages".to_string()))
@@ -521,7 +783,7 @@ mod tests {
             }],
             ..GenerateOptions::default()
         };
-        let (_, payload) = build_request("m", "hi", &options).unwrap();
+        let (_, payload) = build_request("m", "hi", &options, false).unwrap();
         let messages = payload
             .get(&Value::Str("messages".to_string()))
             .unwrap()
@@ -545,7 +807,7 @@ mod tests {
             }],
             ..GenerateOptions::default()
         };
-        let (_, payload) = build_request("m", "hi", &options).unwrap();
+        let (_, payload) = build_request("m", "hi", &options, false).unwrap();
         let messages = payload
             .get(&Value::Str("messages".to_string()))
             .unwrap()
@@ -570,7 +832,7 @@ mod tests {
             }],
             ..GenerateOptions::default()
         };
-        let err = build_request("m", "hi", &options).unwrap_err();
+        let err = build_request("m", "hi", &options, false).unwrap_err();
         assert_eq!(
             err.message,
             "ollama cannot fetch an image URL (https://example.com/a.png); download it and \
@@ -590,7 +852,7 @@ mod tests {
             deterministic: true,
             ..GenerateOptions::default()
         };
-        let (_, payload) = build_request("m", "hi", &options).unwrap();
+        let (_, payload) = build_request("m", "hi", &options, false).unwrap();
         assert_eq!(
             payload.get(&Value::Str("format".to_string())),
             Some(&Value::Str("json".to_string()))
@@ -617,7 +879,7 @@ mod tests {
             deterministic: true,
             ..GenerateOptions::default()
         };
-        let (_, payload) = build_request("m", "hi", &options).unwrap();
+        let (_, payload) = build_request("m", "hi", &options, false).unwrap();
         let model_options = payload
             .get(&Value::Str("options".to_string()))
             .unwrap()
@@ -646,6 +908,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::from(5i64),
+            streams: false,
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -675,6 +938,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::from(5i64),
+            streams: false,
         };
         let result = adapter.check().await;
         assert!(!result.ok);
@@ -725,6 +989,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
+            streams: false,
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -752,6 +1017,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
+            streams: false,
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -775,6 +1041,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
+            streams: false,
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -805,6 +1072,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str("http://127.0.0.1:1".to_string()),
+            streams: false,
         };
         let token = CancellationToken::new();
         let path = EffectPath::root();
@@ -824,6 +1092,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
+            streams: false,
         };
         let result = adapter.check().await;
         assert!(!result.ok);
@@ -836,6 +1105,7 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str(format!("http://user:secret@{addr}")),
+            streams: false,
         };
         let result = adapter.check().await;
         assert!(!result.ok);
@@ -849,9 +1119,145 @@ mod tests {
         let adapter = OllamaAdapter {
             name: "ollama".to_string(),
             base_url: Value::Str(format!("http://{addr}")),
+            streams: false,
         };
         let result = adapter.check().await;
         assert!(result.ok);
         assert!(result.missing.is_empty());
+    }
+
+    // -- streaming (#676) --
+
+    #[tokio::test]
+    async fn generate_streams_deltas_and_matches_the_non_streamed_result() {
+        let body = concat!(
+            "{\"message\": {\"content\": \"hi \"}}\n",
+            "{\"message\": {\"content\": \"there\"}}\n",
+            "{\"message\": {\"content\": \"\"}, \"done\": true, \"prompt_eval_count\": 3, \"eval_count\": 2, \"done_reason\": \"stop\"}\n",
+        );
+        let addr = spawn_ollama_server_body(body);
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            streams: true,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let on_progress = |p: GenerateProgress| seen.borrow_mut().push(p.delta_chars);
+        let mut call = call_ctx(&path, &token);
+        call.on_progress = Some(&on_progress);
+        let options = GenerateOptions {
+            messages: vec![ChatMessage {
+                role: "user".to_string(),
+                content: "hi".to_string(),
+            }],
+            ..GenerateOptions::default()
+        };
+        let result = adapter.generate("m", "hi", &options, &call).await.unwrap();
+        assert_eq!(result.text, "hi there");
+        assert_eq!(result.tokens_sent, Some(3));
+        assert_eq!(result.tokens_received, Some(2));
+        assert_eq!(result.finish_reason, Some("stop".to_string()));
+        assert_eq!(*seen.borrow(), vec![3, 5]);
+    }
+
+    #[tokio::test]
+    async fn generate_streaming_fails_with_exit_18_when_done_never_arrives() {
+        let addr = spawn_ollama_server_body("{\"message\": {\"content\": \"hi\"}}\n");
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            streams: true,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.retry.retryable);
+        assert!(err.message.contains("curl exit 18"));
+    }
+
+    #[tokio::test]
+    async fn generate_streaming_fails_on_a_mid_stream_error_payload() {
+        let body = concat!(
+            "{\"message\": {\"content\": \"hi\"}}\n",
+            "{\"error\": \"model crashed\"}\n",
+        );
+        let addr = spawn_ollama_server_body(body);
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            streams: true,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.retry.retryable);
+        assert!(err.message.contains("model crashed"));
+    }
+
+    #[test]
+    fn parse_ndjson_stream_splits_on_a_unicode_line_separator_inside_a_json_string_like_python() {
+        // A delta whose own text happens to contain U+2028 -- Python's
+        // `str.splitlines()` treats it as a line boundary, breaking this
+        // one NDJSON line into two lines neither of which parses as JSON
+        // on its own, so the delta is silently dropped; Rust's `str::
+        // lines()` alone would not split here, keeping it instead, a
+        // divergence this parses the same, Python way.
+        let body = "{\"message\": {\"content\": \"hi\u{2028}there\"}, \"done\": true}\n";
+        let parsed = parse_ndjson_stream(body);
+        assert_eq!(parsed.text, "");
+        assert!(!parsed.saw_done);
+    }
+
+    #[tokio::test]
+    async fn generate_streaming_falls_back_to_a_plain_json_body() {
+        // A server that answers a streaming request with one plain JSON
+        // body instead of NDJSON -- parsed the non-streamed way.
+        let addr = spawn_ollama_server_body(
+            "{\"response\": \"hi\", \"prompt_eval_count\": 1, \"eval_count\": 1, \"done\": true}",
+        );
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            streams: true,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let result = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.text, "hi");
+    }
+
+    #[test]
+    fn build_request_sets_stream_true_when_asked() {
+        let (_, payload) = build_request("m", "hi", &GenerateOptions::default(), true).unwrap();
+        assert_eq!(
+            payload.get(&Value::Str("stream".to_string())),
+            Some(&Value::Bool(true))
+        );
     }
 }

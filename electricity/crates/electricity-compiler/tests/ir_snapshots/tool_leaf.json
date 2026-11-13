@@ -18,9 +18,11 @@
               "kind": {
                 "Leaf": {
                   "Tool": {
+                    "confine_to": null,
                     "description": null,
                     "expect": null,
                     "group": null,
+                    "limited": false,
                     "model": null,
                     "params": {
                       "Map": {
@@ -47,6 +49,7 @@
                       "backoff_ms": 1000,
                       "max_attempts": 1
                     },
+                    "secret_headers": {},
                     "timeout_ms": null
                   }
                 }
@@ -61,7 +64,8 @@
                 {
                   "Name": "fetch"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -75,7 +79,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

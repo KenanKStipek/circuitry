@@ -27,11 +27,21 @@ Decisions" instead of citing an external project file repeatedly:
   generation); electricity only runs orchestrations once they're written. Once electricity passes
   the full conformance suite, `cof run` itself delegates execution to electricity (§12, M4) — one
   engine, with Python kept as the authoring tool.
-- CLI shape: `electricity <config.json> <orchestration.yml> -e key=value... --out state.json
-  [--resume ...] [--pretty] [--profile <path>]`; the same `config.json` format and the same
-  final-state JSON shape as `cof run --out`. Both files are operator-chosen on the command line
-  and therefore fully trusted — no document-discovery mechanism, no document-trust
-  classification, no project-config search path.
+- CLI shape: `electricity run <orchestration.yml> [-e key=value]... [--config config.json]
+  [--out state.json] [--resume ...] [--pretty] [--profile <path>] [--allow-capabilities cap,cap]
+  [--adapter name] [--label TEXT] [--quiet]`, cof `run`'s own option names and meanings (issue #728) --
+  `--resume`/`--state`/`--force` are #727's own milestone and are not accepted by this build's
+  parser yet (an unrecognized option, same as any other); every other flag in this synopsis is.
+  The legacy
+  `electricity <config.json> <orchestration.yml> ...` form (config always the first positional,
+  never discovered) keeps working as an alias. The orchestration file is always operator-chosen on
+  the command line and therefore fully trusted — no document-discovery mechanism, no
+  document-trust classification. `--config` is the one exception to "explicit only": when it's
+  omitted, `run` discovers a config file exactly as `cof run` does — `CIRCUITRY_CONFIG`, then a
+  project config (`circuitry.config.json`/`config.json`) in the working directory gated by `cof
+  trust`'s own trust store (read-only: electricity never writes it), then the global config
+  (`~/.config/circuitry/config.json`) — same `config.json` format and the same final-state JSON
+  shape as `cof run --out` either way.
   Provider API keys come only from environment variables, never from config.json, state, or a CLI
   flag — with two named exceptions where the reference itself reads a credential from config as a
   fallback (the `cyberdiner` adapter's bearer token, §9.4/§9.6; the `surrealdb` runtime plugin's
@@ -42,8 +52,9 @@ Decisions" instead of citing an external project file repeatedly:
 - Profiles are supported, by explicit file path only: `--profile <path>`. There is no lookup by
   name and no search of the document's or the working directory's `profiles/` folder — the
   reference's own name-based discovery (`discover_profile_path`) is replaced by the operator
-  naming the file directly, consistent with "explicit config only, both files operator-chosen"
-  above. Everything else matches the reference exactly: profile schema and validation,
+  naming the file directly — the orchestration file (and `--profile`'s own path) stay explicit
+  only, consistent with the CLI-shape bullet above; only `--config` gained discovery. Everything
+  else matches the reference exactly: profile schema and validation,
   precedence, model locking, and the `effective_settings.profile` record (§6.11). Needed in M1
   (§15), not deferred.
 - `use` children resolve by filesystem path only; there is no library-name/remote-library
@@ -75,9 +86,9 @@ Decisions" instead of citing an external project file repeatedly:
   starts — §6.9).
 - electricity's v1 CLI has no `--dry-run`, `--validate-only`, or `--verbose` flag; the
   `runtime.last_run` fields of the same names (§6.10) are therefore always written `false`.
-- The native tool set for v1 is `shell`, `json`, `fs`, `awk`, `imagemagick`, `ffmpeg`, `http`,
-  `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `mcp`, `surrealdb`, `email_smtp`
-  (§8.1).
+- The native tool set for v1 is `shell`, `json`, `fs`, `awk`, `imagemagick`, `ffmpeg`, `gh`,
+  `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`, `validate_yaml`, `cel`, `mcp`, `surrealdb`,
+  `email_smtp` (§8.1).
 - Models are reached through a native `ollama` adapter, the OpenAI-compatible family (§9.2), a
   native `anthropic` adapter (§9.3), a native `openai` adapter (its own file, reusing the
   family's message/response helpers and shared transport but registered separately, for its
@@ -102,11 +113,17 @@ Decisions" instead of citing an external project file repeatedly:
 models (or scripted fakes, for conformance testing), produce a final state identical to what
 `cof run` would have produced for the same inputs.
 
-**Scope (v1).** A CLI binary (`electricity <config.json> <orchestration.yml> [-e key=value]...
-[--out state.json] [--state <file>] [--resume <id>|last] [--force] [--pretty] [--live-state <path>]
-[--profile <path>] [--dump-ir]`) plus an embeddable library crate exposing the same run
+**Scope (v1).** A CLI binary (`electricity run <orchestration.yml> [-e key=value]... [--config
+config.json] [--out state.json] [--state <file>] [--resume <id>|last] [--force] [--pretty]
+[--live-state <path>] [--profile <path>] [--allow-capabilities cap,cap] [--adapter name]
+[--label TEXT] [--quiet] [--dump-ir]`, and the legacy `electricity <config.json> <orchestration.yml> ...` form
+as an alias) plus an embeddable library crate exposing the same run
 semantics to a host Rust program (e.g. an application embedding the engine directly rather than shelling out to the
 binary). Both surfaces share one workspace of language, VM, tool, adapter, and plugin crates.
+`--state`/`--resume`/`--force` are this v1 scope's own resume feature (issue #727); issue #728's
+own `electricity run` ships every other flag in this synopsis first, with those three still
+unrecognized options until #727 lands (`electricity/README.md`'s own CLI bullet states this
+current-state subset; this bullet is the full v1 target).
 `--resume last` reads the most recently written `--out` file for this orchestration path, tracked
 in a small CLI-only stash file (`$XDG_STATE_HOME/electricity/last_run.json` on Linux, the platform
 equivalent elsewhere — this location is an electricity-only convenience and carries no parity
@@ -123,12 +140,14 @@ requirement of its own, unlike the `--out` state format it points at).
 | MCP **server** surface (`circuitry-mcp`, `host_claude` adapter) | electricity is a runner, not an interactive agent host; `host_claude`'s `generate()` has no transport of its own — it calls back into a live MCP session that only exists inside `cof`'s server (tools-adapters-plugins §3.9). electricity registers the adapter name only to reproduce `cof`'s own "cannot be built from config" error. |
 | REST trigger / scheduler | Deployment-time concern layered over a runner, not the runner itself; nothing here precludes a caller from wrapping the CLI or library in one later. |
 | The step cache (`cache:`, `cof cache`, `--no-cache`) | Removed from Circuitry itself (#353); electricity never had it to begin with. |
-| `cof trust` / document discovery / untrusted-document `runtime:` filtering | Explicit config only, both files operator-chosen = trusted (Decisions, above). Every config key and every document `runtime:` key electricity reads is honored as-is; there is no discovery mechanism and no notion of an untrusted document to filter against (runtime-semantics §8.6's `ORCHESTRATION_RUNTIME_KEYS` trust split collapses to "always trusted"). |
+| Document discovery / untrusted-document `runtime:` filtering | The orchestration file is always operator-chosen on the command line = trusted (Decisions, above, now narrowed to the document only — `--config` gained discovery in issue #728). Every document `runtime:` key electricity reads is honored as-is; there is no notion of an untrusted document to filter against (runtime-semantics §8.6's `ORCHESTRATION_RUNTIME_KEYS` trust split collapses to "always trusted"). |
 | Mustache partials (`{{> name}}`) | Removed from both Circuitry and electricity (Decisions, above); chevron's partial loading reads an arbitrary file from the process CWD by name, which is both a parity-fragile feature (no production document uses it) and a minor file-disclosure surface for no real benefit. |
 
-**Production-only surface.** electricity's only way to trust a file is for an operator to name
-it on the command line or in the embedding API; there is no API-key discovery beyond environment
-variables (Decisions, above).
+**Production-only surface.** electricity's only way to trust an orchestration file is for an
+operator to name it on the command line or in the embedding API; there is no API-key discovery
+beyond environment variables (Decisions, above). A config file is the one exception: `electricity
+run` discovers and reads `cof`'s own trust store for one found in the working directory, the same
+way `cof run` does (Decisions, above) — read-only, never written by electricity.
 
 ---
 
@@ -984,13 +1003,18 @@ No VM-frame snapshot is ever serialized (§6.5) — resume works exactly like th
 by re-running from the top and skipping whatever the loaded state says already finished
 (runtime-semantics §8.5):
 
+`--state`/`--resume`/`--force` ship in issue #727, `--state <file>` only (never `--resume last`/a
+bare run-id, both of which need `runtime.persistence`/a `--last` stash electricity doesn't have —
+§13's own scope row); the rest of this section otherwise describes the full reference behavior,
+including the parts (persistence auto-load, a bare run-id's input re-pass rule) electricity
+doesn't reach yet:
+
 - an effect is resumable iff `meta.completed_at` is truthy **and** `meta.error` is falsy; a
   **successful `reflector` never writes `meta.completed_at` at all** (its own `meta` stays
   `{"iterations": [...]}` only, issue #506's lane L1, matching Circuitry's own `setdefault`
-  shape) — `--resume` is out of scope for M1 (M2-G), but the consequence is already pinned here:
-  a successful reflector is never resumable and always reruns from scratch, appending its own
-  new `meta.iterations` entries to whatever a prior run already left (the same accumulation a
-  reused, unnamed-loop/`if` node already gets);
+  shape) — a successful reflector is never resumable and always reruns from scratch, appending
+  its own new `meta.iterations` entries to whatever a prior run already left (the same
+  accumulation a reused, unnamed-loop/`if` node already gets);
 - within one chain-flow `dynamic`'s own `effects:` list, resume is **positional**: the moment one
   effect isn't resumed whole, every later sibling in that same chain reruns too, regardless of
   what its own node might (misleadingly) show from a stale prior run;
@@ -1045,7 +1069,7 @@ reference's own message and failure point word for word (the Decisions above).
 | Interrupted by SIGTERM | `143` |
 | Interrupted by SIGHUP (the terminal closed), unless SIGHUP was ignored at start (`nohup`) | `129` |
 | A malformed `-e` value (`KEY=VALUE` parsing failure) — the one pre-run usage error the reference's own CLI never explicitly catches, left to Typer/Click's default `BadParameter` handling | `2` |
-| Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path | `1` |
+| Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path, `run`'s own missing-orchestration-positional check (issue #728: not one of the enumerated usage errors either, since the positional stands in for `--last`) | `1` |
 
 All three interrupted cases still write `--out` exactly like an ordinary failure (runtime-semantics
 §6.5, §8.4) — the exit code alone distinguishes them; resumability is identical across all
@@ -1075,8 +1099,10 @@ nothing; success without `--out` prints the final state as JSON; a run failure p
 payload — so stderr during a run carries two kinds of line: `Warning: ...` (from `--events`/
 `--live-state` write failures folded into `result.warnings` at the end, plus any "Applied host
 settings" notice from step 6) and `WARNING: ...` (Circuitry's own `logging` module, at its
-reference CLI's default `WARNING` level — there is no `--verbose`/`--quiet` flag of electricity's
-own to change it, so this is always on). The latter are reached through the `log` crate, the same
+reference CLI's default `WARNING` level — there is no `--verbose` flag of electricity's own, and
+`run`'s own `--quiet` (issue #728) is accepted but changes nothing here either: it is parsed for
+parity with `cof run`'s own flag, not wired to anything, since this WARNING-level logging is
+already `cof run --quiet`'s own behavior — so this is always on). The latter are reached through the `log` crate, the same
 facade `electricity-cel`'s own absent-path warning already used before this (its own Cargo.toml
 doc comment foretold it): `electricity-vm`'s `core/dynamic.py`/`core/conditional.py` on_error/
 `finally:` degradation warnings, `core/tool.py`'s own invalid-`runtime.tools.timeout_seconds`
@@ -1296,9 +1322,11 @@ these before it ever reaches the orchestration's own state:
   run-wide concurrency-limiter handle dropped before the snapshot is taken** (it isn't
   JSON-serializable at all) but every other private, non-document key the reference also carries
   on this tree — `_orchestration_dir` (the absolute directory a relative `use path:` falls back
-  to, §5.2), `_allowlists`, and `_capability_allow` (always `[]` for electricity, since there is
-  no `--allow-capabilities` flag) — left in place and redacted along with everything else, not
-  stripped out, so the snapshot's key set matches `cof run --out`'s byte-for-byte.
+  to, §5.2), `_allowlists`, and `_capability_allow` (`run`'s own `--allow-capabilities`, issue
+  #728, sorted and deduplicated the same way `cof run`'s own `RunRequest.allow_capabilities`
+  is — `[]` when the flag is absent, same as before) — left in place and redacted along with
+  everything else, not stripped out, so the snapshot's key set matches `cof run --out`'s
+  byte-for-byte.
 
   **`sources`** tracks which layer resolved each effective setting, using the reference's own
   fixed vocabulary of layer labels (`"cli"`, `"orchestration"`, `"config"`, `"default"`, plus
@@ -1358,8 +1386,7 @@ for how the file itself is located:
 - **No discovery.** The reference resolves a bare `--profile <name>` by searching
   `<orchestration_dir>/profiles/<name>.yml` then `<cwd>/profiles/<name>.yml` (and the `.yaml`
   variant of each, `discover_profile_path`). electricity has no such search: `--profile <path>`
-  names the file directly, consistent with "explicit config only, both files operator-chosen"
-  (§1). A path that doesn't resolve to a readable file is **not** one of §6.9's enumerated
+  names the file directly, explicit only, same as the orchestration file (§1). A path that doesn't resolve to a readable file is **not** one of §6.9's enumerated
   pre-run usage errors: the reference's own `load_profile` runs inside the run's single
   top-level try block, *after* state/orchestration loading, the allowlist check, and capability
   consent, but still before `interface.inputs` checking (`runtime_shim.run`'s own call order) —
@@ -1448,16 +1475,19 @@ for how the file itself is located:
   only `--profile` given still auto-loads.
 - **Run-level model/adapter/out precedence.** The reference's own chain is
   `cli > profile > orchestration > config > default` for `model`/`adapter`, and
-  `cli > profile > resume-default-out > default` for `out`. electricity has no `--model`,
-  `--adapter`, `--scoring`, `--routing`, or `--decompose` CLI flags to rank above a profile
-  (Decisions, §1), so its chain is the remainder: for `model`/`adapter`, **profile > orchestration
-  default > config default**; for `out`, **profile > resume-default (§6.8) > default (nothing
-  written)**. A profile's `model`/`adapter`/`out`, when set, therefore wins outright over the
-  orchestration's own top-level `model:`/`adapter:` — exactly as it does for the reference once
-  its own absent CLI overrides are factored out — and `runtime.effective_settings.sources`
-  (§6.10) records `"profile"` for whichever of `model`/`adapter`/`out`/`persistence` a profile
-  actually supplied, matching `resolve_effective_settings`'s own four `sources[...] = "profile"`
-  assignments exactly.
+  `cli > profile > resume-default-out > default` for `out`. electricity's `run` subcommand has
+  `--adapter` (issue #728), which ranks exactly where the reference's own `cli` tier does —
+  `runtime.effective_settings.sources.adapter` records `"cli"` for it, the same string the
+  reference's own `--adapter` records. There is still no `--model`, `--scoring`, `--routing`, or
+  `--decompose` CLI flag (Decisions, §1), so `model`'s own chain is the remainder: **profile >
+  orchestration default > config default**; `out`'s is **the plain `--out` flag (already ranked
+  above everything, unaffected by this issue) > profile > resume-default (§6.8) > default
+  (nothing written)**. A profile's `model`/`out`, when set and not beaten by a higher tier,
+  therefore wins outright over the orchestration's own top-level `model:` — exactly as it does
+  for the reference once its own absent CLI overrides are factored out — and
+  `runtime.effective_settings.sources` (§6.10) records `"profile"` for whichever of
+  `model`/`adapter`/`out`/`persistence` a profile actually supplied and `--adapter` didn't beat,
+  matching `resolve_effective_settings`'s own `sources[...] = "profile"` assignments exactly.
 - **A profile's `persistence:` block**, when present, **replaces** `runtime.persistence`
   outright rather than merging with whatever the orchestration or config already set — the two
   backends take disjoint config keys, so a partial overlay would produce one that is neither.
@@ -1906,7 +1936,7 @@ still differ from CPython 3.11's for a code point assigned meaning after Unicode
 ### 8.1 Native tool plugins (v1)
 
 Rust-native implementations of the tools the owner's production documents use: `shell`, `json`,
-`fs`, `awk`, `imagemagick`, `ffmpeg`, `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`,
+`fs`, `awk`, `imagemagick`, `ffmpeg`, `gh`, `http`, `clock`, `hash`, `env_vars`, `regex`, `uuid`,
 `validate_yaml`, `mcp`, `surrealdb`, `email_smtp` (Decisions, §1). Each implements the shared trait mirroring
 `ToolPlugin` (tools-adapters-plugins §1.1):
 
@@ -1937,6 +1967,11 @@ parity-critical points, cited by section):
 | `fs` (§2.3) | no sandbox — parity means matching the *absence* of a jail, not inventing one; `delete` on a missing path is `value: false`, not an error. |
 | `awk`/`imagemagick` (§2.4) | binary candidates searched in order (`awk, gawk, mawk`; `magick, convert`); `binary`/`env` only from `runtime.plugins.<name>`, never from params. |
 | `ffmpeg` (§2.5) | two metacharacter tiers: `flags`/`input`/`output`/`extra_inputs` reject `|`/`;` too; `filter_complex` does not, since those are legitimate filter-graph syntax there. |
+| `gh` | `GenericSubprocessTool`, one binary candidate (`gh`, no fallback name); `params.args` forwarded to it as argv, never a shell; authentication is whatever `gh auth login` already set up outside circuitry, same as `cof run`. |
+| `systemone` | `POST <base_url><path>/v1/systemone` over the shared HTTP client (any path prefix `base_url` names is kept); loopback-only unless `runtime.plugins.systemone.allow_remote`; `CIRCUITRY_SYSTEMONE_URL` overlays `base_url` the same way `CIRCUITRY_COMFYUI_URL` does; a 3xx/4xx/5xx is a returned `ok=false` result (never raised), a connection failure *is* raised, and a body-read failure on a 2xx is raised too (`http`'s own rule for the same case); every answer is checked against its question before it reaches state; tokens come from the response's own `usage` and reach the run's own totals, on a success or a failure alike, like a prompt's do. `state_file`/`within` confinement is checked at compile time and at every dispatch; §13 has this tool's one remaining accepted divergence (`cof check`'s own up-front validation of a malformed `model`/`questions`). |
+| `cel` | Evaluated with the same CEL evaluator and live scope `if`/`while` use; `params` stay literal (never rendered); the result is written as JSON with timestamps and durations as ISO 8601 and map keys in their authored order (the vendored `cel` crate, `electricity/vendor/cel`); `strict` and `schema` as `plugins/cel.py`. |
+| `service` | Same record and `flock` as `cof run` (`<state_dir>/<name>.json`, `<state_dir>/.lock`): a service one engine starts, the other can stop or query. Ownership (pgid, leader start time, boot time) checked identically on macOS and Linux before any signal is ever sent; a port held by a process this plugin didn't start is reported, never signalled. The readiness probe follows redirects the same way cof's own `urllib` opener does, and a start cancelled while waiting for ready tears its group down with the same graceful `SIGTERM`-then-`grace_ms`-then-`SIGKILL` an ordinary `stop` uses, not a bare `SIGKILL`. |
+| `agent` | One headless `pi`/Claude Code session in `params.cwd`, its own process group, built on the shared `agent_cli`/`agent_live` halves (#520, #636); `result_file` + `result_schema` give one repair turn in the same session for a missing/invalid file, then a failure naming the errors; a turn that fails after the session has an id, or an earlier turn has completed, ends the effect `ok: false` with `session_id`/`transcript`/`timed_out` still in `raw`, never raised; one that fails before either raises, unchanged. `meta.live` is the session's own running summary (turns, tool calls, tokens, the current tool, ...), not the five-provider tail/byte-count shape above; its publishes are throttled the same way, at most once a second plus one trailing flush. |
 | `http` (§2.6) | a 4xx/5xx is a returned `ok=false` result (never a raised error); a connection failure *is* raised — this distinction drives retry classification; `http_error_excerpt`'s four-tier extraction (`error.message` → `error` → `message`/`detail` → redacted raw body) reproduced exactly. |
 | `clock` (§2.7) | IANA timezone database required (`chrono-tz` or `tz`), not a bare UTC-offset model. |
 | `hash`/`uuid`/`env_vars`/`regex` (§2.8–2.11) | `env_vars`'s own `_SECRET_PATTERN` is narrower than and independent of the central redaction deny-list — both must exist, not one standing in for the other. |
@@ -2558,14 +2593,33 @@ of M0-H's run wiring. **Loop progress** (the second bullet) landed with M1's own
   CLI's own cost figure directly rather than computing one. Until at least one such call runs,
   `cost_usd` **stays `null`, never `0`** (§6.10's correction — the reference's own accumulator
   starts at `None` and only becomes a number once something adds to it).
+- **A running process-backed tool's own `meta.live`** (issue #741): while a `shell`, `awk`,
+  `imagemagick`, `ffmpeg` or `gh` step runs (never the agent CLIs, which get the agent tool's own
+  #636 live summary instead, or `http`, which has no running subprocess output to publish),
+  `electricity_tools::process::run_tracked` feeds a bounded tail of each of stdout/stderr (the
+  last 20 lines, at most 4 KiB, decoded the same way the final output is — UTF-8 with invalid
+  bytes replaced, the same universal-newline translation applied) plus the running byte count on
+  each to a callback (`ToolCall::on_live`), which `exec/tool/live.rs` assembles into `meta.live`
+  and publishes through the same coalesced write path a streamed prompt's own `meta.live` (#674)
+  already uses — at most once a second, plus one trailing publish once output has been quiet for
+  a second. `meta.live` is removed again before the attempt's own final result/error is written,
+  so a finished node is byte-identical to a run with no live publishing at all.
 
 ---
 
 ## 11. Configuration
 
-Explicit config file only — no discovery, no `cof trust` (Decisions, §1). Both the config file
-and the orchestration file are operator-chosen and therefore trusted; electricity never
-evaluates any notion of document trust at run time.
+The legacy `electricity <config.json> <orchestration.yml>` form keeps its config file explicit
+only — no discovery, no `cof trust` (Decisions, §1). `electricity run` (issue #728) discovers one
+when `--config` is absent, porting `cli/config.py::resolve_config`'s non-explicit branch exactly:
+`CIRCUITRY_CONFIG`, then a project config (`circuitry.config.json`/`config.json`) discovered in
+the working directory and gated by `cof trust`'s own trust store (`trusted.json` beside the
+global config) — read-only, electricity never writes it — narrowed against the global config's
+own allowlists the same way (`_narrow_allowlists`), then the global config
+(`~/.config/circuitry/config.json`). Either way, the orchestration file stays operator-chosen and
+therefore trusted; electricity never evaluates any notion of document trust at run time
+(§1's Decisions/Non-goals: document trust and config-file discovery are separate concerns, and
+only the latter changed).
 
 **The user's private `.env`** (issue #468). Before resolving the config file, the `electricity`
 binary's own startup ports `cli/config.py::load_user_env`: it loads the private `.env` file
@@ -2763,6 +2817,8 @@ divergence.
 | Q11 | A tree branch's/tree-loop pass's mid-run `--live-state` overlay (issue #465) shows a branch's own in-progress effect node (`meta.completed_at` still `null`) as soon as it starts, since every electricity effect type writes an in-progress `meta` node at attempt start, the same as a plain chain effect already does, and its own coalesced publish simply reads whatever is there, running or not, with no separate republish-on-start step of its own needed. cof's own overlay (`core/store/store.py::Store.parallel_branches`) used to only republish a branch once that branch's own `Store.on_write` had fired at least once, which for a `tool` effect specifically only happened once it completed, so a `tool`/`shell` branch that had started but not finished stayed invisible in cof's own mid-run `--live-state` while already visible in electricity's. | **Was: keep electricity's own richer view, not cof's staler one.** cof's own gap is closed by issue #634 (`Store.fire_effect_start` now republishes a branch's own snapshot eagerly, at every effect start inside it, rather than waiting for a write that a `tool` effect's own isolated branch store otherwise never produced mid-dispatch) — both engines now show a running tree-flow/`use`-child tool or prompt the same way a running chain effect's node always has, electricity through its own unchanged mechanism, cof through this new one. | No — was a deliberate, performance-driven divergence (settled on PR #549's review), now closed by #634. |
 | — | **Regex engine gap**: `fancy-regex`/`regex` do not cover the full Python `re` grammar (true backreference-plus-lookaround combinations, some lookbehind forms). | **Accept the gap for v1**, documented via tools-adapters-plugins §7 case 8 rather than hidden; revisit with an embedded PCRE/Oniguruma binding only if a production document's pattern actually needs it. | **No**: no production regex pattern uses lookaround or backreferences; re-scan if a future document adds one. |
 | — | **CEL crate gap**: the `cel` crate has ~820 skipped conformance cases upstream (mostly proto/extension-related) and is not independently verified against cel-python's own (non-spec-exact) behavior. | **Use `cel` behind the strict/non-strict layer, validated by a differential corpus** (§12) against cel-python on every expression the production documents actually use; keep `cel-core` as a documented fallback if a gap surfaces. | No — this is the research's own recommended mitigation, not an open call. |
+| — | **The `cel` tool's own malformed-`schema:` compile error uses the `jsonschema` Rust crate's own text, not Python's** (issue #723): `build_cel_params`'s own well-formedness check (`electricity_schema::schema_well_formedness_error`) catches the same shapes `plugins/cel.py::static_param_errors`'s `jsonschema.validators.validator_for(schema).check_schema(schema)` call does and fails the compile the same way, but the message after `"params.schema is not a valid JSON Schema: "` comes from the crate's own `SchemaError`/`ValidationError` `Display`, worded differently from Python's own `jsonschema.SchemaError` text for the same malformed schema. | **Copy the verdict and the prefix; accept the third-party message text**, the same carve-out every other third-party-library error in this table uses. | No — a conformance case for this fails the compile on both engines (`error_compare: "location"`), never byte-for-byte on the embedded crate text. |
+| — | **Was: the `cel` tool's own map results had no authored key order** (issue #723): the `cel` crate's own `cel::objects::Map` was backed by a plain `std::collections::HashMap`, not an insertion-ordered one the way `celtypes.MapType` (a Python `dict`) is -- a `cel` row whose own result was a multi-key map (a literal `{...}`, or a `state.` dict read straight through) could not carry its authored/insertion order into electricity's own `value` the way cof's does. | **Fixed by vendoring the `cel` crate** (`vendor/cel`, `vendor/cel/VENDORING.md`, wired in by the workspace `Cargo.toml`'s own `[patch.crates-io]`): its `Map` and the evaluator's own internal map representation (`common::types::map::DefaultMap`) are both backed by `indexmap::IndexMap` instead, so a map literal keeps its source order, a map read from `state` keeps `state`'s own order, and a map nested inside a list/map or chosen by a ternary keeps its own order too -- `electricity-cel::convert::to_json` no longer needs to sort a map's keys at all; `IndexMap`'s own equality stays order-insensitive, so CEL `==`/`in` are unaffected. | No -- electricity now matches cof exactly; closed. |
 | — | **CEL nesting-too-deep text carries a Python-specific, frame-dependent suffix** (§7.2, #403): cof's own `RecursionError.__str__` sometimes appends extra text depending on exactly which further recursion its own formatting triggers while escaping — `", while calling a Python object"` for a parenthesized/call-nested expression, `" in comparison"` observed for some operator chains, none at all for others — varying by context (`if`/`while`/`use`) for the *same* expression, not just by shape. | **Not reproduced.** electricity's own five evaluation-time parity caps (§7.2) always emit the bare `"maximum recursion depth exceeded"` suffix, uniformly, regardless of shape or context; every conformance case pinning one of these failures compares by location/substring (`error_compare: "location"`), never byte-for-byte, exactly like every other third-party-library text in this table. | No — accepted; reproducing Python's own exception-formatting side effects exactly is not a goal. |
 | — | **Mixed CEL nesting shapes diverge from Circuitry in both directions** (§7.2, #403): electricity's seven nesting caps are tracked independently, not against one shared recursion budget the way Circuitry's own interpreter has. | **Accept, documented, in both directions** — electricity can be more lenient (48 nested `size()` calls wrapping a map literal) or stricter (50 parens around a 48-deep list literal, which trips `cel`'s own 96-production parser guard before Circuitry's own floor) than Circuitry on a shape this far outside anything an ordinary orchestration writes; full detail and both worked examples in §7.2 and `electricity-cel/src/nesting.rs`'s own module docs. | No — a known, accepted residual gap; a combined, cross-shape weighted budget that would close it is not required. |
 | — | **cof's own CEL nesting limits vary by Python version** (#403): they come from CPython's recursion handling, which differs between interpreter versions — 3.12 changed it substantially — so the exact depth at which cof itself fails a given expression shape is not one fixed number across 3.10–3.13. | **electricity's own caps follow cof on Python 3.11**, the version `scripts/generate-conformance-cases.py`/`electricity/scripts/generate_*.py` run under (CI's own quality-job lint version). The conformance suite's own version-dependent cases (`cel-member-access-too-deep`, `cel-nesting-caps-fail-the-run`, `cel-nesting-caps-caught-by-on-error-continue`) are scoped to 3.11 via `case.json`'s `python_runner_versions` key (`tests/conformance/README.md`) and skipped on the Python runner under any other interpreter; electricity's own caps don't move with whichever interpreter runs the test, so the electricity runner isn't affected either way. | No — settled; the generators' own pinned interpreter is already the ground truth for every other generated artifact in this port. |
@@ -2794,7 +2850,9 @@ divergence.
 | — | **A write failure immediately after a successful connect** (a TCP `RST` between `connect()` succeeding and the request actually being written): `urllib.request.AbstractHTTPHandler.do_open` wraps `h.request(...)` (connect *and* send) in one `except OSError: raise URLError`, but `h.getresponse()` (waiting for the reply) is outside that wrap — the reference's own code draws this line at "connect-and-send" versus "wait for reply," not at "connect" versus everything after. `hyper::client::conn::http1`'s own `send_request()` future spans *both* writing the request and reading the response head in one step, with no API seam at that exact boundary. | **Classify the whole post-connect `send_request()` failure as the *unwrapped* "waiting for the status line" shape** (`SendError::Timeout`/`RemoteDisconnected`), not the wrapped `URLError` text — the dominant real-world case (the connection drops while waiting for a reply) is classified correctly; only a write failing in the narrow window right after a successful connect, before any byte of the request is even on the wire, would diverge from the reference's own wrapped text. Both shapes still carry `ErrorCause::NoReply` (retryable) either way, so a run's own retry behavior never diverges, only the failure text would, in that one narrow window. | No — accepted; a race window too narrow to matter outside pathological test setups. |
 | — | **A connection reset (`RST`) versus a graceful close (`FIN`) while waiting for a reply**: whether a peer's kernel still has unread bytes sitting in its own receive buffer when it closes is a real timing race on any TCP stack, Circuitry's own `urlopen()` included — a `FIN` surfaces in CPython as `http.client.RemoteDisconnected` (this lane's own pinned text), an `RST` as a raw `ConnectionResetError` with the OS's own errno text, and *which* happens for the exact same server-side code path isn't deterministic. | **Fold both into [`electricity_tools::http_client::SendError::RemoteDisconnected`]** rather than exposing the OS-level reset text separately — both map to `ErrorCause::NoReply` in Circuitry's own `_classify_cause_chain` regardless (`ConnectionError`'s whole class is retryable), so the retry behavior is identical either way; only the literal failure text can differ from a real `cof run` hitting the `RST` side of the same race. | No — accepted; the reference itself isn't deterministic here either. |
 | — | **Credentials in config.json**: the reference reads the `cyberdiner` adapter's token (§9.4) from config only (no env-var form exists for it at all), the `surrealdb` runtime plugin's token/user/password (§10.2) from config as a fallback after the matching env var, and an `mcp` server's `headers`/`env` (§8.1) from config by design. | **Settled 2026-10-06**: follow the reference exactly for all three — config credentials are redacted in state and config.json is already operator-chosen/trusted, so the real rule is "provider API keys from env only; every other service credential from wherever `cof` reads it; no credential on argv or in state" (§1, §14). | No — settled; listed here as the record of the decision. |
-| — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Copy** — implemented in §6.8's resume-safety checks. | No. |
+| — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Not applicable to electricity** (issue #727): electricity has no `--resume <run-id>`/`--resume last` of its own at all (the row below), so this check — which only ever guards a bare run-id resume with no single state file of its own — never has anything to apply to. | No — see the scope row below. |
+| — | **electricity's own `--resume` is `--state <file>` only** (issue #727): `cof run --resume last` (the `--last` stash, `last-run.json`) and `cof run --resume <run-id>` (a `runtime.persistence` backend lookup) are both out of scope — `runtime.persistence` stays refused on electricity (§13's own persistence row), and electricity's CLI keeps no `--last` stash of its own either (issue #760 tracks adding one). `--resume` given without `--state <file>` is refused the same way cof's own `_resolve_resume_state` refuses it — before anything runs, writing no state, exit 1, naming `--state <file>` as the only form electricity accepts — rather than attempting a lookup it can't perform. | **Accept, documented** — a client on the state-file path sees full parity; a client relying on `--resume last`/a run-id needs `cof run` until `runtime.persistence`/a `--last` stash (#760) are ported. | No — `--state`'s own resume path is issue #727's whole scope. |
+| — | **`--resume`'s own `effective_settings.sources["out"]` label**: cof's own `"resume"` value (DESIGN.md §6.8, "writes back to the file it resumed from") versus the plain `"cli"` value an explicit `--out` gets. electricity's CLI does default `--out` to `--state`'s own file when `--resume` is given and `--out` isn't (§6.8's own rule, functionally implemented), but records that default the same way an explicit `--out` would (`"cli"`), not as a third, distinct `"resume"` string. | **Accept, documented** — the file actually written is correct; only the redacted `effective_settings.sources.out` string this one combination would read differs from cof's own. | No — narrow; revisit if a conformance case starts comparing `sources.out` text for this exact combination. |
 | — | **CLI usage-error exit code `2`**: not one of the four codes in an earlier draft's CLI-surface assumption. | **Settled 2026-10-06** (`0`/`1`/`130`/`143` plus `2` for usage errors, as `cof`/click; `129` for SIGHUP since Circuitry #357) — §6.9 now also maps which specific pre-run failures get `1` versus `2`, matching the reference's own case-by-case `BadParameter` handling rather than grouping every usage error under one code. | No — settled; listed here as the record of the decision. |
 | — | **`electricity-template`'s confirmed chevron divergences** (§3.3): a falsy root `{{.}}`, bytes iterated in a section, `int()` leniency, `\x1c`-`\x1f` counted as whitespace, and a same-key inverted section inside a list section — full description of each in the crate's own module docs (`electricity-template/src/lib.rs`), not duplicated here. | **Copy by output everywhere reachable; leave these as-is** — none is reachable by an ordinary orchestration template (state is always a dict; values come from YAML/JSON/tool output). | No — each judged unreachable in production documents; re-scan if a future document shape needs one. |
 | — | **`use.inputs`'s compile-time template/reference checks** (`electricity-compiler`'s `compile::params` module): Circuitry's own `_compile_use` only checks a top-level string/`{from: ...}` value, never recursing into a nested dict/list the way a tool's `params` walk does. | **Copy the shallowness** rather than reusing the deeper `params` walk, to avoid rejecting a document Circuitry's own compiler accepts — full rationale in `compile::params`'s own module docs. | No — matches Circuitry exactly; re-scan if a future document relies on a nested template inside `use.inputs` (Circuitry itself would not render it either). |
@@ -2830,17 +2888,25 @@ Pinned exactly by `tests/golden/prompt_schema_corpus.json` (221 cases; `electric
 | — | **`runtime._decomposition_planner_path`** (issue #522's Settled question 9): an undocumented test hook (`core/decompose.py:75-78`) letting Circuitry's own test suite point the planner at a path other than the bundled `curation/agents/decompose.yml` — only Circuitry's own tests ever set it; `cof` honours an override (`core/decompose.py:356-370`'s `_planner_path`) if one is set. | **Not read at all** — electricity always runs the synced `PLANNER_YAML`, regardless of this key. | Yes — a config file setting this key makes `cof run` load a different planner document while electricity keeps running the bundled one; accepted because only Circuitry's own tests are known to set it, and they always run against `cof`, never `electricity`. |
 | — | **A WARNING line logged with `exc_info=True`** (issue #522's own PR comment): `cof run` writes the line's own text to stderr, then a full Python traceback on the lines after it, for every one of these sites — the two decomposition lines (`Decomposition planner failed for prompt %r`/`Decomposition child failed for prompt %r`), the reflector's own prime-template fallback (`core/reflector.py:342`), and the two complexity-scoring lines (`core/prompt.py:920-924`, `:984-988`). | **Print the WARNING line alone, no traceback** — `log::warn!` has no Python exception object to format one from in the first place; the conformance harness only ever compares the prefixed `WARNING:`-style line itself, never the traceback that follows it on a real `cof run`, so no case shows the difference. | No — accepted for every site in this set; a future WARNING line ported the same way inherits the same rule without a new row here. |
 | — | **An undeclared function/method call whose own argument is an unset `state.` read** (issue #657/#658): `nope(state.x)`/`state.x.nope()` with `x` unset. cof's evaluator (cel-python) resolves the function/method name before evaluating its arguments (`celpy.evaluation.Evaluator.method_eval`), so it always reports the undeclared reference. The `cel` crate resolves every argument first (`objects.rs::call_function`'s own `args?`), so an unset argument's own marker error wins instead — `False` plus the unset-path warning, naming `x`, not an undeclared-reference error. Only reachable when the call's own name genuinely isn't declared; `cof check`'s own free-name rule never looks at function/method names (by design — the two engines' function sets differ), so this can't be caught before run time on either side. | **Accept the gap, documented, not reproduced** — reordering the `cel` crate's own argument/name resolution would mean patching a pinned external dependency for one narrow edge case; short-circuiting itself is unaffected either way (`false && nope(state.x)` stays `false`, with no warning, on both engines, since neither side ever evaluates the call at all there). | No — a narrow, library-ordering difference between cel-python and the `cel` crate, not a design choice; revisit only if a production document's CEL actually calls an undeclared function/method on an unset argument. |
-
----
+| — | **A `cof run` usage error's own invoking program name and decorative panel** (issue #728): `cof run`'s own `UsageError.show` (typer's `rich_markup_mode="rich"`) names the real invoking program (`cof`, or `python -m circuitry.cli.app` under a test harness — not fixed across environments either) in its `Usage:`/`Try ... --help` lines, and wraps `Error: <message>` in a Rich panel (a box whose width depends on the terminal/`COLUMNS`, plus a `(Possible options: ...)` close-match suggestion list) rather than a plain line — confirmed empirically: the same invocation renders a differently-wrapped box at `COLUMNS=40` than at a wider width, so even two real `cof run` runs don't always render this identically. | **electricity run**'s own usage errors print a plain frame instead — `Usage: electricity run [OPTIONS] [orchestration]`, `Try 'electricity run --help' for help.`, a blank line, then `Error: <message>`, always `electricity` as the program name, never a panel or close-match suggestions. `<message>` itself matches the corresponding text inside `cof run`'s own panel (`No such option: <flag>`, `Got unexpected extra argument(s) (<args>)`, `Invalid value: Invalid -e format: ...`) — compared against that substring, never cof's whole frame. | No — the panel and program name are third-party/environment-dependent presentation, not Circuitry's own text; the message core is matched exactly. |
+| — | **`cof run`'s own missing/not-found-orchestration messages add a `cof list` tip** (issue #728): `Error: Missing orchestration. Use --last or provide a path/name.`/`Error: Orchestration not found: <name>` are each followed by a second stdout line, `Tip: run cof list to see available orchestrations.`. | **Omit the tip line** — electricity has no `list` subcommand of its own for it to name; the `Error: ...` line itself matches `cof run`'s exactly, compared on its own. | No — electricity genuinely has nothing for the tip to point at; accepted, not a text-matching gap. |
+| — | **A running process-backed tool's own `meta.live` publish timing** (issue #741): both engines publish at most once a second plus one trailing publish after a second of quiet, but the exact moments a mid-run `--live-state`/`--events` observer catches depend on each engine's own process-pipe scheduling (tokio's `select!` here, a reader thread on `cof run`'s own side) — never byte-for-byte reproducible between the two, the same way `--live-state`'s own write cadence already isn't (§10.5). | **Accept, documented** — no conformance case compares a mid-run snapshot at all (§12's case format only ever captures the final state), so this never affects a committed case; only the final node, with `meta.live` already removed, is compared, and that is unaffected by timing on either engine. | No — an unavoidable consequence of each side's own I/O scheduling, not a design choice. |
+| — | **The `systemone` tool's own `cof check`-time validation of `model`/`questions`** (issue #724): `plugins/systemone.py::static_param_errors` is called a second time from `core/compiler.py`, so `cof run` refuses a malformed `model`/`questions` *before the run starts*, with a compile error. The `state_file`/`within` half of that same function — a document with no file of its own, a non-literal `within`, and a limited document's `within` escaping its own project — is ported at compile time (`electricity_compiler::compile::leaves::check_systemone_confinement`, `ToolOp::limited`/`.confine_to`, mirroring `ToolOp::prompt_file`'s existing `DispatchFile`), a profile cannot switch a tool to or from `systemone` (`electricity_compiler::overrides`), and `params_json` cannot set `within` (`electricity_vm::exec::tool::reject_overlay_within`) — only `model`/`questions` remain unchecked until dispatch. | **Not ported** for `model`/`questions` alone — both are checked again, byte for byte, inside `execute()` itself, so a malformed effect still fails the same way; only the *timing* differs (at that effect's own attempt, not before the run starts) and, for a tree/chain document, an earlier effect may have already run by then. | No — accepted; a check that changes nothing an ordinary orchestration's `--out` ever shows. |
+| — | **`http`'s own `save_to`, a non-2xx response's body (issue #726): `cof run`'s own `max_bytes` cap only ever applies to the 2xx/`_save_body` path — a non-2xx response's error-excerpt body is read in full by the plugin's ordinary `except HTTPError` handler (`exc.read()`), unbounded. electricity streams every hop's body straight to a per-hop temporary file (`electricity_tools::http_client::send_to_sink`), bounded by the same `max_bytes` regardless of the eventual status, so it can read the body back for the excerpt without ever holding an unbounded amount in memory; a non-2xx body longer than `max_bytes` fails with the same "over max_bytes" text a 2xx one would, where `cof run` would instead read the whole thing. | **Keep electricity's own defensive cap** — the point of streaming at all is to bound memory regardless of status; an error body large enough to hit a default 100 MiB cap is already pathological on either engine, and the difference is only ever observable in `meta.error`'s own wording, never which status/redirect decision is made. | No — narrow; revisit only if a production document's own server sends an error body that large. |
 
 ## 14. Security model
 
 electricity's security posture mirrors Circuitry's (Decisions, §1: "same security rules as
 `cof`"):
 
-- **Explicit trust, no discovery.** Both the config file and the orchestration file are
-  operator-chosen and therefore fully trusted — electricity performs no document-trust
-  classification, no `cof trust`-equivalent prompt, no implicit config search path.
+- **Explicit trust, no discovery.** Both the config file and the top-level orchestration file
+  are operator-chosen and therefore fully trusted — no `cof trust`-equivalent prompt, no
+  implicit config search path. electricity does classify a *nested* document's own trust
+  (`DocumentOrigin`), the same distinction `cof check`/`cof run` make: a `use` child named by
+  `path:` inherits its parent's trust, where one named inline or generated at run time (a
+  reflector/decomposition plan) is never trusted, whatever its parent is — the boundary
+  `runtime.secrets`/`{secret: ...}` and `http`'s `save_to` (§13, issues #725/#726) are checked
+  against.
 - **Shell allowlists + host pin, intersection semantics.** A `shell` effect's commands are
   bounded by the intersection of the document's own `allowed_commands` and the host's
   `runtime.plugins.shell.allowed_commands` pin — never their union (§8.4).
@@ -2877,17 +2943,24 @@ electricity's security posture mirrors Circuitry's (Decisions, §1: "same securi
   RestrictedPython + forked-child + rlimit sandboxing is what bounds that specific plugin; the
   bridge's value is a crash boundary and a kill switch, and this distinction is stated plainly to
   users, not implied to be stronger than it is.
-- **Capability ceiling on generated plans — always unrestricted for electricity, not a gate it
-  enforces.** The reference's own capability ceiling is installed only for a *library-sourced*
+- **Capability ceiling on generated plans — unrestricted for an ordinary path run, but not
+  unconditionally.** The reference's own capability ceiling is installed for a *library-sourced*
   document (a shared-library fetch, a remote library source, or a path inside a library cache
-  directory) or a `use: ref:` child reached from one — **never** for a document run directly by
-  path, which is electricity's only mode (Decisions, §1). Since electricity also rejects `ref:`
-  outright (§4 step 4, §13), neither condition that installs a ceiling in the reference can ever
-  apply to electricity: the ceiling is **always `None`/unrestricted** for every electricity run,
-  reflector- and decomposition-generated plans included. This is worth stating plainly rather than
-  describing electricity as "enforcing a capability ceiling" (an earlier draft implied it does) —
-  the risk is someone building a *stricter* gate that then diverges from what `cof run` itself
-  does for the exact same path-run document, not someone building a gate that's too loose.
+  directory) or a `use: ref:` child reached from one. electricity rejects `ref:` outright (§4
+  step 4, §13) and has no shared-library fetch or remote-library-source run of its own
+  (Decisions, §1), but it does still resolve the one path condition: `electricity_config::
+  is_cache_path` (issue #728, issue #337's own anti-bypass rule) checks whether the orchestration
+  path given resolves inside the library cache directory (`CIRCUITRY_CACHE_DIR`/`XDG_CACHE_HOME`/
+  `~/.cache/circuitry/library` — electricity has no configured library source of its own, so this
+  is the only cache root there is to check against). A path run from there is gated exactly as a
+  library-sourced one would be: `required_capabilities` (the document's own tool providers, by
+  `plugins/capabilities.py`'s table, plus every reachable `use` child's) must be covered by
+  `trusted.json`'s `document_capabilities` entry for that file (read-only — electricity never
+  writes it) union `--allow-capabilities`, or the run is refused before anything executes, with
+  the reference's own `refusal_message` text and exit code. Every *other* path run keeps the
+  ceiling **`None`/unrestricted**, exactly as before. This is worth stating plainly rather than
+  describing electricity as unconditionally never enforcing a capability ceiling (an earlier draft
+  of this bullet claimed exactly that) — the one condition electricity can still hit is this one.
 
 ---
 

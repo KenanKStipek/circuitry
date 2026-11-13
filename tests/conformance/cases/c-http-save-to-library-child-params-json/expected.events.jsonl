@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-11-12T21:08:16.096Z","ev":"run_start","run_id":"43c267e0-35c2-46cb-8ac6-a2b2aff4880f","orchestration":"orchestration.yml","config":"materialized-config.json","engine":"cof 0.1.0","pid":48596}
+{"v":1,"seq":1,"ts":"2026-11-12T21:08:16.097Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-12T21:08:16.098Z","ev":"start","id":1,"path":"prime.child"}
+{"v":1,"seq":3,"ts":"2026-11-12T21:08:16.102Z","ev":"start","id":2,"path":"prime.child.payload"}
+{"v":1,"seq":4,"ts":"2026-11-12T21:08:16.102Z","ev":"end","id":2,"path":"prime.child.payload","ok":true,"ms":0}
+{"v":1,"seq":5,"ts":"2026-11-12T21:08:16.102Z","ev":"start","id":3,"path":"prime.child.call"}
+{"v":1,"seq":6,"ts":"2026-11-12T21:08:16.102Z","ev":"end","id":3,"path":"prime.child.call","ok":false,"ms":0,"error":"HttpPlugin: params['save_to']: only a document run by path may save a response to a file (a limited document, a library entry or a generated plan cannot)."}
+{"v":1,"seq":7,"ts":"2026-11-12T21:08:16.102Z","ev":"end","id":1,"path":"prime.child","ok":true,"ms":5}
+{"v":1,"seq":8,"ts":"2026-11-12T21:08:16.102Z","ev":"end","id":0,"path":"prime","ok":true,"ms":5}
+{"v":1,"seq":9,"ts":"2026-11-12T21:08:16.102Z","ev":"run_end","ok":true}

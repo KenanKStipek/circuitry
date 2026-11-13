@@ -102,6 +102,17 @@ struct TestChild {
     child: std::process::Child,
 }
 
+impl TestChild {
+    /// Signals this child's whole process group, never just its own
+    /// pid -- `process_group(0)` in [`spawn`] made it its own group
+    /// leader, so this never reaches the test binary itself.
+    fn send(&self, signum: i32) {
+        unsafe {
+            libc::kill(-(self.child.id() as i32), signum);
+        }
+    }
+}
+
 impl Drop for TestChild {
     fn drop(&mut self) {
         unsafe {
@@ -459,6 +470,144 @@ fn mid_run_live_state_shows_a_finished_tree_loop_pass_before_it_merges() {
     let out_text = fs::read_to_string(&out).unwrap();
     assert_eq!(
         final_live, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}
+
+/// A single `awk` step, slow enough (two 0.6s `system("sleep ...")`
+/// calls between three `print`s, one of them to stderr) to guarantee a
+/// mid-run `--live-state` write lands while it's still running (#741).
+const SLOW_AWK_DOC: &str = "\
+effects:
+  - name: slow_awk
+    type: tool
+    provider: awk
+    params:
+      args: ['BEGIN{print \"line1\"; fflush(); system(\"sleep 0.6\"); print \"line2\" > \"/dev/stderr\"; fflush(\"/dev/stderr\"); system(\"sleep 0.6\"); print \"line3\"}']
+";
+
+/// Issue #741: a running process-backed tool (here, `awk`)
+/// publishes `meta.live` while it runs, in the same shape a streamed
+/// prompt's own `meta.live` already has (`v`/`started_at`/
+/// `updated_at`, plus this shape's own `stdout_tail`/`stderr_tail`/
+/// `stdout_bytes`/`stderr_bytes`) -- and `live` is gone from the final
+/// node, so `--live-state`'s last write still matches `--out` exactly.
+#[test]
+fn mid_run_live_state_shows_a_running_tools_meta_live_and_clears_it_at_the_end() {
+    let home = TempHome::new("slow-awk");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", SLOW_AWK_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 0, "the run itself must succeed");
+
+    fn live_meta(v: &serde_json::Value) -> Option<&serde_json::Value> {
+        get(v, &["prime", "slow_awk", "meta", "live"])
+    }
+
+    // Not merely present -- actually fed by `run_tracked`'s own
+    // reader loop: `line1` (stdout) and `line2` (stderr) have each
+    // landed, and only on their own stream, by the time awk's second
+    // `sleep` is running. A snapshot that only ever checked key types
+    // would pass even if `on_live` were never called at all (the
+    // dispatch-start empty snapshot already has every key, with empty
+    // tails).
+    let mid_run_live = observations.iter().find_map(|(_, contents)| {
+        let parsed: serde_json::Value = serde_json::from_str(contents).unwrap();
+        let live = live_meta(&parsed)?;
+        let stdout_tail = live.get("stdout_tail")?.as_str()?;
+        let stderr_tail = live.get("stderr_tail")?.as_str()?;
+        (stdout_tail.contains("line1")
+            && !stdout_tail.contains("line2")
+            && stderr_tail.contains("line2")
+            && !stderr_tail.contains("line1"))
+        .then(|| live.clone())
+    });
+    let live = mid_run_live.unwrap_or_else(|| {
+        panic!(
+            "expected a mid-run write with stdout_tail holding `line1` and stderr_tail \
+             holding `line2`, each absent from the other stream; observed {} versions: {:#?}",
+            observations.len(),
+            observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+        )
+    });
+    assert_eq!(live.get("v"), Some(&serde_json::json!(1)));
+    assert!(live.get("started_at").is_some_and(|v| v.is_string()));
+    assert!(live.get("updated_at").is_some_and(|v| v.is_string()));
+    assert!(live.get("stdout_tail").is_some_and(|v| v.is_string()));
+    assert!(live.get("stderr_tail").is_some_and(|v| v.is_string()));
+    assert!(live.get("stdout_bytes").is_some_and(|v| v.is_u64()));
+    assert!(live.get("stderr_bytes").is_some_and(|v| v.is_u64()));
+
+    let final_contents = &observations.last().unwrap().1;
+    let final_parsed: serde_json::Value = serde_json::from_str(final_contents).unwrap();
+    assert!(
+        live_meta(&final_parsed).is_none(),
+        "the final write must have no `meta.live` left at all: {final_contents}"
+    );
+
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_contents, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}
+
+/// Issue #741: cancelling a running process-backed tool (SIGINT,
+/// same as `signals.rs`'s own `sigint_exits_130_runs_finally_and_
+/// writes_out`) clears `meta.live` exactly like a normal exit does --
+/// the guard that removes it runs on every path out of a dispatch
+/// attempt, cancelled or not.
+#[test]
+fn sigint_during_a_running_tool_clears_its_meta_live() {
+    let home = TempHome::new("sigint-slow-awk");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", SLOW_AWK_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    fn live_meta(v: &serde_json::Value) -> Option<&serde_json::Value> {
+        get(v, &["prime", "slow_awk", "meta", "live"])
+    }
+
+    // Wait for `meta.live` to actually appear before signalling, so
+    // this exercises the cancelled-while-live path specifically, not
+    // a run that happened to finish (or hadn't started the tool yet)
+    // before the signal landed.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some((_, contents)) = read_versioned(&live) {
+            if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&contents) {
+                if live_meta(&parsed).is_some() {
+                    break;
+                }
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "`prime.slow_awk.meta.live` never appeared within 10s"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+
+    child.send(libc::SIGINT);
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 130, "a SIGINT'd run must exit 130");
+
+    let final_contents = &observations.last().unwrap().1;
+    let final_parsed: serde_json::Value = serde_json::from_str(final_contents).unwrap();
+    assert!(
+        live_meta(&final_parsed).is_none(),
+        "the final write after a cancelled tool must have no `meta.live` left: {final_contents}"
+    );
+
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_contents, &out_text,
         "the final --live-state write must equal --out byte for byte"
     );
 }

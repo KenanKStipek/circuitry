@@ -11,7 +11,7 @@ log:
   ✗ prime.flaky  /bin/ls failed (exit 1): ls: /nonexistent-osi-fixture-path: No such file or directory
   ▶ prime.cleanup  shell echo cleaned
   ✓ prime.cleanup  0.0s  cleaned
-  ■ run ok  0.0s
+  ■ run fleet-vole  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.cleanup: Done skip=None retrying=false

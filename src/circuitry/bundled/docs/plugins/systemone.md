@@ -60,8 +60,8 @@ config (or in a document you run by path), never in an effect's params.
   checked like `base_url`, and a non-loopback URL from it is still refused
   unless config says `allow_remote: true`. A document run by path still wins
   over it: its own `runtime.plugins.systemone.base_url` is merged over the
-  config the variable already set, as with `CIRCUITRY_COMFYUI_URL`. Only `cof`
-  reads it: electricity does not run the `systemone` tool.
+  config the variable already set, as with `CIRCUITRY_COMFYUI_URL`. electricity
+  reads it the same way, at the same point in config resolution.
 
 ## Params
 
@@ -244,5 +244,13 @@ the key is only ever sent to `base_url`.
 
 ## electricity
 
-`systemone` is a cof-only plugin. `electricity` refuses a document that names it
-before the run starts, with its usual preview message pointing at `cof run`.
+`electricity` runs `systemone` too: the same request body, host rules, `within`
+confinement and answer checks, over its own HTTP client. One difference,
+narrow: the `cof check`/compile-time validation of a malformed `model`/
+`questions` (failing a document before the run starts) is not ported; both
+still run again at the effect's own dispatch, so a malformed effect still
+fails the same way, only later in the run. The `state_file`/`within` half of
+that same compile-time check — a document with no file of its own, a
+non-literal `within`, and a **limited** document's `within` escaping its own
+project (the "Trust and `use`" section above) — is checked at compile time
+and at dispatch, same as `cof check`/`cof run`.

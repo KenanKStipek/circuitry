@@ -1,0 +1,6 @@
+prime.big.parts.iter_0.map:
+  - text: '{"summary": "part0"}'
+prime.big.parts.iter_1.map:
+  - text: '{"summary": "part1"}'
+prime.big.merge:
+  - text: '{"summary": "combined"}'

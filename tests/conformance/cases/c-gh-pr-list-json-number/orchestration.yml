@@ -1,0 +1,8 @@
+name: c-gh-pr-list-json-number
+effects:
+  - type: tool
+    name: open_prs
+    provider: gh
+    params:
+      args: ["pr", "list", "--state", "open", "--json", "number"]
+      parse: json

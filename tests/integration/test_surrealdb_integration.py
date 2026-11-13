@@ -7,7 +7,7 @@ from the same env vars the plugin uses in production — ``SURREAL_USER`` /
 
 Local server:
 
-    docker run --rm -p 8000:8000 surrealdb/surrealdb:latest \\
+    docker run --rm -p 8000:8000 surrealdb/surrealdb:v4.0.1 \\
         start --user root --pass root
 
 In CI this runs against a SurrealDB service container; see
@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from circuitry.plugins.surrealdb import DEFAULT_URL, SurrealDBPlugin
+from circuitry.surrealdb_sdk import run_query
 
 if os.getenv("CIRCUITRY_RUN_INTEGRATION") != "1":
     pytest.skip(
@@ -75,13 +76,17 @@ def scoped_users(plugin: SurrealDBPlugin) -> dict[str, str]:
         client.use(_NAMESPACE, _DATABASE)
         # Passwords are hex-only (uuid4().hex), so string interpolation into
         # SurrealQL here can't break out of the quoted literal.
-        client.query(
-            f"DEFINE USER editor_user ON DATABASE PASSWORD '{editor_password}' "
-            "ROLES EDITOR"
+        run_query(
+            client.query(
+                f"DEFINE USER editor_user ON DATABASE PASSWORD '{editor_password}' "
+                "ROLES EDITOR"
+            )
         )
-        client.query(
-            f"DEFINE USER viewer_user ON DATABASE PASSWORD '{viewer_password}' "
-            "ROLES VIEWER"
+        run_query(
+            client.query(
+                f"DEFINE USER viewer_user ON DATABASE PASSWORD '{viewer_password}' "
+                "ROLES VIEWER"
+            )
         )
     finally:
         client.close()
@@ -115,12 +120,34 @@ def test_create_select_upsert_delete_round_trip(
     assert _first_record(upserted.value)["name"] == "grace"
 
     after_upsert = plugin.execute(params={"mode": "select", "target": record_id})
+    assert isinstance(after_upsert.value, list)
     assert _first_record(after_upsert.value)["score"] == 2
 
     plugin.execute(params={"mode": "delete", "record": record_id})
 
     remaining = plugin.execute(params={"mode": "select", "target": table})
-    assert remaining.value in ([], None)
+    assert remaining.value == []
+
+
+def test_select_and_delete_of_a_record_range(plugin: SurrealDBPlugin, table: str) -> None:
+    for i in (1, 2, 3):
+        plugin.execute(
+            params={
+                "mode": "create",
+                "table": f"{table}:{i}",
+                "data": {"name": f"person-{i}"},
+            }
+        )
+
+    # "1..3" is half-open (excludes 3), the same on both SDK majors.
+    selected = plugin.execute(params={"mode": "select", "target": f"{table}:1..3"})
+    assert isinstance(selected.value, list)
+    assert {record["name"] for record in selected.value} == {"person-1", "person-2"}
+
+    plugin.execute(params={"mode": "delete", "record": f"{table}:1..3"})
+
+    remaining = plugin.execute(params={"mode": "select", "target": table})
+    assert {record["name"] for record in remaining.value} == {"person-3"}
 
 
 def test_query_with_bound_params(plugin: SurrealDBPlugin, table: str) -> None:
@@ -145,9 +172,26 @@ def test_query_with_bound_params(plugin: SurrealDBPlugin, table: str) -> None:
 
 
 def test_surrealql_syntax_error_is_actionable(plugin: SurrealDBPlugin) -> None:
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(
+        RuntimeError, match="surrealdb query failed: Parse error"
+    ) as excinfo:
         plugin.execute(params={"mode": "query", "query": "SELEC * FROM person"})
-    assert "surrealdb" in str(excinfo.value)
+    assert "unexpected response shape" not in str(excinfo.value)
+
+
+def test_query_raises_on_a_later_failing_statement(
+    plugin: SurrealDBPlugin, table: str
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="surrealdb query failed: An error occurred: later statement failed",
+    ):
+        plugin.execute(
+            params={
+                "mode": "query",
+                "query": f"CREATE {table} SET name = 'ada'; THROW 'later statement failed';",
+            }
+        )
 
 
 def test_bad_credentials_are_rejected(
@@ -217,7 +261,7 @@ def test_database_scoped_editor_and_viewer_authenticate_with_correct_grants(
     denied = viewer.execute(
         params={"mode": "create", "table": table, "data": {"name": "grace"}}
     )
-    assert denied.value in ([], None)
+    assert denied.value == []
 
     selected = viewer.execute(params={"mode": "select", "target": table})
     assert _first_record(selected.value)["name"] == "ada"

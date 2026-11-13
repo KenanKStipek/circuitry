@@ -1,0 +1,7 @@
+name: c752-label-missing-input
+label: "{{input.ticket}}"
+effects:
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {x: 1}}

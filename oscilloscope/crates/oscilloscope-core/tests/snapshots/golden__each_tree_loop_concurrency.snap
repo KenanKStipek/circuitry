@@ -13,7 +13,7 @@ log:
   ✓ prime.each_tree.iter_3.nap  0.0s  d
   ✓ prime.each_tree.iter_2.nap  0.0s  c
   ⟳ prime.each_tree pass 4/4  ETA 0.0s
-  ■ run ok  0.0s
+  ■ run mauve-falcon  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.each_tree: Done skip=None retrying=false

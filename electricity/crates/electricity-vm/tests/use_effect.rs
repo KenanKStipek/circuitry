@@ -89,6 +89,7 @@ async fn run_use_with_supported(
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -96,6 +97,7 @@ async fn run_use_with_supported(
 
 fn base_use_op(source: UseSource) -> electricity_bytecode::UseOp {
     electricity_bytecode::UseOp {
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
         parent_trusted: false,
         source,
         inputs: None,
@@ -632,6 +634,7 @@ async fn use_inside_a_tree_dynamic_has_no_false_cycle_between_sibling_branches()
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     result.expect("two tree-dynamic siblings using the identical child must never false-cycle");
@@ -772,6 +775,7 @@ effects:
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     result.expect("a child with several ordinary steps must succeed");
