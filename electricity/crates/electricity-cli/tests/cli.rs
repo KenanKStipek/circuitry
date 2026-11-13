@@ -1439,6 +1439,127 @@ fn run_subcommand_accepts_short_config_and_out_aliases() {
     assert!(out.exists(), "status: {:?}", output.status);
 }
 
+/// `-s` is `--state`'s own short alias (issue #727), matching cof's.
+#[test]
+fn run_subcommand_accepts_short_state_alias() {
+    let (mut cmd, home) = command("run-sub-short-state-alias");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let out = home.path.join("out.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+    let saved_a = {
+        let state: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+        state["prime"]["a"]["value"].clone()
+    };
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let resumed_out = home.path.join("resumed.json");
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "-s",
+            out.to_str().unwrap(),
+            "--resume",
+            "state",
+            "-o",
+            resumed_out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    let resumed: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&resumed_out).unwrap()).unwrap();
+    assert_eq!(
+        resumed["prime"]["a"]["value"], saved_a,
+        "-s named the same state file --state would -- the already-finished effect was skipped"
+    );
+}
+
+/// DESIGN.md §6.8: `--resume` with no explicit `--out` of its own
+/// defaults `--out` to the `--state` file itself -- so a resumed run
+/// writes back to the exact file it resumed from, with no `--out` on
+/// the command line at all.
+#[test]
+fn run_subcommand_resume_with_no_out_writes_back_to_the_state_file() {
+    let (mut cmd, home) = command("run-sub-resume-out-default");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let state_path = home.path.join("state.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            state_path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+    let first_mtime = fs::metadata(&state_path).unwrap().modified().unwrap();
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--state",
+            state_path.to_str().unwrap(),
+            "--resume",
+            "state",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    // No --out at all, and yet stdout is empty (the "no --out" success
+    // contract would otherwise print the state there instead) -- the
+    // only place the final state could have gone is back into the
+    // file --state itself named.
+    assert!(second.stdout.is_empty(), "{:?}", second.stdout);
+    let second_mtime = fs::metadata(&state_path).unwrap().modified().unwrap();
+    assert!(
+        second_mtime >= first_mtime,
+        "the --state file was never written back to"
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    assert!(state["prime"]["a"]["meta"]["completed_at"].is_string());
+}
+
 /// The legacy form's own first positional already is the config path
 /// -- `--config`/`-c` there is rejected as redundant rather than
 /// silently ignored (issue #728's own review).

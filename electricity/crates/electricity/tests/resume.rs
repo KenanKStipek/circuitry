@@ -345,6 +345,7 @@ async fn a_finally_effect_always_reruns_even_if_its_saved_node_finished() {
     let first = run(&request(config.clone(), doc.clone())).await;
     assert!(first.ok, "{:?}", first.error);
     let mut state = first.state.unwrap();
+    let saved_body = child(at_mut(&mut state, "prime.outer"), "body");
     let saved_cleanup = child(at_mut(&mut state, "prime.outer"), "cleanup");
 
     // The outer dynamic itself never finished (the interrupt landed
@@ -365,6 +366,12 @@ async fn a_finally_effect_always_reruns_even_if_its_saved_node_finished() {
     assert_ne!(
         resumed_cleanup, saved_cleanup,
         "finally: never skips via --resume, even when its own saved node finished"
+    );
+    let resumed_body = child(at_mut(&mut resumed, "prime.outer"), "body");
+    assert_eq!(
+        resumed_body, saved_body,
+        "body already looked finished and comes before finally: in the same chain -- it must be \
+         skipped and reused as-is, not rerun alongside cleanup"
     );
 }
 
@@ -411,6 +418,103 @@ async fn a_dynamic_with_resume_restart_reruns_its_whole_scope_even_when_both_ste
         child(at_mut(&mut resumed, "prime.outer"), "step2"),
         saved_step2,
         "step2 likewise"
+    );
+}
+
+fn named_if_doc() -> &'static str {
+    "interface:\n  inputs:\n    flag: {default: true}\n\
+     effects:\n  - name: gate\n    type: if\n    if: {mode: cel, expr: state.input.flag}\n    \
+     then:\n      - name: a\n        type: tool\n        provider: uuid\n      - name: b\n        \
+     type: tool\n        provider: uuid\n    else:\n      - name: c\n        type: tool\n        \
+     provider: uuid\n"
+}
+
+#[tokio::test]
+async fn a_named_if_continues_inside_its_saved_branch_when_the_condition_selects_it_again() {
+    let dir = temp_dir("if-continue");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(&dir, "doc.yml", named_if_doc());
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_a = child(at_mut(&mut state, "prime.gate"), "a");
+
+    // Interrupted after `a` finished but before `b` did -- the gate's
+    // own meta never completed, and `b` is simply absent, the same
+    // shape a real interrupt mid-branch leaves.
+    set(&mut state, "prime.gate.meta.completed_at", Value::None);
+    remove(&mut state, "prime.gate", "b");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.gate"), "a"),
+        saved_a,
+        "the condition selected the same ('then') branch again -- a, positioned before the \
+         unfinished effect, is skipped and reused"
+    );
+    let b = child(at_mut(&mut resumed, "prime.gate"), "b");
+    assert!(
+        child(&b, "meta")
+            .as_dict()
+            .and_then(|m| m.get(&key("completed_at")))
+            .is_some_and(|v| *v != Value::None),
+        "b never finished -- it must actually run on resume: {b:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_named_if_reruns_from_its_start_when_the_condition_now_selects_the_other_branch() {
+    let dir = temp_dir("if-flip");
+    let config = write(&dir, "config.json", "{}");
+    let doc = write(&dir, "doc.yml", named_if_doc());
+
+    let mut first_req = request(config.clone(), doc.clone());
+    first_req
+        .inputs
+        .insert("flag".to_string(), "true".to_string());
+    let first = run(&first_req).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+
+    // Interrupted mid-'then' branch, exactly as the continue case above.
+    set(&mut state, "prime.gate.meta.completed_at", Value::None);
+    remove(&mut state, "prime.gate", "b");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+    // The condition now selects 'else' instead -- the saved 'then'
+    // branch's own progress (however far it got) is irrelevant; 'else'
+    // runs from its own first effect, same as a first run would.
+    req.inputs.insert("flag".to_string(), "false".to_string());
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.gate"), "meta")
+            .as_dict()
+            .and_then(|m| m.get(&key("branch")))
+            .cloned(),
+        Some(Value::Str("else".to_string())),
+        "the condition flipped to 'else'"
+    );
+    let c = child(at_mut(&mut resumed, "prime.gate"), "c");
+    assert!(
+        child(&c, "meta")
+            .as_dict()
+            .and_then(|m| m.get(&key("completed_at")))
+            .is_some_and(|v| *v != Value::None),
+        "the newly selected branch's own effect must actually run: {c:?}"
     );
 }
 
