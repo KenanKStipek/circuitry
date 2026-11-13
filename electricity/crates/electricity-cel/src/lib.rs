@@ -492,7 +492,10 @@ fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
                 )
             };
         }
-        CelError::new(expr, format!("CEL evaluation failed for {}: {text}", py_repr(expr)))
+        CelError::new(
+            expr,
+            format!("CEL evaluation failed for {}: {text}", py_repr(expr)),
+        )
     })
 }
 
@@ -578,7 +581,10 @@ fn is_valid_map_key(index: &cel::Value) -> bool {
 }
 
 fn is_valid_sequence_index(index: &cel::Value) -> bool {
-    matches!(index, cel::Value::Int(_) | cel::Value::UInt(_) | cel::Value::Bool(_))
+    matches!(
+        index,
+        cel::Value::Int(_) | cel::Value::UInt(_) | cel::Value::Bool(_)
+    )
 }
 
 /// `cel::ExecutionError::UnsupportedIndex(index, container)` in
@@ -646,7 +652,11 @@ fn evaluation_error_text(err: &cel::ExecutionError) -> String {
             format!("cannot use {} as a key", cel_type_phrase(value))
         }
         cel::ExecutionError::ValuesNotComparable(a, b) => {
-            format!("cannot compare {} to {}", cel_type_phrase(a), cel_type_phrase(b))
+            format!(
+                "cannot compare {} to {}",
+                cel_type_phrase(a),
+                cel_type_phrase(b)
+            )
         }
         cel::ExecutionError::UnsupportedBinaryOperator(op, a, b) => {
             format!(
@@ -1162,7 +1172,8 @@ pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
         ));
     }
     let env = stdlib_env();
-    env.compile(expr).map_err(CelSyntaxError::from_compile_error)?;
+    env.compile(expr)
+        .map_err(CelSyntaxError::from_compile_error)?;
     Ok(())
 }
 
@@ -1785,12 +1796,19 @@ mod tests {
                 "m",
                 dict(vec![
                     ("a", Value::from(1_i64)),
-                    ("b", Value::List(vec![Value::from(1_i64), Value::from(2_i64)])),
+                    (
+                        "b",
+                        Value::List(vec![Value::from(1_i64), Value::from(2_i64)]),
+                    ),
                 ]),
             ),
             (
                 "l",
-                Value::List(vec![Value::from(1_i64), Value::from(2_i64), Value::from(3_i64)]),
+                Value::List(vec![
+                    Value::from(1_i64),
+                    Value::from(2_i64),
+                    Value::from(3_i64),
+                ]),
             ),
             ("n", Value::from(5_i64)),
         ])
@@ -1834,7 +1852,10 @@ mod tests {
     fn list_indexed_by_a_string_names_both_types() {
         let state = index_error_test_state();
         let err = evaluate_condition(r#"state.l['a'] == 1"#, &state, true).unwrap_err();
-        assert!(err.to_string().ends_with("cannot index a list with a string"));
+        assert!(
+            err.to_string()
+                .ends_with("cannot index a list with a string")
+        );
     }
 
     #[test]
