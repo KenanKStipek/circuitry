@@ -27,6 +27,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -100,6 +101,37 @@ def _sandboxed_env(home_dir: Path, extra: dict[str, str] | None = None) -> dict[
     env["HOME"] = str(home_dir)
     env.update(extra or {})
     return env
+
+
+def _real_last_run_snapshot() -> tuple[bool, float, bytes] | None:
+    """The real `~/.config/circuitry/last-run.json` -- never the fake
+    home every subprocess below gets via `_sandboxed_env`'s own `HOME`
+    override, `test_service_parity.py`'s own identical rationale for its
+    `services` directory: this account's own `cof`/`electricity` runs
+    write this file right now, and this module must never touch it.
+    `None` when the file doesn't exist.
+    """
+    real_path = Path.home() / ".config" / "circuitry" / "last-run.json"
+    if not real_path.is_file():
+        return None
+    stat = real_path.stat()
+    return (True, stat.st_mtime, real_path.read_bytes())
+
+
+@pytest.fixture(autouse=True)
+def _guard_against_the_real_last_run_stash() -> Any:
+    """Fails the test outright, rather than silently touching it, if
+    anything in this module ever resolves `~/.config/circuitry/
+    last-run.json` under this account's real home -- every test here
+    must pass its own sandboxed `HOME` (`_sandboxed_env`) to every
+    `cof`/`electricity` subprocess it starts instead."""
+    before = _real_last_run_snapshot()
+    yield
+    after = _real_last_run_snapshot()
+    assert after == before, (
+        "a test in this module touched the real "
+        "~/.config/circuitry/last-run.json"
+    )
 
 
 def _write_case(case_dir: Path, orchestration: str = ORCHESTRATION) -> None:
