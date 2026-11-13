@@ -35,6 +35,9 @@ fn leaf_op(path: EffectPath, name: &str, kind: LeafKind, on_error: OnError) -> O
         on_error,
         labels: None,
         enabled: true,
+        // Every leaf's own `resume:` (a `use`'s) lives on its own
+        // `UseOp::resume_mode` instead -- never read here.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -1150,6 +1153,7 @@ pub(crate) fn compile_report(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     })
 }
 
@@ -1282,5 +1286,6 @@ pub(crate) fn compile_reflector(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     })
 }

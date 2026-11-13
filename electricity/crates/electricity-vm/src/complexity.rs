@@ -540,6 +540,7 @@ mod tests {
             on_error: electricity_bytecode::OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 

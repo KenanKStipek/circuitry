@@ -308,6 +308,7 @@ mod tests {
             on_error,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 

@@ -451,6 +451,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: indexmap::IndexMap::new(),
             effect_names: BTreeSet::new(),

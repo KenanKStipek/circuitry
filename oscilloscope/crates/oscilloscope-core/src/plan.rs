@@ -1385,6 +1385,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -1408,6 +1409,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -1459,6 +1461,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             });
 
             let root = Op {
@@ -1471,6 +1474,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             };
             Program {
                 root,
@@ -1518,6 +1522,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }
         }
 
@@ -1534,6 +1539,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -1579,6 +1585,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }
         }
 
@@ -1595,6 +1602,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -1642,6 +1650,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
         ];
         let root = Op {
@@ -1671,12 +1680,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -1727,12 +1738,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -1770,12 +1783,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -1805,6 +1820,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -1859,12 +1875,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -1921,12 +1939,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2340,12 +2360,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2373,6 +2395,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2422,12 +2445,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2481,12 +2506,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2546,6 +2573,7 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     },
                     tool_op(b_path, "b"),
                 ],
@@ -2554,6 +2582,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2617,6 +2646,7 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     },
                     tool_op(b_path, "b"),
                 ],
@@ -2625,6 +2655,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2710,6 +2741,7 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     },
                     tool_op(b_path, "b"),
                 ],
@@ -2718,6 +2750,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2762,6 +2795,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2807,12 +2841,14 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }],
                 overlay: false,
             }),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let program = Program {
             root,
@@ -2890,10 +2926,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         let m = plan.match_path("prime.gate").expect("the if's own node");
@@ -2946,10 +2984,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         let decisions = plan.unnamed_if_decisions();
@@ -2994,10 +3034,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         let decisions = plan.unnamed_if_decisions();
@@ -3037,6 +3079,7 @@ mod tests {
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                     ],
                     max_concurrency: None,
@@ -3045,10 +3088,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         let decisions = plan.unnamed_if_decisions();
@@ -3101,6 +3146,7 @@ mod tests {
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                     ],
                     max_concurrency: None,
@@ -3109,10 +3155,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         assert!(plan.is_unnamed_loop_body_path("prime.fan.u_nap"));
@@ -3154,6 +3202,7 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }])),
                     flow: electricity_bytecode::LoopFlow::Chain,
                     max_concurrency: None,
@@ -3164,10 +3213,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         let decisions = plan.unnamed_if_decisions();
@@ -3235,6 +3286,7 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }])),
                     flow: electricity_bytecode::LoopFlow::Chain,
                     max_concurrency: None,
@@ -3245,10 +3297,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         assert!(plan.is_unnamed_loop_body_path("prime.fan.iter_0.nap"));
@@ -3283,10 +3337,12 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }])),
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let plan = PlanTree::from_program(&program_with_root(root));
         let m = plan.match_path("prime.gate").expect("the if's own node");

@@ -96,10 +96,19 @@ pub struct RunRequest {
     /// continue rule (a loop's first unfinished pass, a conditional's
     /// saved branch, a `use` with `runtime.state.record_children`)
     /// follows from there. Ignored with no `state_path` (cof's own
-    /// `--resume last`/`--resume <run-id>` modes are out of this
-    /// engine's scope: ruling 3, issue #727 -- `runtime.persistence`
-    /// stays refused).
+    /// `--resume last`/`--resume <run-id>` modes are out of scope for
+    /// issue #727 -- they need a persistence/stash lookup, and
+    /// `runtime.persistence` itself stays refused on electricity).
     pub resume: bool,
+    /// `--resume` with no explicit `--out` of its own (issue #727,
+    /// DESIGN.md §6.8) -- the `--state` file itself, named by the CLI
+    /// layer so this crate never has to re-derive it from `resume`/
+    /// `state_path` alone. Ranked *below* a loaded `--profile`'s own
+    /// `out:` and *above* writing nothing at all (`cli/effective_
+    /// settings.py::resolve_effective_settings`'s own `cli > profile >
+    /// resume source > default` order) -- [`RunRequest::out_path`]
+    /// itself is the `cli` tier and always outranks this field.
+    pub resume_default_out: Option<PathBuf>,
     /// `--force` (issue #727) -- with `resume`, continue even though
     /// *orchestration_path*'s own content changed since the saved run
     /// (`runtime.last_run.document_hash` mismatch) or it carries no

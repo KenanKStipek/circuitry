@@ -170,6 +170,8 @@ pub fn compile_document(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        // The document root has no `resume:` of its own -- never read.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     };
 
     let runtime_block = dict_get(document, "runtime").cloned();

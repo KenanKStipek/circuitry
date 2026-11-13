@@ -175,9 +175,10 @@ struct RunArgs {
     state: Option<String>,
     /// `--resume` (issue #727, `run` only) -- any value engages
     /// `--state`'s own resume skip logic (`cof run`'s own `last`/a
-    /// run-id mode is out of this engine's scope: ruling 3); absent
-    /// with `--state` given, the state file still seeds the run, just
-    /// without the skip-and-continue behaviour.
+    /// run-id mode needs a persistence/stash lookup this engine never
+    /// builds, so it is out of scope here); absent with `--state`
+    /// given, the state file still seeds the run, just without the
+    /// skip-and-continue behaviour.
     resume: Option<String>,
     /// `--force` (issue #727, `run` only).
     force: bool,
@@ -1070,21 +1071,33 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         }
     };
 
-    // DESIGN.md §6.8: "--resume with no explicit --out of its own writes
-    // back to the file it resumed from" -- --state <file> --resume,
-    // with no --out given, defaults --out to that same file.
-    let out_path = run_args.out.map(PathBuf::from).or_else(|| {
-        if run_args.resume.is_some() {
-            run_args.state.clone().map(PathBuf::from)
-        } else {
-            None
-        }
-    });
+    // Only the literal flag -- DESIGN.md §6.8's own "--resume with no
+    // explicit --out writes back to the file it resumed from" default
+    // ranks *below* a loaded `--profile`'s own `out:` (`cli/
+    // effective_settings.py::resolve_effective_settings`'s own `cli >
+    // profile > resume source > default` order), so it is passed to
+    // `RunRequest::resume_default_out` instead and applied inside
+    // `electricity` (lib)'s own effective-settings resolution, at that
+    // tier, not folded into this CLI-level `out_path` (which ranks
+    // above a profile unconditionally).
+    let out_path = run_args.out.map(PathBuf::from);
 
     // `--resume` (issue #727): only the `--state <file>` form is in
-    // scope -- `cof run --resume last`/`--resume <run-id>` both need a
-    // persistence/stash lookup this engine never builds (ruling 3:
-    // `runtime.persistence` stays refused).
+    // scope -- `cof run --resume <run-id>` needs a `runtime.persistence`
+    // backend lookup, which stays refused on electricity; `cof run
+    // --resume last` needs cof's own `--last` stash (`last-run.json`),
+    // which electricity does not keep (#760 tracks adding one).
+    if run_args.resume.as_deref() == Some("last") && run_args.state.is_none() {
+        signal_guard.disarm();
+        let message = "--resume last needs cof's own --last stash, which electricity does not \
+                        keep; pass --state <file> naming a saved state directly instead";
+        if run_args.via_run {
+            print_run_usage_error(message);
+        } else {
+            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+        }
+        return ExitCode::from(2);
+    }
     if run_args.resume.is_some() && run_args.state.is_none() {
         signal_guard.disarm();
         let message = "--resume needs --state <file> naming a saved state directly; \
@@ -1111,8 +1124,13 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         adapter_override: run_args.adapter.clone(),
         label_override: run_args.label.clone(),
         armed: true,
-        state_path: run_args.state.map(PathBuf::from),
+        state_path: run_args.state.clone().map(PathBuf::from),
         resume: run_args.resume.is_some(),
+        resume_default_out: if run_args.resume.is_some() {
+            run_args.state.clone().map(PathBuf::from)
+        } else {
+            None
+        },
         force: run_args.force,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

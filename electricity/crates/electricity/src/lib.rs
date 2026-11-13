@@ -1277,6 +1277,31 @@ pub async fn run_orchestration_with_config(
         }};
     }
 
+    // `--resume`'s own document-hash refusal (`cli/app.py::
+    // _resolve_resume_state`) happens entirely *before* `cof run`'s own
+    // `run()` is ever called, so a refused resume writes nothing at
+    // all -- not even back to the file it would have resumed from. The
+    // ordinary `fail!` above reports the whole (seeded, but never run)
+    // state, which `--resume`'s own `--out` default (DESIGN.md §6.8)
+    // would otherwise write straight back onto `--state`'s own file.
+    macro_rules! fail_no_resume_state {
+        ($message:expr) => {{
+            let signal = signal_from_token(token);
+            let error = match signal {
+                Some(signal) => signal.interrupt_text().to_string(),
+                None => $message,
+            };
+            return RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(error),
+                warnings,
+                signal,
+            };
+        }};
+    }
+
     // Step 5: load the document -- a load error still writes --out.
     let mut check_options = electricity_compiler::CheckOptions {
         skip_preflight: true,
@@ -1351,7 +1376,7 @@ pub async fn run_orchestration_with_config(
             _ => None,
         };
         match recorded_hash {
-            None => fail!(
+            None => fail_no_resume_state!(
                 "The saved state to resume from has no runtime.last_run.document_hash -- it \
                  wasn't written by `cof run`/`electricity run` (or predates this field), so \
                  there is no way to tell whether this document changed since it ran. Pass \
@@ -1366,7 +1391,7 @@ pub async fn run_orchestration_with_config(
                 )
                 .ok();
                 if current_hash.is_some_and(|current| current != recorded_hash) {
-                    fail!(format!(
+                    fail_no_resume_state!(format!(
                         "{} changed since the run being resumed (content hash differs) -- \
                          rerun from scratch, or pass --force to resume anyway.",
                         req.orchestration_path.display()
@@ -1477,21 +1502,40 @@ pub async fn run_orchestration_with_config(
         None => None,
     };
     if let Some(profile) = &profile {
-        // Profile `inputs:` become the base layer under `-e` (DESIGN
-        // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
-        // own seam) -- re-seeding `state["input"]` again now, the same
-        // way the step-5 reseed above already does, so every failure
-        // from here on reports the profile-layered namespace too, not
-        // only the one `build_input_namespace` (step 10) itself
-        // produces.
         check_options.profile_inputs = profile
             .inputs
             .iter()
             .filter_map(|(k, v)| k.as_str().map(|k| (k.to_string(), v.clone())))
             .collect();
-        let (restored_input, _) =
-            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
-        state::replace_input_namespace(&store, restored_input);
+        if req.state_path.is_some() {
+            // `cli/runtime_shim.py::run`, ~:542-551: profile inputs are
+            // a lower-priority base layer *under* whatever `--state`
+            // already resumed (itself possibly already `-e`-overridden,
+            // by the earlier merge above) -- `dict(profile.inputs)`
+            // updated by the existing namespace, not the other way
+            // round, so only a key the resumed namespace doesn't
+            // already have is filled in from the profile.
+            if let Ok(input_node) = store.ensure_dict(&store.root, Value::Str("input".to_string()))
+            {
+                for (key, value) in &check_options.profile_inputs {
+                    let key = Value::Str(key.clone());
+                    if store.peek(&input_node, &key).is_none() {
+                        store.set_leaf(&input_node, key, value.clone());
+                    }
+                }
+            }
+        } else {
+            // Profile `inputs:` become the base layer under `-e` (DESIGN
+            // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
+            // own seam) -- re-seeding `state["input"]` again now, the same
+            // way the step-5 reseed above already does, so every failure
+            // from here on reports the profile-layered namespace too, not
+            // only the one `build_input_namespace` (step 10) itself
+            // produces.
+            let (restored_input, _) =
+                electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+            state::replace_input_namespace(&store, restored_input);
+        }
     }
 
     // Step 6 (part 1): effective settings -- model/adapter/plugins/
@@ -1516,6 +1560,21 @@ pub async fn run_orchestration_with_config(
     // still outranks it (set below, at the same point the existing
     // `sources["out"] = "cli"` override already runs); every `fail!`
     // from here on reports whichever of the two actually applies.
+    //
+    // `--resume` with no `--out` of its own (DESIGN §6.8,
+    // `RunRequest::resume_default_out`'s own doc comment): ranks below
+    // a profile's own `out:` (just set, if any) and above writing
+    // nothing -- applied only when `effective_settings_with_profile`
+    // left `out` at its own "default" (`None`) tier, so a profile's
+    // `out:` is never displaced by it.
+    if effective.out.is_none() {
+        if let Some(resume_out) = &req.resume_default_out {
+            effective.out = Some(resume_out.clone());
+            effective
+                .sources
+                .insert("out".to_string(), "resume".to_string());
+        }
+    }
     resolved_out_path = effective.out.clone();
 
     // Step 6 (part 2)/7/9: complexity validation (before the limiter),
@@ -1779,6 +1838,15 @@ pub async fn run_orchestration_with_config(
     )
     .ok();
 
+    // `state["runtime"]["last_run"] = {...}` (`cli/runtime_shim.py::run`,
+    // ~:754) replaces the whole dict, rather than updating into whatever
+    // `--state` resumed -- a stale `label`/`totals` from the saved run
+    // must not survive into this run's own `runtime.last_run`.
+    store.set_leaf(
+        &runtime_node,
+        Value::Str("last_run".to_string()),
+        Value::Dict(Dict::new()),
+    );
     let last_run_node = store
         .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
         .expect("Store::ensure_dict never fails");
@@ -2488,6 +2556,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -2502,6 +2571,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -2633,6 +2703,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(default_adapter_called_directly(&op));
     }
@@ -2657,6 +2728,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(!default_adapter_called_directly(&op));
     }
@@ -2684,6 +2756,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(default_adapter_called_directly(&op));
     }

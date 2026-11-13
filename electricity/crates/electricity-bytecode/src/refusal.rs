@@ -677,7 +677,7 @@ fn walk_region(path: &EffectPath, region: &Region, supported: &Supported<'_>) ->
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::effects::{PromptContent, PromptOp, PromptType, RetryPolicy, ToolOp};
+    use crate::effects::{PromptContent, PromptOp, PromptType, ResumeMode, RetryPolicy, ToolOp};
     use crate::op::OnError;
     use crate::template::{Escape, TemplateText};
     use indexmap::IndexMap;
@@ -804,6 +804,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -818,6 +819,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -837,6 +839,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         }
     }
 
@@ -1789,6 +1792,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1815,6 +1819,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let supported = Supported {
@@ -1861,6 +1866,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1892,6 +1898,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![if_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1941,6 +1948,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![inner]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -1973,6 +1981,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let refusal = first_unsupported(&program, false, &m0()).unwrap();
@@ -2005,6 +2014,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let supported = Supported {
@@ -2126,6 +2136,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let supported = Supported {
@@ -2160,6 +2171,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: ResumeMode::Continue,
         };
         let program = program_with_root(root_block(vec![loop_op]));
         let supported = Supported {

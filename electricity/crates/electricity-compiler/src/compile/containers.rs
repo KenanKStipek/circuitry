@@ -426,10 +426,11 @@ fn compile_dynamic(
     valid_name: &str,
     loop_names: &BTreeSet<String>,
 ) -> Result<Op, CompileError> {
-    // DESIGN.md §13: a `dynamic`'s own `resume:` validates the same as
-    // cof's, but (unlike `use`'s own `UseOp::resume_mode`) is not yet
-    // carried into this `Op` -- every `dynamic` resumes as `continue`.
-    check_resume_mode(effect, "Dynamic", effect_path)?;
+    // A `dynamic`'s own `resume:` (#590/#727) -- `Op::resume_mode`
+    // carries the result into execution (`exec::dynamic::execute_
+    // dynamic`), the same way `UseOp::resume_mode` already does for a
+    // `use`.
+    let resume_mode = check_resume_mode(effect, "Dynamic", effect_path)?;
     let flow = normalize_flow(
         first_truthy(&[get_truthy(effect, "flow"), get_truthy(effect, "strategy")])
             .map(Value::py_str)
@@ -506,6 +507,7 @@ fn compile_dynamic(
         on_error,
         labels,
         enabled: true,
+        resume_mode,
     })
 }
 
@@ -616,6 +618,9 @@ fn compile_conditional(
         on_error,
         labels,
         enabled: true,
+        // An `if`/`conditional` has no `resume:` of its own on either
+        // engine -- never read.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     })
 }
 
@@ -917,6 +922,9 @@ fn compile_loop(
         on_error,
         labels,
         enabled: true,
+        // A `loop` has no `resume:` of its own on either engine --
+        // never read.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     })
 }
 

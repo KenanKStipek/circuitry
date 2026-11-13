@@ -514,6 +514,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 },
                 &reflector.inner,
             ),

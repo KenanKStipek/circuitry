@@ -224,6 +224,8 @@ async fn run_iteration(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        // Synthesized, with no `resume:` of its own -- never read.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     };
     // Issue #516 §4(c): a reflector's own inner `dynamic` always resets
     // to display depth 0, regardless of the reflector's own ambient
@@ -364,6 +366,9 @@ async fn run_iteration(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        // `use_op`'s own `resume_mode` lives on the `UseOp` itself --
+        // never read here.
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     };
     // `_store_root(store)` at the top level: the reflector's own
     // *containing* scope (`parent`), never the inherited `CtxChain` --
@@ -584,6 +589,7 @@ fn prepend_prime_to_plan_prompt(region: &Region, plan_from_step: &str, prime_tex
                                 on_error: op.on_error,
                                 labels: op.labels.clone(),
                                 enabled: op.enabled,
+                                resume_mode: op.resume_mode,
                             };
                         }
                     }

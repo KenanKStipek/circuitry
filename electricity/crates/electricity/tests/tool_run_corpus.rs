@@ -293,6 +293,7 @@ async fn run_case(name: &str, orchestration: &str, config: &str) -> Json {
         armed: true,
         state_path: None,
         resume: false,
+        resume_default_out: None,
         force: false,
     };
     let token = CancellationToken::new();

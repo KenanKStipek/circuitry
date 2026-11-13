@@ -135,6 +135,7 @@ fn plan_prompt(name: &str) -> Op {
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -194,6 +195,7 @@ fn reflector_leaf_with_inner(
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 

@@ -2627,12 +2627,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2840,6 +2842,7 @@ mod tests {
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                         Op {
                             path: report_path,
@@ -2853,6 +2856,7 @@ mod tests {
                             on_error: OnError::Fail,
                             labels: None,
                             enabled: true,
+                            resume_mode: electricity_bytecode::ResumeMode::Continue,
                         },
                     ],
                     overlay: false,
@@ -2860,6 +2864,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -2946,12 +2951,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -3591,6 +3598,7 @@ mod tests {
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -3603,12 +3611,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -3673,6 +3683,7 @@ mod tests {
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -3685,12 +3696,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -3730,6 +3743,7 @@ mod tests {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 }
             }
 
@@ -3838,6 +3852,7 @@ mod tests {
                                 on_error: OnError::Fail,
                                 labels: None,
                                 enabled: true,
+                                resume_mode: electricity_bytecode::ResumeMode::Continue,
                             },
                         );
                     }
@@ -4057,6 +4072,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             }
         }
 
@@ -4093,12 +4109,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -5763,6 +5781,7 @@ mod tests {
                                     on_error: OnError::Fail,
                                     labels: None,
                                     enabled: true,
+                                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                                 }],
                                 overlay: true,
                             }),
@@ -5775,12 +5794,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -5839,6 +5860,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             })
             .collect();
         Program {
@@ -5866,12 +5888,14 @@ mod tests {
                         on_error: OnError::Fail,
                         labels: None,
                         enabled: true,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                     }],
                     overlay: false,
                 }),
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),
@@ -6275,6 +6299,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -6316,6 +6341,7 @@ mod tests {
             on_error,
             labels: None,
             enabled,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -6336,6 +6362,7 @@ mod tests {
             on_error,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -6370,6 +6397,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -6402,6 +6430,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -6418,6 +6447,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: Default::default(),
             effect_names: Default::default(),

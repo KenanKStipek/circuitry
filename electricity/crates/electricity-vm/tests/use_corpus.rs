@@ -808,6 +808,7 @@ async fn golden_corpus_end_to_end() {
             on_error,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();

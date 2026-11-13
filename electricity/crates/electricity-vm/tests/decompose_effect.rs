@@ -62,6 +62,7 @@ fn prompt_leaf(path: EffectPath, name: &str, op: PromptOp, on_error: OnError) ->
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 

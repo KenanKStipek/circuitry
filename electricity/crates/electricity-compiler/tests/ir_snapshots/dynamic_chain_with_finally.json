@@ -70,7 +70,8 @@
                               {
                                 "Name": "a"
                               }
-                            ]
+                            ],
+                            "resume_mode": "Continue"
                           }
                         ],
                         "overlay": false
@@ -126,7 +127,8 @@
                               {
                                 "Name": "cleanup"
                               }
-                            ]
+                            ],
+                            "resume_mode": "Continue"
                           }
                         ],
                         "overlay": false
@@ -145,7 +147,8 @@
                 {
                   "Name": "group"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -159,7 +162,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

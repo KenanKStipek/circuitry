@@ -20,14 +20,33 @@ use indexmap::IndexMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-fn temp_dir(name: &str) -> PathBuf {
+/// A fresh, empty directory under the OS temp dir, removed again when
+/// this guard drops -- on every exit path, including a failing
+/// `assert!` (unlike a plain cleanup call at a test function's own
+/// end, which a panic partway through would skip).
+struct TempDir(PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = Path;
+    fn deref(&self) -> &Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+fn temp_dir(name: &str) -> TempDir {
     let dir = std::env::temp_dir().join(format!(
         "electricity-resume-test-{name}-{}",
         std::process::id()
     ));
     let _ = fs::remove_dir_all(&dir);
     fs::create_dir_all(&dir).unwrap();
-    dir
+    TempDir(dir)
 }
 
 fn write(dir: &Path, name: &str, contents: &str) -> PathBuf {
@@ -53,6 +72,7 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         armed: true,
         state_path: None,
         resume: false,
+        resume_default_out: None,
         force: false,
     }
 }
@@ -278,6 +298,11 @@ async fn a_changed_document_is_refused_without_force() {
     let result = run(&req).await;
     assert!(!result.ok);
     assert!(
+        result.state.is_none(),
+        "a refused resume must write nothing back to --state's own file (the --out default), \
+         same as cof's own pre-run refusal"
+    );
+    assert!(
         result
             .error
             .as_deref()
@@ -340,6 +365,10 @@ async fn a_state_file_with_no_document_hash_is_refused_without_force() {
 
     let result = run(&req).await;
     assert!(!result.ok);
+    assert!(
+        result.state.is_none(),
+        "same as the hash-mismatch refusal above"
+    );
     assert!(
         result
             .error

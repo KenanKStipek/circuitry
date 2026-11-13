@@ -2030,6 +2030,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2163,6 +2164,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2362,6 +2364,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2471,6 +2474,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2639,6 +2643,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         let store = Store::new();
@@ -2872,6 +2877,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let effect_node = store
             .ensure_dict(&prime, Value::Str("step".to_string()))
@@ -2968,6 +2974,7 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         let effect_node = store
             .ensure_dict(&store.root, Value::Str("step".to_string()))
