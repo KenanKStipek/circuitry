@@ -1275,6 +1275,95 @@ fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #693 item 4: two unnamed `if`s sharing the same host, one
+/// resolving `then` and the other `else` -- selecting each decision
+/// in turn (← after the run ends, issue #704 rule 3) must show that
+/// decision's own condition and branch, never the other's, proving
+/// the two never swap suffixes depending on which got evidence
+/// first.
+#[test]
+fn selecting_either_of_two_unnamed_ifs_on_one_host_shows_its_own_decision() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: if\n    if:\n      mode: cel\n      expr: \"true\"\n    then:\n      - name: a_then\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n    else:\n      - name: a_else\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n  - type: if\n    if:\n      mode: cel\n      expr: \"false\"\n    then:\n      - name: b_then\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n    else:\n      - name: b_else\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    assert!(
+        screen.contains("Ended"),
+        "expected the run to have ended; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"2");
+    let screen = wait_for_screen_text(&captured_buf, "Flow \u{b7}", Duration::from_secs(10));
+    assert!(
+        screen.contains("Flow \u{b7}"),
+        "expected the Flow screen after pressing 2; screen:\n{screen}"
+    );
+
+    // The run just ended with no `selected_path` of its own set yet
+    // (the display alone falls back to "b_else", the last step the
+    // plan ran) -- the first ← only makes that fallback concrete
+    // (`flow_select_station`'s own `None` case lands back on the
+    // same last station), so it takes two to actually step off it
+    // onto b's own decision.
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[D\x1b[D");
+    let screen = wait_for_screen_text(&captured_buf, "cel  false", Duration::from_secs(10));
+    assert!(
+        screen.contains("cel  false"),
+        "expected b's own condition once its decision is selected; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{2192} else") && screen.contains("(inferred)"),
+        "expected b's own else branch, inferred, never a's; screen:\n{screen}"
+    );
+
+    // Two more ← steps: over a's own taken step ("a_then"), then
+    // onto a's own decision.
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[D\x1b[D");
+    let screen = wait_for_screen_text(&captured_buf, "cel  true", Duration::from_secs(10));
+    assert!(
+        screen.contains("cel  true"),
+        "expected a's own condition once its decision is selected; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{2192} then") && screen.contains("(inferred)"),
+        "expected a's own then branch, inferred, never b's; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
 /// §4: at 80×24 the Flow's own Story pane drops, and every loop's
 /// own lanes fold into their own band regardless of lane count,
 /// picked up on the TUI's own next redraw with no key needed; below
