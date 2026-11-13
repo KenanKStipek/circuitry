@@ -1715,6 +1715,7 @@ mod tests {
                     name: Some("first".to_string()),
                     kind: NodeKind::Leaf(Box::new(LeafKind::Use(electricity_bytecode::UseOp {
                         parent_trusted: false,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                         source: UseSource::Path("child.yml".to_string()),
                         inputs: None,
                         outputs: None,
@@ -2327,6 +2328,7 @@ mod tests {
                     name: Some("first".to_string()),
                     kind: NodeKind::Leaf(Box::new(LeafKind::Use(electricity_bytecode::UseOp {
                         parent_trusted: false,
+                        resume_mode: electricity_bytecode::ResumeMode::Continue,
                         source: UseSource::Path("child.yml".to_string()),
                         inputs: None,
                         outputs: None,
