@@ -1023,6 +1023,20 @@ class TestFreeIdentifiers:
     def test_three_argument_map_binds_nothing(self):
         assert free_identifiers("[1, 2, 3].map(i, i > 0, i * 2)") == ("i", "i", "i")
 
+    def test_own_walk_overflow_is_the_same_check_error_not_a_bare_one(self, monkeypatch):
+        # This walk is a second, separate recursive pass over the tree
+        # _compile already built -- a shape that compiles cleanly can still
+        # overflow *this* walk's own, independent recursion budget.
+        import circuitry.core.cel_eval as cel_eval_module
+
+        def _raise(*_args, **_kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(cel_eval_module, "_walk_free_identifiers", _raise)
+        with pytest.raises(CelValidationError) as excinfo:
+            free_identifiers("state.a == 1")
+        assert str(excinfo.value) == "expression is nested too deeply"
+
     def test_macro_variable_named_like_a_loop_binding_is_bound(self):
         assert free_identifiers("state.input.items.all(unit, unit > 0)") == ("state",)
 

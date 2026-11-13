@@ -1,7 +1,7 @@
 {
-  "spec_case": "issue #403: a member-access chain past electricity's own MAX_ACCESSOR_NESTING_DEPTH",
-  "description": "A 613-link member-access chain fails Circuitry itself before the document ever runs: path collection walks the whole parse tree once per '.' link with no recursion guard, so the RecursionError it raises escapes every try/except in core/cel_eval.py uncaught, with no 'CEL evaluation failed for ...' wrapping and no effect-path prefix, just Python's own bare exception text. electricity matches the phase (rejected at compile time, the document never runs) and the simpler of Circuitry's two observed text forms; only the shared 'maximum recursion depth exceeded' substring is compared, since Circuitry's own exact wording varies by call context.",
-  "engines": ["python", "electricity"],
+  "spec_case": "issue #403: a member-access chain past Circuitry's own recursion budget for this shape, through the CLI's own real call depth",
+  "description": "A 613-link member-access chain fails cof itself before the document ever runs: path collection walks the whole parse tree once per '.' link with no recursion guard, raising a RecursionError so close to Python's own limit, at the CLI's own real call depth, that even core/cel_eval.py::_compile's RecursionError catch (issue #629) can itself re-trigger a second one while handling the first -- cof's own text for this exact edge-of-the-limit case stays the bare, call-context-dependent one #629 fixes everywhere else. electricity-cel has no comparable edge: MAX_ACCESSOR_NESTING_DEPTH is a deterministic pre-scan with no recursion of its own to re-trigger, so its own rejection for this shape is always the clean, located text now (c629-cel-nested-too-deep covers a shape -- deep parens, not a long accessor chain -- where cof's own catch has room to spare and both engines already agree). Python-only until cof's own remaining edge case is closed.",
+  "engines": ["python"],
   "expect": "failure",
   "error_compare": "location",
   "location_pattern": "maximum recursion depth exceeded",

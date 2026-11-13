@@ -949,10 +949,22 @@ def free_identifiers(expr: str) -> tuple[str, ...]:
     identifiers here; a message-construction type name (``Msg{f: 1}``) is,
     because it is read the same way any other bare name is.
 
-    Raises :class:`CelValidationError` if *expr* does not parse.
+    Raises :class:`CelValidationError` if *expr* does not parse, or is too
+    deeply nested for this walk's own recursion to finish -- a shape
+    :func:`_compile` can itself compile fine (its own ``RecursionError``
+    catch, around parsing and :func:`_collect_state_paths`, never runs),
+    since this walk is a second, separate recursive pass over the same
+    cached tree, paying its own frame per level independently.
     """
     out: list[str] = []
-    _walk_free_identifiers(_compile(expr).runner.ast, frozenset(), out)
+    try:
+        _walk_free_identifiers(_compile(expr).runner.ast, frozenset(), out)
+    except RecursionError:
+        raise CelValidationError(
+            "expression is nested too deeply",
+            expression=expr,
+            too_deeply_nested=True,
+        ) from None
     return tuple(out)
 
 
