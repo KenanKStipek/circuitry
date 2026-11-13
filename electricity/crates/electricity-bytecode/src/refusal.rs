@@ -98,6 +98,10 @@ const TOOL_GH_PROVIDERS: &[&str] = &["gh"];
 /// built on the shared HTTP client ([`TOOL_HTTP_PROVIDERS`]'s own
 /// stack) but with its own flag, since it was added after that set.
 const TOOL_SYSTEMONE_PROVIDERS: &[&str] = &["systemone"];
+/// The `agent` provider (#720): a headless `pi`/Claude Code session,
+/// built on [`crate::plugin_names`]'s own shared `agent_cli` half (#520)
+/// but with its own flag, since it was added after every set above.
+const TOOL_AGENT_PROVIDERS: &[&str] = &["agent"];
 
 /// Why [`first_unsupported`] refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -244,6 +248,8 @@ pub struct Supported<'a> {
     pub tool_gh: bool,
     /// Issue #724: `systemone` ([`TOOL_SYSTEMONE_PROVIDERS`]).
     pub tool_systemone: bool,
+    /// Issue #720: `agent` ([`TOOL_AGENT_PROVIDERS`]).
+    pub tool_agent: bool,
     /// Lane K2 (#448, #516): scoring and routing are wired into
     /// `prompt` from this lane on -- read nowhere by the walker itself
     /// (nothing in a compiled [`Program`] says "this effect is
@@ -308,6 +314,7 @@ impl<'a> Supported<'a> {
             tool_cel: false,
             tool_gh: false,
             tool_systemone: false,
+            tool_agent: false,
             complexity: false,
             decomposition: false,
             secrets: false,
@@ -373,6 +380,8 @@ impl<'a> Supported<'a> {
             tool_gh: true,
             // issue #724
             tool_systemone: true,
+            // issue #720
+            tool_agent: true,
             // lane K2 (#448, #516)
             complexity: true,
             // lane L2b (#448, #522)
@@ -402,6 +411,7 @@ impl<'a> Supported<'a> {
             || (self.tool_cel && TOOL_CEL_PROVIDERS.contains(&name))
             || (self.tool_gh && TOOL_GH_PROVIDERS.contains(&name))
             || (self.tool_systemone && TOOL_SYSTEMONE_PROVIDERS.contains(&name))
+            || (self.tool_agent && TOOL_AGENT_PROVIDERS.contains(&name))
     }
 }
 

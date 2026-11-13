@@ -185,7 +185,7 @@ async fn command_output(
         timeout: Some(Duration::from_secs(SECRET_COMMAND_TIMEOUT_SECONDS)),
         ..RunOpts::default()
     };
-    match process::run_tracked(argv, &opts, token, None).await {
+    match process::run_tracked(argv, &opts, token, None, None, None).await {
         Ok(completed) => {
             if completed.exit_code != 0 {
                 return Err(runtime_error(format!(

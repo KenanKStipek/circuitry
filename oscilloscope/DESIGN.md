@@ -983,16 +983,12 @@ own rules are unchanged:
     `provider` is `agent` (cof's own rule at `core/compiler.py`,
     trimmed and case-insensitive) is counted alongside running
     prompts (`2 prompts · 1 agent in flight`), with no token estimate
-    of its own — live agent token usage (#612) is a later lane. Only
-    `cof` can ever produce a running agent: electricity compiles an
-    `agent` effect's prompt file for parity with `cof check`, but
-    refuses to run the step itself -- `agent` is a known cof plugin
-    name (`electricity-bytecode`'s own `PLUGIN_NAMES`), and
-    `electricity-tools`' registry has no builder for it, so its
-    refusal walker refuses it with the preview marker, the same way
-    it refuses any other orchestration outside electricity's own
-    preview scope. With neither a prompt nor an agent running, the
-    line says so ("nothing in flight").
+    of its own — live agent token usage (#612) comes later. Both
+    engines can produce a running agent now (#720): electricity's own
+    `agent` plugin runs a headless `pi`/Claude Code session exactly as
+    cof's does, publishing the same `meta.live` while it runs. With
+    neither a prompt nor an agent running, the line says so ("nothing
+    in flight").
 
     This count also reads a running leaf's own `provider` from the
     compiled plan, not state alone: a tree-loop pass's tool child,

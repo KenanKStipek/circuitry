@@ -575,6 +575,7 @@ dependencies = [
  "electricity-json",
  "electricity-pyre",
  "electricity-redaction",
+ "electricity-schema",
  "electricity-value",
  "electricity-yaml",
  "fancy-regex",

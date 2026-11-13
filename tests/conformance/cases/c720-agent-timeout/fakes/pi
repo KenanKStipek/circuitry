@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""A fake `pi` for c720-agent-timeout (issue #720): ignores SIGTERM and
+sleeps until the engine's own timeout kills its whole process group --
+bounded (#661) so it never outlives the engine: it stops on its own once
+orphaned (a parent pid of 1 means the engine died before this line ran)
+or after 120 s, whichever comes first."""
+
+from __future__ import annotations
+
+import os
+import signal
+import sys
+import time
+
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+parent = os.getppid()
+deadline = time.monotonic() + 120
+while parent != 1 and os.getppid() == parent and time.monotonic() < deadline:
+    time.sleep(0.2)

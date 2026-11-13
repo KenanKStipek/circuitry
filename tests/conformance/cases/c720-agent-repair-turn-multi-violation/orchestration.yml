@@ -1,0 +1,27 @@
+name: c720-agent-repair-turn-multi-violation
+effects:
+  - type: tool
+    name: implement
+    provider: agent
+    timeout_ms: 20000
+    params:
+      engine: pi
+      prompt: "Write the result file."
+      cwd: {from: input.work_dir}
+      result_file: scratch/result.json
+      result_schema:
+        type: object
+        properties:
+          summary: {type: string}
+          tests_pass: {type: boolean}
+          details:
+            type: object
+            properties:
+              coverage: {type: number}
+            required: [coverage]
+        required: [summary, tests_pass, details]
+      transcript: scratch/transcript.log
+  - type: tool
+    name: remove_scratch
+    provider: fs
+    params: {mode: delete, path: scratch, recursive: true}

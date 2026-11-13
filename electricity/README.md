@@ -16,8 +16,8 @@ working as an alias -- runs
 documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `prompt` and `reflector` effects and `finally:` blocks, with the `json`,
 `shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
-`clock`, `regex`, `http`, `validate_yaml`, `cel`, `gh` and `systemone` tool providers, aiming at the
-same final state, `--live-state` and `--events` output as `cof run`.
+`clock`, `regex`, `http`, `validate_yaml`, `cel`, `gh`, `systemone` and `agent` tool providers,
+aiming at the same final state, `--live-state` and `--events` output as `cof run`.
 `runtime.secrets.<name>` (the Keychain, a command or an environment
 variable) and a document's own `{secret: <name>}` resolve at dispatch, in
 an `http` effect's `params.headers` or a subprocess tool's host `env`,
@@ -40,7 +40,8 @@ nor reimplements), as does a `reflector`'s own generated plan naming it.
 Model-mode `if`/`while` conditions and `expect:` run too. While a `shell`, `awk`, `imagemagick`, `ffmpeg` or `gh` step is running, its node carries a
 `meta.live` snapshot of its output so far (the last 20 lines of each of stdout/stderr, at most 4
 KiB each, published at most once a second) -- removed again once the step finishes, so the final
-state is unaffected. `--profile
+state is unaffected. An `agent` effect's `meta.live` is its own richer summary (turns, tool calls,
+tokens, the current tool, ...) instead, matching `cof run`'s own shape for the same tool. `--profile
 <path>` loads a profile (adapter/model/inputs/persistence overrides,
 routing pins and provider denials) from an explicit path -- no name
 discovery. `runtime.complexity` scoring, model routing and decomposition (splitting
@@ -76,9 +77,9 @@ release alongside the Python distributions, marked as a preview.
 
 ## What electricity can't run yet
 
-- **Tool providers.** electricity builds 16 of Circuitry's 76 tool
+- **Tool providers.** electricity builds 17 of Circuitry's 76 tool
   plugins (the list above). A document, or a `use: {path:}` child, naming
-  any of the other 60 is refused before the run starts; a plan compiled
+  any of the other 59 is refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
   absorbs it. A name that isn't one of Circuitry's plugins at all fails

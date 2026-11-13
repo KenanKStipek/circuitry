@@ -1,0 +1,13 @@
+name: c720-agent-timeout
+effects:
+  - type: tool
+    name: implement
+    provider: agent
+    on_error: continue
+    timeout_ms: 1000
+    retries: {max_attempts: 1}
+    params:
+      engine: pi
+      prompt: "Write the result file."
+      cwd: {from: input.work_dir}
+      session: existing-session-c720
