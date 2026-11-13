@@ -691,7 +691,8 @@ class TestUnsetPathFollowsEvaluation:
         expr = "(state.input.m.x == 1 || true) && 1/0 == 1"
         with pytest.raises(CelEvaluationError) as excinfo:
             evaluate_cel(expr, self.CTX)
-        assert "divide by zero" in str(excinfo.value)
+        assert "CEL evaluation failed for" in str(excinfo.value)
+        assert "division by zero" in str(excinfo.value)
 
     def test_strict_ternary_guarded_read_does_not_raise(self):
         expr = "has(state.input.a.b) ? state.input.a.b.c == 1 : true"
@@ -777,6 +778,114 @@ class TestNestingErrorWinsOverUnsetPath:
                 return
             assert result is False
         pytest.fail("no depth up to 140 reached the nesting limit")
+
+
+# ---------------------------------------------------------------------------
+# Index/key/division errors: one line, never a container's contents (#629)
+# ---------------------------------------------------------------------------
+
+
+class TestIndexAndKeyErrorsNeverEmbedAContainer:
+    CTX: ClassVar[dict] = {"input": {"m": {"a": 1, "b": [1, 2]}, "l": [1, 2, 3], "n": 5}}
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX, strict=True)
+        return str(excinfo.value)
+
+    def test_missing_string_key(self):
+        assert self._error_text("state.input.m['zz'] == 1").endswith("no such key: 'zz'")
+
+    def test_missing_int_key(self):
+        assert self._error_text("state.input.m[7] == 1").endswith("no such key: 7")
+
+    def test_list_index_out_of_range(self):
+        text = self._error_text("state.input.l[5] == 1")
+        assert text.endswith("list index out of range: 5")
+
+    def test_list_indexed_by_a_string(self):
+        text = self._error_text("state.input.l['a'] == 1")
+        assert text.endswith("cannot index a list with a string")
+
+    def test_int_indexed_by_an_int(self):
+        text = self._error_text("state.input.n[0] == 1")
+        assert text.endswith("cannot index an int with an int")
+
+    def test_negative_index_is_unaffected(self):
+        assert evaluate_cel("state.input.l[-1] == 3", self.CTX, strict=True) is True
+
+    def test_dot_access_of_a_missing_map_key(self):
+        # A macro-bound variable, not a ``state.`` path: the absent-path
+        # rule only ever marks a ``state.`` occurrence, so this is the
+        # only way to reach ``member_dot``'s own map lookup rather than
+        # that rule's own "unset" outcome.
+        text = self._error_text("[{'a': 1}].exists(x, x.zz == 1)")
+        assert text.endswith("no such key: 'zz'")
+
+    def test_field_selection_on_a_list_never_shows_its_elements(self):
+        text = self._error_text("[[1, 2, 3]].exists(x, x.zz == 1)")
+        assert text.endswith("cannot select field 'zz' on a list")
+
+    def test_no_error_text_contains_a_tuple_repr(self):
+        for expr in (
+            "state.input.m['zz'] == 1",
+            "state.input.m[7] == 1",
+            "state.input.l[5] == 1",
+            "state.input.l['a'] == 1",
+            "state.input.n[0] == 1",
+            "1 / 0 == 1",
+            "1 % 0 == 1",
+        ):
+            text = self._error_text(expr)
+            assert "KeyError" not in text
+            assert "IndexError" not in text
+            assert "TypeError" not in text
+            assert "ZeroDivisionError" not in text
+
+
+class TestDivisionAndModulusByZero:
+    def test_division_by_zero(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("1 / 0 == 1", {})
+        assert str(excinfo.value).endswith("division by zero")
+
+    def test_modulus_by_zero(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("1 % 0 == 1", {})
+        assert str(excinfo.value).endswith("modulus by zero")
+
+    def test_float_division_by_zero_is_unaffected(self):
+        assert evaluate_cel("1.0 / 0.0 > 0.0", {}) is True
+
+
+# ---------------------------------------------------------------------------
+# Nested too deeply: a check error, named at its own location (#629)
+# ---------------------------------------------------------------------------
+
+
+class TestNestedTooDeeplyIsACheckError:
+    def _nested_expr(self, depth: int = 150) -> str:
+        return "(" * depth + "state.input.missing" + ")" * depth
+
+    def test_validate_cel_syntax_names_the_location(self):
+        with pytest.raises(CelValidationError) as excinfo:
+            validate_cel_syntax(
+                self._nested_expr(),
+                effect_path="prime.effects[0]",
+                effect_name="g",
+            )
+        text = str(excinfo.value)
+        assert text == (
+            "CEL expression at 'prime.effects[0]' (effect 'g'): expression is "
+            "nested too deeply"
+        )
+
+    def test_never_the_raw_recursion_error_text(self):
+        with pytest.raises(CelValidationError) as excinfo:
+            validate_cel_syntax(self._nested_expr(), effect_path="prime.effects[0]")
+        text = str(excinfo.value)
+        assert "maximum recursion depth" not in text
+        assert "getting the str of an object" not in text
 
 
 # ---------------------------------------------------------------------------

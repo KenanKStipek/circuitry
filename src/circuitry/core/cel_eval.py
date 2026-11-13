@@ -93,9 +93,17 @@ _CACHE_MAX_ENTRIES = 512
 class CelError(Exception):
     """Base class for CEL parse, validation and evaluation errors."""
 
-    def __init__(self, message: str, *, expression: str) -> None:
+    def __init__(
+        self, message: str, *, expression: str, too_deeply_nested: bool = False
+    ) -> None:
         super().__init__(message)
         self.expression = expression
+        #: Set only by :func:`_compile`'s own ``RecursionError`` catch --
+        #: lets :func:`validate_cel_syntax` report the one-line "nested
+        #: too deeply" text instead of wrapping it as a generic parse
+        #: failure (which would repeat the whole, deeply nested
+        #: expression back in the message).
+        self.too_deeply_nested = too_deeply_nested
 
 
 class CelValidationError(CelError, ValueError):
@@ -162,6 +170,67 @@ def _error_text(exc: CELEvalError) -> str:
     return str(exc)
 
 
+#: CEL's own type names (the ``type()``/conversion-function vocabulary
+#: cel-python's own ``evaluation.py`` already uses, ``null_type`` read as
+#: ``null`` per that vocabulary's own comment), keyed by the concrete
+#: ``celtypes`` class every value of that type is an instance of.
+_CEL_TYPE_NAMES: dict[type, str] = {
+    celtypes.BoolType: "bool",
+    celtypes.BytesType: "bytes",
+    celtypes.DoubleType: "double",
+    celtypes.IntType: "int",
+    celtypes.ListType: "list",
+    celtypes.MapType: "map",
+    celtypes.NullType: "null",
+    celtypes.StringType: "string",
+    celtypes.UintType: "uint",
+    type(None): "null",
+}
+
+#: The indefinite article each CEL type name takes ("a map", "an int",
+#: "a uint" — "uint" starts with a vowel letter but a consonant sound,
+#: so it takes "a" the way "a user" does, not "an").
+_CEL_TYPE_ARTICLES: dict[str, str] = {
+    "bool": "a",
+    "bytes": "a",
+    "double": "a",
+    "int": "an",
+    "list": "a",
+    "map": "a",
+    "null": "a",
+    "string": "a",
+    "uint": "a",
+}
+
+
+def _cel_type_name(value: Any) -> str:
+    """*value*'s CEL type name, never a Python class name."""
+    return _CEL_TYPE_NAMES.get(type(value), type(value).__name__.lower())
+
+
+def _cel_type_phrase(value: Any) -> str:
+    """*value*'s CEL type name with its indefinite article, e.g. ``"an int"``."""
+    name = _cel_type_name(value)
+    return f"{_CEL_TYPE_ARTICLES.get(name, 'a')} {name}"
+
+
+def _repr_key(value: Any) -> str:
+    """*value* the way a key or index belongs in an error: a string in
+    single quotes, every other CEL scalar bare — never a container's
+    own repr, which :func:`_cel_type_phrase` names only by type."""
+    if isinstance(value, celtypes.StringType):
+        return repr(str(value))
+    if isinstance(value, celtypes.BytesType):
+        return repr(bytes(value))
+    if isinstance(value, celtypes.BoolType):
+        return "true" if value else "false"
+    if isinstance(value, (celtypes.IntType, celtypes.UintType)):
+        return str(int(value))
+    if isinstance(value, celtypes.DoubleType):
+        return repr(float(value))
+    return str(value)
+
+
 class _StateEvaluator(Evaluator):
     """Evaluates CEL the way :mod:`cel_eval` needs, not the way cel-python does.
 
@@ -198,21 +267,52 @@ class _StateEvaluator(Evaluator):
         if isinstance(member, NameContainer):
             if property_name in member:
                 return member[property_name].value
-            err = f"No {property_name!r} in bindings {sorted(member.keys())}"
-            return CELEvalError(err, KeyError, None, tree=tree)
+            err = f"no such name {property_name!r} in {sorted(member.keys())!r}"
+            return CELEvalError(err, tree=tree)
         if isinstance(member, celtypes.MessageType):
             return member.get(property_name)
         if isinstance(member, celtypes.MapType):
             try:
                 return member[property_name]
             except KeyError:
-                err = f"no such member in mapping: {property_name!r}"
-                return CELEvalError(err, KeyError, None, tree=tree)
-        err = (
-            f"{member!r} with type: '{type(member)}' does not support field "
-            "selection"
+                return CELEvalError(f"no such key: {property_name!r}", tree=tree)
+        return CELEvalError(
+            f"cannot select field {property_name!r} on {_cel_type_phrase(member)}",
+            tree=tree,
         )
-        return CELEvalError(err, TypeError, None, tree=tree)
+
+    def member_index(self, tree: lark.Tree) -> Any:
+        # ``visit_children`` (not two direct ``self.visit()`` calls),
+        # matching the base method's own frame count per nesting level
+        # -- see conditionalor's comment. ``func`` is ``_[_]``'s own
+        # registered function, wrapped by ``_propagate_first_error``
+        # (module level, near ``_FUNCTIONS``): either operand already
+        # being a ``CELEvalError`` (an unset read, or any other) is
+        # returned outright, before the real lookup ever runs, so the
+        # except clauses below only ever see a genuine lookup failure.
+        member, index = self.visit_children(tree)
+        func = self.activation.resolve_function("_[_]")
+        try:
+            return func(member, index)
+        except KeyError as ex:
+            value = CELEvalError(f"no such key: {_repr_key(index)}", tree=tree)
+            value.__cause__ = ex
+            return value
+        except IndexError as ex:
+            value = CELEvalError(
+                f"{_cel_type_name(member)} index out of range: {_repr_key(index)}",
+                tree=tree,
+            )
+            value.__cause__ = ex
+            return value
+        except TypeError as ex:
+            value = CELEvalError(
+                f"cannot index {_cel_type_phrase(member)} with "
+                f"{_cel_type_phrase(index)}",
+                tree=tree,
+            )
+            value.__cause__ = ex
+            return value
 
     def expr(self, tree: lark.Tree) -> Any:
         if len(tree.children) == 1:
@@ -313,6 +413,52 @@ class _StateEvaluator(Evaluator):
             return CELEvalError(err, TypeError, None, tree=tree)
         raise CELSyntaxError(
             f"{tree.data} {tree.children}: bad conditionaland node",
+            line=tree.meta.line,
+            column=tree.meta.column,
+        )
+
+    def multiplication(self, tree: lark.Tree) -> Any:
+        if len(tree.children) == 1:
+            values = self.visit_children(tree)
+            return values[0]
+        if len(tree.children) == 2:
+            left_op = cast("lark.Tree", tree.children[0])
+            op_name = {
+                "multiplication_div": "_/_",
+                "multiplication_mul": "_*_",
+                "multiplication_mod": "_%_",
+            }[left_op.data]
+            func = self.activation.resolve_function(op_name)
+            # NOTE: values have the structure [[left], right] -- see
+            # conditionalor's comment: matching the base method's own
+            # access pattern, not a simplification of it, keeps the
+            # frame count per nesting level identical.
+            (left, *_), right = cast(
+                "tuple[list[Any], Any]", self.visit_children(tree)
+            )
+            try:
+                return func(left, right)
+            except TypeError as ex:
+                err = (
+                    f"found no matching overload for {left_op.data!r} "
+                    f"applied to '({type(left)}, {type(right)})'"
+                )
+                value = CELEvalError(err, ex.__class__, ex.args, tree=tree)
+                value.__cause__ = ex
+                return value
+            except ZeroDivisionError as ex:
+                text = "division by zero" if op_name == "_/_" else "modulus by zero"
+                value = CELEvalError(text, tree=tree)
+                value.__cause__ = ex
+                return value
+            except (ValueError, OverflowError) as ex:
+                value = CELEvalError(
+                    "return error for overflow", ex.__class__, ex.args, tree=tree
+                )
+                value.__cause__ = ex
+                return value
+        raise CELSyntaxError(
+            f"{tree.data} {tree.children}: bad multiplication node",
             line=tree.meta.line,
             column=tree.meta.column,
         )
@@ -651,6 +797,10 @@ def validate_cel_syntax(
     try:
         _compile(expr)
     except CelError as exc:
+        if exc.too_deeply_nested:
+            raise CelValidationError(
+                f"{where}: expression is nested too deeply", expression=expr
+            ) from exc
         raise CelValidationError(
             f"{where}: expression does not parse ({exc}). Expression: {expr!r}",
             expression=expr,
@@ -896,12 +1046,31 @@ def _compile(expr: str) -> _Compiled:
             return cached
         try:
             tree = _ENV.compile(expr)
+            found = _collect_state_paths(tree)
+            runner = _ENV.program(tree, functions=_FUNCTIONS)
+        except RecursionError:
+            # Walking the parse tree (``_collect_state_paths``) recurses
+            # per tree level the same way parsing itself does, so a
+            # pathologically nested expression (deep parenthesisation, a
+            # long accessor chain) can exhaust Python's recursion budget
+            # here rather than in ``_ENV.compile`` itself. Caught here,
+            # not left to escape: by the time Python raises
+            # ``RecursionError`` the call stack is already this deep, and
+            # the interpreter's own message for it varies by exactly
+            # which operation was mid-call when the limit hit (observed:
+            # "...while getting the str of an object") — never str()'d
+            # or otherwise touched, only its type, so nothing here risks
+            # a second recursion failure trying to format it.
+            raise CelValidationError(
+                "expression is nested too deeply",
+                expression=expr,
+                too_deeply_nested=True,
+            ) from None
         except Exception as exc:
             raise CelValidationError(str(exc).strip(), expression=expr) from exc
-        found = _collect_state_paths(tree)
         paths = tuple((path, guarded) for _node, path, guarded in found)
         compiled = _Compiled(
-            runner=_ENV.program(tree, functions=_FUNCTIONS),
+            runner=runner,
             paths=paths,
             occurrences=tuple(
                 (node, path) for node, path, guarded in found if not guarded
