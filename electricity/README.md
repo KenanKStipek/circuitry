@@ -9,7 +9,7 @@ is the production runner.
 
 **This is a preview.** `electricity run <orchestration.yml>` -- cof's own `run` option names
 (`-e`, `--config`, `--out`, `--live-state`, `--events`, `--allow-capabilities`, `--adapter`,
-`--quiet`), with the same config discovery as `cof run` when `--config` is omitted
+`--label`, `--quiet`), with the same config discovery as `cof run` when `--config` is omitted
 (`CIRCUITRY_CONFIG`, a trusted project config in the working directory, the global config); the
 legacy `electricity <config.json> <orchestration.yml>` form (config always explicit) keeps
 working as an alias -- runs
@@ -81,7 +81,7 @@ release alongside the Python distributions, marked as a preview.
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
 - **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
   `--out`/`-o`, `--live-state`, `--events`, `--allow-capabilities`,
-  `--adapter` and `--quiet` -- the same names, meaning and config discovery.
+  `--adapter`, `--label` and `--quiet` -- the same names, meaning and config discovery.
   Every other `cof run` option is engine-specific, not yet accepted:
   `--resume`/`--state`/`-s`/`--force`/`--last` (#727); `--profile` (name,
   not a path) and `--profile-from-state`; `--print`, `--dry-run`,

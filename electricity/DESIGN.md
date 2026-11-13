@@ -29,7 +29,7 @@ Decisions" instead of citing an external project file repeatedly:
   engine, with Python kept as the authoring tool.
 - CLI shape: `electricity run <orchestration.yml> [-e key=value]... [--config config.json]
   [--out state.json] [--resume ...] [--pretty] [--profile <path>] [--allow-capabilities cap,cap]
-  [--adapter name] [--quiet]`, cof `run`'s own option names and meanings (issue #728) --
+  [--adapter name] [--label TEXT] [--quiet]`, cof `run`'s own option names and meanings (issue #728) --
   `--resume`/`--state`/`--force` are #727's own milestone and are not accepted by this build's
   parser yet (an unrecognized option, same as any other); every other flag in this synopsis is.
   The legacy
@@ -116,7 +116,7 @@ models (or scripted fakes, for conformance testing), produce a final state ident
 **Scope (v1).** A CLI binary (`electricity run <orchestration.yml> [-e key=value]... [--config
 config.json] [--out state.json] [--state <file>] [--resume <id>|last] [--force] [--pretty]
 [--live-state <path>] [--profile <path>] [--allow-capabilities cap,cap] [--adapter name]
-[--quiet] [--dump-ir]`, and the legacy `electricity <config.json> <orchestration.yml> ...` form
+[--label TEXT] [--quiet] [--dump-ir]`, and the legacy `electricity <config.json> <orchestration.yml> ...` form
 as an alias) plus an embeddable library crate exposing the same run
 semantics to a host Rust program (e.g. an application embedding the engine directly rather than shelling out to the
 binary). Both surfaces share one workspace of language, VM, tool, adapter, and plugin crates.
