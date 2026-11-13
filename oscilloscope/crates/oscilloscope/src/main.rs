@@ -107,6 +107,13 @@ struct RunArgs {
     /// same.
     #[arg(long)]
     no_history: bool,
+    /// Literal text for this run's own label (issue #752), passed
+    /// through to the engine unchanged -- wins over the document's
+    /// own `label:` template. Shown in place of the run's generated
+    /// name wherever one is shown, from the first frame; `osi watch`
+    /// has no `--label` of its own, since it never launches anything.
+    #[arg(long, value_name = "TEXT")]
+    label: Option<String>,
 }
 
 #[derive(Parser, Debug)]
@@ -222,8 +229,11 @@ fn print_discovered_runs() -> ExitCode {
         scan_enabled.then_some(cwd.as_path()),
         std::time::SystemTime::now(),
     );
-    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
-    let names = oscilloscope_core::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
     for (run, name) in runs.iter().zip(names.iter()) {
         println!(
             "{}",
@@ -1047,6 +1057,7 @@ fn do_run(args: RunArgs) -> ExitCode {
         config,
         sets: args.set.clone(),
         run_dir: run_dir.clone(),
+        label: args.label.clone(),
     };
     // `config` recorded in history exactly as given on the command
     // line, never resolved further; `run_dir` made absolute so
@@ -4976,6 +4987,7 @@ mod all_run_slot_tests {
             events: None,
             live_state: None,
             started_at: None,
+            label: None,
         };
         let mut slot = AllRunSlot::new(found_bare);
         assert_eq!(slot.document_label, "—");
@@ -5008,6 +5020,7 @@ mod all_run_slot_tests {
             events: None,
             live_state: None,
             started_at: None,
+            label: None,
         };
         let mut slot = AllRunSlot::new(run.clone());
         let plan_ptr_before = std::ptr::addr_of!(slot.plan);
@@ -5031,6 +5044,7 @@ mod all_run_slot_tests {
             events: None,
             live_state: None,
             started_at: None,
+            label: None,
         };
         let mut slots = vec![
             AllRunSlot::new(run("/a/triage.yml")),
@@ -5351,8 +5365,11 @@ fn disambiguate_tile_labels(slots: &mut [AllRunSlot]) {
         slots.iter().map(|s| s.run.clone()).collect();
     let config_labels: Vec<Option<String>> = slots.iter().map(|s| s.config_label.clone()).collect();
     let labels = oscilloscope_core::select::disambiguated_document_labels(&runs, &config_labels);
-    let run_ids: Vec<Option<&str>> = runs.iter().map(|r| r.run_id.as_deref()).collect();
-    let names = oscilloscope_core::names::disambiguated_names(&run_ids);
+    let labelled_ids: Vec<(Option<&str>, Option<&str>)> = runs
+        .iter()
+        .map(|r| (r.label.as_deref(), r.run_id.as_deref()))
+        .collect();
+    let names = oscilloscope_core::names::disambiguated_names(&labelled_ids);
     for ((slot, label), name) in slots.iter_mut().zip(labels).zip(names) {
         slot.document_label = label;
         slot.name = name;
@@ -7083,6 +7100,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (_lines, final_state, _) = drain_until_ended(
@@ -7156,6 +7174,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (lines, final_state, _) = drain_until_ended(
@@ -7244,6 +7263,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: dir.path().to_path_buf(),
+            label: None,
         };
 
         let (lines, final_state, _) = drain_until_ended(
@@ -7568,6 +7588,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: run_dir.clone(),
+            label: None,
         };
         std::fs::write(
             spec.live_state_path(),

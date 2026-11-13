@@ -29,6 +29,12 @@ pub struct RunSpec {
     pub config: Option<PathBuf>,
     pub sets: Vec<String>,
     pub run_dir: PathBuf,
+    /// `osi <doc> --label TEXT` (issue #752), passed through to
+    /// whichever engine runs this: literal text that wins over the
+    /// document's own `label:` template. `None` with no `--label`
+    /// given at all -- `osi watch` never sets this, since it never
+    /// launches anything.
+    pub label: Option<String>,
 }
 
 impl RunSpec {
@@ -111,7 +117,7 @@ impl std::error::Error for EngineError {}
 /// which a plain `.contains("--events")` never matches, so detection
 /// silently read every such run as "this binary has no --events" and
 /// fell back to running it with the live-state file only.
-fn strip_ansi_escapes(text: &str) -> String {
+pub(crate) fn strip_ansi_escapes(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut chars = text.chars().peekable();
     while let Some(c) = chars.next() {
@@ -329,6 +335,9 @@ impl Engine for CofEngine {
         if self.caps.events {
             cmd.arg("--events").arg(spec.events_path());
         }
+        if let Some(label) = &spec.label {
+            cmd.arg("--label").arg(label);
+        }
         for kv in &spec.sets {
             cmd.arg("-e").arg(kv);
         }
@@ -431,6 +440,9 @@ impl Engine for ElectricityEngine {
         for kv in &spec.sets {
             cmd.arg("-e").arg(kv);
         }
+        if let Some(label) = &spec.label {
+            cmd.arg("--label").arg(label);
+        }
         cmd.arg("--out").arg(spec.out_path());
         if self.caps.events {
             cmd.arg("--events").arg(spec.events_path());
@@ -512,6 +524,7 @@ mod tests {
             config: None,
             sets: vec!["k=v".to_string()],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -523,6 +536,43 @@ mod tests {
         assert!(args.contains(&"--events".to_string()));
         assert!(args.contains(&"-e".to_string()));
         assert!(args.contains(&"k=v".to_string()));
+    }
+
+    #[test]
+    fn cof_command_includes_label_when_given() {
+        let engine = CofEngine::with_caps("cof", EngineCaps::default());
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let label_idx = args.iter().position(|a| a == "--label").expect("--label");
+        assert_eq!(args[label_idx + 1], "ticket 42");
+    }
+
+    #[test]
+    fn cof_command_omits_label_when_none() {
+        let engine = CofEngine::with_caps("cof", EngineCaps::default());
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: None,
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: None,
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        assert!(!args.contains(&"--label".to_string()));
     }
 
     #[test]
@@ -541,6 +591,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -558,6 +609,7 @@ mod tests {
             config: None,
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         assert!(matches!(
             engine.command(&spec),
@@ -573,6 +625,7 @@ mod tests {
             config: Some(PathBuf::from("config.json")),
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -599,6 +652,7 @@ mod tests {
             config: Some(PathBuf::from("config.json")),
             sets: vec!["k=v".to_string()],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
@@ -625,6 +679,25 @@ mod tests {
     }
 
     #[test]
+    fn electricity_command_includes_label_when_given() {
+        let engine = ElectricityEngine::new("electricity");
+        let spec = RunSpec {
+            orchestration: PathBuf::from("do.yml"),
+            config: Some(PathBuf::from("config.json")),
+            sets: vec![],
+            run_dir: PathBuf::from("/tmp/run"),
+            label: Some("ticket 42".to_string()),
+        };
+        let cmd = engine.command(&spec).unwrap();
+        let args: Vec<String> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
+        let label_idx = args.iter().position(|a| a == "--label").expect("--label");
+        assert_eq!(args[label_idx + 1], "ticket 42");
+    }
+
+    #[test]
     fn electricity_command_omits_events_and_live_state_when_unsupported() {
         let engine = ElectricityEngine::with_caps(
             "electricity",
@@ -640,6 +713,7 @@ mod tests {
             config: Some(PathBuf::from("config.json")),
             sets: vec![],
             run_dir: PathBuf::from("/tmp/run"),
+            label: None,
         };
         let cmd = engine.command(&spec).unwrap();
         let args: Vec<String> = cmd
