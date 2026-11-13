@@ -73,6 +73,9 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     }
 }
 

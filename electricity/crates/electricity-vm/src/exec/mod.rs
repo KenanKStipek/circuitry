@@ -30,6 +30,22 @@ use indexmap::IndexMap;
 use std::future::Future;
 use std::pin::Pin;
 
+/// `core/dynamic.py::DynamicRuntime._execute_effect`'s own four
+/// outcomes (`"disabled"`/`"resumed"`/`"reported"`/`"ran"`), collapsed
+/// to the one distinction a resumed chain/branch/pass actually acts on
+/// (issue #727): whether *this* child counts as "a real divergence
+/// point", after which every later sibling reruns regardless of its
+/// own saved node. [`ExecOutcome::Ran`] is cof's `"ran"` alone; every
+/// other outcome -- disabled, skipped via `--resume`, or *any* report
+/// that actually dispatched (named or not: `_execute_effect`'s own
+/// `return "reported" if is_report else "ran"` names every report, not
+/// only an unnamed one) -- is [`ExecOutcome::NotRan`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExecOutcome {
+    Ran,
+    NotRan,
+}
+
 /// A recursive async executor's own return type -- every container
 /// executor in this crate recurses into its own children (a `dynamic`'s
 /// body can hold another `dynamic`/`if`, an `if` branch can too), and an
@@ -43,6 +59,17 @@ use std::pin::Pin;
 /// against the alternative (a hand-written state machine per container
 /// kind).
 pub(crate) type BoxExecFuture<'a> = Pin<Box<dyn Future<Output = Result<(), VmError>> + 'a>>;
+
+/// [`execute_op`]'s own return type -- [`ExecOutcome`] rather than
+/// plain `()`, so its four callers (a chain/branch/pass loop, `use`'s
+/// own entry) can tell a real dispatch apart from one that didn't
+/// count toward resume eligibility. Never a [`BoxExecFuture`] itself:
+/// unlike `execute_dynamic`/`execute_loop`/`execute_conditional`/
+/// `execute_use` (each a `BoxExecFuture` in its own right, called from
+/// several places besides `execute_op`), `execute_op` has exactly these
+/// four callers, all in this crate, all able to take the richer type.
+pub(crate) type BoxExecOutcomeFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<ExecOutcome, VmError>> + 'a>>;
 
 /// POSIX signal numbers `core/dynamic.py::_error_text` branches on --
 /// matching [`crate::CancellationToken`]'s own doc comment (`SIGTERM`
@@ -84,6 +111,51 @@ pub(crate) fn key(s: &str) -> Value {
 /// actually propagate in a document that compiled.
 pub(crate) fn store_err(err: StoreError) -> VmError {
     VmError::Message(err.to_string())
+}
+
+/// Python truthiness for the handful of raw state values this crate's
+/// own `--resume` skip check reads directly off an uncompiled [`Value`]
+/// (`meta.completed_at`/`meta.error`) -- matches every other private
+/// copy of this same check already in this crate (`exec::use_`'s own
+/// `is_truthy`, `exec::loop_`'s own record_children helpers).
+pub(crate) fn is_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None => false,
+        Some(Value::None) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Int(i)) => !i.is_zero(),
+        Some(Value::Float(f)) => *f != 0.0,
+        Some(Value::Str(s)) => !s.is_empty(),
+        Some(Value::Bytes(b)) => !b.is_empty(),
+        Some(Value::List(items)) => !items.is_empty(),
+        Some(Value::Dict(d)) => !d.is_empty(),
+        Some(Value::Date(_)) | Some(Value::DateTime(..)) => true,
+    }
+}
+
+/// `core.resume.effect_completed_ok` (issue #727): *node*'s own `meta`
+/// shows a finished run -- `completed_at` truthy and `error` falsy --
+/// the one condition `--resume` skips a named effect's node for
+/// (`dynamic.py::DynamicRuntime._execute_effect`'s own check, this
+/// crate's single shared copy of it). `false` for a node with no
+/// tracked `meta` child at all (never started).
+pub(crate) fn effect_completed_ok(store: &Store, node: &NodeRef) -> bool {
+    let Ok(Some(meta)) = store.child(node, &key("meta")) else {
+        return false;
+    };
+    let completed_at = match store.peek(&meta, &key("completed_at")) {
+        Some(crate::Slot::Value(v)) => is_truthy(Some(&v)),
+        Some(crate::Slot::Node(n)) => !n.borrow().is_empty(),
+        None => false,
+    };
+    if !completed_at {
+        return false;
+    }
+    match store.peek(&meta, &key("error")) {
+        Some(crate::Slot::Value(v)) => !is_truthy(Some(&v)),
+        Some(crate::Slot::Node(n)) => n.borrow().is_empty(),
+        None => true,
+    }
 }
 
 /// *meta*'s own `completed_at`, Python-truthy -- `cli/runtime_shim.py::
@@ -368,7 +440,16 @@ pub(crate) fn execute_op<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
-) -> BoxExecFuture<'a> {
+    // `cof run --resume` (issue #727): whether *this specific* child,
+    // if named, should be skipped (reusing its saved node as-is) when
+    // that node already shows a finished run -- `core/dynamic.py::
+    // DynamicRuntime._execute_effect`'s own `resume_active` parameter,
+    // decided per child by the caller (a chain/tree dynamic, a loop
+    // body, a conditional branch, `use`'s own entry), never read from
+    // an ambient flag here. `false` for an ordinary (non-resumed) run,
+    // and for every call this crate made before this parameter existed.
+    resume_active: bool,
+) -> BoxExecOutcomeFuture<'a> {
     Box::pin(async move {
         // Wired now (`core/
         // dynamic.py::DynamicRuntime._execute_effect`'s own single
@@ -405,7 +486,24 @@ pub(crate) fn execute_op<'a>(
                 }
                 observer.write();
             }
-            return Ok(());
+            return Ok(ExecOutcome::NotRan);
+        }
+        // `cof run --resume` (issue #727): a named effect whose own node
+        // already shows a finished run is skipped outright -- no
+        // `effect_start`/`effect_complete`, no write, this run reuses it
+        // exactly as saved (`core/dynamic.py::DynamicRuntime.
+        // _execute_effect`'s own `"resumed"` outcome). Checked after the
+        // disabled check above, never before: a disabled effect is always
+        // disabled, resume or not (Python's own `is_enabled` check comes
+        // first too).
+        if resume_active {
+            if let Some(name) = &op.name {
+                if let Ok(Some(existing)) = store.child(parent, &Value::Str(name.clone())) {
+                    if effect_completed_ok(store, &existing) {
+                        return Ok(ExecOutcome::NotRan);
+                    }
+                }
+            }
         }
         match &op.kind {
             NodeKind::Leaf(leaf) => match leaf.as_ref() {
@@ -421,54 +519,72 @@ pub(crate) fn execute_op<'a>(
                         op, tool_op, store, parent, &live_root, frame, run_ctx, observer, token,
                     )
                     .await
+                    .map(|()| ExecOutcome::Ran)
                 }
-                LeafKind::Prompt(prompt_op) => {
-                    prompt::execute_prompt(
-                        op, prompt_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
-                    )
-                    .await
-                }
-                LeafKind::Use(use_op) => {
-                    use_::execute_use(
-                        op, use_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
-                    )
-                    .await
-                }
-                LeafKind::Reflector(reflector_op) => {
-                    reflector::execute_reflector(
-                        op,
-                        reflector_op,
-                        store,
-                        parent,
-                        ctx_chain,
-                        frame,
-                        run_ctx,
-                        observer,
-                        token,
-                    )
-                    .await
-                }
-                LeafKind::Yield(yield_op) => {
-                    yield_::execute_yield(
-                        op, yield_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
-                    )
-                    .await
-                }
+                LeafKind::Prompt(prompt_op) => prompt::execute_prompt(
+                    op, prompt_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                )
+                .await
+                .map(|()| ExecOutcome::Ran),
+                LeafKind::Use(use_op) => use_::execute_use(
+                    op,
+                    use_op,
+                    store,
+                    parent,
+                    ctx_chain,
+                    frame,
+                    run_ctx,
+                    observer,
+                    token,
+                    resume_active,
+                )
+                .await
+                .map(|()| ExecOutcome::Ran),
+                LeafKind::Reflector(reflector_op) => reflector::execute_reflector(
+                    op,
+                    reflector_op,
+                    store,
+                    parent,
+                    ctx_chain,
+                    frame,
+                    run_ctx,
+                    observer,
+                    token,
+                )
+                .await
+                .map(|()| ExecOutcome::Ran),
+                LeafKind::Yield(yield_op) => yield_::execute_yield(
+                    op, yield_op, store, parent, ctx_chain, frame, run_ctx, observer, token,
+                )
+                .await
+                .map(|()| ExecOutcome::Ran),
                 LeafKind::Report(report_op) => {
                     report::execute_report(
                         op, report_op, store, parent, ctx_chain, frame, run_ctx, observer,
                     )
                     .await;
-                    Ok(())
+                    // `core/dynamic.py::_execute_effect`'s own `return
+                    // "reported" if is_report else "ran"` -- every
+                    // report that dispatches, named or not, is
+                    // `NotRan` for resume purposes (this module's own
+                    // `ExecOutcome` doc comment).
+                    Ok(ExecOutcome::NotRan)
                 }
             },
             NodeKind::Control(region) => match region {
-                Region::If { .. } => {
-                    conditional::execute_conditional(
-                        op, store, parent, ctx_chain, frame, run_ctx, observer, token,
-                    )
-                    .await
-                }
+                Region::If { .. } => conditional::execute_conditional(
+                    op,
+                    store,
+                    parent,
+                    ctx_chain,
+                    frame,
+                    run_ctx,
+                    observer,
+                    token,
+                    resume_active,
+                )
+                .await
+                .map(|()| ExecOutcome::Ran),
                 Region::Block { .. } | Region::Parallel { .. } | Region::TryFinally { .. } => {
                     // Issue #516 §4(c): every nested `dynamic` reached
                     // through this generic dispatch (the document root
@@ -491,8 +607,10 @@ pub(crate) fn execute_op<'a>(
                         run_ctx,
                         observer,
                         token,
+                        resume_active,
                     )
                     .await
+                    .map(|()| ExecOutcome::Ran)
                 }
                 Region::Loop {
                     // Not read here: `op.name` below is the same
@@ -506,26 +624,26 @@ pub(crate) fn execute_op<'a>(
                     max_iterations,
                     min_iterations,
                     collect,
-                } => {
-                    loop_::execute_loop(
-                        op,
-                        spec,
-                        body,
-                        *flow,
-                        *max_concurrency,
-                        *max_iterations,
-                        *min_iterations,
-                        collect.as_deref(),
-                        store,
-                        parent,
-                        ctx_chain,
-                        frame,
-                        run_ctx,
-                        observer,
-                        token,
-                    )
-                    .await
-                }
+                } => loop_::execute_loop(
+                    op,
+                    spec,
+                    body,
+                    *flow,
+                    *max_concurrency,
+                    *max_iterations,
+                    *min_iterations,
+                    collect.as_deref(),
+                    store,
+                    parent,
+                    ctx_chain,
+                    frame,
+                    run_ctx,
+                    observer,
+                    resume_active,
+                    token,
+                )
+                .await
+                .map(|()| ExecOutcome::Ran),
             },
         }
     })

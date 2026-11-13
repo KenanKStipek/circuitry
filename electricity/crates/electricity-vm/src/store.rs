@@ -1394,7 +1394,10 @@ mod tests {
         };
         let mut expected_ref = IndexMap::new();
         expected_ref.insert(key("$ref"), Value::Str("iter_2".to_string()));
-        assert_eq!(saved_loop.get(&key("last")), Some(&Value::Dict(expected_ref)));
+        assert_eq!(
+            saved_loop.get(&key("last")),
+            Some(&Value::Dict(expected_ref))
+        );
     }
 
     #[test]
@@ -1411,6 +1414,9 @@ mod tests {
         };
         let mut expected_ref = IndexMap::new();
         expected_ref.insert(key("$ref"), Value::Str("iter_9".to_string()));
-        assert_eq!(saved_root.get(&key("last")), Some(&Value::Dict(expected_ref)));
+        assert_eq!(
+            saved_root.get(&key("last")),
+            Some(&Value::Dict(expected_ref))
+        );
     }
 }

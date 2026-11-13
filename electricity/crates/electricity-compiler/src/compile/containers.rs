@@ -403,8 +403,12 @@ pub(crate) fn check_resume_mode(
 ) -> Result<electricity_bytecode::ResumeMode, CompileError> {
     match effect.get(&Value::Str("resume".to_string())) {
         None => Ok(electricity_bytecode::ResumeMode::Continue),
-        Some(Value::Str(mode)) if mode == "continue" => Ok(electricity_bytecode::ResumeMode::Continue),
-        Some(Value::Str(mode)) if mode == "restart" => Ok(electricity_bytecode::ResumeMode::Restart),
+        Some(Value::Str(mode)) if mode == "continue" => {
+            Ok(electricity_bytecode::ResumeMode::Continue)
+        }
+        Some(Value::Str(mode)) if mode == "restart" => {
+            Ok(electricity_bytecode::ResumeMode::Restart)
+        }
         Some(other) => Err(CompileError(format!(
             "{label} effect at '{effect_path}': 'resume' must be 'continue' or \
              'restart', got {}.",

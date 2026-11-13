@@ -45,6 +45,9 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     }
 }
 
@@ -564,6 +567,9 @@ async fn a_document_that_passes_every_check_still_writes_full_observability_toda
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     };
 
     let result = run(&req).await;
@@ -608,6 +614,9 @@ async fn run_start_names_only_the_config_files_own_file_name() {
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     };
 
     let result = run(&req).await;
@@ -654,6 +663,9 @@ async fn a_token_cancelled_before_execute_root_starts_is_an_interrupted_run() {
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     };
 
     let token = CancellationToken::new();
@@ -779,6 +791,9 @@ fn a_run_with_no_live_state_never_touches_tokios_timer_driver() {
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .build()
@@ -1262,6 +1277,9 @@ async fn a_secret_echoed_by_the_server_is_masked_everywhere_a_run_writes() {
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     };
 
     let result = run(&req).await;
@@ -1362,6 +1380,9 @@ async fn a_secret_straddling_the_error_excerpts_cut_leaves_no_fragment_in_any_ru
         adapter_override: None,
         label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        force: false,
     };
 
     let result = run(&req).await;

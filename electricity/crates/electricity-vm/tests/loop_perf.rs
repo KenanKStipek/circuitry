@@ -136,6 +136,7 @@ async fn run_each_chain_of(
         &ctx,
         &NullObserver,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -277,6 +278,7 @@ async fn run_while_of(n: u32) -> std::time::Duration {
         &ctx,
         &NullObserver,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -401,6 +403,7 @@ async fn run_while_use_of(n: u32) -> std::time::Duration {
         &ctx,
         &NullObserver,
         &token,
+        false,
     )
     .await
     .unwrap();

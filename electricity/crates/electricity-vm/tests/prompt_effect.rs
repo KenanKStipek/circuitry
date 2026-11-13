@@ -246,9 +246,16 @@ async fn run_prompt_in_ctx(
     let leaf = prompt_leaf(root_path().push_name("ask"), "ask", op, on_error);
     let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
     let observer = RecordingObserver::new();
-    let result =
-        electricity_vm::execute_root(&program(root), &store, ctx_value, &ctx, &observer, &token)
-            .await;
+    let result = electricity_vm::execute_root(
+        &program(root),
+        &store,
+        ctx_value,
+        &ctx,
+        &observer,
+        &token,
+        false,
+    )
+    .await;
     (store, observer, result)
 }
 
@@ -708,6 +715,7 @@ effects:
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .expect("a use child's own successful prompt must not refuse");
@@ -833,6 +841,7 @@ async fn an_allowlist_denial_mid_chain_records_the_previous_passs_attempt_list()
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -1006,6 +1015,7 @@ async fn a_cancellation_during_backoff_stops_the_run() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(
@@ -1189,6 +1199,7 @@ async fn meta_key_order_on_a_reused_node_matches_cof_run() {
         &ctx,
         &RecordingObserver::new(),
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -1201,6 +1212,7 @@ async fn meta_key_order_on_a_reused_node_matches_cof_run() {
         &ctx,
         &RecordingObserver::new(),
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -1303,6 +1315,7 @@ effects:
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     let VmError::Refused {
@@ -1462,6 +1475,7 @@ async fn cancelling_mid_generate_stops_the_run_without_recording_an_attempt() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(
@@ -1551,6 +1565,7 @@ async fn cancelling_between_fallback_attempts_never_dispatches_the_next_one() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(
@@ -1624,6 +1639,7 @@ async fn a_routed_model_becomes_the_fallback_chains_default_model() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     result.unwrap();
@@ -1695,6 +1711,7 @@ async fn an_unknown_pinned_band_raises_before_effect_start_and_on_error_skip_doe
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     let VmError::Raised {
@@ -2352,6 +2369,7 @@ async fn error_code_and_http_status_are_reset_on_a_reused_node() {
         &ctx,
         &RecordingObserver::new(),
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -2363,6 +2381,7 @@ async fn error_code_and_http_status_are_reset_on_a_reused_node() {
         &ctx,
         &RecordingObserver::new(),
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -2413,6 +2432,7 @@ async fn error_code_and_http_status_are_popped_on_a_render_failure_after_a_prior
         &ctx,
         &RecordingObserver::new(),
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -2436,6 +2456,7 @@ async fn error_code_and_http_status_are_popped_on_a_render_failure_after_a_prior
         &ctx,
         &RecordingObserver::new(),
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -2627,6 +2648,7 @@ async fn streamed_progress_captures_meta_live_at_each_delta_and_clears_it_on_suc
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -2764,6 +2786,7 @@ async fn streamed_progress_inside_a_use_child_captures_meta_live_at_the_parents_
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();

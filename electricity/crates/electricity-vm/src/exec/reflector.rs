@@ -234,6 +234,10 @@ async fn run_iteration(
         .rebased(&op.path, &op.path.push_name("inner"))
         .with_display_depth(crate::complexity::depth::REFLECTOR_RESET);
     let empty_chain: CtxChain = Vec::new();
+    // `cof run --resume`: a reflector's own inner dynamic is never
+    // passed this flag in `core/dynamic.py` either -- it always reruns
+    // whole once reached (the parent's own skip check on the reflector
+    // node as a whole already decided that).
     let inner_result = execute_dynamic(
         &inner_op,
         store,
@@ -243,6 +247,7 @@ async fn run_iteration(
         run_ctx,
         observer,
         token,
+        false,
     )
     .await;
     match inner_result {
@@ -374,6 +379,7 @@ async fn run_iteration(
     // depth 0, so its own child root `dynamic` ([`Frame::nested`]'s own
     // `+1`) lands at depth 1, matching issue #516 §4(c)'s last row.
     let gen_frame = frame.with_display_depth(crate::complexity::depth::REFLECTOR_RESET);
+    // Same "never resumes" rule as the inner `dynamic` above.
     let use_result = execute_use_with_ctx(
         &use_synth_op,
         &use_op,
@@ -384,6 +390,7 @@ async fn run_iteration(
         run_ctx,
         observer,
         token,
+        false,
     )
     .await;
     match use_result {

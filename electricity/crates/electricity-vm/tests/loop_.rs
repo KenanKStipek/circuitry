@@ -259,6 +259,7 @@ async fn run_with_observer(
         &ctx,
         observer,
         &token,
+        false,
     )
     .await
 }
@@ -981,6 +982,7 @@ async fn run_with_adapter(
         &ctx,
         observer,
         &token,
+        false,
     )
     .await
 }
@@ -1149,6 +1151,7 @@ async fn a_cancelled_named_chain_each_keeps_its_completed_passes() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -1237,6 +1240,7 @@ async fn cancelled_nested_loops_both_keep_their_completed_passes() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -1460,6 +1464,7 @@ async fn a_cancelled_tree_loop_still_clears_its_overlay() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -1706,6 +1711,7 @@ async fn value_on_a_reused_node_survives_a_cancellation_that_skips_the_final_wri
         &ctx,
         &electricity_vm::NullObserver,
         &token,
+        false,
     )
     .await;
     assert!(matches!(result, Err(VmError::Cancelled)));

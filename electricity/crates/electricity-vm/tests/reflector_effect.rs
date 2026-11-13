@@ -221,6 +221,7 @@ async fn run_reflector(
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -576,6 +577,7 @@ async fn cancellation_during_the_planner_leaves_no_record() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert_eq!(result.unwrap_err(), VmError::Cancelled);

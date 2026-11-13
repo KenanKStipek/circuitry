@@ -857,6 +857,7 @@ async fn golden_corpus_end_to_end() {
             &run_ctx,
             &observer,
             &token,
+            false,
         )
         .await;
 

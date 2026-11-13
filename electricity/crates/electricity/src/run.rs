@@ -83,6 +83,28 @@ pub struct RunRequest {
     /// `main` always passes `true`: this crate has no embedding
     /// caller of its own yet (M1-A).
     pub armed: bool,
+    /// `--state <path>` (issue #727) -- the whole saved state this run
+    /// seeds its store from (every top-level key, not just `input`),
+    /// relinking a `last` alias the same way [`electricity_vm::
+    /// hydrate_resumed_state`] does for any loaded JSON object. `None`
+    /// seeds the ordinary way ([`state::seed_state`]'s own `-e`-only
+    /// seed).
+    pub state_path: Option<PathBuf>,
+    /// `--resume` (issue #727) -- with [`RunRequest::state_path`], a
+    /// named effect whose saved node already finished without error is
+    /// skipped and reused; every effect-type container's own partial-
+    /// continue rule (a loop's first unfinished pass, a conditional's
+    /// saved branch, a `use` with `runtime.state.record_children`)
+    /// follows from there. Ignored with no `state_path` (cof's own
+    /// `--resume last`/`--resume <run-id>` modes are out of this
+    /// engine's scope: ruling 3, issue #727 -- `runtime.persistence`
+    /// stays refused).
+    pub resume: bool,
+    /// `--force` (issue #727) -- with `resume`, continue even though
+    /// *orchestration_path*'s own content changed since the saved run
+    /// (`runtime.last_run.document_hash` mismatch) or it carries no
+    /// recorded hash at all.
+    pub force: bool,
 }
 
 /// `run_orchestration`'s own result -- success and failure both carry a
