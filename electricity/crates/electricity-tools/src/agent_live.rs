@@ -237,6 +237,15 @@ pub struct LiveTracker<'a> {
     tool_seq: Cell<i64>,
     seen_message_ids: RefCell<std::collections::HashSet<String>>,
     earlier_attempts: Option<(Option<i64>, Option<i64>)>,
+    /// `agent_live.py::LivePublisher`'s own throttle (#636, ruling 5):
+    /// at most one publish a second, with a pending update from inside
+    /// that window still flushed once the window ends -- here, by
+    /// [`LiveTracker::maybe_flush`], called from the same periodic tick
+    /// [`crate::process::run_tracked`]'s own `on_live` cadence already
+    /// gives a process-backed tool's live tail (#741), rather than a
+    /// background thread of this tracker's own.
+    published_at: Cell<Option<std::time::Instant>>,
+    live_pending: Cell<bool>,
 }
 
 impl<'a> LiveTracker<'a> {
@@ -284,8 +293,10 @@ impl<'a> LiveTracker<'a> {
             tool_seq: Cell::new(0),
             seen_message_ids: RefCell::new(std::collections::HashSet::new()),
             earlier_attempts,
+            published_at: Cell::new(None),
+            live_pending: Cell::new(false),
         };
-        tracker.publish_now();
+        tracker.request_publish();
         tracker
     }
 
@@ -392,6 +403,42 @@ impl<'a> LiveTracker<'a> {
         (self.publish)(self.snapshot());
     }
 
+    /// `LivePublisher`'s own cadence check (`crate::process::live_due`,
+    /// the exact gate a process-backed tool's own live tail already uses)
+    /// -- `true` at most once a second, coalescing every call in between
+    /// into [`LiveTracker::live_pending`] for [`LiveTracker::maybe_flush`]
+    /// to flush once the window has actually passed.
+    fn live_due(&self) -> bool {
+        let mut published_at = self.published_at.get();
+        let mut pending = self.live_pending.get();
+        let due = crate::process::live_due(&mut published_at, &mut pending);
+        self.published_at.set(published_at);
+        self.live_pending.set(pending);
+        due
+    }
+
+    /// Every `agent_live.py::LiveTracker::_publish_now` call site's own
+    /// replacement: publishes immediately when the throttle allows it,
+    /// otherwise only records that an update is pending.
+    fn request_publish(&self) {
+        if self.live_due() {
+            self.publish_now();
+        }
+    }
+
+    /// [`crate::agent_cli::run_agent_cli`]'s own periodic tick while the
+    /// CLI runs, independent of new stdout: flushes a publish left
+    /// pending by [`LiveTracker::request_publish`] once the throttle
+    /// window it was denied in has actually ended, so a quiet stretch
+    /// mid-turn still surfaces the one update it missed within about a
+    /// second of it, exactly as `agent_live.py::LivePublisher`'s own
+    /// writer thread would have.
+    pub fn maybe_flush(&self) {
+        if self.live_pending.get() && self.live_due() {
+            self.publish_now();
+        }
+    }
+
     // ---- transcript ----
 
     fn write_transcript(&self, kind: &str, fields: Dict) {
@@ -443,7 +490,7 @@ impl<'a> LiveTracker<'a> {
                 .unwrap_or(Value::None),
         );
         self.write_transcript("turn", fields);
-        self.publish_now();
+        self.request_publish();
     }
 
     /// `agent_live.py::LiveTracker.sync_turn_totals`.
@@ -460,7 +507,7 @@ impl<'a> LiveTracker<'a> {
         self.tokens_sent.set(tokens_sent);
         self.tokens_received.set(tokens_received);
         self.cost_usd.set(cost_usd);
-        self.publish_now();
+        self.request_publish();
     }
 
     fn note_model(&self, value: Option<&str>) -> bool {
@@ -580,7 +627,7 @@ impl<'a> LiveTracker<'a> {
         fields.insert(key("tool"), Value::Str(bucket));
         fields.insert(key("target"), target.map(Value::Str).unwrap_or(Value::None));
         self.write_transcript("tool_start", fields);
-        self.publish_now();
+        self.request_publish();
     }
 
     fn latest_pending_tool(&self) -> Option<(String, String)> {
@@ -601,7 +648,7 @@ impl<'a> LiveTracker<'a> {
             None => self.pending_fifo.borrow_mut().pop_front(),
         };
         let Some(pending) = pending else {
-            self.publish_now();
+            self.request_publish();
             return;
         };
         let ms = duration_ms.unwrap_or_else(|| pending.started.elapsed().as_secs_f64() * 1000.0);
@@ -636,7 +683,7 @@ impl<'a> LiveTracker<'a> {
             fields.insert(key("lines_removed"), opt_i64(removed));
         }
         self.write_transcript("tool_end", fields);
-        self.publish_now();
+        self.request_publish();
     }
 
     fn apply_usage(
@@ -717,7 +764,7 @@ impl<'a> LiveTracker<'a> {
             Some("session") => {
                 if let Some(Value::Str(id)) = event.get(&key("id")) {
                     *self.session_id.borrow_mut() = Some(id.clone());
-                    self.publish_now();
+                    self.request_publish();
                 }
             }
             Some("tool_execution_start") => {
@@ -739,7 +786,7 @@ impl<'a> LiveTracker<'a> {
                     .and_then(|m| m.get(&key("model")))
                     .and_then(Value::as_str);
                 if self.note_model(model) {
-                    self.publish_now();
+                    self.request_publish();
                 }
             }
             Some("message_end") => {
@@ -775,7 +822,7 @@ impl<'a> LiveTracker<'a> {
                 if !text.is_empty() {
                     self.note_reply(&text);
                 }
-                self.publish_now();
+                self.request_publish();
             }
             _ => {}
         }
@@ -798,7 +845,7 @@ impl<'a> LiveTracker<'a> {
                     session_changed = true;
                 }
                 if model_changed || session_changed {
-                    self.publish_now();
+                    self.request_publish();
                 }
             }
             Some("assistant") => {
@@ -870,7 +917,7 @@ impl<'a> LiveTracker<'a> {
                 for text in texts {
                     self.note_reply(&text);
                 }
-                self.publish_now();
+                self.request_publish();
             }
             Some("user") => {
                 let content = event
@@ -912,7 +959,7 @@ impl<'a> LiveTracker<'a> {
                         }
                     }
                 }
-                self.publish_now();
+                self.request_publish();
             }
             _ => {}
         }

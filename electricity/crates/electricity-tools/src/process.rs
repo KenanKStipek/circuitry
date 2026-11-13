@@ -366,7 +366,7 @@ fn live_tail(stdout_buf: &[u8], stderr_buf: &[u8]) -> LiveTail {
 /// second. A call that isn't due only records that a publish is
 /// *pending*, for [`run_tracked`]'s own periodic tick to flush once a
 /// second has actually passed even if no further output ever arrives.
-fn live_due(published_at: &mut Option<std::time::Instant>, pending: &mut bool) -> bool {
+pub(crate) fn live_due(published_at: &mut Option<std::time::Instant>, pending: &mut bool) -> bool {
     let now = std::time::Instant::now();
     let due = published_at.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1));
     if due {
@@ -427,12 +427,22 @@ fn emit_trailing_line(buf: &[u8], line_start: usize, on_line: &dyn Fn(&str)) {
 /// sync), never the authoritative parse of the run's output, which
 /// still goes through this function's own strict, whole-buffer decode
 /// once the run ends.
+///
+/// *on_tick*, when given, is called on every periodic poll wakeup of
+/// this function's own loop (`POLL_INTERVAL`), regardless of whether
+/// anything arrived on either pipe -- unlike *on_live*, never throttled
+/// or gated on a pending flag of its own; the one caller that needs it
+/// (`agent_cli.rs::run_agent_cli`, #636) keeps its own throttle state
+/// and uses this only as a timer to flush a publish denied inside its
+/// own window, even through a stretch with no output at all.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_tracked(
     cmd: &[String],
     opts: &RunOpts,
     token: &CancellationToken,
     on_live: Option<&dyn Fn(LiveTail)>,
     on_line: Option<&dyn Fn(&str)>,
+    on_tick: Option<&dyn Fn()>,
 ) -> Result<Completed, ProcError> {
     // `get_token().check()` before `Popen` -- refuse to even start a new
     // child once cancellation has already been requested.
@@ -690,6 +700,9 @@ pub async fn run_tracked(
                     if live_pending && live_due(&mut live_published_at, &mut live_pending) {
                         on_live(live_tail(&stdout_buf, &stderr_buf));
                     }
+                }
+                if let Some(on_tick) = on_tick {
+                    on_tick();
                 }
             }
         }
@@ -1388,9 +1401,16 @@ mod tests {
         let on_live = move |tail: LiveTail| {
             calls_for_callback.borrow_mut().push(tail);
         };
-        let completed = run_tracked(&cmd, &RunOpts::default(), &token, Some(&on_live), None)
-            .await
-            .unwrap();
+        let completed = run_tracked(
+            &cmd,
+            &RunOpts::default(),
+            &token,
+            Some(&on_live),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(completed.stdout, "out1");
         assert_eq!(completed.stderr, "out2");
         let calls = calls.borrow();
@@ -1422,9 +1442,16 @@ mod tests {
         let on_line = move |line: &str| {
             lines_for_callback.borrow_mut().push(line.to_string());
         };
-        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None, Some(&on_line))
-            .await
-            .unwrap();
+        let completed = run_tracked(
+            &cmd,
+            &RunOpts::default(),
+            &token,
+            None,
+            Some(&on_line),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(completed.stdout, "one\ntwo\nthree");
         assert_eq!(
             lines.borrow().as_slice(),
@@ -1445,9 +1472,16 @@ mod tests {
         let on_line = move |line: &str| {
             lines_for_callback.borrow_mut().push(line.to_string());
         };
-        run_tracked(&cmd, &RunOpts::default(), &token, None, Some(&on_line))
-            .await
-            .unwrap();
+        run_tracked(
+            &cmd,
+            &RunOpts::default(),
+            &token,
+            None,
+            Some(&on_line),
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(lines.borrow().as_slice(), ["one".to_string()]);
     }
 
@@ -1459,7 +1493,7 @@ mod tests {
         // a real run never panics on an absent callback.
         let token = CancellationToken::new();
         let cmd = vec!["echo".to_string(), "hi".to_string()];
-        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None, None)
+        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None, None, None)
             .await
             .unwrap();
         assert_eq!(completed.stdout, "hi\n");
@@ -1473,6 +1507,7 @@ mod tests {
             &["true".to_string()],
             &RunOpts::default(),
             &token,
+            None,
             None,
             None,
         )
@@ -1489,7 +1524,7 @@ mod tests {
             "-c".to_string(),
             "printf out; printf err 1>&2; exit 3".to_string(),
         ];
-        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None, None)
+        let completed = run_tracked(&cmd, &RunOpts::default(), &token, None, None, None)
             .await
             .unwrap();
         assert_eq!(completed.stdout, "out");
@@ -1501,7 +1536,7 @@ mod tests {
     async fn run_tracked_reports_not_found_for_a_missing_binary() {
         let token = CancellationToken::new();
         let cmd = vec!["electricity-tools-definitely-missing-binary".to_string()];
-        let err = run_tracked(&cmd, &RunOpts::default(), &token, None, None)
+        let err = run_tracked(&cmd, &RunOpts::default(), &token, None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ProcError::NotFound(_)));
@@ -1516,7 +1551,7 @@ mod tests {
             ..RunOpts::default()
         };
         let cmd = vec!["sleep".to_string(), "30".to_string()];
-        let err = run_tracked(&cmd, &opts, &token, None, None)
+        let err = run_tracked(&cmd, &opts, &token, None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
@@ -1530,7 +1565,9 @@ mod tests {
             ..RunOpts::default()
         };
         let cmd = vec!["cat".to_string()];
-        let completed = run_tracked(&cmd, &opts, &token, None, None).await.unwrap();
+        let completed = run_tracked(&cmd, &opts, &token, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(completed.stdout, "hello\n");
     }
 
@@ -1571,7 +1608,7 @@ mod tests {
             ..RunOpts::default()
         };
         let cmd = vec!["sleep".to_string(), "30".to_string()];
-        let err = run_tracked(&cmd, &opts, &token, None, None)
+        let err = run_tracked(&cmd, &opts, &token, None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
@@ -1599,7 +1636,7 @@ mod tests {
         // future; this test needs the real owned future actually
         // dropped at a precise point, which only a `Pin<Box<_>>`'s own
         // `drop` gives.
-        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None, None));
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None, None, None));
         // One poll is enough to spawn the child and construct the
         // guard; the future is then dropped without ever completing.
         tokio::select! {
@@ -1653,7 +1690,9 @@ mod tests {
             "-c".to_string(),
             "sleep 8473 >/dev/null 2>&1 & echo $!".to_string(),
         ];
-        let completed = run_tracked(&cmd, &opts, &token, None, None).await.unwrap();
+        let completed = run_tracked(&cmd, &opts, &token, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(completed.exit_code, 0);
         let bg_pid: u32 = completed.stdout.trim().parse().expect("sh printed $!");
         assert!(
@@ -1744,7 +1783,7 @@ mod tests {
                 pidfile.display()
             ),
         ];
-        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None, None));
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None, None, None));
         // One poll (via `select!`, not a bare `.await` sitting on an
         // un-started future) is enough to actually spawn the shell and
         // its background child before cancellation is requested.
@@ -1790,7 +1829,9 @@ mod tests {
         };
         let cmd = vec!["true".to_string()];
         let started = tokio::time::Instant::now();
-        let completed = run_tracked(&cmd, &opts, &token, None, None).await.unwrap();
+        let completed = run_tracked(&cmd, &opts, &token, None, None, None)
+            .await
+            .unwrap();
         assert_eq!(completed.exit_code, 0);
         assert!(
             started.elapsed() < Duration::from_secs(5),
@@ -1826,7 +1867,7 @@ mod tests {
             "sleep 8470 & echo hi".to_string(),
         ];
         let started = tokio::time::Instant::now();
-        let err = run_tracked(&cmd, &opts, &token, None, None)
+        let err = run_tracked(&cmd, &opts, &token, None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
@@ -1863,7 +1904,7 @@ mod tests {
             "sleep 8471 & echo hi".to_string(),
         ];
         let started = tokio::time::Instant::now();
-        let err = run_tracked(&cmd, &opts, &token, None, None)
+        let err = run_tracked(&cmd, &opts, &token, None, None, None)
             .await
             .unwrap_err();
         assert!(matches!(err, ProcError::Timeout { .. }));
@@ -1893,7 +1934,7 @@ mod tests {
             "-c".to_string(),
             "sleep 8472 & echo hi".to_string(),
         ];
-        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None, None));
+        let mut fut = Box::pin(run_tracked(&cmd, &opts, &token, None, None, None));
         // `sh` itself (printing "hi" and exiting) finishes almost at
         // once; this gives it ample time to exit and be reaped by this
         // future's own wait loop before the drop below, while the

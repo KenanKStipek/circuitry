@@ -34,6 +34,7 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         on_live: None,
         on_agent_live: None,
         agent_attempt: 1,
+        agent_earlier_attempts: None,
         limited: false,
         confine_to: None,
     }
@@ -362,6 +363,7 @@ async fn a_secret_header_defaults_redirects_to_strip_auth_not_follow() {
             on_live: None,
             on_agent_live: None,
             agent_attempt: 1,
+            agent_earlier_attempts: None,
             limited: false,
             confine_to: None,
         },
@@ -527,6 +529,7 @@ async fn a_secret_straddling_the_error_excerpts_own_cut_leaves_no_fragment_on_ei
             on_live: None,
             on_agent_live: None,
             agent_attempt: 1,
+            agent_earlier_attempts: None,
             limited: false,
             confine_to: None,
         },

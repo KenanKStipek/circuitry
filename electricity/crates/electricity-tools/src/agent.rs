@@ -41,7 +41,6 @@ pub const PI: &str = "pi";
 pub const CLAUDE_CODE: &str = "claude_code";
 const DEFAULT_ENGINE: &str = PI;
 const TOOLS_PERMISSION_MODE: &str = "dontAsk";
-const MAX_QUOTED_ERRORS: usize = 20;
 const TRANSCRIPT_NAME: &str = "transcript.log";
 const PROJECT_INSTRUCTIONS_HEADER: &str = "\n\n---\n\nProject instructions from the repository's CLAUDE.md (Claude Code does not load it in this session):\n\n";
 
@@ -258,6 +257,25 @@ impl From<AgentCliRunError> for TurnFailure {
     }
 }
 
+/// `run_agent_cli`'s own failure, turned into this turn's outcome --
+/// `Cancelled`/`Decode` are never wrapped as a CLI failure
+/// (`agent_cli.rs`'s own `AgentCliRunError` doc comment), so unlike
+/// `Timeout`/`StartFailed` they never become an `ok: false` result
+/// naming a session or transcript to resume; they raise exactly as
+/// every other tool's own `ProcError::Cancelled`/`ProcError::Decode`
+/// does.
+fn turn_outcome_from_run_error(err: AgentCliRunError) -> TurnOutcome {
+    match err {
+        AgentCliRunError::Cancelled => TurnOutcome::Raise(ToolError::message("cancelled")),
+        AgentCliRunError::Decode(message) => TurnOutcome::Raise(ToolError {
+            py_class: PyExc::UnicodeDecodeError,
+            message,
+            cause: ErrorCause::None,
+        }),
+        other => TurnOutcome::Failed(TurnFailure::from(other)),
+    }
+}
+
 impl From<AgentCliParseError> for TurnFailure {
     fn from(err: AgentCliParseError) -> Self {
         TurnFailure {
@@ -347,6 +365,7 @@ async fn run_pi_turn(
         },
     );
     let on_line = |line: &str| live.handle_line(line);
+    let on_tick = || live.maybe_flush();
     let run_result = run_agent_cli(
         &cmd,
         &options.unset_env,
@@ -356,10 +375,11 @@ async fn run_pi_turn(
         Some(PathBuf::from(&options.cwd)),
         token,
         Some(&on_line),
+        Some(&on_tick),
     )
     .await;
     let _ = std::fs::remove_file(&prompt_file);
-    let proc = run_result.map_err(|err| TurnOutcome::Failed(TurnFailure::from(err)))?;
+    let proc = run_result.map_err(turn_outcome_from_run_error)?;
     let parsed =
         parse_pi_output(&proc).map_err(|err| TurnOutcome::Failed(TurnFailure::from(err)))?;
     let mut turns = 0i64;
@@ -442,6 +462,7 @@ async fn run_claude_turn(
     .map_err(|err| TurnOutcome::Raise(ToolError::message(format!("agent: {err:?}"))))?;
     let cmd = stream_json(cmd);
     let on_line = |line: &str| live.handle_line(line);
+    let on_tick = || live.maybe_flush();
     let run_result = run_agent_cli(
         &cmd,
         &options.unset_env,
@@ -451,9 +472,10 @@ async fn run_claude_turn(
         Some(PathBuf::from(&options.cwd)),
         token,
         Some(&on_line),
+        Some(&on_tick),
     )
     .await;
-    let proc = run_result.map_err(|err| TurnOutcome::Failed(TurnFailure::from(err)))?;
+    let proc = run_result.map_err(turn_outcome_from_run_error)?;
     let result = parse_claude_output(&proc, None)
         .map_err(|err| TurnOutcome::Failed(TurnFailure::from(err)))?;
     let mut turns = 0i64;
@@ -637,9 +659,7 @@ fn repair_prompt(result_file: &Path, errors: &[String]) -> String {
     )
 }
 
-/// `plugins/agent.py::_read_result`. Known divergence (DESIGN.md §13):
-/// reports at most the first schema violation, labelled `(root)` rather
-/// than cof's own JSON-pointer-shaped path -- see the module doc comment.
+/// `plugins/agent.py::_read_result`.
 fn read_result(result_file: &Path, result_schema: Option<&Value>) -> (Value, Vec<String>) {
     let bytes = match std::fs::read(result_file) {
         Ok(bytes) => bytes,
@@ -666,20 +686,13 @@ fn read_result(result_file: &Path, result_schema: Option<&Value>) -> (Value, Vec
     let Some(schema) = result_schema else {
         return (value, Vec::new());
     };
-    let mut errors = match electricity_schema::validate_prompt_schema(schema, &value) {
-        electricity_schema::PromptSchemaCheck::Valid => Vec::new(),
-        electricity_schema::PromptSchemaCheck::Invalid(message) => {
-            vec![format!("(root): {message}")]
-        }
-        electricity_schema::PromptSchemaCheck::SchemaError(message) => {
+    let errors = match electricity_schema::result_schema_errors(schema, &value) {
+        electricity_schema::SchemaErrorList::Valid => Vec::new(),
+        electricity_schema::SchemaErrorList::Invalid(errors) => errors,
+        electricity_schema::SchemaErrorList::SchemaError(message) => {
             vec![format!("(root): {message}")]
         }
     };
-    if errors.len() > MAX_QUOTED_ERRORS {
-        let more = errors.len() - MAX_QUOTED_ERRORS;
-        errors.truncate(MAX_QUOTED_ERRORS);
-        errors.push(format!("... and {more} more"));
-    }
     (value, errors)
 }
 
@@ -1090,7 +1103,10 @@ impl ToolPlugin for AgentPlugin {
             permission_mode = TOOLS_PERMISSION_MODE.to_string();
         }
         let result_file_param = optional_str(params, "result_file")?;
-        let result_schema = get(params, "result_schema").cloned();
+        let result_schema = match get(params, "result_schema") {
+            None | Some(Value::None) => None,
+            Some(value) => Some(value.clone()),
+        };
         if let Some(schema) = &result_schema {
             if result_file_param.is_empty() {
                 return Err(value_error(
@@ -1197,7 +1213,7 @@ impl ToolPlugin for AgentPlugin {
             i64::from(call.agent_attempt),
             &transcript_path,
             &publish,
-            None,
+            call.agent_earlier_attempts,
         );
 
         let session_id = if session_param.is_empty() {

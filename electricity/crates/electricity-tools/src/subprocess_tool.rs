@@ -379,7 +379,7 @@ pub(crate) async fn run_binary(
         env_set: Vec::new(),
     };
 
-    let completed = match process::run_tracked(&cmd, &opts, token, on_live, None).await {
+    let completed = match process::run_tracked(&cmd, &opts, token, on_live, None, None).await {
         Ok(completed) => completed,
         Err(ProcError::NotFound(_)) => {
             return Err(ToolError {

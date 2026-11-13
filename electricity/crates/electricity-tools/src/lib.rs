@@ -307,6 +307,13 @@ pub struct ToolCall<'a> {
     /// `agent`'s own `meta.live.attempt` reads it; every other provider
     /// ignores it.
     pub agent_attempt: u32,
+    /// `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`,
+    /// the run's own totals *before* this attempt -- `Some` only once
+    /// `agent_attempt > 1`, the same `attempt_index > 0` gate
+    /// `core/tool.py`'s own call applies; `None` on the first attempt and
+    /// for every other provider. Only `agent`'s own `meta.live.
+    /// earlier_attempts` reads it.
+    pub agent_earlier_attempts: Option<(Option<i64>, Option<i64>)>,
     /// `ToolDefinition.limited`: true for a tool effect compiled from a
     /// document not run by path. Only [`crate::systemone::SystemOnePlugin`]
     /// reads this.
@@ -401,6 +408,7 @@ mod tests {
             on_live: None,
             on_agent_live: None,
             agent_attempt: 1,
+            agent_earlier_attempts: None,
             limited: false,
             confine_to: None,
         }

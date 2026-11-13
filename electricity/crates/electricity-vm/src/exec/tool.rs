@@ -168,6 +168,7 @@ pub async fn run_tool(
     on_live: Option<&dyn Fn(electricity_tools::process::LiveTail)>,
     on_agent_live: Option<&dyn Fn(electricity_value::Value)>,
     agent_attempt: u32,
+    agent_earlier_attempts: Option<(Option<i64>, Option<i64>)>,
     limited: bool,
     confine_to: Option<&str>,
 ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
@@ -183,6 +184,7 @@ pub async fn run_tool(
         on_live,
         on_agent_live,
         agent_attempt,
+        agent_earlier_attempts,
         limited,
         confine_to,
     };
@@ -757,8 +759,8 @@ fn evaluate_cel_tool<R: ParamsCtx>(
             .and_then(|d| d.get(&Value::Str("schema".to_string())))
             .expect("just matched Some(Value::Dict(_)) above");
         match electricity_schema::cel_schema_errors(schema, &value) {
-            electricity_schema::CelSchemaCheck::Valid => {}
-            electricity_schema::CelSchemaCheck::Invalid(errors) => {
+            electricity_schema::SchemaErrorList::Valid => {}
+            electricity_schema::SchemaErrorList::Invalid(errors) => {
                 return Err(electricity_tools::ToolError {
                     py_class: electricity_tools::PyExc::ValueError,
                     message: format!(
@@ -768,7 +770,7 @@ fn evaluate_cel_tool<R: ParamsCtx>(
                     cause: electricity_tools::ErrorCause::None,
                 });
             }
-            electricity_schema::CelSchemaCheck::SchemaError(message) => {
+            electricity_schema::SchemaErrorList::SchemaError(message) => {
                 return Err(electricity_tools::ToolError {
                     py_class: electricity_tools::PyExc::ValueError,
                     message,
@@ -1489,6 +1491,8 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 on_live,
                                                 on_agent_live,
                                                 attempt_index + 1,
+                                                (attempt_index > 0)
+                                                    .then_some((total_tokens_sent, total_tokens_received)),
                                                 tool.limited,
                                                 tool.confine_to.as_deref(),
                                             ).await
@@ -1503,8 +1507,24 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 // explicit, not merely left for this
                                 // scope's own end, so it happens before the
                                 // result-handling code below writes this
-                                // attempt's own final meta values.
-                                drop(_clear_live);
+                                // attempt's own final meta values. For an
+                                // agent effect specifically, a cancelled
+                                // attempt is the one exception: `plugins/
+                                // agent.py`'s own `except Exception` never
+                                // catches the interrupt, so cof's own
+                                // `meta.live` survives in final state as
+                                // the one surviving record of that
+                                // attempt's session and transcript -- the
+                                // guard is forgotten rather than dropped so
+                                // its own `Drop` impl never runs.
+                                let is_cancelled_outcome = dispatch.is_none()
+                                    || (token.is_set()
+                                        && matches!(&dispatch, Some(Err(err)) if err.message == "cancelled"));
+                                if is_agent && is_cancelled_outcome {
+                                    std::mem::forget(_clear_live);
+                                } else {
+                                    drop(_clear_live);
+                                }
                                 // Released before this attempt's own backoff
                                 // sleep (and before a model-mode `expect:` would
                                 // run, if M0-H ever dispatched one) -- a
@@ -2104,6 +2124,7 @@ mod tests {
             None,
             None,
             1,
+            None,
             false,
             None,
         )
@@ -2133,6 +2154,7 @@ mod tests {
             None,
             None,
             1,
+            None,
             false,
             None,
         )

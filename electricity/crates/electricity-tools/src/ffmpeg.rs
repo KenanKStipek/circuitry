@@ -246,7 +246,7 @@ impl ToolPlugin for FfmpegPlugin {
         };
 
         let completed =
-            match process::run_tracked(&cmd, &opts, call.token, call.on_live, None).await {
+            match process::run_tracked(&cmd, &opts, call.token, call.on_live, None, None).await {
                 Ok(completed) => completed,
                 Err(ProcError::NotFound(_)) => {
                     return Err(ToolError {
@@ -361,6 +361,7 @@ mod tests {
             on_live: None,
             on_agent_live: None,
             agent_attempt: 1,
+            agent_earlier_attempts: None,
             limited: false,
             confine_to: None,
         }
