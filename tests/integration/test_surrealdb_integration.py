@@ -172,15 +172,20 @@ def test_query_with_bound_params(plugin: SurrealDBPlugin, table: str) -> None:
 
 
 def test_surrealql_syntax_error_is_actionable(plugin: SurrealDBPlugin) -> None:
-    with pytest.raises(RuntimeError) as excinfo:
+    with pytest.raises(
+        RuntimeError, match="surrealdb query failed: Parse error"
+    ) as excinfo:
         plugin.execute(params={"mode": "query", "query": "SELEC * FROM person"})
-    assert "surrealdb" in str(excinfo.value)
+    assert "unexpected response shape" not in str(excinfo.value)
 
 
 def test_query_raises_on_a_later_failing_statement(
     plugin: SurrealDBPlugin, table: str
 ) -> None:
-    with pytest.raises(RuntimeError, match="SurrealQL error"):
+    with pytest.raises(
+        RuntimeError,
+        match="surrealdb query failed: An error occurred: later statement failed",
+    ):
         plugin.execute(
             params={
                 "mode": "query",

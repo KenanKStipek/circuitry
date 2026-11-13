@@ -135,11 +135,11 @@ Failures map to actionable messages and mark the run `ok=False`:
 | request timed out | `surrealdb: <url> timed out (...)` |
 | bad credentials | `surrealdb: authentication rejected by <url> (...)` |
 | wrong namespace/database | `surrealdb: USE <ns> <db> failed (...)` |
-| SurrealQL error | `surrealdb <mode> failed: ...` / `SurrealQL error: ...` |
+| SurrealQL error | `surrealdb <mode> failed: <the server's own message>` |
 
 A `query` mode call with more than one SurrealQL statement raises on the
-first one that fails, in statement order — the same statement, and the same
-`SurrealQL error: ...` text, no matter which `surrealdb` SDK major is
+first one that fails, in statement order — the same statement, and the
+server's own message verbatim, no matter which `surrealdb` SDK major is
 installed. On success `query`'s value is the first statement's own result.
 
 The SDK's own request timeout is disabled, so a slow query is given as long

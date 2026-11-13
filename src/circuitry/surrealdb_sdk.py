@@ -102,19 +102,30 @@ def run_query_raw(response: Any, *, mode: str = "query") -> Any:
     ``query_raw()`` exists on both SDK majors with the identical shape
     above, so this is the one place a multi-statement SurrealQL string gets
     the same answer regardless of which major is installed: a failure in
-    *any* statement raises, in statement order, with the same text either
-    way -- SDK 2.x's own ``query()`` only ever checks the first statement
-    and silently drops a later one's error, and SDK 3.x's own
-    ``query().execute()`` raises its own (differently worded) exception for
-    the same case, so neither SDK's own method is used here.
+    *any* statement raises, in statement order -- SDK 2.x's own ``query()``
+    only ever checks the first statement and silently drops a later one's
+    error, and SDK 3.x's own ``query().execute()`` raises its own
+    (differently worded) exception for the same case, so neither SDK's own
+    method is used here.
+
+    Either kind of failure raises with the server's own message, verbatim --
+    the same text SDK 2.x's own ``query()`` raised with, before this existed.
+    A statement-level failure (``{"result": [{"status": "ERR", ...}, ...]}``)
+    and an RPC-level one (a parse/validation error, which never produces a
+    ``"result"`` list at all: ``{"error": {"message": ..., ...}}``) are both
+    unwrapped to that message rather than reported as an unrecognised shape.
     """
+    if isinstance(response, dict) and "result" not in response and "error" in response:
+        error = response["error"]
+        message = error.get("message") if isinstance(error, dict) else error
+        raise RuntimeError(str(message if message is not None else error))
     statements = response.get("result") if isinstance(response, dict) else None
     if not isinstance(statements, list):
         raise RuntimeError(f"surrealdb {mode}: unexpected response shape: {response!r}")
     for statement in statements:
         if isinstance(statement, dict) and str(statement.get("status", "")).upper() == "ERR":
             detail = statement.get("result") or statement.get("detail") or statement
-            raise RuntimeError(f"surrealdb {mode}: SurrealQL error: {detail}")
+            raise RuntimeError(str(detail))
     if not statements:
         return None
     first = statements[0]

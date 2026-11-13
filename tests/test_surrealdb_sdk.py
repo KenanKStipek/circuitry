@@ -149,7 +149,7 @@ def test_run_query_raw_raises_on_the_first_failing_statement() -> None:
             {"status": "ERR", "result": "Found NONE for field score"},
         ]
     }
-    with pytest.raises(RuntimeError, match="SurrealQL error: Found NONE"):
+    with pytest.raises(RuntimeError, match=r"^Found NONE for field score$"):
         run_query_raw(response, mode="query")
 
 
@@ -160,7 +160,20 @@ def test_run_query_raw_raises_on_an_early_failing_statement_even_with_a_later_ok
             {"status": "OK", "result": [{"name": "ada"}]},
         ]
     }
-    with pytest.raises(RuntimeError, match="SurrealQL error: Parse error"):
+    with pytest.raises(RuntimeError, match=r"^Parse error$"):
+        run_query_raw(response, mode="query")
+
+
+def test_run_query_raw_raises_with_the_servers_message_for_an_rpc_level_error() -> None:
+    response = {
+        "error": {
+            "cause": None,
+            "code": -32000,
+            "kind": "Validation",
+            "message": "Parse error: Unexpected token",
+        }
+    }
+    with pytest.raises(RuntimeError, match=r"^Parse error: Unexpected token$"):
         run_query_raw(response, mode="query")
 
 

@@ -487,7 +487,7 @@ def test_query_raises_when_a_later_statement_fails(fake_sdk: type[FakeSurreal]) 
         ]
     }
 
-    with pytest.raises(RuntimeError, match="SurrealQL error: Found NONE"):
+    with pytest.raises(RuntimeError, match="surrealdb query failed: Found NONE"):
         _plugin().execute(
             params={
                 "mode": "query",
@@ -840,8 +840,28 @@ def test_statement_level_error_status_is_raised(fake_sdk: type[FakeSurreal]) -> 
         "result": [{"status": "ERR", "result": "Table 'nope' does not exist"}]
     }
 
-    with pytest.raises(RuntimeError, match="SurrealQL error: Table 'nope' does not exist"):
+    with pytest.raises(
+        RuntimeError, match="surrealdb query failed: Table 'nope' does not exist"
+    ):
         _plugin().execute(params={"mode": "query", "query": "SELECT * FROM nope"})
+
+
+def test_rpc_level_error_is_raised_with_the_servers_message(
+    fake_sdk: type[FakeSurreal],
+) -> None:
+    fake_sdk.query_raw_result = {
+        "error": {
+            "cause": None,
+            "code": -32000,
+            "kind": "Validation",
+            "message": "Parse error: Unexpected token nonsense",
+        }
+    }
+
+    with pytest.raises(
+        RuntimeError, match="surrealdb query failed: Parse error: Unexpected token"
+    ):
+        _plugin().execute(params={"mode": "query", "query": "SELEC nonsense FROM"})
 
 
 def test_connection_dropped_mid_operation_maps_to_connection_error(
