@@ -3884,6 +3884,31 @@ pub(crate) fn last_finished_row(
         })
 }
 
+/// Issue #690: the step rows and the Now pane, while actually
+/// scrubbed away from Now, reconstruct the run as of `cutoff`
+/// instead of showing its current state -- `state` truncated the
+/// same way the design's own frame fixtures are (`model::
+/// truncate_state_to`), observed into a brand new [`RunModel`] of
+/// its own (never the real, live one, which only ever runs forward)
+/// so `running_or_queued_bound` and every other model-backed figure
+/// read exactly as a real attach at that instant would. `None` with
+/// nothing to truncate against yet (no `state` at all).
+type SignalReconstruction = (Vec<Row>, BTreeMap<String, NodeMeta>, RunModel, Value);
+
+fn signal_reconstruct_at(
+    state: Option<&Value>,
+    plan: &PlanTree,
+    cutoff: &str,
+) -> Option<SignalReconstruction> {
+    let truncated = crate::model::truncate_state_to(state?, cutoff);
+    let flat = crate::model::flatten_state(&truncated);
+    let mut model = RunModel::new();
+    let statuses = model.observe(&truncated, plan, crate::model::ProcessState::Running);
+    let all_paths = crate::render::all_observed_paths(&flat, &statuses, plan, &model);
+    let rows = crate::render::build_rows(plan, &flat, &statuses, &all_paths, cutoff, &model, None);
+    Some((rows, flat, model, truncated))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn build_signal(
     rows: &[Row],
@@ -3953,6 +3978,16 @@ pub fn build_signal(
     // Readings' own Peak, Largest and Quiet all read up to here, not
     // past it, once scrubbed away from Now.
     let cursor = cursor_col.or(selection_col).or(now_col);
+    // Issue #690: only while actually scrubbed away from Now (the
+    // explicit `cursor_col`, never the plain selection-column
+    // fallback above) does the past get reconstructed at all -- `n`
+    // clears `cursor_col` back to `None` and this reverts with it,
+    // the same as "n returns to the live state".
+    let scrub_recon = cursor_col.filter(|&c| Some(c) != now_col).and_then(|c| {
+        let cutoff =
+            run_start.and_then(|s| crate::observe::add_seconds(s, (c + 1) as f64 * column_s))?;
+        signal_reconstruct_at(state, plan, &cutoff)
+    });
 
     let model_label = rows
         .iter()
@@ -4104,95 +4139,171 @@ pub fn build_signal(
     // (`rows`'s own depth-1 slice, in plan order -- never real finish
     // order, which this screen has no Now band to anchor against the
     // way the Tape's own list does), each at its own start column.
-    let top_level: Vec<&Row> = rows.iter().filter(|r| r.depth == 1).collect();
-    let started: Vec<&&Row> = top_level
-        .iter()
-        .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
-        .collect();
-    let mut step_rows = Vec::new();
-    for row in &started {
-        let Some(node) = flat.get(&row.path) else {
-            continue;
-        };
-        let Some(start_ts) = node.created_at.as_deref() else {
-            continue;
-        };
-        let Some(offset) = elapsed_offset(start_ts) else {
-            continue;
-        };
-        let col = col_of(offset);
-        let label = tape_row_label(row, flat, plan);
-        let kind = match row.kind {
-            RowKind::Prompt | RowKind::Reflector => {
-                let (sent, received) = crate::model::node_tokens(&node.meta);
-                let total = sent + received;
-                let usual = tape_row_usual_tokens(&row.path, plan, header);
-                let dev = usual
-                    .filter(|&u| u > 0)
-                    .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
-                let reply_words = (!node.value.is_null())
-                    .then(|| crate::summary::json_value_summary(&node.value, 24))
-                    .filter(|v| !v.is_empty());
-                let mut parts = vec![crate::format::format_tokens(total)];
-                if let Some(dev) = dev {
-                    parts.push(format!("{dev:+.0}%"));
+    // Issue #690: `rows`/`flat`/`model` shadow to the reconstructed
+    // past, local to this block alone -- Readings and the selected
+    // step below read the live ones, unaffected.
+    let (step_rows, ahead_suffix, now_pane) = {
+        let rows: &[Row] = scrub_recon
+            .as_ref()
+            .map(|(r, ..)| r.as_slice())
+            .unwrap_or(rows);
+        let flat: &BTreeMap<String, NodeMeta> =
+            scrub_recon.as_ref().map(|(_, f, ..)| f).unwrap_or(flat);
+        let model: &RunModel = scrub_recon.as_ref().map(|(_, _, m, _)| m).unwrap_or(model);
+        let state: Option<&Value> = scrub_recon.as_ref().map(|(_, _, _, s)| s).or(state);
+        let top_level: Vec<&Row> = rows.iter().filter(|r| r.depth == 1).collect();
+        let started: Vec<&&Row> = top_level
+            .iter()
+            .filter(|r| !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+            .collect();
+        let mut step_rows = Vec::new();
+        for row in &started {
+            let Some(node) = flat.get(&row.path) else {
+                continue;
+            };
+            let Some(start_ts) = node.created_at.as_deref() else {
+                continue;
+            };
+            let Some(offset) = elapsed_offset(start_ts) else {
+                continue;
+            };
+            let col = col_of(offset);
+            let label = tape_row_label(row, flat, plan);
+            let kind = match row.kind {
+                RowKind::Prompt | RowKind::Reflector => {
+                    let (sent, received) = crate::model::node_tokens(&node.meta);
+                    let total = sent + received;
+                    let usual = tape_row_usual_tokens(&row.path, plan, header);
+                    let dev = usual
+                        .filter(|&u| u > 0)
+                        .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
+                    let reply_words = (!node.value.is_null())
+                        .then(|| crate::summary::json_value_summary(&node.value, 24))
+                        .filter(|v| !v.is_empty());
+                    let mut parts = vec![crate::format::format_tokens(total)];
+                    if let Some(dev) = dev {
+                        parts.push(format!("{dev:+.0}%"));
+                    }
+                    if let Some(words) = reply_words {
+                        parts.push(words);
+                    }
+                    SignalStepKind::Prompt {
+                        rest: parts.join(" \u{b7} "),
+                    }
                 }
-                if let Some(words) = reply_words {
-                    parts.push(words);
+                RowKind::If => {
+                    let prefix = format!("{}.", row.path);
+                    let released = rows
+                        .iter()
+                        .filter(|r| {
+                            r.depth == row.depth + 1
+                                && r.path.starts_with(&prefix)
+                                && !matches!(
+                                    r.status.kind,
+                                    StatusKind::Pending | StatusKind::Skipped
+                                )
+                        })
+                        .map(|r| {
+                            let rn = flat.get(&r.path);
+                            let (sent, received) = rn
+                                .map(|n| crate::model::node_tokens(&n.meta))
+                                .unwrap_or((0, 0));
+                            let total = sent + received;
+                            let usual = tape_row_usual_tokens(&r.path, plan, header);
+                            let dev = usual
+                                .filter(|&u| u > 0)
+                                .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
+                            SignalReleasedStep {
+                                label: r.label.clone(),
+                                tokens: (total > 0).then_some(total),
+                                dev_pct: dev,
+                            }
+                        })
+                        .collect();
+                    // The very next top-level row's own progress, when
+                    // it is an already-active loop -- the design's text
+                    // never names this, only `run2`'s own frame does.
+                    let suffix = top_level
+                        .iter()
+                        .position(|r| r.path == row.path)
+                        .and_then(|idx| top_level.get(idx + 1))
+                        .filter(|r| {
+                            r.kind == RowKind::Loop
+                                && !matches!(
+                                    r.status.kind,
+                                    StatusKind::Pending | StatusKind::Skipped
+                                )
+                        })
+                        .map(|r| {
+                            let (tokens, count) = signal_loop_pass_tokens(&r.path, flat);
+                            format!(
+                                "\u{b7} {} \u{d7}{count} \u{b7} {}",
+                                tape_row_label(r, flat, plan),
+                                crate::format::format_tokens(tokens)
+                            )
+                        })
+                        .unwrap_or_default();
+                    SignalStepKind::Decision { released, suffix }
                 }
-                SignalStepKind::Prompt {
-                    rest: parts.join(" \u{b7} "),
+                RowKind::Loop => {
+                    let busy = rows
+                        .iter()
+                        .filter(|r| {
+                            r.path.starts_with(&format!("{}.", row.path))
+                                && r.kind.is_leaf()
+                                && matches!(
+                                    r.status.kind,
+                                    StatusKind::Running
+                                        | StatusKind::LikelyRunning
+                                        | StatusKind::RunningOrQueued
+                                )
+                        })
+                        .count() as u64;
+                    let total = row.loop_progress.and_then(|p| p.total);
+                    let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
+                    let queued = total.map(|t| t.saturating_sub(done).saturating_sub(busy));
+                    let status_text = match queued {
+                        Some(queued) => format!("{busy} Running \u{b7} {queued} Queued"),
+                        None => format!("{busy} Running"),
+                    };
+                    SignalStepKind::Loop { status_text }
                 }
-            }
-            RowKind::If => {
-                let prefix = format!("{}.", row.path);
-                let released = rows
-                    .iter()
-                    .filter(|r| {
-                        r.depth == row.depth + 1
-                            && r.path.starts_with(&prefix)
-                            && !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped)
-                    })
-                    .map(|r| {
-                        let rn = flat.get(&r.path);
-                        let (sent, received) = rn
-                            .map(|n| crate::model::node_tokens(&n.meta))
-                            .unwrap_or((0, 0));
-                        let total = sent + received;
-                        let usual = tape_row_usual_tokens(&r.path, plan, header);
-                        let dev = usual
-                            .filter(|&u| u > 0)
-                            .map(|u| ((total as f64 - u as f64) / u as f64) * 100.0);
-                        SignalReleasedStep {
-                            label: r.label.clone(),
-                            tokens: (total > 0).then_some(total),
-                            dev_pct: dev,
-                        }
-                    })
-                    .collect();
-                // The very next top-level row's own progress, when
-                // it is an already-active loop -- the design's text
-                // never names this, only `run2`'s own frame does.
-                let suffix = top_level
-                    .iter()
-                    .position(|r| r.path == row.path)
-                    .and_then(|idx| top_level.get(idx + 1))
-                    .filter(|r| {
-                        r.kind == RowKind::Loop
-                            && !matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped)
-                    })
-                    .map(|r| {
-                        let (tokens, count) = signal_loop_pass_tokens(&r.path, flat);
-                        format!(
-                            "\u{b7} {} \u{d7}{count} \u{b7} {}",
-                            tape_row_label(r, flat, plan),
-                            crate::format::format_tokens(tokens)
-                        )
-                    })
-                    .unwrap_or_default();
-                SignalStepKind::Decision { released, suffix }
-            }
-            RowKind::Loop => {
+                _ => {
+                    let what = tape_tool_what(row, Some(node), plan);
+                    let (cmd, duration) = match what.split_once(" \u{b7} ") {
+                        Some((d, c)) => (c.to_string(), d.to_string()),
+                        None => (String::new(), what),
+                    };
+                    let text = if cmd.is_empty() {
+                        format!("{label} \u{b7} {duration}")
+                    } else {
+                        format!("{label} \u{b7} {cmd} \u{b7} {duration}")
+                    };
+                    let end_col = row
+                        .duration_s
+                        .map(|d| col + ((d / column_s).round() as usize).max(1) - 1)
+                        .unwrap_or(col);
+                    SignalStepKind::Tool { end_col, text }
+                }
+            };
+            step_rows.push(SignalStepRow {
+                path: row.path.clone(),
+                label,
+                col,
+                row_kind: row.kind,
+                status: row.status.kind,
+                kind,
+            });
+        }
+
+        // The faint plan-ahead list trailing the last step row: the
+        // last started top-level row's own loop, if any, names its own
+        // next undispatched pass first; then every top-level row still
+        // ahead, in plan order; then `■ End` while the run is live.
+        let last_started = started.last().copied();
+        let mut ahead_items: Vec<String> = Vec::new();
+        if let Some(row) = last_started {
+            if row.kind == RowKind::Loop {
                 let busy = rows
                     .iter()
                     .filter(|r| {
@@ -4206,55 +4317,59 @@ pub fn build_signal(
                             )
                     })
                     .count() as u64;
-                let total = row.loop_progress.and_then(|p| p.total);
                 let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
-                let queued = total.map(|t| t.saturating_sub(done).saturating_sub(busy));
-                let status_text = match queued {
-                    Some(queued) => format!("{busy} Running \u{b7} {queued} Queued"),
-                    None => format!("{busy} Running"),
-                };
-                SignalStepKind::Loop { status_text }
+                let total = row.loop_progress.and_then(|p| p.total);
+                if total.is_none_or(|t| done + busy < t) {
+                    ahead_items.push(format!("iter_{}", done + busy));
+                }
             }
-            _ => {
-                let what = tape_tool_what(row, Some(node), plan);
-                let (cmd, duration) = match what.split_once(" \u{b7} ") {
-                    Some((d, c)) => (c.to_string(), d.to_string()),
-                    None => (String::new(), what),
-                };
-                let text = if cmd.is_empty() {
-                    format!("{label} \u{b7} {duration}")
-                } else {
-                    format!("{label} \u{b7} {cmd} \u{b7} {duration}")
-                };
-                let end_col = row
-                    .duration_s
-                    .map(|d| col + ((d / column_s).round() as usize).max(1) - 1)
-                    .unwrap_or(col);
-                SignalStepKind::Tool { end_col, text }
+        }
+        for row in top_level
+            .iter()
+            .filter(|r| matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
+        {
+            ahead_items.push(tape_row_label(row, flat, plan));
+        }
+        let ahead_suffix = if ahead_items.is_empty() {
+            header
+                .run_end_ts
+                .is_none()
+                .then(|| "\u{25a0} End".to_string())
+        } else {
+            let mut text = ahead_items
+                .iter()
+                .map(|i| format!("\u{b7} {i}"))
+                .collect::<Vec<_>>()
+                .join("   ");
+            if header.run_end_ts.is_none() {
+                text.push_str("   \u{25a0} End");
             }
+            Some(text)
         };
-        step_rows.push(SignalStepRow {
-            path: row.path.clone(),
-            label,
-            col,
-            row_kind: row.kind,
-            status: row.status.kind,
-            kind,
-        });
-    }
 
-    // The faint plan-ahead list trailing the last step row: the
-    // last started top-level row's own loop, if any, names its own
-    // next undispatched pass first; then every top-level row still
-    // ahead, in plan order; then `■ End` while the run is live.
-    let last_started = started.last().copied();
-    let mut ahead_items: Vec<String> = Vec::new();
-    if let Some(row) = last_started {
-        if row.kind == RowKind::Loop {
+        // The Now pane. Issue #690: a loop still `Pending` (not yet
+        // dispatched at all) is `!= Done` too -- without this, the
+        // title read `0 of 0 Slots Busy` before any loop had even
+        // started, rather than naming what the run actually runs.
+        let running_loops: Vec<&Row> = top_level
+            .iter()
+            .filter(|r| {
+                r.kind == RowKind::Loop
+                    && matches!(
+                        r.status.kind,
+                        StatusKind::Running
+                            | StatusKind::LikelyRunning
+                            | StatusKind::RunningOrQueued
+                    )
+            })
+            .copied()
+            .collect();
+        let slots_text = running_loops.first().map(|loop_row| {
+            let prefix = format!("{}.", loop_row.path);
             let busy = rows
                 .iter()
                 .filter(|r| {
-                    r.path.starts_with(&format!("{}.", row.path))
+                    r.path.starts_with(&prefix)
                         && r.kind.is_leaf()
                         && matches!(
                             r.status.kind,
@@ -4264,194 +4379,157 @@ pub fn build_signal(
                         )
                 })
                 .count() as u64;
-            let done = row.loop_progress.map(|p| p.done).unwrap_or(0);
-            let total = row.loop_progress.and_then(|p| p.total);
-            if total.is_none_or(|t| done + busy < t) {
-                ahead_items.push(format!("iter_{}", done + busy));
-            }
-        }
-    }
-    for row in top_level
-        .iter()
-        .filter(|r| matches!(r.status.kind, StatusKind::Pending | StatusKind::Skipped))
-    {
-        ahead_items.push(tape_row_label(row, flat, plan));
-    }
-    let ahead_suffix = if ahead_items.is_empty() {
-        header
-            .run_end_ts
-            .is_none()
-            .then(|| "\u{25a0} End".to_string())
-    } else {
-        let mut text = ahead_items
-            .iter()
-            .map(|i| format!("\u{b7} {i}"))
-            .collect::<Vec<_>>()
-            .join("   ");
-        if header.run_end_ts.is_none() {
-            text.push_str("   \u{25a0} End");
-        }
-        Some(text)
-    };
-
-    // The Now pane.
-    let running_loops: Vec<&Row> = top_level
-        .iter()
-        .filter(|r| r.kind == RowKind::Loop && r.status.kind != StatusKind::Done)
-        .copied()
-        .collect();
-    let slots_text = running_loops.first().map(|loop_row| {
-        let prefix = format!("{}.", loop_row.path);
-        let busy = rows
-            .iter()
-            .filter(|r| {
-                r.path.starts_with(&prefix)
-                    && r.kind.is_leaf()
-                    && matches!(
-                        r.status.kind,
-                        StatusKind::Running
-                            | StatusKind::LikelyRunning
-                            | StatusKind::RunningOrQueued
-                    )
-            })
-            .count() as u64;
-        let slots = model
-            .running_or_queued_bound(&loop_row.path)
-            .unwrap_or(busy);
-        format!("{busy} of {slots} Slots Busy")
-    });
-    let mut running = Vec::new();
-    let mut per_loop_slot: BTreeMap<String, u64> = BTreeMap::new();
-    for row in rows.iter().filter(|r| {
-        r.kind.is_leaf()
-            && matches!(
-                r.status.kind,
-                StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
-            )
-    }) {
-        let (what, _, _) = tape_row_content(row, flat, plan, model, state, false, false, now);
-        let loop_path = running_loops
-            .iter()
-            .find(|l| row.path.starts_with(&format!("{}.", l.path)))
-            .map(|l| l.path.clone());
-        let slot = loop_path.map(|lp| {
-            let n = per_loop_slot.entry(lp).or_insert(0);
-            *n += 1;
-            *n
+            let slots = model
+                .running_or_queued_bound(&loop_row.path)
+                .unwrap_or(busy);
+            format!("{busy} of {slots} Slots Busy")
         });
-        running.push(SignalRunningRow {
-            path: row.path.clone(),
-            label: signal_breadcrumb(&row.path),
-            what,
-            slot,
-        });
-    }
-    // A pass not yet dispatched (`iter_2`, say) has no row of its
-    // own in `rows` at all, only once it starts -- the same gap
-    // `build_tape`'s own `missing_loop_pass_rows` fills in for the
-    // Tape's list, needed here for "waits for a slot" and "Next
-    // Signal" to see an undispatched pass's own leaves too.
-    let extra_rows = crate::render::missing_loop_pass_rows(rows, flat, plan, state);
-    let augmented: Vec<&Row> = rows
-        .iter()
-        .chain(extra_rows.iter().map(|(_, r)| r))
-        .collect();
-
-    let mut waiting = Vec::new();
-    for loop_row in &running_loops {
-        let prefix = format!("{}.", loop_row.path);
-        // The pass itself never gets a row of its own (only its own
-        // leaves do) -- the first pending leaf under a queued pass
-        // names it, its own breadcrumb cut back to the pass
-        // (`drafts › iter_2`, never drilling into the leaf).
-        if let Some(next) = augmented.iter().find(|r| {
-            r.path.starts_with(&prefix)
-                && tape_row_is_under_a_queued_pass(&r.path)
-                && r.status.kind == StatusKind::Pending
+        let mut running = Vec::new();
+        let mut per_loop_slot: BTreeMap<String, u64> = BTreeMap::new();
+        for row in rows.iter().filter(|r| {
+            r.kind.is_leaf()
+                && matches!(
+                    r.status.kind,
+                    StatusKind::Running | StatusKind::LikelyRunning | StatusKind::RunningOrQueued
+                )
         }) {
-            if let Some(pass_path) = signal_pass_path(&next.path) {
-                waiting.push((signal_breadcrumb(pass_path), "waits for a slot".to_string()));
+            let (what, _, _) = tape_row_content(row, flat, plan, model, state, false, false, now);
+            let loop_path = running_loops
+                .iter()
+                .find(|l| row.path.starts_with(&format!("{}.", l.path)))
+                .map(|l| l.path.clone());
+            let slot = loop_path.map(|lp| {
+                let n = per_loop_slot.entry(lp).or_insert(0);
+                *n += 1;
+                *n
+            });
+            running.push(SignalRunningRow {
+                path: row.path.clone(),
+                label: signal_breadcrumb(&row.path),
+                what,
+                slot,
+            });
+        }
+        // A pass not yet dispatched (`iter_2`, say) has no row of its
+        // own in `rows` at all, only once it starts -- the same gap
+        // `build_tape`'s own `missing_loop_pass_rows` fills in for the
+        // Tape's list, needed here for "waits for a slot" and "Next
+        // Signal" to see an undispatched pass's own leaves too.
+        let extra_rows = crate::render::missing_loop_pass_rows(rows, flat, plan, state);
+        let augmented: Vec<&Row> = rows
+            .iter()
+            .chain(extra_rows.iter().map(|(_, r)| r))
+            .collect();
+
+        let mut waiting = Vec::new();
+        for loop_row in &running_loops {
+            let prefix = format!("{}.", loop_row.path);
+            // The pass itself never gets a row of its own (only its own
+            // leaves do) -- the first pending leaf under a queued pass
+            // names it, its own breadcrumb cut back to the pass
+            // (`drafts › iter_2`, never drilling into the leaf).
+            if let Some(next) = augmented.iter().find(|r| {
+                r.path.starts_with(&prefix)
+                    && tape_row_is_under_a_queued_pass(&r.path)
+                    && r.status.kind == StatusKind::Pending
+            }) {
+                if let Some(pass_path) = signal_pass_path(&next.path) {
+                    waiting.push((signal_breadcrumb(pass_path), "waits for a slot".to_string()));
+                }
             }
         }
-    }
-    let loop_summary = running_loops.first().map(|loop_row| {
-        let done = loop_row.loop_progress.map(|p| p.done).unwrap_or(0);
-        let total = loop_row
-            .loop_progress
-            .and_then(|p| p.total)
-            .map(|t| t.to_string())
-            .unwrap_or_else(|| "?".to_string());
-        let (tokens, count) = signal_loop_pass_tokens(&loop_row.path, flat);
-        let per_pass = match tokens.checked_div(count) {
-            Some(avg) => format!(" \u{b7} {} per pass", crate::format::format_tokens(avg)),
-            None => String::new(),
-        };
-        (
-            tape_row_label(loop_row, flat, plan),
-            format!("{done} of {total} passes{per_pass}"),
-        )
-    });
+        let loop_summary = running_loops.first().map(|loop_row| {
+            let done = loop_row.loop_progress.map(|p| p.done).unwrap_or(0);
+            let total = loop_row
+                .loop_progress
+                .and_then(|p| p.total)
+                .map(|t| t.to_string())
+                .unwrap_or_else(|| "?".to_string());
+            let (tokens, count) = signal_loop_pass_tokens(&loop_row.path, flat);
+            let per_pass = match tokens.checked_div(count) {
+                Some(avg) => format!(" \u{b7} {} per pass", crate::format::format_tokens(avg)),
+                None => String::new(),
+            };
+            (
+                tape_row_label(loop_row, flat, plan),
+                format!("{done} of {total} passes{per_pass}"),
+            )
+        });
 
-    let last_burst_idx = buckets
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, b)| b.sent + b.received > 0)
-        .map(|(i, _)| i);
-    let last_burst = last_burst_idx.and_then(|i| {
-        let b = &buckets[i];
-        let ts = b.last_ts.as_deref()?;
-        let age = duration_seconds(ts, now)?;
-        let plural = |n: u64, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
-        // An agent's tokens arrive as sightings rather than a prompt's
-        // end, so a burst names what it was made of.
-        let what = match (b.prompt_count, b.agent_count) {
-            (_, 0) => plural(b.prompt_count, "prompt"),
-            (0, agents) => plural(agents, "agent"),
-            (prompts, agents) => format!(
-                "{} and {}",
-                plural(prompts, "prompt"),
-                plural(agents, "agent")
-            ),
+        let last_burst_idx = buckets
+            .iter()
+            .enumerate()
+            .rev()
+            .find(|(_, b)| b.sent + b.received > 0)
+            .map(|(i, _)| i);
+        let last_burst = last_burst_idx.and_then(|i| {
+            let b = &buckets[i];
+            let ts = b.last_ts.as_deref()?;
+            let age = duration_seconds(ts, now)?;
+            let plural =
+                |n: u64, word: &str| format!("{n} {word}{}", if n == 1 { "" } else { "s" });
+            // An agent's tokens arrive as sightings rather than a prompt's
+            // end, so a burst names what it was made of.
+            let what = match (b.prompt_count, b.agent_count) {
+                (_, 0) => plural(b.prompt_count, "prompt"),
+                (0, agents) => plural(agents, "agent"),
+                (prompts, agents) => format!(
+                    "{} and {}",
+                    plural(prompts, "prompt"),
+                    plural(agents, "agent")
+                ),
+            };
+            Some(format!(
+                "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {what} in one step",
+                crate::format::format_duration(age),
+                crate::format::format_tokens_arrow(b.sent),
+                crate::format::format_tokens_arrow(b.received),
+            ))
+        });
+        // An undispatched pass's own leaf (an `extra_rows` entry)
+        // always precedes a later top-level sibling in real plan order
+        // (its own loop is already running), so it's checked first --
+        // `rows` alone would read a top-level row like `summary` as
+        // "next" instead, skipping over the loop's own queued pass
+        // entirely (`augmented`'s own chained order is append-only, not
+        // plan order).
+        let is_pending_prompt = |r: &&Row| {
+            matches!(r.kind, RowKind::Prompt | RowKind::Reflector)
+                && r.status.kind == StatusKind::Pending
         };
-        Some(format!(
-            "{} ago \u{b7} \u{2191}{} \u{2193}{} \u{b7} {what} in one step",
-            crate::format::format_duration(age),
-            crate::format::format_tokens_arrow(b.sent),
-            crate::format::format_tokens_arrow(b.received),
-        ))
-    });
-    // An undispatched pass's own leaf (an `extra_rows` entry)
-    // always precedes a later top-level sibling in real plan order
-    // (its own loop is already running), so it's checked first --
-    // `rows` alone would read a top-level row like `summary` as
-    // "next" instead, skipping over the loop's own queued pass
-    // entirely (`augmented`'s own chained order is append-only, not
-    // plan order).
-    let is_pending_prompt = |r: &&Row| {
-        matches!(r.kind, RowKind::Prompt | RowKind::Reflector)
-            && r.status.kind == StatusKind::Pending
-    };
-    let next_signal_row = extra_rows
-        .iter()
-        .map(|(_, r)| r)
-        .find(|r| is_pending_prompt(r))
-        .or_else(|| rows.iter().find(is_pending_prompt));
-    let next_signal = next_signal_row.map(|r| {
-        let queued = tape_row_is_under_a_queued_pass(&r.path)
-            && running_loops
-                .iter()
-                .any(|l| r.path.starts_with(&format!("{}.", l.path)));
-        let qualifier = if queued { "next slot" } else { "queued" };
-        let usual = tape_row_usual_tokens(&r.path, plan, header);
-        let usual_text = usual
-            .map(|u| format!(" \u{b7} usually {}", crate::format::format_tokens(u)))
-            .unwrap_or_default();
-        format!(
-            "{} \u{b7} {qualifier}{usual_text}",
-            tape_row_label(r, flat, plan)
+        let next_signal_row = extra_rows
+            .iter()
+            .map(|(_, r)| r)
+            .find(|r| is_pending_prompt(r))
+            .or_else(|| rows.iter().find(is_pending_prompt));
+        let next_signal = next_signal_row.map(|r| {
+            let queued = tape_row_is_under_a_queued_pass(&r.path)
+                && running_loops
+                    .iter()
+                    .any(|l| r.path.starts_with(&format!("{}.", l.path)));
+            let qualifier = if queued { "next slot" } else { "queued" };
+            let usual = tape_row_usual_tokens(&r.path, plan, header);
+            let usual_text = usual
+                .map(|u| format!(" \u{b7} usually {}", crate::format::format_tokens(u)))
+                .unwrap_or_default();
+            format!(
+                "{} \u{b7} {qualifier}{usual_text}",
+                tape_row_label(r, flat, plan)
+            )
+        });
+        (
+            step_rows,
+            ahead_suffix,
+            SignalNowPane {
+                slots_text,
+                running,
+                waiting,
+                loop_summary,
+                last_burst,
+                next_signal,
+            },
         )
-    });
+    };
 
     // Readings: Peak, Largest and Quiet read only up to the cursor's
     // own column (Now's, when not scrubbed), the same moment the
@@ -4586,14 +4664,7 @@ pub fn build_signal(
         tile_now_running: Vec::new(),
         tile_now_ahead: Vec::new(),
         ahead_suffix,
-        now_pane: SignalNowPane {
-            slots_text,
-            running,
-            waiting,
-            loop_summary,
-            last_burst,
-            next_signal,
-        },
+        now_pane,
         readings: SignalReadings {
             sent: sent_sum,
             received: received_sum,
@@ -8123,6 +8194,157 @@ mod tests {
         assert_eq!(signal.readings.received, 34);
     }
 
+    /// Issue #690: scrubbed to a past column, the step rows and the
+    /// Now pane reconstruct the run as of that instant -- a pass
+    /// that hadn't started yet by the cutoff isn't a row at all (the
+    /// real engine would have no entry for it either), the loop's
+    /// own done count reads only the one pass actually finished by
+    /// then, and the busy leaf the live state shows running is gone
+    /// from the reconstructed Now pane entirely. n (cursor_col:
+    /// None) returns to the live state unchanged.
+    #[test]
+    fn build_signal_scrubbing_reconstructs_the_past_column() {
+        let mut drafts = tape_row("prime.drafts", 1, "drafts", RowKind::Loop, StatusKind::Done);
+        drafts.loop_progress = Some(crate::render::LoopProgress {
+            done: 2,
+            total: Some(2),
+            eta_s: None,
+        });
+        let rows = vec![
+            drafts,
+            tape_row(
+                "prime.drafts.iter_0.draft",
+                3,
+                "iter_0 draft",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row(
+                "prime.drafts.iter_1.draft",
+                3,
+                "iter_1 draft",
+                RowKind::Prompt,
+                StatusKind::Done,
+            ),
+            tape_row("prime.slow", 1, "slow", RowKind::Tool, StatusKind::Running),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.drafts".to_string(),
+            tape_node("2026-01-01T00:00:00.000Z", Some("2026-01-01T00:00:02.500Z")),
+        );
+        flat.insert(
+            "prime.drafts.iter_0.draft".to_string(),
+            signal_node(
+                "2026-01-01T00:00:00.000Z",
+                Some("2026-01-01T00:00:00.800Z"),
+                40,
+                10,
+            ),
+        );
+        flat.insert(
+            "prime.drafts.iter_1.draft".to_string(),
+            signal_node(
+                "2026-01-01T00:00:01.500Z",
+                Some("2026-01-01T00:00:02.500Z"),
+                42,
+                11,
+            ),
+        );
+        flat.insert(
+            "prime.slow".to_string(),
+            tape_node("2026-01-01T00:00:02.500Z", None),
+        );
+        let state = json!({"prime": {"value": null, "meta": {
+            "created_at": "2026-01-01T00:00:00.000Z", "completed_at": null},
+            "drafts": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:00.000Z",
+                "completed_at": "2026-01-01T00:00:02.500Z",
+                "progress": {"done": 2, "total": 2}},
+                "iter_0": {"draft": {"value": "ok", "meta": {
+                    "created_at": "2026-01-01T00:00:00.000Z",
+                    "completed_at": "2026-01-01T00:00:00.800Z",
+                    "tokens_sent_total": 40, "tokens_received_total": 10}}},
+                "iter_1": {"draft": {"value": "ok", "meta": {
+                    "created_at": "2026-01-01T00:00:01.500Z",
+                    "completed_at": "2026-01-01T00:00:02.500Z",
+                    "tokens_sent_total": 42, "tokens_received_total": 11}}}
+            },
+            "slow": {"value": null, "meta": {
+                "created_at": "2026-01-01T00:00:02.500Z", "completed_at": null,
+                "provider": "shell"}}
+        }});
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:03.000Z";
+
+        let scrubbed = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            1000,
+            Some(0),
+            None,
+            now,
+        );
+        assert_eq!(
+            scrubbed.step_rows.len(),
+            1,
+            "only the loop itself had started by the cutoff, slow not yet: {:?}",
+            scrubbed.step_rows
+        );
+        assert_eq!(scrubbed.step_rows[0].path, "prime.drafts");
+        assert!(
+            matches!(
+                scrubbed.step_rows[0].kind,
+                SignalStepKind::Loop { ref status_text } if status_text == "0 Running · 1 Queued"
+            ),
+            "no pass was actually busy right at the cutoff: {:?}",
+            scrubbed.step_rows[0].kind
+        );
+        assert!(
+            scrubbed.now_pane.running.is_empty(),
+            "nothing was actually running at the cutoff, iter_1 not started yet: {:?}",
+            scrubbed.now_pane.running
+        );
+        let (loop_label, loop_status) = scrubbed
+            .now_pane
+            .loop_summary
+            .as_ref()
+            .expect("the loop was still running as of the cutoff");
+        assert_eq!(loop_label, "drafts");
+        assert_eq!(
+            *loop_status,
+            "1 of 2 passes . 50 t per pass".replace('.', "\u{b7}"),
+            "only iter_0's own pass had finished by the cutoff"
+        );
+
+        let live = build_signal(
+            &rows,
+            &rows,
+            &header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            1000,
+            None,
+            None,
+            now,
+        );
+        assert_eq!(live.step_rows.len(), 2);
+        assert_eq!(live.step_rows[0].path, "prime.drafts");
+        assert_eq!(live.step_rows[1].path, "prime.slow");
+        assert_eq!(live.now_pane.running.len(), 1);
+        assert_eq!(live.now_pane.running[0].path, "prime.slow");
+    }
+
     /// The Now pane's own lines: a running leaf with its slot, the
     /// active loop's own summary, Last Burst and Next Signal, all
     /// read off the same `rows`/`flat`/buckets the trace itself is.
@@ -8218,6 +8440,41 @@ mod tests {
             .expect("a next signal");
         assert!(next_signal.starts_with("next"), "{next_signal:?}");
         assert!(next_signal.contains("queued"), "{next_signal:?}");
+    }
+
+    /// Issue #690: a loop still `Pending` -- not yet dispatched at
+    /// all -- is `!= Done` too, so `slots_text` must stay `None`
+    /// rather than read `0 of 0 Slots Busy` before the loop has even
+    /// started.
+    #[test]
+    fn build_signal_slots_text_is_none_before_a_loop_starts() {
+        let rows = vec![
+            tape_row("prime.ask", 1, "ask", RowKind::Prompt, StatusKind::Running),
+            tape_row(
+                "prime.drafts",
+                1,
+                "drafts",
+                RowKind::Loop,
+                StatusKind::Pending,
+            ),
+        ];
+        let mut flat = BTreeMap::new();
+        flat.insert(
+            "prime.ask".to_string(),
+            tape_node("2026-01-01T00:00:00.000Z", None),
+        );
+        let mut header = base_header();
+        header.run_start_ts = Some("2026-01-01T00:00:00Z".to_string());
+        let plan = PlanTree::empty();
+        let model = RunModel::new();
+        let now = "2026-01-01T00:00:01.000Z";
+        let signal = build_signal(
+            &rows, &rows, &header, &flat, &plan, &model, None, 100, None, None, now,
+        );
+
+        assert_eq!(signal.now_pane.slots_text, None);
+        assert_eq!(signal.now_pane.running.len(), 1);
+        assert_eq!(signal.now_pane.running[0].path, "prime.ask");
     }
 
     #[test]

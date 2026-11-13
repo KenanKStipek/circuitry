@@ -592,6 +592,110 @@ pub fn flatten_state(state: &Value) -> BTreeMap<String, NodeMeta> {
     out
 }
 
+fn truncate_ts_at_or_before(ts: &str, cutoff: &str) -> bool {
+    match (
+        chrono::DateTime::parse_from_rfc3339(ts),
+        chrono::DateTime::parse_from_rfc3339(cutoff),
+    ) {
+        (Ok(ts), Ok(cutoff)) => ts <= cutoff,
+        _ => false,
+    }
+}
+
+/// A single node of [`truncate_state_to`]'s own walk: `false` means
+/// the caller drops this key entirely (the real engine hadn't
+/// reached it yet by `cutoff`); a container not yet finished as a
+/// whole keeps its own still-running shape, `value` forced back to
+/// `Null` and `completed_at` removed, its `progress.done` (a loop's)
+/// recomputed from whichever of its own passes had actually finished
+/// by `cutoff` rather than the real, later figure.
+fn truncate_node(value: &mut Value, cutoff: &str) -> bool {
+    let Some(obj) = value.as_object_mut() else {
+        return true;
+    };
+    if !obj.contains_key("meta") {
+        // A bare container (a loop's own `iter_N`, or `prime` itself):
+        // no `created_at` of its own to check, only its children's.
+        let keys: Vec<String> = obj.keys().cloned().collect();
+        for key in keys {
+            let keep = truncate_node(obj.get_mut(&key).unwrap(), cutoff);
+            if !keep {
+                obj.remove(&key);
+            }
+        }
+        return !obj.is_empty();
+    }
+    let created_at = obj
+        .get("meta")
+        .and_then(|m| m.get("created_at"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    if !created_at.is_some_and(|c| truncate_ts_at_or_before(&c, cutoff)) {
+        return false;
+    }
+    let completed_at = obj
+        .get("meta")
+        .and_then(|m| m.get("completed_at"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let own_done = completed_at.is_some_and(|c| truncate_ts_at_or_before(&c, cutoff));
+    let keys: Vec<String> = obj
+        .keys()
+        .filter(|k| k.as_str() != "value" && k.as_str() != "meta")
+        .cloned()
+        .collect();
+    for key in &keys {
+        let keep = truncate_node(obj.get_mut(key).unwrap(), cutoff);
+        if !keep {
+            obj.remove(key);
+        }
+    }
+    if !own_done {
+        let has_progress = obj.get("meta").is_some_and(|m| m.get("progress").is_some());
+        let done = keys
+            .iter()
+            .filter(|k| k.starts_with("iter_"))
+            .filter(|k| {
+                let pass = obj.get(k.as_str()).and_then(Value::as_object);
+                pass.is_some_and(|p| {
+                    p.values().all(|leaf| {
+                        leaf.get("meta")
+                            .and_then(|m| m.get("completed_at"))
+                            .and_then(Value::as_str)
+                            .is_some_and(|c| truncate_ts_at_or_before(c, cutoff))
+                    })
+                })
+            })
+            .count();
+        obj.insert("value".to_string(), Value::Null);
+        let meta = obj.get_mut("meta").unwrap().as_object_mut().unwrap();
+        meta.remove("completed_at");
+        if has_progress {
+            meta["progress"]["done"] = serde_json::json!(done);
+            meta.remove("completed_passes");
+        }
+    }
+    true
+}
+
+/// Prunes `state`'s own `prime` subtree down to what a real engine
+/// would actually have persisted by `cutoff` (RFC3339) -- a node the
+/// run hadn't reached by then has no entry at all, and a container
+/// not yet finished as a whole has no `value` of its own and no
+/// `completed_at`. The Signal's own scrub cursor (issue #690) reads
+/// this to reconstruct the run as of a past column: `flatten_state`
+/// and a fresh `RunModel`'s own `observe` read the result exactly as
+/// they would the real engine's own write at that instant, the same
+/// way the design's own frame fixtures (`design/fixtures`) are built
+/// from a later, final document by this same truncation.
+pub fn truncate_state_to(state: &Value, cutoff: &str) -> Value {
+    let mut state = state.clone();
+    if let Some(prime) = state.get_mut("prime") {
+        truncate_node(prime, cutoff);
+    }
+    state
+}
+
 fn walk(node: &Value, path: &str, out: &mut BTreeMap<String, NodeMeta>) {
     let Some(obj) = node.as_object() else {
         return;

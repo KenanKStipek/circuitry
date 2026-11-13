@@ -2941,6 +2941,102 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #684: with follow off and the Now band's own row scrolled
+/// out of the list's window, the status line says so and names `f`
+/// -- otherwise nothing on screen below 100 columns tells the user
+/// how to get Now back in view.
+#[test]
+fn follow_off_with_now_out_of_view_shows_a_status_line_notice() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    // Prompts, not tool steps: two or more finished tool steps under
+    // a second merge into one `N quick steps` row the Tape never
+    // lists at all (`fold::is_quick_step`) -- this test needs 30
+    // separate rows above the Now band to push it out of the list's
+    // own window, each with a row of its own.
+    let mut steps = String::new();
+    let mut replies = String::new();
+    for i in 0..30 {
+        steps.push_str(&format!(
+            "  - name: step{i}\n    type: prompt\n    template: \"go {i}\"\n"
+        ));
+        replies.push_str(&format!(
+            "prime.step{i}:\n  - text: \"ok {i}\"\n    tokens_sent: 1\n    tokens_received: 1\n"
+        ));
+    }
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        &format!(
+            "adapter: scripted\nmodel: scripted-model\neffects:\n{steps}  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n"
+        ),
+    );
+    let replies_doc = write_doc(work.path(), "replies.yaml", &replies);
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies_doc));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    resize_pty(&slave_path, 80, 24);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let screen = wait_for_screen_text(&captured_buf, "Now ", Duration::from_secs(10));
+        assert!(
+            screen.contains("Now "),
+            "expected the Now band visible by default while following; got:\n{screen}"
+        );
+    }
+
+    let before_g = captured_buf.lock().unwrap().len();
+    send_bytes(&mut master, b"g");
+    std::thread::sleep(Duration::from_millis(500));
+    {
+        let after = captured_buf.lock().unwrap()[before_g..].to_vec();
+        let rendered = String::from_utf8_lossy(&after);
+        let screen = support::screen_grid(&captured_buf.lock().unwrap(), 200, 60).join("\n");
+        assert!(
+            !screen.contains("\u{2501}\u{2501} Now"),
+            "expected the Now band's own rule scrolled out of view after g; got:\n{rendered:?}\nscreen:\n{screen}"
+        );
+        assert!(
+            screen.contains("follow is off") && screen.contains(" f "),
+            "expected the status line to say follow is off and name f; got:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
 /// Issue #738: the Help overlay opens over the Tape on its Keys page
 /// (the key bar's own keys, including the movement aliases and
 /// `/`/`e` the key bar itself does not show), and `←→` reaches its
@@ -3428,6 +3524,58 @@ fn the_tapes_detail_pane_still_shows_at_100x30() {
             "expected the detail pane's own title at 100x30; got:\n{rendered:?}"
         );
     }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #684: at 100-119 columns the list pane's own share of the
+/// terminal falls short of the Tape's own full title -- the
+/// previews clause is dropped whole, with a trailing ellipsis,
+/// rather than the border clipping the text mid-word.
+#[test]
+fn the_tapes_list_title_shortens_instead_of_clipping_at_100x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_100 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 100, 30);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_100,
+        b"Selected",
+        Duration::from_secs(10),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60).join("\n");
+    let title_row = screen
+        .lines()
+        .find(|l| l.contains("Tape ·"))
+        .unwrap_or_default();
+    assert!(
+        title_row.contains('⋯'),
+        "expected the title's own dropped clause to end in an ellipsis at 100x30; got:\n{title_row}"
+    );
+    assert!(
+        !title_row.contains("Previews"),
+        "expected the previews clause dropped whole, not clipped mid-word, at 100x30; got:\n{title_row}"
+    );
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));

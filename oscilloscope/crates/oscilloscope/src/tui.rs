@@ -389,11 +389,25 @@ fn draw_tape_status_line(
     header: &oscilloscope_core::render::Header,
     narrow: bool,
     dialog_open: bool,
+    now_out_of_view: bool,
     ctx: &DrawCtx,
     now: &str,
 ) {
     use oscilloscope_core::screens::TapeItem;
     if let Some(spans) = shared_run_chrome_status_spans(&screen.head, header, ctx) {
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
+    // Issue #684: follow off with the Now band scrolled out of the
+    // list's own window -- said plainly, since nothing else on
+    // screen below 100 columns (no key bar room, no Now band of its
+    // own visible to look at) otherwise tells the user `f` is the
+    // way back.
+    if !dialog_open && now_out_of_view {
+        let spans = vec![Span::styled(
+            " follow is off · Now is out of view · f follows it again",
+            Style::default().fg(ctx.theme.text),
+        )];
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
@@ -1801,6 +1815,29 @@ fn truncate_text(text: &str, max_chars: usize) -> String {
     }
 }
 
+/// The Tape's own bordered list title, shortened to `budget` chars
+/// before the border ever has to clip it (issue #684): `base`
+/// (`Tape · N Done · M Running · K Ahead · ▰ = unit t`) is never cut
+/// itself -- `previews` (` · Previews On`/`Off`, the one clause this
+/// width range actually overflows on) is dropped whole first, with a
+/// trailing ellipsis marking the cut, the same rule the key bar
+/// already follows for a left item that would not fit; only once
+/// even `base` alone overflows does the remainder get
+/// `truncate_text`'s own plain cut.
+fn tape_list_title_fit(base: &str, previews: &str, budget: usize) -> String {
+    let full = format!("{base}{previews}");
+    if full.chars().count() <= budget {
+        return full;
+    }
+    if !previews.is_empty() {
+        let dropped = format!("{base} ⋯");
+        if dropped.chars().count() <= budget {
+            return dropped;
+        }
+    }
+    truncate_text(base, budget)
+}
+
 /// A row's own `what` text, cut to its own column's width -- one
 /// char narrower than [`truncate_text`]'s own plain budget
 /// (`what_width - 1`, not `what_width`): text that happens to fill
@@ -2223,10 +2260,17 @@ fn draw_tape_list(
         } else {
             ""
         };
-        format!(
-            "Tape · {} Done · {} Running · {} Ahead · {suffix}{previews}",
+        let base = format!(
+            "Tape · {} Done · {} Running · {} Ahead · {suffix}",
             screen.done, screen.running, screen.ahead
-        )
+        );
+        // Issue #684: at 100-119 columns the list pane's own share of
+        // the terminal can fall short of the full title -- the block
+        // title has no truncation rule of its own, so without this
+        // the border just clips the text (`Previews O`), separately
+        // from the 60-79 switch above, which swaps in a shorter
+        // title outright rather than shortening this one.
+        tape_list_title_fit(&base, previews, (area.width as usize).saturating_sub(5))
     };
     let border_color = if app.pane == Pane::Tree {
         ctx.theme.border_focused
@@ -2727,6 +2771,7 @@ fn draw_tape_list(
             .iter()
             .position(|(path, _)| path.as_deref() == Some(p))
     });
+    let now_band_row = now_area.as_ref().map(|r| r.start);
     let start = tape_list_window_start(
         &kinds,
         now_area,
@@ -2737,6 +2782,11 @@ fn draw_tape_list(
     );
     app.tape_list_start = Some(start);
     let (real_range, blank_first) = tape_list_window_range(&kinds, start, content_rows);
+    // Issue #684: with follow off, the centred/kept-in-view window
+    // can still leave the Now band's own row outside what actually
+    // draws -- the status line names `f` when it does.
+    app.tape_now_out_of_view = !app.follow
+        && now_band_row.is_some_and(|row| row < real_range.start || row >= real_range.end);
     let mut visible: Vec<Line> = lines
         .into_iter()
         .skip(real_range.start)
@@ -8264,16 +8314,6 @@ fn draw_tape(
         ])
         .split(full_area);
     draw_tape_header_band(frame, sections[0], header, "TAPE", now, icon_frame, ctx);
-    draw_tape_status_line(
-        frame,
-        sections[2],
-        screen,
-        header,
-        full_area.width < 80,
-        app.dialog != Dialog::None,
-        ctx,
-        now,
-    );
     let key_bar_items = if app.tape_fullscreen_step {
         fullscreen_step_key_bar_items(full_area.width >= 80)
     } else {
@@ -8283,7 +8323,21 @@ fn draw_tape(
 
     let body = sections[1];
     if app.tape_fullscreen_step && screen.selected.is_some() {
+        // Issue #684: the list, and so the Now band, isn't on
+        // screen at all here -- nothing to say is out of view.
+        app.tape_now_out_of_view = false;
         draw_tape_detail(frame, body, screen, app, transcript_view, now, ctx);
+        draw_tape_status_line(
+            frame,
+            sections[2],
+            screen,
+            header,
+            full_area.width < 80,
+            app.dialog != Dialog::None,
+            app.tape_now_out_of_view,
+            ctx,
+            now,
+        );
         return;
     }
     // §5: the detail pane stays down to 100 columns, not just
@@ -8326,6 +8380,17 @@ fn draw_tape(
             ctx,
         );
     }
+    draw_tape_status_line(
+        frame,
+        sections[2],
+        screen,
+        header,
+        full_area.width < 80,
+        app.dialog != Dialog::None,
+        app.tape_now_out_of_view,
+        ctx,
+        now,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -9082,12 +9147,19 @@ fn draw_signal_seconds_row(
     } else {
         None
     };
+    // Issue #690: the row's own usable width keeps one trailing
+    // blank column before the pane's own right border, the same gap
+    // every tick and label already clears everywhere else on this
+    // row -- without it, whatever draws last here (a short `Ahead`,
+    // or the lone tick past it) can run flush up to the border with
+    // nothing between them.
+    let content_width = data_width.saturating_sub(1);
     // #734: cut Now (and Ahead after it)
     // to fit the room left to the pane's own right edge, Ahead
     // dropped first, never running either past it.
     let (now_text, ahead_text) = match (&now_label_full, now_label_col) {
         (Some(label), Some(c)) => {
-            let budget = data_width.saturating_sub(c);
+            let budget = content_width.saturating_sub(c);
             let (now_text, ahead_text) =
                 cut_now_and_ahead_label(label, ahead_label_full.as_deref(), budget);
             (Some(now_text), ahead_text)
@@ -9112,7 +9184,7 @@ fn draw_signal_seconds_row(
     // own text, at the window's own right edge) never runs into its
     // neighbour -- the same rule the Combined Signal's own seconds
     // row uses.
-    let max_elapsed_for_spacing = (start_col + data_width) as f64 / cols_per_second as f64;
+    let max_elapsed_for_spacing = (start_col + content_width) as f64 / cols_per_second as f64;
     let seconds_step =
         oscilloscope_core::format::signal_mark_step_s(cols_per_second, max_elapsed_for_spacing);
     let mut seconds = 0u64;
@@ -9123,11 +9195,14 @@ fn draw_signal_seconds_row(
             continue;
         }
         let col = (abs_col - start_col as u64) as usize;
-        if col >= data_width {
+        if col >= content_width {
             break;
         }
         let x = data_x + col as u16;
         let text = oscilloscope_core::format::format_signal_elapsed(seconds as f64);
+        if col + text.chars().count() > content_width {
+            break;
+        }
         // At least one blank column always separates a tick from
         // the Now label (#734: the shared
         // `mark_clears_label`, the Combined Signal's own seconds
@@ -9450,12 +9525,22 @@ fn draw_signal_now_pane(
     wide: bool,
 ) {
     let border_color = ctx.theme.border;
-    let title = screen
-        .now_pane
-        .slots_text
-        .as_deref()
-        .map(|s| format!("Now \u{b7} {s}"))
-        .unwrap_or_else(|| "Now".to_string());
+    // Issue #690: the slots count (`N of M Slots Busy`) only means
+    // anything while a loop is actually running -- otherwise the
+    // title names what runs instead, the same as the Tape's own
+    // counts do, rather than falling all the way back to a bare
+    // `Now`.
+    let title = match screen.now_pane.slots_text.as_deref() {
+        Some(s) => format!("Now \u{b7} {s}"),
+        None => {
+            let running = screen.now_pane.running.len();
+            if running > 0 {
+                format!("Now \u{b7} {running} Running")
+            } else {
+                "Now".to_string()
+            }
+        }
+    };
     let block = Block::default()
         .borders(Borders::ALL)
         .border_set(ratatui::symbols::border::ROUNDED)
@@ -23706,6 +23791,100 @@ mod tape_frame_goldens {
         );
     }
 
+    /// Issue #690: scrubbed to column 24 (cutoff 2.5s into the run2
+    /// fixture, before `tests` has finished and well before `drafts`
+    /// has even started) the step rows and the Now pane reconstruct
+    /// that instant -- `tests` still shows running, not the finished
+    /// row and the busy `drafts` loop the live state at `now` (3.62s)
+    /// actually has. A pinned golden, not a design frame: no `.mock`
+    /// fixture shows a scrubbed column.
+    #[test]
+    fn signal_scrubbed_to_a_past_column_reconstructs_the_run2_fixture() {
+        let plan = demo_plan();
+        let (_history_dir, history) = demo_history();
+        let now = RUN2_FROZEN_NOW;
+        let (state, events) = run2_frozen_at_3_62s();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        observe_all_events(&mut model, &events);
+        let mut rendered = oscilloscope_core::render::build_folded(
+            "demo.yml",
+            "cof 0.1.0",
+            &plan,
+            &mut model,
+            Some(&state),
+            oscilloscope_core::model::ProcessState::Running,
+            0.0,
+            now,
+            &[],
+            true,
+            &Default::default(),
+        );
+        crate::history_io::apply_history_eta(
+            &history,
+            &mut rendered.header,
+            Some(&state),
+            &plan,
+            now,
+        );
+        let flat = oscilloscope_core::model::flatten_state(&state);
+        let signal_screen = oscilloscope_core::screens::build_signal(
+            &rendered.rows,
+            &rendered.unfolded_rows,
+            &rendered.header,
+            &flat,
+            &plan,
+            &model,
+            Some(&state),
+            100,
+            Some(24),
+            None,
+            now,
+        );
+        assert_eq!(
+            signal_screen.step_rows.len(),
+            2,
+            "tests still running, gate and drafts not started yet: {:?}",
+            signal_screen.step_rows
+        );
+        assert_eq!(signal_screen.step_rows[0].label, "kind");
+        assert_eq!(signal_screen.step_rows[1].label, "tests");
+        assert_eq!(signal_screen.step_rows[1].status, StatusKind::Running);
+
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = frame_zone();
+        let mut app = crate::keys::App::new(false);
+        app.screen = oscilloscope_core::screens::Screen::Signal;
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw(
+                    f,
+                    &rendered,
+                    None,
+                    &[],
+                    &mut app,
+                    None,
+                    &ctx,
+                    0,
+                    now,
+                    None,
+                    None,
+                    None,
+                    Some(&signal_screen),
+                    None,
+                )
+            })
+            .unwrap();
+        insta::assert_snapshot!(terminal.backend().to_string());
+    }
+
     /// `main.rs`'s own `push_story_line` filter, reproduced here
     /// rather than imported: it's a thin wrapper around a bounded
     /// `Vec` that lives in the binary crate, not `oscilloscope-core`.
@@ -24328,6 +24507,38 @@ mod tape_frame_goldens {
             buffer[(right_edge_x, y)].symbol(),
             "│",
             "the pane's own right border must never be overwritten: {row:?}"
+        );
+    }
+
+    /// Issue #690: without history, `Ahead` carries no `· plan order
+    /// · usually ends ...` tail at all, so it is short enough to fit
+    /// the room all the way up to the pane's own right edge -- which
+    /// must still leave at least one blank column before the
+    /// border, the same clearing rule a tick must always keep from
+    /// either label.
+    #[test]
+    fn signal_ahead_label_never_runs_flush_to_the_right_border_without_history() {
+        let screen = oscilloscope_core::screens::SignalScreen {
+            sent_axis_top: 600,
+            received_axis_top: 80,
+            column_ms: 100,
+            now_col: Some(27),
+            now_ts: Some("2026-01-01T00:00:02.700Z".to_string()),
+            now_elapsed_s: Some(2.7),
+            ahead_eta_ts: None,
+            buckets: vec![oscilloscope_core::screens::SignalBucket::default(); 28],
+            ..Default::default()
+        };
+        let buffer = draw_chart_only(&screen, 60, 16, true);
+        let y = buffer.area.y + 1 + SIGNAL_SENT_ROWS as u16 + 1 + SIGNAL_RECEIVED_ROWS as u16;
+        let row: String = (0..buffer.area.width)
+            .map(|x| buffer[(x, y)].symbol().chars().next().unwrap_or(' '))
+            .collect();
+        let border_x = buffer.area.x + buffer.area.width - 1;
+        assert_eq!(
+            buffer[(border_x - 1, y)].symbol(),
+            " ",
+            "expected at least one blank column before the border: {row:?}"
         );
     }
 
