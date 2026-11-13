@@ -888,6 +888,23 @@ fn last_fallback_tokens(attempts_meta: &[Value]) -> (Value, Value) {
         .unwrap_or((Value::None, Value::None))
 }
 
+/// `core/prompt.py`'s own per-attempt entry `error` for an ordinary
+/// (non-decode/schema) chain failure: `str(generation_error)`, already
+/// the same text as the chain's own last fallback entry (`last_error`
+/// there is the same exception that entry's own `error` field redacted).
+/// Reading it back off `attempts_meta`'s own last entry, already
+/// redacted at the point it was recorded, is that same value -- never
+/// `"All adapter attempts failed: ..."`, which `core/prompt.py` only
+/// ever raises once the whole retry loop gives up, not per attempt.
+fn last_fallback_error(attempts_meta: &[Value]) -> Option<String> {
+    attempts_meta
+        .last()
+        .and_then(Value::as_dict)
+        .and_then(|dict| dict.get(&key("error")))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_failure(
     store: &Store,
@@ -1696,6 +1713,19 @@ pub(crate) async fn execute_prompt(
                 attempts_meta_outer = attempts_meta;
 
                 let cause = failure.cause.clone();
+                // This attempt's own entry carries the chain's last
+                // failure as-is -- `core/prompt.py`'s own `str(
+                // generation_error)` -- never the generic
+                // "All adapter attempts failed: ..." text `message`
+                // below wraps it in, which only ever becomes this
+                // pass's own `meta.error` once every attempt is spent
+                // (the `finish_failure` call below, past the retry
+                // check). Computed before `failure.bare` moves into
+                // `message` just below.
+                let entry_error = match &failure.bare {
+                    Some((_, message)) => redact_str(message),
+                    None => last_fallback_error(&attempts_meta_outer).unwrap_or_default(),
+                };
                 let (message, py_class) = match failure.bare {
                     Some((py_class, message)) => (message, py_class),
                     None => {
@@ -1712,7 +1742,7 @@ pub(crate) async fn execute_prompt(
                     attempt_started_at,
                     now_iso(),
                     Value::None,
-                    Some(redact_str(&message)),
+                    Some(entry_error),
                     attempts_meta_outer.clone(),
                     entry_tokens_sent,
                     entry_tokens_received,

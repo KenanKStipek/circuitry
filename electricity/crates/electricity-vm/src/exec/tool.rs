@@ -1072,6 +1072,10 @@ pub async fn execute_tool<R: ParamsCtx>(
     // `command` secret twice.
     let mut dispatch_secrets = electricity_tools::secrets::SecretValues::new();
     let mut next_delay_ms = base_backoff_ms;
+    // Every attempt this pass makes, oldest first (#668) -- written to
+    // meta.attempts only once more than one attempt has run, exactly
+    // when meta.retries_used is also set.
+    let mut retry_attempts: Vec<Value> = Vec::new();
     // `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`
     // locals (issue #724): accumulated across every attempt of this
     // pass, written to `meta.tokens_sent_total`/`.tokens_received_total`
@@ -1182,6 +1186,12 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `timeout_ms: {from: ...}` with no usable value is never
         // retried -- a retry reads the same state.
         let mut timeout_unresolved = false;
+        // This attempt's own `meta.attempts` entry value (#668): `None`
+        // unless dispatch actually reached a result -- the effect
+        // node's own `value` leaf isn't reset per attempt, so reading
+        // it back here on an early failure could show a reused node's
+        // earlier pass.
+        let mut entry_value = Value::None;
         // `core/tool.py`'s own `secret_unresolved` (issue #725): a
         // secret that failed to resolve, or a header that looks like a
         // reference but isn't the document's own literal one, is never
@@ -2126,7 +2136,6 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "retries_used",
                 Value::from(i64::from(attempt_index)),
             );
-            write_attempts(store, &meta_node, &retry_attempts);
         }
         // Issue #724: the attempt that decided this pass's own outcome --
         // unlike `tokens_sent_total`/`tokens_received_total` above, only
@@ -2150,6 +2159,12 @@ pub async fn execute_tool<R: ParamsCtx>(
         }
         if reported_tokens {
             observer.record_totals(&store.snapshot(&meta_node));
+        }
+        // `meta.attempts` is written last of all (#668), after
+        // `tokens_sent`/`tokens_received`/`cost_usd` above -- same order
+        // `core/tool.py`'s own success path keeps.
+        if attempt_index > 0 {
+            write_attempts(store, &meta_node, &retry_attempts);
         }
         observer.effect_complete(
             &effect_path,
