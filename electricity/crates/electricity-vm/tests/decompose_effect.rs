@@ -62,6 +62,7 @@ fn prompt_leaf(path: EffectPath, name: &str, op: PromptOp, on_error: OnError) ->
         on_error,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -262,6 +263,7 @@ async fn run_decomposing_prompt(
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     (store, observer, result)
@@ -414,6 +416,7 @@ async fn record_children_grafts_the_decomposition_childs_own_effects() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -855,6 +858,7 @@ effects:\n\
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -940,6 +944,7 @@ async fn a_cancellation_mid_planner_propagates_and_writes_no_decomposition_recor
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(matches!(result, Err(VmError::Cancelled)), "{result:?}");

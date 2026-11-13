@@ -83,6 +83,37 @@ pub struct RunRequest {
     /// `main` always passes `true`: this crate has no embedding
     /// caller of its own yet (M1-A).
     pub armed: bool,
+    /// `--state <path>` (issue #727) -- the whole saved state this run
+    /// seeds its store from (every top-level key, not just `input`),
+    /// relinking a `last` alias the same way [`electricity_vm::
+    /// hydrate_resumed_state`] does for any loaded JSON object. `None`
+    /// seeds the ordinary way ([`state::seed_state`]'s own `-e`-only
+    /// seed).
+    pub state_path: Option<PathBuf>,
+    /// `--resume` (issue #727) -- with [`RunRequest::state_path`], a
+    /// named effect whose saved node already finished without error is
+    /// skipped and reused; every effect-type container's own partial-
+    /// continue rule (a loop's first unfinished pass, a conditional's
+    /// saved branch, a `use` with `runtime.state.record_children`)
+    /// follows from there. Ignored with no `state_path` (cof's own
+    /// `--resume last`/`--resume <run-id>` modes are out of scope for
+    /// issue #727 -- they need a persistence/stash lookup, and
+    /// `runtime.persistence` itself stays refused on electricity).
+    pub resume: bool,
+    /// `--resume` with no explicit `--out` of its own (issue #727,
+    /// DESIGN.md §6.8) -- the `--state` file itself, named by the CLI
+    /// layer so this crate never has to re-derive it from `resume`/
+    /// `state_path` alone. Ranked *below* a loaded `--profile`'s own
+    /// `out:` and *above* writing nothing at all (`cli/effective_
+    /// settings.py::resolve_effective_settings`'s own `cli > profile >
+    /// resume source > default` order) -- [`RunRequest::out_path`]
+    /// itself is the `cli` tier and always outranks this field.
+    pub resume_default_out: Option<PathBuf>,
+    /// `--force` (issue #727) -- with `resume`, continue even though
+    /// *orchestration_path*'s own content changed since the saved run
+    /// (`runtime.last_run.document_hash` mismatch) or it carries no
+    /// recorded hash at all.
+    pub force: bool,
 }
 
 /// `run_orchestration`'s own result -- success and failure both carry a

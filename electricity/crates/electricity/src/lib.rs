@@ -1180,12 +1180,63 @@ pub async fn run_orchestration_with_config(
     let run_t0 = Instant::now();
     let mut warnings: Vec<String> = req.config_warnings.clone();
 
-    // Step 4: seed state (`input` namespace, from the CLI's own `-e`
-    // entries) -- every failure from here on reports *some* state,
-    // even if sparse, and carries the same `input` a `cof run` of the
-    // same `-e` values would (PR #441).
-    let store = Store::new();
-    state::seed_state(&store, &req.inputs);
+    // Step 4: seed state -- every failure from here on reports *some*
+    // state, even if sparse, and carries the same `input` a `cof run`
+    // of the same `-e` values would (PR #441). `--state <path>` (issue
+    // #727) seeds the *whole* saved tree instead of just `input`,
+    // relinking a `last` alias the same way `cli/runtime_shim.py::
+    // _load_state`'s own `link_last_refs` does -- a missing or
+    // unparseable file is this run's own failure, reported with no
+    // state at all (`state: None`), the same shape a config error
+    // reports (this function's own doc comment): nothing has been
+    // seeded yet for either to show.
+    let store = match &req.state_path {
+        Some(state_path) => {
+            let text = match std::fs::read_to_string(state_path) {
+                Ok(text) => text,
+                Err(_) => {
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(format!("state file not found: {}", state_path.display())),
+                        warnings,
+                        signal: None,
+                    };
+                }
+            };
+            let loaded_state = match electricity_json::loads(&text) {
+                Ok(value @ Value::Dict(_)) => value,
+                Ok(_) => {
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(
+                            "The saved state to resume from is not a JSON object.".to_string(),
+                        ),
+                        warnings,
+                        signal: None,
+                    };
+                }
+                Err(err) => {
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(format!("{}: {err}", state_path.display())),
+                        warnings,
+                        signal: None,
+                    };
+                }
+            };
+            Store::with_resumed_state(loaded_state)
+        }
+        None => Store::new(),
+    };
+    if req.state_path.is_none() {
+        state::seed_state(&store, &req.inputs);
+    }
 
     // A loaded `--profile`'s own `out:` (issue #495, lane R) -- `None`
     // until a profile actually resolves one; every `fail!` from that
@@ -1233,6 +1284,31 @@ pub async fn run_orchestration_with_config(
         }};
     }
 
+    // `--resume`'s own document-hash refusal (`cli/app.py::
+    // _resolve_resume_state`) happens entirely *before* `cof run`'s own
+    // `run()` is ever called, so a refused resume writes nothing at
+    // all -- not even back to the file it would have resumed from. The
+    // ordinary `fail!` above reports the whole (seeded, but never run)
+    // state, which `--resume`'s own `--out` default (DESIGN.md §6.8)
+    // would otherwise write straight back onto `--state`'s own file.
+    macro_rules! fail_no_resume_state {
+        ($message:expr) => {{
+            let signal = signal_from_token(token);
+            let error = match signal {
+                Some(signal) => signal.interrupt_text().to_string(),
+                None => $message,
+            };
+            return RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(error),
+                warnings,
+                signal,
+            };
+        }};
+    }
+
     // Step 5: load the document -- a load error still writes --out.
     let mut check_options = electricity_compiler::CheckOptions {
         skip_preflight: true,
@@ -1257,9 +1333,106 @@ pub async fn run_orchestration_with_config(
     // `build_input_namespace` (step 10) itself. Never `apply_declared_
     // inputs`'d yet (that's step 10's own job, below) -- this is still
     // just the sniffed-and-string-restored seed.
-    let (restored_input, _) =
-        electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
-    state::replace_input_namespace(&store, restored_input);
+    // `--state <path>` (issue #727): never a wholesale replace --
+    // `cli/app.py`'s own `apply_inline_overrides` merges fresh `-e`
+    // values onto the *resumed* `input` dict, `-e` winning, rather
+    // than rebuilding the namespace from `-e` alone the way the
+    // ordinary (no `--state`) path below does; with no `-e` at all,
+    // the resumed `input` is left exactly as the saved state had it.
+    if req.state_path.is_some() {
+        if !req.inputs.is_empty() {
+            let (restored_input, _) =
+                electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+            match store.child(&store.root, &Value::Str("input".to_string())) {
+                Ok(Some(input_node)) => {
+                    for (k, v) in restored_input {
+                        store.set_leaf(&input_node, k, v);
+                    }
+                }
+                _ => state::replace_input_namespace(&store, restored_input),
+            }
+        }
+    } else {
+        let (restored_input, _) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        state::replace_input_namespace(&store, restored_input);
+    }
+
+    // `cof run --resume` (issue #727): refuse a document that changed
+    // since the run being resumed -- a stale node's recorded
+    // `params_rendered`/output could no longer match what this
+    // document would now produce for it. Only checked with `--resume`
+    // itself (a plain `--state` with no `--resume` trusts the file
+    // outright, matching `cli/runtime_shim.py`'s own `_load_state`,
+    // which never checks a hash at all) and skipped entirely by
+    // `--force`.
+    if req.resume && !req.force {
+        // `cli/app.py::_resolve_resume_state`'s own `last_run_record =
+        // loaded.get("runtime", {}).get("last_run") if isinstance(...,
+        // dict) else None` -- a missing/non-dict `runtime` means
+        // `recorded_hash` is `None` outright; it never falls back to a
+        // root-level `last_run` the way a plain-state load's own
+        // `hydrate_resumed_state` tolerates for other purposes. An empty
+        // string is `not recorded_hash` too (`if not recorded_hash:`'s
+        // own Python truthiness) -- the same "no document_hash" refusal
+        // as a missing one, never "changed".
+        let recorded_hash = match store.child(&store.root, &Value::Str("runtime".to_string())) {
+            Ok(Some(runtime_node)) => {
+                match store.peek(&runtime_node, &Value::Str("last_run".to_string())) {
+                    Some(electricity_vm::Slot::Node(last_run)) => {
+                        match store.peek(&last_run, &Value::Str("document_hash".to_string())) {
+                            Some(electricity_vm::Slot::Value(Value::Str(ref s)))
+                                if !s.is_empty() =>
+                            {
+                                Some(s.clone())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match recorded_hash {
+            None => fail_no_resume_state!(
+                "The saved state to resume from has no \
+                 runtime.last_run.document_hash \u{2014} it wasn't written by `cof run` (or \
+                 predates this field), so there is no way to tell whether this document \
+                 changed since it ran. Pass --force to resume anyway."
+                    .to_string()
+            ),
+            Some(recorded_hash) => {
+                let current_hash = electricity_compiler::document_content_digest(
+                    &loaded.path,
+                    &loaded.document,
+                    &loaded.confinement_root,
+                )
+                .ok();
+                let matches = current_hash.as_ref().is_none_or(|current| {
+                    if *current == recorded_hash {
+                        return true;
+                    }
+                    // `core/resume.py::_legacy_document_sha256` fallback
+                    // (pre-#407 algorithm): a state file an older
+                    // release wrote still resumes without --force.
+                    electricity_compiler::legacy_document_sha256(
+                        &loaded.path,
+                        &loaded.document,
+                        &loaded.confinement_root,
+                    )
+                    .is_ok_and(|legacy| legacy == recorded_hash)
+                });
+                if !matches {
+                    fail_no_resume_state!(format!(
+                        "{} changed since the run being resumed (content hash differs) \
+                         \u{2014} rerun from scratch, or pass --force to resume anyway.",
+                        req.orchestration_path.display()
+                    ));
+                }
+            }
+        }
+    }
 
     // `electricity-config`'s own first caller (vm-lanes.md's own row for
     // this module): between resolve_config and effective_settings, the
@@ -1362,21 +1535,40 @@ pub async fn run_orchestration_with_config(
         None => None,
     };
     if let Some(profile) = &profile {
-        // Profile `inputs:` become the base layer under `-e` (DESIGN
-        // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
-        // own seam) -- re-seeding `state["input"]` again now, the same
-        // way the step-5 reseed above already does, so every failure
-        // from here on reports the profile-layered namespace too, not
-        // only the one `build_input_namespace` (step 10) itself
-        // produces.
         check_options.profile_inputs = profile
             .inputs
             .iter()
             .filter_map(|(k, v)| k.as_str().map(|k| (k.to_string(), v.clone())))
             .collect();
-        let (restored_input, _) =
-            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
-        state::replace_input_namespace(&store, restored_input);
+        if req.state_path.is_some() {
+            // `cli/runtime_shim.py::run`, ~:542-551: profile inputs are
+            // a lower-priority base layer *under* whatever `--state`
+            // already resumed (itself possibly already `-e`-overridden,
+            // by the earlier merge above) -- `dict(profile.inputs)`
+            // updated by the existing namespace, not the other way
+            // round, so only a key the resumed namespace doesn't
+            // already have is filled in from the profile.
+            if let Ok(input_node) = store.ensure_dict(&store.root, Value::Str("input".to_string()))
+            {
+                for (key, value) in &check_options.profile_inputs {
+                    let key = Value::Str(key.clone());
+                    if store.peek(&input_node, &key).is_none() {
+                        store.set_leaf(&input_node, key, value.clone());
+                    }
+                }
+            }
+        } else {
+            // Profile `inputs:` become the base layer under `-e` (DESIGN
+            // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
+            // own seam) -- re-seeding `state["input"]` again now, the same
+            // way the step-5 reseed above already does, so every failure
+            // from here on reports the profile-layered namespace too, not
+            // only the one `build_input_namespace` (step 10) itself
+            // produces.
+            let (restored_input, _) =
+                electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+            state::replace_input_namespace(&store, restored_input);
+        }
     }
 
     // Step 6 (part 1): effective settings -- model/adapter/plugins/
@@ -1401,6 +1593,21 @@ pub async fn run_orchestration_with_config(
     // still outranks it (set below, at the same point the existing
     // `sources["out"] = "cli"` override already runs); every `fail!`
     // from here on reports whichever of the two actually applies.
+    //
+    // `--resume` with no `--out` of its own (DESIGN §6.8,
+    // `RunRequest::resume_default_out`'s own doc comment): ranks below
+    // a profile's own `out:` (just set, if any) and above writing
+    // nothing -- applied only when `effective_settings_with_profile`
+    // left `out` at its own "default" (`None`) tier, so a profile's
+    // `out:` is never displaced by it.
+    if effective.out.is_none() {
+        if let Some(resume_out) = &req.resume_default_out {
+            effective.out = Some(resume_out.clone());
+            effective
+                .sources
+                .insert("out".to_string(), "resume".to_string());
+        }
+    }
     resolved_out_path = effective.out.clone();
 
     // Step 6 (part 2)/7/9: complexity validation (before the limiter),
@@ -1518,25 +1725,60 @@ pub async fn run_orchestration_with_config(
     // wholesale with the coerced/defaulted namespace (PR #441: a
     // key the final namespace doesn't carry forward,
     // e.g. an optional input whose seed was `null`, must not survive
-    // from the step-5 reseed above).
+    // from the step-5 reseed above). `--state` (issue #727): never a
+    // rebuild from `-e` alone -- `core/interface_inputs.py::
+    // check_interface_inputs` mutates whatever `input_ns` it's handed
+    // in place (default-fill/require/coerce only; an undeclared key
+    // stays untouched), so a resumed run's own already-merged `input`
+    // (step 5's own merge above) is this step's starting point
+    // instead of a fresh `-e`-only namespace that would drop every
+    // resumed key `-e` didn't name again.
     let input_namespace_for_label: Value;
-    match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
-        Ok(namespace) => {
-            input_namespace_for_label = Value::Dict(namespace.clone());
-            state::replace_input_namespace(&store, namespace);
+    if req.state_path.is_some() {
+        let mut namespace: indexmap::IndexMap<Value, Value> = store
+            .child(&store.root, &Value::Str("input".to_string()))
+            .ok()
+            .flatten()
+            .map(|node| store.snapshot(&node))
+            .and_then(|mut v| v.as_dict_mut().map(std::mem::take))
+            .unwrap_or_default();
+        let (_, iface_inputs) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        let apply_result = match iface_inputs {
+            Some(iface_inputs) => {
+                electricity_compiler::apply_declared_inputs(&mut namespace, iface_inputs)
+            }
+            None => Ok(()),
+        };
+        match apply_result {
+            Ok(()) => {
+                input_namespace_for_label = Value::Dict(namespace.clone());
+                state::replace_input_namespace(&store, namespace);
+            }
+            Err(err) => {
+                state::replace_input_namespace(&store, namespace);
+                fail!(err)
+            }
         }
-        Err(err) => {
-            // Step 10 itself failed partway
-            // through -- mirror Python's own in-place mutation of
-            // `state["input"]` as far as it got before the first
-            // violation (`build_input_namespace_best_effort`'s own doc
-            // comment), replacing wholesale same as the success arm.
-            let partial = electricity_compiler::build_input_namespace_best_effort(
-                &loaded.document,
-                &check_options,
-            );
-            state::replace_input_namespace(&store, partial);
-            fail!(err)
+    } else {
+        match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
+            Ok(namespace) => {
+                input_namespace_for_label = Value::Dict(namespace.clone());
+                state::replace_input_namespace(&store, namespace);
+            }
+            Err(err) => {
+                // Step 10 itself failed partway
+                // through -- mirror Python's own in-place mutation of
+                // `state["input"]` as far as it got before the first
+                // violation (`build_input_namespace_best_effort`'s own doc
+                // comment), replacing wholesale same as the success arm.
+                let partial = electricity_compiler::build_input_namespace_best_effort(
+                    &loaded.document,
+                    &check_options,
+                );
+                state::replace_input_namespace(&store, partial);
+                fail!(err)
+            }
         }
     }
 
@@ -1629,6 +1871,15 @@ pub async fn run_orchestration_with_config(
     )
     .ok();
 
+    // `state["runtime"]["last_run"] = {...}` (`cli/runtime_shim.py::run`,
+    // ~:754) replaces the whole dict, rather than updating into whatever
+    // `--state` resumed -- a stale `label`/`totals` from the saved run
+    // must not survive into this run's own `runtime.last_run`.
+    store.set_leaf(
+        &runtime_node,
+        Value::Str("last_run".to_string()),
+        Value::Dict(Dict::new()),
+    );
     let last_run_node = store
         .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
         .expect("Store::ensure_dict never fails");
@@ -2175,6 +2426,7 @@ pub async fn run_orchestration_with_config(
         &run_ctx,
         &observer,
         token,
+        req.resume,
     ));
     let exec_result = match &live_mirror {
         Some(mirror) => {
@@ -2337,6 +2589,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -2351,6 +2604,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -2404,6 +2658,7 @@ mod tests {
 
     fn use_op() -> UseOp {
         UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("child.yml".to_string()),
             inputs: None,
@@ -2430,6 +2685,7 @@ mod tests {
     #[test]
     fn a_use_effects_own_model_mode_expect_calls_the_default_adapter() {
         let op = block(vec![leaf(LeafKind::Use(UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             expect: Some(ExpectCondition::Model {
                 template: TemplateText::new("ok?".to_string(), false, Escape::None),
@@ -2480,6 +2736,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(default_adapter_called_directly(&op));
     }
@@ -2504,6 +2761,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(!default_adapter_called_directly(&op));
     }
@@ -2531,6 +2789,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(default_adapter_called_directly(&op));
     }

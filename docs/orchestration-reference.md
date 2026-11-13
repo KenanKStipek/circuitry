@@ -2495,6 +2495,17 @@ opt-in behavior from plain `--state`/persistence carryover (above and
 [Loop Iteration Paths](#loop-iteration-paths)), which only seeds a run's
 starting state and reruns every effect regardless of what already finished.
 
+`electricity run` has the same `--state <file> --resume <anything>` and
+`--force` flags, with this section's own skip-and-continue rules applied
+the same way (everything below, `resume: restart` included) — a state
+file either engine wrote resumes on the other. `--resume last`/a run-id
+(the other two rows of the table below) aren't supported: electricity has
+no `--last` stash and `runtime.persistence` stays refused on it, so
+`--resume` always needs `--state <file>` naming the saved state directly—
+given without it, electricity refuses the same way cof's own safety checks
+do (before anything runs, writing no state, exit 1). electricity's own
+`--last` stash is tracked separately (#760).
+
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An
 effect whose node shows `meta.completed_at` set and no `meta.error`
@@ -2606,8 +2617,11 @@ effects after it in the same chain rerun, as after any effect that did not
 resume whole. `resume: continue` is the default and the behaviour described
 above. Only `dynamic` and `use` take the key: `cof check` rejects it on any
 other effect type and rejects any value but `continue` and `restart`.
-electricity has no `--resume`; it checks the key the same way and otherwise
-ignores it.
+electricity checks the key the same way cof does and, since electricity's
+own `--resume` exists (above), honors it too: `resume: restart` runs a
+`use` fresh the same way; on a plain `dynamic`, electricity still only
+checks the key, resuming as `continue` regardless of the value (a
+documented, narrower gap).
 
 **Where the saved state comes from.** `--resume` needs a saved state that
 records each effect's `meta.completed_at`/`meta.error` and

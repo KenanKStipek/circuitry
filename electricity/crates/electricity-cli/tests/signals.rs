@@ -180,6 +180,21 @@ fn wait_until_running(home: &TempHome) {
     }
 }
 
+/// Waits for *path* to exist -- used where `--live-state` itself can't
+/// stand in for "this step has actually started": it never republishes
+/// a `use` child's own effects past its own first write, so polling it
+/// for one of the child's steps would just hang. The blocking step's
+/// own script creates *path* only once it actually starts running.
+fn wait_for_file(path: &Path) {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    while !path.exists() {
+        if std::time::Instant::now() >= deadline {
+            panic!("{} never appeared within 10s", path.display());
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// *out*'s own `prime.cleanup` node (the `finally:` step [`LONG_SLEEP_DOC`]
 /// declares) is present with a real value -- `finally:` actually ran,
 /// not merely that the run exited with the right code (PR #441:
@@ -455,18 +470,20 @@ effects:
     );
 }
 
-/// Lane I (issue #469), ruling R3 on PR #472's review:
-/// a SIGINT while a `use` child is running must exit 130 and leave no
-/// trace of the child's own effect having run -- `VmError::Cancelled`
-/// bypasses `execute_use`'s own output-mapping/retry bookkeeping
-/// entirely (the same rule every other container follows), so the use
-/// node itself never gets a `completed_at`, and the child's own
-/// full-passthrough keys (which only ever land on a *successful*
-/// child run) never appear at all -- not even a stale mid-run graft,
-/// since [`run_isolated_inner`] always clears it before returning,
-/// cancelled or not.
+/// Issue #469 -- the
+/// `runtime.state.record_children` config is off here, the common
+/// case: a SIGINT while a `use` child is running must exit 130 and
+/// leave no trace of the child's own effect having run --
+/// `VmError::Cancelled` bypasses `execute_use`'s own output-mapping/
+/// retry bookkeeping entirely (the same rule every other container
+/// follows), so the use node itself never gets a `completed_at`, and
+/// the child's own full-passthrough keys (which only ever land on a
+/// *successful* child run, or -- separately -- on a `record_children`
+/// graft, exercised by this module's own
+/// `sigint_during_a_use_child_with_record_children_keeps_its_finished_steps`)
+/// never appear at all.
 #[test]
-fn sigint_during_a_use_child_exits_130_with_no_leftover_child_effects() {
+fn sigint_during_a_use_child_without_record_children_exits_130_with_no_leftover_child_effects() {
     const DOC: &str = "\
 effects:
   - name: wrapper
@@ -507,6 +524,91 @@ finally:
         wrapper.get("slow").is_none(),
         "the child's own effect must never be merged onto the use node \
          when the run was cancelled before it finished: {state}"
+    );
+    assert!(
+        wrapper["meta"]["child_errors"].is_null(),
+        "cof's own cancellation path (`except BaseException`) never \
+         collects child_errors, record_children or not: {state}"
+    );
+}
+
+/// Issue #727 follow-up: with `runtime.state.record_children` on, a
+/// `use` cancelled mid-child must keep the same shape
+/// `core/use.py::UseRuntime.execute`'s own `except BaseException`
+/// leaves -- the finished step's record grafted onto the use node
+/// unchanged, the in-progress one grafted with its own meta so far but
+/// no `completed_at`, `meta.child_errors` left `None` (never the
+/// interrupt text), and the use node itself with no `completed_at` of
+/// its own.
+#[test]
+fn sigint_during_a_use_child_with_record_children_keeps_its_finished_steps() {
+    let home = TempHome::new("sigint-use-child-record-children");
+    let started = home.path.join("started");
+    const DOC_TEMPLATE: &str = "\
+effects:
+  - name: wrapper
+    type: use
+    inline: |
+      effects:
+        - name: quick
+          type: tool
+          provider: json
+          params: {mode: parse, input: '{\"ok\": true}'}
+        - name: slow
+          type: tool
+          provider: shell
+          params:
+            command: bash
+            args: [\"-c\", \"touch started; exec sleep 60\"]
+            allowed_commands: [\"bash\"]
+            cwd: \"HOME_PATH_PLACEHOLDER\"
+finally:
+  - name: cleanup
+    type: tool
+    provider: sleep
+    params: {seconds: 5}
+";
+    let doc_text = DOC_TEMPLATE.replace("HOME_PATH_PLACEHOLDER", &home.path.display().to_string());
+    let config = home.write(
+        "config.json",
+        r#"{"runtime": {"state": {"record_children": true}}}"#,
+    );
+    let doc = home.write("doc.yml", &doc_text);
+    let out = home.path.join("out.json");
+    let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
+    wait_until_running(&home);
+    wait_for_file(&started);
+    child.send(libc::SIGINT);
+    let status = child
+        .wait_timeout(Duration::from_secs(10))
+        .expect("electricity exited after SIGINT");
+    assert_eq!(status.code(), Some(130));
+    assert!(out.exists());
+    assert_finally_ran(&out);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let wrapper = &state["prime"]["wrapper"];
+    assert!(
+        wrapper["meta"]["completed_at"].is_null(),
+        "a use node cancelled mid-child must never complete: {state}"
+    );
+    assert!(
+        wrapper["meta"]["child_errors"].is_null(),
+        "cof's own cancellation path never collects child_errors, even \
+         with record_children on: {state}"
+    );
+    assert!(
+        !wrapper["quick"]["meta"]["completed_at"].is_null(),
+        "the child's own finished step must survive the graft: {state}"
+    );
+    assert!(
+        wrapper["slow"]["meta"]["created_at"].is_string(),
+        "the child's own in-progress step must still be grafted, with \
+         whatever meta it got to: {state}"
+    );
+    assert!(
+        wrapper["slow"]["meta"]["completed_at"].is_null(),
+        "the child's own in-progress step must never look finished: {state}"
     );
 }
 

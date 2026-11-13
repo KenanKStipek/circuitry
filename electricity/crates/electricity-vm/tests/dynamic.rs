@@ -57,6 +57,7 @@ async fn chain_stops_at_the_first_failure_and_never_runs_the_rest() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -112,6 +113,7 @@ async fn an_absorbed_failure_lets_the_parent_continue_and_records_meta_error() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -154,6 +156,7 @@ async fn dynamic_meta_key_order_matches_circuitry() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -227,6 +230,7 @@ async fn tree_dispatch_fires_before_any_branch_and_merges_every_child_in_order()
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -293,6 +297,7 @@ async fn tree_registers_every_branch_before_dispatch_and_clears_at_merge() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -362,6 +367,7 @@ async fn a_tree_cancelled_before_any_branch_starts_still_clears_its_overlay() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -425,6 +431,7 @@ async fn tree_stop_on_error_never_starts_a_queued_branch() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -461,6 +468,7 @@ async fn finally_runs_after_a_body_failure_and_reports_finally_error_too() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -519,6 +527,7 @@ async fn an_already_cancelled_token_stops_the_chain_before_its_first_effect() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -573,6 +582,7 @@ async fn finally_still_runs_when_the_token_is_already_cancelled() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -625,6 +635,7 @@ async fn finally_also_runs_after_a_successful_body() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -686,6 +697,7 @@ async fn a_signal_during_an_otherwise_successful_finally_is_reported_as_interrup
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     // `on_error: skip` on `prime` itself must not matter: a cancellation
@@ -744,6 +756,7 @@ async fn two_simultaneous_tree_failures_are_combined_into_one_numbered_message()
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap_err();
@@ -838,6 +851,7 @@ async fn stop_on_error_records_only_the_first_of_two_simultaneous_failures() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -895,6 +909,7 @@ async fn dispatch_reports_branches_and_concurrency_in_the_observers_own_paramete
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -957,6 +972,7 @@ async fn a_deeply_nested_dynamics_own_if_sees_an_earlier_siblings_write_through_
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -1033,6 +1049,7 @@ async fn on_error_continue_never_absorbs_a_cancelled_leaf() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     assert!(matches!(result, Err(VmError::Cancelled)), "got {result:?}");
@@ -1088,6 +1105,7 @@ async fn on_error_continue_never_absorbs_a_refused_use_child_and_finally_still_r
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     let err = result.expect_err("a refused use child must never be absorbed by on_error: continue");
@@ -1168,6 +1186,7 @@ async fn a_refused_tree_branch_is_never_absorbed_by_on_error_continue_and_finall
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await;
     let err = result.expect_err(
@@ -1233,6 +1252,7 @@ async fn observer_write_fires_once_per_chain_step_once_per_branch_and_once_after
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -1278,6 +1298,7 @@ async fn a_disabled_op_writes_a_skip_node_instead_of_dispatching() {
         &ctx,
         &observer,
         &token,
+        false,
     )
     .await
     .unwrap();

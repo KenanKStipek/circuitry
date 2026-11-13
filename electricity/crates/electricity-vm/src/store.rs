@@ -318,6 +318,23 @@ impl Store {
         }
     }
 
+    /// A store whose root is [`hydrate_resumed_state`]'s own result for
+    /// *value* -- `--state`'s own entry point (issue #727): every top-
+    /// level key *value* carries (`input`, `runtime`, `prime`, every
+    /// other effect/root key a prior run wrote) becomes this run's own
+    /// starting state, with every `last` alias relinked, exactly as
+    /// `cli/runtime_shim.py::_load_state`'s own `link_last_refs` leaves
+    /// it for `Store(state, ...)` to use directly.
+    pub fn with_resumed_state(value: Value) -> Self {
+        let mut value = value;
+        migrate_legacy_state(&mut value);
+        Store {
+            root: hydrate_resumed_state(value),
+            #[cfg(test)]
+            snapshot_calls: std::cell::Cell::new(0),
+        }
+    }
+
     /// This store's own [`Store::snapshot`] call count so far -- see the
     /// field's own doc comment.
     #[cfg(test)]
@@ -722,6 +739,121 @@ fn is_iter_key(key: &Value) -> bool {
         return false;
     };
     !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// A fresh root [`NodeRef`] built from *value* -- the Rust shape of
+/// `core/saved_state.py::link_last_refs`: every dict anywhere in *value*
+/// (reachable through dict keys; never through a list element -- see
+/// [`Store::saved`]'s own doc comment on why that side is symmetric) is
+/// promoted into a tracked [`Slot::Node`], and a `last` key shaped
+/// exactly `{"$ref": "iter_<N>"}` is replaced by a [`Slot::Node`] that
+/// shares the sibling `iter_<N>`'s own identity -- the inverse of
+/// [`Store::saved`]'s own compaction. A `last` whose `$ref` target is
+/// missing, or isn't itself a dict, is left exactly as
+/// [`Store::saved`]'s own doc comment says `link_last_refs` leaves it:
+/// the literal reference value, not an alias.
+/// `core/state_ns.py::migrate_legacy_state` -- wraps every root key of
+/// *value* that isn't `input`/`prime`/`runtime` or `_`-prefixed under a
+/// new `input` key, in place, unless `input` is already present (a
+/// state dict that already carries one is trusted as already
+/// namespaced, and left untouched, making this idempotent). A pre-
+/// namespace state file (or one authored by hand with bare top-level
+/// keys) still resumes the same way `--state` loading it on cof does --
+/// top level only, never recursed into a nested dict.
+fn migrate_legacy_state(value: &mut Value) {
+    let Value::Dict(map) = value else {
+        return;
+    };
+    if map.contains_key(&Value::Str("input".to_string())) {
+        return;
+    }
+    let lifted: Vec<Value> = map
+        .keys()
+        .filter(|key| {
+            let Value::Str(key) = key else {
+                return true;
+            };
+            !matches!(key.as_str(), "prime" | "runtime") && !key.starts_with('_')
+        })
+        .cloned()
+        .collect();
+    let mut input_ns = electricity_value::Dict::new();
+    for key in lifted {
+        if let Some(lifted_value) = map.shift_remove(&key) {
+            input_ns.insert(key, lifted_value);
+        }
+    }
+    map.insert(Value::Str("input".to_string()), Value::Dict(input_ns));
+}
+
+pub fn hydrate_resumed_state(mut value: Value) -> NodeRef {
+    // `Value` has a hand-written `Drop` impl (iterative dropping,
+    // regardless of depth -- see `exec::live_ctx`'s own identical note),
+    // so a plain `Value::Dict(map) => ...` match arm can't move `map`
+    // out of `value` by value: `std::mem::take` through `&mut` swaps it
+    // out for an empty map instead, which is what the `if let` below
+    // actually destructures.
+    if let Value::Dict(ref mut map) = value {
+        let taken = std::mem::take(map);
+        let mut entries: IndexMap<Value, Slot> = IndexMap::with_capacity(taken.len());
+        for (key, v) in taken {
+            entries.insert(key, hydrate_slot(v));
+        }
+        relink_last(&mut entries);
+        node_from_entries(entries)
+    } else {
+        // A non-dict root never reaches this function in practice (the
+        // CLI's own `--state` load already requires a JSON object); kept
+        // total, rather than partial, for defense in depth.
+        new_node()
+    }
+}
+
+fn hydrate_slot(mut value: Value) -> Slot {
+    if let Value::Dict(ref mut map) = value {
+        let taken = std::mem::take(map);
+        Slot::Node(hydrate_resumed_state(Value::Dict(taken)))
+    } else {
+        Slot::Value(value)
+    }
+}
+
+/// *entries*' own `last` key, relinked in place to alias its `iter_<N>`
+/// sibling when it is shaped exactly `{"$ref": "iter_<N>"}` and that
+/// sibling is itself a dict -- [`hydrate_resumed_state`]'s own single
+/// caller, one level of *entries* at a time (every deeper level already
+/// relinked its own `last`, if any, on the way up through
+/// [`hydrate_slot`]'s recursive call).
+fn relink_last(entries: &mut IndexMap<Value, Slot>) {
+    let last_key = Value::Str("last".to_string());
+    let target_key: Option<Value> = match entries.get(&last_key) {
+        Some(Slot::Node(candidate)) => {
+            let borrowed = candidate.borrow();
+            let ref_key = Value::Str("$ref".to_string());
+            if borrowed.entries().len() == 1 {
+                match borrowed.entries().get(&ref_key) {
+                    Some(Slot::Value(Value::Str(name))) => {
+                        let candidate_key = Value::Str(name.clone());
+                        if is_iter_key(&candidate_key) {
+                            Some(candidate_key)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    if let Some(target_key) = target_key {
+        if let Some(Slot::Node(target)) = entries.get(&target_key) {
+            let target = Rc::clone(target);
+            entries.insert(last_key, Slot::Node(target));
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1255,5 +1387,72 @@ mod tests {
         assert!(!is_iter_key(&key("iter_a")));
         assert!(!is_iter_key(&key("not_iter_1")));
         assert!(!is_iter_key(&Value::Int(1.into())));
+    }
+
+    fn store_from_root(root: NodeRef) -> Store {
+        Store {
+            root,
+            #[cfg(test)]
+            snapshot_calls: std::cell::Cell::new(0),
+        }
+    }
+
+    #[test]
+    fn hydrate_resumed_state_relinks_a_dollar_ref_last_to_its_iter_sibling() {
+        let mut iter_2 = IndexMap::new();
+        iter_2.insert(key("value"), Value::Str("done".to_string()));
+        let mut last_ref = IndexMap::new();
+        last_ref.insert(key("$ref"), Value::Str("iter_2".to_string()));
+        let mut loop_node = IndexMap::new();
+        loop_node.insert(key("iter_2"), Value::Dict(iter_2));
+        loop_node.insert(key("last"), Value::Dict(last_ref));
+        let mut root = IndexMap::new();
+        root.insert(key("my_loop"), Value::Dict(loop_node));
+
+        let store = store_from_root(hydrate_resumed_state(Value::Dict(root)));
+        let loop_node = store.child(&store.root, &key("my_loop")).unwrap().unwrap();
+        let iter_2_node = match loop_node.borrow().get(&key("iter_2")) {
+            Some(Slot::Node(n)) => Rc::clone(n),
+            other => panic!("expected iter_2 to be a tracked node, got {other:?}"),
+        };
+        match loop_node.borrow().get(&key("last")) {
+            Some(Slot::Node(n)) => assert!(Rc::ptr_eq(n, &iter_2_node)),
+            other => panic!("expected last to alias iter_2, got {other:?}"),
+        }
+
+        // Round-trips back through `saved()` to the same `$ref` shape.
+        let saved = store.saved(&store.root);
+        let Value::Dict(ref saved_root) = saved else {
+            panic!("expected a dict");
+        };
+        let Some(Value::Dict(saved_loop)) = saved_root.get(&key("my_loop")) else {
+            panic!("expected my_loop to round-trip as a dict");
+        };
+        let mut expected_ref = IndexMap::new();
+        expected_ref.insert(key("$ref"), Value::Str("iter_2".to_string()));
+        assert_eq!(
+            saved_loop.get(&key("last")),
+            Some(&Value::Dict(expected_ref))
+        );
+    }
+
+    #[test]
+    fn hydrate_resumed_state_leaves_a_last_with_no_matching_sibling_unaliased() {
+        let mut last_ref = IndexMap::new();
+        last_ref.insert(key("$ref"), Value::Str("iter_9".to_string()));
+        let mut root = IndexMap::new();
+        root.insert(key("last"), Value::Dict(last_ref));
+
+        let store = store_from_root(hydrate_resumed_state(Value::Dict(root)));
+        let saved = store.saved(&store.root);
+        let Value::Dict(ref saved_root) = saved else {
+            panic!("expected a dict");
+        };
+        let mut expected_ref = IndexMap::new();
+        expected_ref.insert(key("$ref"), Value::Str("iter_9".to_string()));
+        assert_eq!(
+            saved_root.get(&key("last")),
+            Some(&Value::Dict(expected_ref))
+        );
     }
 }

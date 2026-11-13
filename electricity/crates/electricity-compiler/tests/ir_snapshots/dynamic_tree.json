@@ -68,7 +68,8 @@
                           {
                             "Name": "a"
                           }
-                        ]
+                        ],
+                        "resume_mode": "Continue"
                       },
                       {
                         "enabled": true,
@@ -117,7 +118,8 @@
                           {
                             "Name": "b"
                           }
-                        ]
+                        ],
+                        "resume_mode": "Continue"
                       }
                     ],
                     "max_concurrency": 2,
@@ -135,7 +137,8 @@
                 {
                   "Name": "group"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -149,7 +152,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

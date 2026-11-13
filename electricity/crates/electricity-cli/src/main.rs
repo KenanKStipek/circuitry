@@ -54,7 +54,7 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
        electricity run <orchestration.yml> [-e key=value]... [--config config.json]
                     [--out state.json] [--live-state state.json] [--events events.jsonl]
                     [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]
-                    [--pretty] [--profile <path>]
+                    [--pretty] [--profile <path>] [--state state.json] [--resume MODE] [--force]
 
 electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents
 only (persistence and runtime plugins are refused with a
@@ -119,7 +119,26 @@ Options:
                       an explicit path -- no name discovery.
   --dump-ir           Print the compiled IR as JSON and exit. Unstable: this
                       format is a debugging aid and can change in any release.
-                      Legacy form only -- no `cof run` equivalent.";
+                      Legacy form only -- no `cof run` equivalent.
+  --state <path>, -s  `run` only: resume from this saved state file --
+                      every top-level key it carries, not just `input`.
+                      A named effect whose saved node already finished
+                      without error is skipped and reused only when
+                      --resume is also given; named alone, --state
+                      still seeds the whole run from the file, with no
+                      skip. The -s alias is `run` only, matching cof's.
+  --resume <mode>     `run` only, combined with --state <file>: engages
+                      the skip-and-continue behaviour above. cof's own
+                      'last'/a run-id mode (looked up via its own --last
+                      stash or a runtime.persistence backend) is not
+                      supported -- --resume always needs --state <file>
+                      naming the saved state directly. Refuses a
+                      document that changed since the saved run unless
+                      --force.
+  --force             `run` only: with --resume, continue even though
+                      the orchestration's content changed since the
+                      saved run (or it carries no recorded digest at
+                      all).";
 
 /// A successfully parsed run request -- every flag [`USAGE`] lists that
 /// isn't `--dump-ir`/`--version`/`--help`, from either
@@ -150,6 +169,19 @@ struct RunArgs {
     /// `--quiet` (issue #728, `run` only) -- accepted for parity; has
     /// no observable effect today (USAGE's own note).
     quiet: bool,
+    /// `--state <path>`/`-s` (issue #727, `run` only) -- the saved
+    /// state this run resumes from (every top-level key, not just
+    /// `input`), named explicitly.
+    state: Option<String>,
+    /// `--resume` (issue #727, `run` only) -- any value engages
+    /// `--state`'s own resume skip logic (`cof run`'s own `last`/a
+    /// run-id mode needs a persistence/stash lookup this engine never
+    /// builds, so it is out of scope here); absent with `--state`
+    /// given, the state file still seeds the run, just without the
+    /// skip-and-continue behaviour.
+    resume: Option<String>,
+    /// `--force` (issue #727, `run` only).
+    force: bool,
     /// Whether this came from `electricity run <doc> ...` rather than
     /// the legacy `electricity <config.json> <doc> ...` form -- the one
     /// thing [`run_action`]'s own later usage-error site (a malformed
@@ -159,6 +191,12 @@ struct RunArgs {
     via_run: bool,
 }
 
+// `RunArgs` has grown past clippy's own size heuristic (issue #727's
+// three new fields) -- a CLI parses exactly one command line per
+// process and discards `Action` immediately after, so boxing the
+// large variant to shrink every other one would only add an
+// allocation with no actual memory-pressure benefit.
+#[allow(clippy::large_enum_variant)]
 enum Action {
     Version,
     Help,
@@ -240,6 +278,10 @@ const RUN_FLAGS: &[(&str, Arity)] = &[
     ("--allow-capabilities", Arity::Value),
     ("--adapter", Arity::Value),
     ("--label", Arity::Value),
+    ("--state", Arity::Value),
+    ("-s", Arity::Value),
+    ("--resume", Arity::Value),
+    ("--force", Arity::Boolean),
 ];
 
 fn flag_arity<'a>(flags: &'a [(&'static str, Arity)], flag: &str) -> Option<&'a Arity> {
@@ -278,6 +320,9 @@ struct ParsedFlags {
     allow_capabilities: Option<String>,
     adapter: Option<String>,
     label: Option<String>,
+    state: Option<String>,
+    resume: Option<String>,
+    force: bool,
     positionals: Vec<String>,
 }
 
@@ -300,6 +345,9 @@ fn parse_flags(
         allow_capabilities: None,
         adapter: None,
         label: None,
+        state: None,
+        resume: None,
+        force: false,
         positionals: Vec::new(),
     };
     let mut i = 0;
@@ -342,6 +390,7 @@ fn parse_flags(
                     "--dump-ir" => parsed.dump_ir = true,
                     "--pretty" => parsed.pretty = true,
                     "--quiet" => parsed.quiet = true,
+                    "--force" => parsed.force = true,
                     _ => unreachable!("every Arity::Boolean flag is handled above"),
                 }
                 i += 1;
@@ -364,6 +413,8 @@ fn parse_flags(
                     "--allow-capabilities" => parsed.allow_capabilities = Some(value),
                     "--adapter" => parsed.adapter = Some(value),
                     "--label" => parsed.label = Some(value),
+                    "--state" | "-s" => parsed.state = Some(value),
+                    "--resume" => parsed.resume = Some(value),
                     _ => unreachable!("every Arity::Value flag is handled above"),
                 }
                 i += if inline_value.is_some() { 1 } else { 2 };
@@ -458,6 +509,9 @@ fn classify(args: &[String]) -> Action {
             adapter: parsed.adapter,
             label: None,
             quiet: parsed.quiet,
+            state: None,
+            resume: None,
+            force: false,
             via_run: false,
         }),
         _ => Action::UsageError("no config file or orchestration given".to_string()),
@@ -500,6 +554,9 @@ fn classify_run(args: &[String]) -> Action {
             adapter: parsed.adapter,
             label: parsed.label,
             quiet: parsed.quiet,
+            state: parsed.state,
+            resume: parsed.resume,
+            force: parsed.force,
             via_run: true,
         }),
         // `click.exceptions.UsageError`'s own literal template keeps
@@ -1014,7 +1071,62 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         }
     };
 
+    // Only the literal flag -- DESIGN.md §6.8's own "--resume with no
+    // explicit --out writes back to the file it resumed from" default
+    // ranks *below* a loaded `--profile`'s own `out:` (`cli/
+    // effective_settings.py::resolve_effective_settings`'s own `cli >
+    // profile > resume source > default` order), so it is passed to
+    // `RunRequest::resume_default_out` instead and applied inside
+    // `electricity` (lib)'s own effective-settings resolution, at that
+    // tier, not folded into this CLI-level `out_path` (which ranks
+    // above a profile unconditionally).
     let out_path = run_args.out.map(PathBuf::from);
+
+    // `--resume` (issue #727): only the `--state <file>` form is in
+    // scope. `cof run`'s own two other sources both fail inside
+    // `cli/app.py::_resolve_resume_state` with a `typer.BadParameter`
+    // the caller re-raises as `typer.Exit(code=1)` -- a pre-run
+    // refusal that writes no state at all, not a raw CLI usage error
+    // (DESIGN.md §6.9's own exit-code table), so this is refused the
+    // same way `--resume`'s document-hash checks are: through the
+    // ordinary `RunResult`/`exit_code_for` path, exit 1, nothing
+    // written -- never `ExitCode::from(2)`.
+    if run_args.resume.is_some() && run_args.state.is_none() {
+        signal_guard.disarm();
+        let message = if run_args.resume.as_deref() == Some("last") {
+            // `cof run --resume last` reads its own `--last` stash
+            // (`last-run.json`); electricity keeps none (issue #760
+            // tracks adding one).
+            "--resume last needs cof's own --last stash, which electricity does not keep \
+             (issue #760) -- pass --state <file> naming a saved state directly instead."
+                .to_string()
+        } else {
+            // `cof run --resume <run-id>` needs the orchestration's own
+            // `runtime.persistence` backend, which stays refused on
+            // electricity.
+            "--resume <run-id> needs this orchestration's runtime.persistence backend, which \
+             stays refused on electricity -- pass --state <file> naming a saved state directly \
+             instead."
+                .to_string()
+        };
+        let result = RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(message),
+            warnings: config_warnings.clone(),
+            signal: None,
+        };
+        if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
+            print_stderr_contract(&result);
+            write_stderr(&format!(
+                "electricity: could not serialize run state: {err}\n"
+            ));
+            return ExitCode::from(1);
+        }
+        print_stderr_contract(&result);
+        return exit_code_for(&result);
+    }
 
     let req = RunRequest {
         config_path: explicit_config_path,
@@ -1030,6 +1142,14 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         adapter_override: run_args.adapter.clone(),
         label_override: run_args.label.clone(),
         armed: true,
+        state_path: run_args.state.clone().map(PathBuf::from),
+        resume: run_args.resume.is_some(),
+        resume_default_out: if run_args.resume.is_some() {
+            run_args.state.clone().map(PathBuf::from)
+        } else {
+            None
+        },
+        force: run_args.force,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

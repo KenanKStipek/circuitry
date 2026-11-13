@@ -77,12 +77,35 @@ pub(crate) fn execute_dynamic<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
+    // `cof run --resume` (issue #727): whether this dynamic's own body
+    // may skip a child whose saved node already finished without error
+    // -- `core/dynamic.py::DynamicRuntime.resume`, decided by the
+    // caller.
+    resume_active: bool,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
         let name = op
             .name
             .as_deref()
             .expect("a dynamic (root or nested) always has a name");
+        // `core/dynamic.py::DynamicRuntime.execute`'s own `if self.resume
+        // and self.defn.resume == "restart": self.resume = False;
+        // store.state.pop(self.defn.name, None)` -- a finished node was
+        // already skipped by the parent, so reaching this `execute_
+        // dynamic` call at all means it's unfinished; `resume: restart`
+        // drops whatever it saved (the whole node, not just a stale
+        // `meta`) and runs it from its first effect, like a fresh run.
+        // `parent` is always a real `Store`-created node here (never a
+        // loop/`if`-branch overlay -- the same invariant `ensure_dict`'s
+        // own `debug_assert!` already requires of it, just below), so
+        // removing a key from it directly is safe.
+        let mut resume_active = resume_active;
+        if resume_active && op.resume_mode == electricity_bytecode::ResumeMode::Restart {
+            resume_active = false;
+            parent
+                .borrow_mut()
+                .shift_remove(&Value::Str(name.to_string()));
+        }
         let dyn_node = store.ensure_dict(parent, key(name)).map_err(store_err)?;
 
         let (body, finally): (&Region, Option<&Region>) = match &op.kind {
@@ -135,6 +158,7 @@ pub(crate) fn execute_dynamic<'a>(
                     run_ctx,
                     observer,
                     token,
+                    resume_active,
                 )
                 .await
             }
@@ -155,6 +179,7 @@ pub(crate) fn execute_dynamic<'a>(
                     run_ctx,
                     observer,
                     token,
+                    resume_active,
                 )
                 .await
             }
@@ -189,6 +214,11 @@ pub(crate) fn execute_dynamic<'a>(
             Some(Region::Block { ops, .. }) => {
                 let finally_token = CancellationToken::new();
                 Some(
+                    // `core/dynamic.py::_execute_chain`'s own
+                    // `resume_active=False`: cleanup always reruns in
+                    // full, resumed or not (this crate's own doc
+                    // comment on `execute_chain`'s `resume_active`
+                    // parameter).
                     execute_chain(
                         ops,
                         store,
@@ -199,6 +229,7 @@ pub(crate) fn execute_dynamic<'a>(
                         run_ctx,
                         observer,
                         &finally_token,
+                        false,
                     )
                     .await,
                 )
@@ -385,21 +416,41 @@ fn execute_chain<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
+    // `cof run --resume`'s own positional skip (issue #727): stops for
+    // good -- for every later step in *this* chain, `finally:` included
+    // when it reuses this function with `false` -- the moment one step
+    // is an [`super::ExecOutcome::Ran`] (`core/dynamic.py::
+    // DynamicRuntime.execute`'s own `resume_active` local, chain-flow
+    // branch: "positional, not per-effect").
+    resume_active: bool,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
+        let mut resume_active = resume_active;
         for child_op in ops {
             if token.is_set() {
                 return Err(VmError::Cancelled);
             }
             let result = execute_op(
-                child_op, store, write_node, ctx_chain, frame, run_ctx, observer, token,
+                child_op,
+                store,
+                write_node,
+                ctx_chain,
+                frame,
+                run_ctx,
+                observer,
+                token,
+                resume_active,
             )
             .await;
             // `core/dynamic.py`'s own chain loop calls `store.on_write`
             // from a `finally:` around every single effect -- success or
             // failure alike, never skipped by an absorbed `on_error`.
             observer.write();
-            result.map_err(|e| wrap_effect_error(&effect_label(container_name, child_op), e))?;
+            let outcome = result
+                .map_err(|e| wrap_effect_error(&effect_label(container_name, child_op), e))?;
+            if outcome == super::ExecOutcome::Ran {
+                resume_active = false;
+            }
         }
         Ok(())
     })
@@ -430,6 +481,15 @@ fn execute_tree<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
+    // `cof run --resume` (issue #727): every branch gets the same
+    // ambient flag -- `core/dynamic.py::DynamicRuntime._execute_branch`
+    // passes no `resume_active` override of its own, so each branch
+    // just reads this dynamic's own `self.resume`. A branch whose own
+    // saved node already finished is skipped (seeded below, before
+    // dispatch); one that didn't finish reruns whole -- a tree branch
+    // has no positional record to continue inside (this crate's own
+    // `execute_op` doc comment on `ExecOutcome`).
+    resume_active: bool,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
         let n = branch_ops.len();
@@ -461,6 +521,31 @@ fn execute_tree<'a>(
         // into until the merge below).
         let tree_chain: CtxChain = vec![CtxSource::Frozen(super::live_ctx(ctx_chain, store))];
         let branches = store.parallel_branches(dyn_node, n).map_err(store_err)?;
+        // `cof run --resume` (#356 follow-up's own tree-seed comment in
+        // `core/dynamic.py`): a branch store starts life empty, so
+        // without this, `execute_op`'s own skip check could never see a
+        // finished node from a prior run. Seed the one key each branch
+        // is actually responsible for from *dyn_node* (which, under
+        // resume, still carries the earlier run's children) before
+        // dispatch.
+        if resume_active {
+            for (idx, branch_op) in branch_ops.iter().enumerate() {
+                let Some(branch_name) = &branch_op.name else {
+                    continue;
+                };
+                if let Some(existing) = dyn_node.borrow().get(&key(branch_name)).cloned() {
+                    let is_completed = match &existing {
+                        crate::Slot::Node(n) => super::effect_completed_ok(store, n),
+                        crate::Slot::Value(_) => false,
+                    };
+                    if is_completed {
+                        branches[idx]
+                            .borrow_mut()
+                            .insert(key(branch_name), existing);
+                    }
+                }
+            }
+        }
         observer.register_tree_branches(&container_path, &branches);
 
         let container_name = op
@@ -495,6 +580,7 @@ fn execute_tree<'a>(
                         run_ctx,
                         observer,
                         token,
+                        resume_active,
                     )
                     .await;
                     // `core/dynamic.py::DynamicRuntime._execute_branch`'s
@@ -537,7 +623,7 @@ fn execute_tree<'a>(
 
             while let Some((idx, result)) = in_flight.next().await {
                 match result {
-                    Ok(()) => {}
+                    Ok(_) => {}
                     Err(VmError::Cancelled) => {
                         interrupted = true;
                     }

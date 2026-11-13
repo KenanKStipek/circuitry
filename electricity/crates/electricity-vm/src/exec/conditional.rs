@@ -43,6 +43,12 @@ pub(crate) fn execute_conditional<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
+    // `cof run --resume` (issue #727, #573): a named `if` whose saved
+    // node did not finish continues inside the branch its condition
+    // selects again, when that matches the branch the saved node
+    // itself took (`decide_and_run`'s own `saved_branch`/`resume_active`
+    // computation) -- `core/conditional.py::ConditionalRuntime.resume`.
+    resume_active: bool,
 ) -> BoxExecFuture<'a> {
     Box::pin(async move {
         let NodeKind::Control(Region::If {
@@ -58,6 +64,24 @@ pub(crate) fn execute_conditional<'a>(
         match &op.name {
             Some(name) => {
                 let node = store.ensure_dict(parent, key(name)).map_err(store_err)?;
+                // `core/conditional.py::ConditionalRuntime.execute`'s own
+                // `saved_branch = meta.get("branch") if self.resume else
+                // None` -- read before `write_conditional_meta_start`
+                // resets `meta` below, the same "read the saved record
+                // before this run's own fields overwrite it" order
+                // `loop_.rs`'s own resume_from computation and `use_.rs`'s
+                // own `saved_child_run` already use.
+                let saved_branch: Option<String> = if resume_active {
+                    match store.peek(&node, &key("meta")) {
+                        Some(crate::Slot::Node(meta)) => match store.peek(&meta, &key("branch")) {
+                            Some(crate::Slot::Value(Value::Str(ref s))) => Some(s.clone()),
+                            _ => None,
+                        },
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
                 store.set_leaf(&node, key("value"), Value::None);
                 let meta = store.ensure_dict(&node, key("meta")).map_err(store_err)?;
                 write_conditional_meta_start(store, &meta, cond, *threshold, op.labels.as_ref());
@@ -77,6 +101,7 @@ pub(crate) fn execute_conditional<'a>(
                     run_ctx,
                     observer,
                     token,
+                    saved_branch,
                 )
                 .await;
                 // `cli/events.py::EventLog.on_complete` reads the node's
@@ -105,7 +130,7 @@ pub(crate) fn execute_conditional<'a>(
             None => {
                 decide_and_run(
                     op, cond, then_, else_, store, parent, None, ctx_chain, frame, run_ctx,
-                    observer, token,
+                    observer, token, None,
                 )
                 .await
             }
@@ -213,6 +238,11 @@ async fn decide_and_run<'a>(
     run_ctx: &'a RunContext<'a>,
     observer: &'a dyn RunObserver,
     token: &'a CancellationToken,
+    // `cof run --resume` (#573): the branch *op*'s own saved node took
+    // last time, or `None` for an unnamed `if` (never resumable) or a
+    // first/non-resumed run. Compared against the branch this call
+    // actually selects, below, once the condition is (re-)evaluated.
+    saved_branch: Option<String>,
 ) -> Result<(), VmError> {
     // Set only by a *successful* `Condition::Model` evaluation below --
     // its own `answer`/`adapter`/`model`/`tokens_*` write happens after
@@ -359,6 +389,12 @@ async fn decide_and_run<'a>(
 
     let branch_ops: &[Op] = select_branch_ops(result, then_, else_);
     let branch_label = if result { "then" } else { "else" };
+    // `core/conditional.py::ConditionalRuntime.execute`'s own
+    // `resume_active = saved_branch is not None and saved_branch ==
+    // branch` -- the condition is re-evaluated every time (above), even
+    // under resume; this branch's own steps only skip via `--resume`
+    // when it is the exact branch the saved node took.
+    let mut resume_active = saved_branch.as_deref() == Some(branch_label);
 
     if let Some((_, meta)) = named {
         store.set_leaf(meta, key("condition_result"), Value::Bool(result));
@@ -403,10 +439,14 @@ async fn decide_and_run<'a>(
             run_ctx,
             observer,
             token,
+            resume_active,
         )
         .await
         {
-            Ok(()) => {
+            Ok(outcome) => {
+                if outcome == super::ExecOutcome::Ran {
+                    resume_active = false;
+                }
                 executed.push(effect_record(child_op, index));
                 let local = local_writes(branch_parent, &baseline, &own_names);
                 // `core/scope.py::scope_ctx`'s own early return (`if not

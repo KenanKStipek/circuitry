@@ -86,6 +86,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: false,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 

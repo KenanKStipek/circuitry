@@ -2071,6 +2071,7 @@ mod tests {
             on_error: OnError::Continue,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
 
         // Not the attempts-exhausted call site: a later pass's own error

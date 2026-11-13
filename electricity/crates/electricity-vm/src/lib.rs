@@ -41,7 +41,7 @@ pub use electricity_value::CancellationToken;
 pub use limiter::{Limiter, LimiterError, SlotGuard};
 pub use observer::{NullObserver, RunObserver};
 pub use store::{
-    NodeRef, Slot, Store, StoreError, node_from_entries, node_with_fallback,
+    NodeRef, Slot, Store, StoreError, hydrate_resumed_state, node_from_entries, node_with_fallback,
     node_with_fallback_hiding, node_with_fallback_watermarked,
 };
 
@@ -408,6 +408,10 @@ pub async fn execute_root(
     run_ctx: &RunContext<'_>,
     observer: &dyn RunObserver,
     token: &CancellationToken,
+    // `cof run --resume` (issue #727): whether the document root's own
+    // children may skip a finished saved node -- the run-wide flag
+    // every call site but a genuinely resumed run passes `false`.
+    resume_active: bool,
 ) -> Result<(), VmError> {
     let chain: exec::CtxChain = match ctx {
         Value::None => Vec::new(),
@@ -423,6 +427,7 @@ pub async fn execute_root(
         run_ctx,
         observer,
         token,
+        resume_active,
     )
     .await
 }
@@ -446,6 +451,7 @@ mod tests {
                 on_error: OnError::Fail,
                 labels: None,
                 enabled: true,
+                resume_mode: electricity_bytecode::ResumeMode::Continue,
             },
             prompts: indexmap::IndexMap::new(),
             effect_names: BTreeSet::new(),
@@ -505,6 +511,7 @@ mod tests {
             &run_ctx,
             &NullObserver,
             &token,
+            false,
         )
         .await
         .unwrap();

@@ -49,7 +49,22 @@ an over-threshold prompt into chunks, planned and executed as its own
 isolated child run) all run too, writing `meta.complexity`/
 `meta.decomposition` the same way `cof run` does -- including the size
 trigger (a prompt's rendered input over its own token budget, sliced
-deterministically into whole-unit parts and run the same way). [What
+deterministically into whole-unit parts and run the same way). `--state
+<path>`/`-s` resumes a run from a saved state file (every top-level key,
+not just `input`) the same way `cof run --state` does; combined with
+`--resume`, a named effect whose saved node already finished without
+error is skipped and reused -- a named loop resumes at its first
+unfinished pass, a named `if` continues inside the branch its saved node
+took when its condition selects that branch again, a `use` with
+`runtime.state.record_children` continues inside its child when the
+saved record's own digest and inputs still match, and `finally:` always
+reruns. A document that changed since the saved run is refused unless
+`--force`. A state file either engine wrote resumes on the other.
+`--resume last`/a run-id (cof's own persistence-backed modes) are not
+supported -- only naming a saved file directly with `--state`; a `--resume`
+with neither is refused the same way cof's own safety checks refuse it
+(before anything runs, writing no state, exit 1), naming `--state <file>`
+as the only form electricity accepts (`--last`'s own stash is #760). [What
 electricity can't run yet](#what-electricity-cant-run-yet), below, still
 refuses with a preview message pointing at `cof run`. A document and its
 literal `use` children are checked before the run starts; an inline or
@@ -75,15 +90,20 @@ release alongside the Python distributions, marked as a preview.
   ASCII or Latin-1 fails the effect with the preview message.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
-- **Persistence and resume.** `runtime.persistence` is refused. There is
-  no `--resume` or `--state` yet.
+- **Persistence.** `runtime.persistence` is refused -- clients need the
+  `--state`-file resume path first (#727); a backend can follow. `cof
+  run`'s own `--resume last`/a run-id (looked up via its own `--last`
+  stash or a `runtime.persistence` backend) isn't supported either --
+  `--resume` always needs `--state <file>` naming the saved state
+  directly; electricity's own `--last` stash is tracked separately (#760).
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
 - **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
   `--out`/`-o`, `--live-state`, `--events`, `--allow-capabilities`,
   `--adapter`, `--label` and `--quiet` -- the same names, meaning and config discovery.
-  Every other `cof run` option is engine-specific, not yet accepted:
-  `--resume`/`--state`/`-s`/`--force`/`--last` (#727); `--profile` (name,
+  `--state`/`-s`, `--resume` and `--force` are accepted too (#727, with
+  the one narrowing above). Every other `cof run` option is
+  engine-specific, not yet accepted: `--last`; `--profile` (name,
   not a path) and `--profile-from-state`; `--print`, `--dry-run`,
   `--validate-only`, `--json`, `--verbose`/`-v`, `--tail`,
   `--skip-preflight`; `--model`, `--explain-routing`, `--decompose-out`,

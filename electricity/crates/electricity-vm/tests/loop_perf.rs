@@ -74,6 +74,7 @@ fn stringify_item(path: EffectPath, name: &str) -> Op {
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -108,6 +109,7 @@ fn named_each_chain_loop(name: &str, flow: LoopFlow, max_concurrency: Option<u32
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -136,6 +138,7 @@ async fn run_each_chain_of(
         &ctx,
         &NullObserver,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -256,6 +259,7 @@ fn named_while_loop(name: &str, max_iterations: u32) -> Op {
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -277,6 +281,7 @@ async fn run_while_of(n: u32) -> std::time::Duration {
         &ctx,
         &NullObserver,
         &token,
+        false,
     )
     .await
     .unwrap();
@@ -377,6 +382,7 @@ fn named_while_use_loop(name: &str, max_iterations: u32) -> Op {
         on_error: OnError::Fail,
         labels: None,
         enabled: true,
+        resume_mode: electricity_bytecode::ResumeMode::Continue,
     }
 }
 
@@ -401,6 +407,7 @@ async fn run_while_use_of(n: u32) -> std::time::Duration {
         &ctx,
         &NullObserver,
         &token,
+        false,
     )
     .await
     .unwrap();
