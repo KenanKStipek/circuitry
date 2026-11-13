@@ -1,0 +1,6 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "Three retried `tool` effects, each a `shell`-wrapped fake that appends one character to a file under `scratch/` and echoes the file's whole content, removed by a root `finally:` delete. `third` passes on its third attempt (three `meta.attempts` entries, each with its own `exit_code`). `first` has `retries` configured but passes on its first attempt, so `meta.attempts` is absent. `never` exhausts `max_attempts: 2` under `on_error: continue`. Pins the entry shape, key order, the presence rule, and `on_error`.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

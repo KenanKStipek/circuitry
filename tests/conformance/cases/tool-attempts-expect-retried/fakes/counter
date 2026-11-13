@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Appends one 'x' to the file named by argv[1] (creating its parent
+directory and the file itself if needed) and writes the file's whole,
+now-updated content to stdout -- a `tool` effect's own fs counter for the
+`meta.attempts` conformance case (#668), the `shell`-wrapped counterpart
+of #663's `use`-level `fs` append/read pair: a single retried effect calls
+this once per attempt, so each attempt's own reply is one character
+longer than the last.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+path.parent.mkdir(parents=True, exist_ok=True)
+with path.open("a", encoding="utf-8") as fh:
+    fh.write("x")
+sys.stdout.write(path.read_text(encoding="utf-8"))
