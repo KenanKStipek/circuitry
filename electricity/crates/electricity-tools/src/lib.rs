@@ -46,6 +46,7 @@ pub use electricity_bytecode::plugin_names;
 pub mod process;
 pub mod regex;
 pub mod registry;
+pub mod secrets;
 pub mod shell;
 pub mod subprocess_tool;
 pub mod systemone;
@@ -263,6 +264,23 @@ pub struct ToolCall<'a> {
     pub config: &'a Value,
     pub token: &'a CancellationToken,
     pub armed: bool,
+    /// Issue #725: the (lower-cased) names of an `http` effect's own
+    /// `headers` whose value `electricity_vm::exec::tool` resolved from a
+    /// `{secret: ...}` reference, before building this call -- empty for
+    /// every other provider, and for `http` when no header came from a
+    /// secret. `HttpPlugin::execute` reads this for two things only:
+    /// `params.redirects`' own default (`strip_auth` instead of `follow`
+    /// when non-empty), and which headers a followed cross-origin
+    /// redirect strips alongside `Authorization`.
+    pub secret_headers: &'a [String],
+    /// Issue #725: scrubs every secret this dispatch resolved out of a
+    /// string, `electricity_tools::secrets::SecretValues::scrub_str`'s own
+    /// callback -- `None` for every provider but `http`. `HttpPlugin::
+    /// execute` applies it to an error body *before* cutting it to
+    /// `ERROR_EXCERPT_MAX_CHARS`, so no part of a secret survives the cut
+    /// (`plugins/http.py::HttpPlugin.execute`'s own `scrub_secrets`
+    /// parameter).
+    pub scrub: Option<&'a dyn Fn(&str) -> String>,
     pub on_live: Option<&'a dyn Fn(process::LiveTail)>,
     /// `ToolDefinition.limited`: true for a tool effect compiled from a
     /// document not run by path. Only [`crate::systemone::SystemOnePlugin`]
@@ -353,6 +371,8 @@ mod tests {
             config: &NONE,
             token,
             armed: false,
+            secret_headers: &[],
+            scrub: None,
             on_live: None,
             limited: false,
             confine_to: None,

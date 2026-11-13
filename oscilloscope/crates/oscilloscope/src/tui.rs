@@ -15773,6 +15773,7 @@ mod golden_tests {
                 group: None,
                 prompt_file: None,
                 limited: false,
+                secret_headers: indexmap::IndexMap::new(),
                 confine_to: None,
             }))),
             on_error,

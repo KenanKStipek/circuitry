@@ -499,6 +499,7 @@ name = "electricity-config"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "electricity-bytecode",
  "electricity-json",
  "electricity-value",
  "electricity-yaml",

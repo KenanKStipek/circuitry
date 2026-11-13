@@ -129,6 +129,7 @@ mod tests {
                 expect: None,
                 description: None,
                 group: group.map(|s| s.to_string()),
+                secret_headers: IndexMap::new(),
                 prompt_file: None,
                 limited: false,
                 confine_to: None,

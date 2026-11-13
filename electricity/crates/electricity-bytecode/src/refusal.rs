@@ -259,6 +259,17 @@ pub struct Supported<'a> {
     /// successor to what [`Supported::complexity`] used to gate (issue
     /// #516 §4(b)).
     pub decomposition: bool,
+    /// Issue #725: `runtime.secrets.<name>` and `{secret: <name>}`,
+    /// resolved at dispatch, in an `http` effect's `params.headers` or a
+    /// subprocess tool's host `runtime.plugins.<name>.env`. A reference
+    /// anywhere else is a compile error regardless of this flag (the
+    /// compiler's own placement check, not something this walker ever
+    /// gates), so this flag only ever lowers [`RefusalReason::
+    /// SecretReference`] for a well-placed one.
+    pub secrets: bool,
+    /// Issue #726: an `http` effect's `params.save_to` writes a 2xx body
+    /// to a file as raw bytes.
+    pub http_save_to: bool,
     /// Extra provider names accepted on top of `json` (always on) and
     /// the four capability flags above -- only ever non-empty for the
     /// `test-tools` cargo feature's own `sleep`/`fail`, which don't
@@ -299,6 +310,8 @@ impl<'a> Supported<'a> {
             tool_systemone: false,
             complexity: false,
             decomposition: false,
+            secrets: false,
+            http_save_to: false,
             providers,
         }
     }
@@ -364,6 +377,10 @@ impl<'a> Supported<'a> {
             complexity: true,
             // lane L2b (#448, #522)
             decomposition: true,
+            // issue #725
+            secrets: true,
+            // issue #726
+            http_save_to: true,
             // issue #682: the size trigger for decomposition
             providers,
         }
@@ -524,10 +541,13 @@ fn walk_leaf(path: &EffectPath, leaf: &LeafKind, supported: &Supported<'_>) -> O
                     RefusalReason::UnsupportedToolProvider(normalized_provider),
                 );
             }
-            if names_a_secret(&tool.params, normalized_provider == "http") {
+            if !supported.secrets && names_a_secret(&tool.params, normalized_provider == "http") {
                 return refusal(path, RefusalReason::SecretReference);
             }
-            if normalized_provider == "http" && names_save_to(&tool.params) {
+            if !supported.http_save_to
+                && normalized_provider == "http"
+                && names_save_to(&tool.params)
+            {
                 return refusal(path, RefusalReason::HttpSaveTo);
             }
             None
@@ -769,6 +789,7 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: IndexMap::new(),
             prompt_file: None,
             limited: false,
             confine_to: None,
@@ -1134,6 +1155,39 @@ mod tests {
     }
 
     #[test]
+    fn an_http_effect_with_save_to_is_accepted_once_http_save_to_is_set() {
+        // Issue #726: once this build writes the body to a file, the
+        // same document the first test above refused runs unrefused.
+        let mut with_save_to = Supported::m0(&["json", "http"]);
+        with_save_to.http_save_to = true;
+        let mut params = IndexMap::new();
+        params.insert(
+            Value::Str("url".to_string()),
+            ParamNode::Literal(Value::Str("https://example.com/a.png".to_string())),
+        );
+        params.insert(
+            Value::Str("save_to".to_string()),
+            ParamNode::From {
+                path: "input.name".to_string(),
+                default: None,
+                as_json: false,
+            },
+        );
+        let tool = leaf_op(
+            EffectPath::root().push_name("download"),
+            LeafKind::Tool(tool_op_with_provider("http", ParamNode::Map(params))),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_save_to
+            ),
+            None
+        );
+    }
+
+    #[test]
     fn a_tool_whose_params_name_a_secret_is_refused_with_the_preview_marker() {
         // Issue #598: `{secret: <name>}` in an `http` header, or anywhere
         // else in a tool's params (`cof check` rejects that placement).
@@ -1184,6 +1238,41 @@ mod tests {
                 &program_with_root(root_block(vec![plain])),
                 false,
                 &with_http
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_well_placed_secret_header_is_accepted_once_secrets_is_set() {
+        // Issue #725: a `{secret: ...}` in an `http` header runs once
+        // this build resolves it -- the compiler's own placement check
+        // (not this walker) is what still refuses a misplaced one.
+        let mut headers = IndexMap::new();
+        headers.insert(
+            Value::Str("Authorization".to_string()),
+            ParamNode::Map({
+                let mut reference = IndexMap::new();
+                reference.insert(
+                    Value::Str("secret".to_string()),
+                    ParamNode::Literal(Value::Str("api".to_string())),
+                );
+                reference
+            }),
+        );
+        let mut params = IndexMap::new();
+        params.insert(Value::Str("headers".to_string()), ParamNode::Map(headers));
+        let mut with_secrets = Supported::m0(&["json", "http"]);
+        with_secrets.secrets = true;
+        let tool = leaf_op(
+            EffectPath::root().push_name("call"),
+            LeafKind::Tool(tool_op_with_provider("http", ParamNode::Map(params))),
+        );
+        assert_eq!(
+            first_unsupported(
+                &program_with_root(root_block(vec![tool])),
+                false,
+                &with_secrets
             ),
             None
         );

@@ -1202,11 +1202,12 @@ host `env` (`runtime.plugins.<name>.env`, see
   document's own `runtime.secrets`, which wins over the host's) or
   `not defined` (`Secrets: billing (host), github (document)`; `--json` adds
   `secret_sources`, by name).
-- **electricity** resolves no secret yet: it refuses a document whose tool
-  params name one, and a run whose tool's host `env` holds one, with the
-  preview message. A host `env` secret for a tool that only a `use` child or
-  a generated plan names fails that effect with the preview message
-  instead, which `on_error` can absorb.
+- **electricity** resolves `runtime.secrets` and `{secret: ...}` the same
+  way: the Keychain, a command or an environment variable, at dispatch, with
+  the same error texts, caching and trust rule. A limited document (a
+  `use: inline` child, or one resolved through a limited parent) that names
+  one, including through a rendered `params_json` only that effect's own
+  dispatch can see, fails the same way `cof check`/`cof run` do.
 
 **Redirects (`http`'s `redirects`).** Python's HTTP client follows a
 redirect with the same headers, which would send a bearer token to whatever
@@ -1283,9 +1284,13 @@ bytes, never decoded, and never kept in state.
   a file, unless the host sets `trust_orchestration_runtime` (which trusts
   every document, so a library entry may then name `save_to` and its
   consent asks about `network` only).
-- **electricity** does not save a body yet: a document whose `http` params
-  name `save_to` is refused with the preview message, and one that
-  `params_json` adds fails that effect with it, before any request.
+- **electricity** saves a response body the same way: `within`, `overwrite`
+  and `max_bytes` with the same texts, streamed to a temporary file next to
+  the target and moved into place only once complete, so a failure
+  (including over `max_bytes`) leaves no file. A limited document's
+  `save_to`/`within` fails at dispatch the same way `cof check`/`cof run`
+  do, including through a rendered `params_json` only that effect's own
+  dispatch can see.
 
 #### Recording parsed stdout (`runtime.state.parsed_stdout`)
 

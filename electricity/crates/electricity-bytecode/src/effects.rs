@@ -209,6 +209,14 @@ pub struct ToolOp {
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
     pub group: Option<String>,
+    /// `http`'s own literal `params.headers` entries whose value is a
+    /// `{secret: <name>, prefix?: <text>}` reference (issue #725), by
+    /// header name -- extracted once, at compile time, from the
+    /// document's own literal `params.headers` only (never from
+    /// `params_json`, which the compiler's own placement check refuses
+    /// to carry one in at all). Empty for every provider but `http`,
+    /// and for `http` whenever its own `headers` names no secret.
+    pub secret_headers: IndexMap<String, crate::secrets::SecretRef>,
     /// `ToolDefinition.prompt_file`: an `agent` effect's `params.prompt` of
     /// `{file: {from: <state path>}, within: <dir>}` (issue #591), compiled
     /// for parity with `cof check`; `prompt` is then absent from `params`.
@@ -216,8 +224,13 @@ pub struct ToolOp {
     pub prompt_file: Option<DispatchFile>,
     /// `ToolDefinition.limited`: true for a tool effect compiled from a
     /// document not run by path (a `use`-nested child, a reflector or
-    /// decomposition plan, stdin, an SDK string). Only the `systemone`
-    /// provider's file access is confined by this.
+    /// decomposition plan, stdin, an SDK string). An `http` effect on a
+    /// limited document may never name `save_to`/`within`
+    /// (`core/tool.py::reject_limited_save_to`'s own check, ported), whether
+    /// from its literal `params`, a rendered `params_json` overlay, or a
+    /// profile that switched the provider to `http`, checked at dispatch
+    /// against the fully rendered params. The `systemone` provider's file
+    /// access is confined by this too.
     pub limited: bool,
     /// `ToolDefinition.confine_to`: the project a limited `systemone`
     /// effect's `within` must stay inside, from the document's own

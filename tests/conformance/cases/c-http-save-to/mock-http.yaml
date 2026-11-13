@@ -1,0 +1,28 @@
+- request:
+    method: GET
+    path: /a.bin
+  response:
+    status: 200
+    reason: OK
+    body: "hello-save-to"
+- request:
+    method: GET
+    path: /a-v2.bin
+  response:
+    status: 200
+    reason: OK
+    body: "replaced-body"
+- request:
+    method: GET
+    path: /big.bin
+  response:
+    status: 200
+    reason: OK
+    body: "0123456789abcdef"
+- request:
+    method: GET
+    path: /missing.bin
+  response:
+    status: 404
+    reason: Not Found
+    body: "nope"

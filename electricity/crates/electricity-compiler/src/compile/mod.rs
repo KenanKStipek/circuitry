@@ -7,9 +7,11 @@
 pub mod coerce;
 pub mod containers;
 pub mod expect;
+pub mod http_save_to;
 pub mod leaves;
 pub mod names;
 pub mod params;
+pub mod secrets;
 pub mod templates;
 
 use crate::{CompileError, DocumentOrigin, compose, prompt_files};
@@ -87,6 +89,7 @@ pub fn compile_document(
     origin: &DocumentOrigin,
 ) -> Result<Program, CompileError> {
     crate::state_ns::validate_bare_input_refs(document)?;
+    secrets::check_runtime_env_secrets(document, matches!(origin, DocumentOrigin::File { .. }))?;
 
     let declared_prompts = prompt_files::compile_declared_prompts(document, origin)?;
     compose::check_prompt_composition(document, &declared_prompts, origin)?;

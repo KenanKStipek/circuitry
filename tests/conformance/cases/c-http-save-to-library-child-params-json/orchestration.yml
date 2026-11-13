@@ -1,0 +1,5 @@
+name: c-http-save-to-library-child-params-json
+effects:
+  - type: use
+    name: child
+    ref: child

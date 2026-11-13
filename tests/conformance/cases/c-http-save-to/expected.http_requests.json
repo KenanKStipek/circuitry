@@ -1,0 +1,82 @@
+[
+  {
+    "method": "GET",
+    "path": "/a.bin",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  },
+  {
+    "method": "GET",
+    "path": "/a-v2.bin",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  },
+  {
+    "method": "GET",
+    "path": "/big.bin",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  },
+  {
+    "method": "GET",
+    "path": "/missing.bin",
+    "query": [],
+    "headers": [
+      [
+        "accept-encoding",
+        "identity"
+      ],
+      [
+        "connection",
+        "close"
+      ],
+      [
+        "host",
+        "127.0.0.1:<MOCK_PORT>"
+      ]
+    ],
+    "body": ""
+  }
+]

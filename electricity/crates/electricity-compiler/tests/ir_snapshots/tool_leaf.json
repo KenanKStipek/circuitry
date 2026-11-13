@@ -49,6 +49,7 @@
                       "backoff_ms": 1000,
                       "max_attempts": 1
                     },
+                    "secret_headers": {},
                     "timeout_ms": null
                   }
                 }

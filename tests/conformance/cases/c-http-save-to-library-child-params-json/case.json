@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #726 (a library child never saves a file, even through a rendered params_json)",
+  "description": "A use: ref: child is always limited, whatever its parent is, and loaded from a real file -- so its own params_json keeps a real, unrendered Mustache tag through compilation (unlike a use: inline child, whose inline text is itself rendered once at the parent's own scope, before the child is ever parsed). That tag only resolves to the JSON object {\"save_to\": ...} at the child's own dispatch time, from a prior effect's own state, so neither the compiler's literal-params check nor its literal-JSON params_json sniff ever sees save_to at compile time. cof's dispatch-time check still refuses it. electricity-only: electricity has no library (DESIGN.md), so this document's own ref: compiles there as a flat refusal, never reaching the scenario at all; the equivalent dispatch-time check on electricity's own use: inline/limited document path is covered directly by a Rust unit test instead.",
+  "engines": ["python"],
+  "expect": "success",
+  "config": "config.json",
+  "cli_args": ["--allow-capabilities", "network"]
+}

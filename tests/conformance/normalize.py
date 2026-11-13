@@ -63,6 +63,7 @@ _FIELD_RULES: dict[str, str] = {
     "started_at": "timestamp_iso",
     "completed_at": "timestamp_iso",
     "created_at": "timestamp_iso",
+    "resolved_at": "timestamp_iso",
     "_timestamp": "timestamp_compact",
     "wall_time_s": "duration",
     "eta_s": "duration",
