@@ -4,7 +4,9 @@
 //! the generic OpenAI-compatible shape doesn't cover (the `seed`
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
-use crate::config::{cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, stream_flag};
+use crate::config::{
+    cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url, stream_flag,
+};
 use crate::curl_text::{
     classify_curl_outcome_with_error_code, curl_error_code, curl_failure_message,
 };
@@ -443,7 +445,7 @@ pub fn build_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
         base_url: cfg_value_or(cfg, "base_url", "https://api.openai.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
         streams: stream_flag(cfg, name)?,
-        api_key_env: resolve_api_key_env(cfg, "OPENAI_API_KEY", name)?,
+        api_key_env: resolve_required_api_key_env(cfg, "OPENAI_API_KEY", name)?,
     }))
 }
 

@@ -247,18 +247,48 @@ pub fn resolve_api_key_env(
     default: &str,
     adapter_name: &str,
 ) -> Result<String, AdapterError> {
+    resolve_api_key_env_impl(cfg, default, adapter_name, true)
+}
+
+/// [`resolve_api_key_env`] for the adapters that always send a
+/// credential (`openai`, `anthropic`, `replicate`, `watsonx`,
+/// `azure-openai`): `api_key_env: ""` is rejected the same way any
+/// other invalid name is, since none of them has an endpoint an
+/// explicit "no key" could describe.
+pub fn resolve_required_api_key_env(
+    cfg: &Value,
+    default: &str,
+    adapter_name: &str,
+) -> Result<String, AdapterError> {
+    resolve_api_key_env_impl(cfg, default, adapter_name, false)
+}
+
+fn resolve_api_key_env_impl(
+    cfg: &Value,
+    default: &str,
+    adapter_name: &str,
+    allow_empty: bool,
+) -> Result<String, AdapterError> {
+    let invalid = |value: &Value| AdapterError {
+        message: format!(
+            "runtime.adapters.{adapter_name}.api_key_env must be an environment \
+             variable name, got {}",
+            value.py_repr()
+        ),
+        retry: RetryInfo::not_retryable(),
+        py_class: PyExc::ValueError,
+    };
     match cfg_get(cfg, "api_key_env") {
         None => Ok(default.to_string()),
-        Some(Value::Str(s)) if s.is_empty() || is_env_name(s) => Ok(s.clone()),
-        Some(other) => Err(AdapterError {
-            message: format!(
-                "runtime.adapters.{adapter_name}.api_key_env must be an environment \
-                 variable name, got {}",
-                other.py_repr()
-            ),
-            retry: RetryInfo::not_retryable(),
-            py_class: PyExc::ValueError,
-        }),
+        Some(Value::Str(s)) if s.is_empty() => {
+            if allow_empty {
+                Ok(s.clone())
+            } else {
+                Err(invalid(&Value::Str(s.clone())))
+            }
+        }
+        Some(Value::Str(s)) if is_env_name(s) => Ok(s.clone()),
+        Some(other) => Err(invalid(other)),
     }
 }
 
@@ -481,6 +511,27 @@ mod tests {
             resolve_api_key_env(&cfg, "NIM_API_KEY", "nvidia-nim").unwrap(),
             ""
         );
+    }
+
+    #[test]
+    fn resolve_required_api_key_env_keeps_an_explicit_name() {
+        let cfg = dict(&[("api_key_env", Value::Str("OPENAI_TEAM_KEY".to_string()))]);
+        assert_eq!(
+            resolve_required_api_key_env(&cfg, "OPENAI_API_KEY", "openai").unwrap(),
+            "OPENAI_TEAM_KEY"
+        );
+    }
+
+    #[test]
+    fn resolve_required_api_key_env_rejects_an_empty_string() {
+        let cfg = dict(&[("api_key_env", Value::Str(String::new()))]);
+        let err = resolve_required_api_key_env(&cfg, "OPENAI_API_KEY", "openai").unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.openai.api_key_env must be an environment variable name, \
+             got ''"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
     }
 
     #[test]

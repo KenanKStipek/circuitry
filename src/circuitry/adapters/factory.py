@@ -73,7 +73,9 @@ def _build_openai(cfg: dict[str, Any], name: str = "openai") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.openai.com/v1",
         default_model=cfg.get("default_model") or "gpt-4o-mini",
-        api_key_env=resolve_api_key_env(cfg, default="OPENAI_API_KEY", adapter_name=name),
+        api_key_env=resolve_api_key_env(
+            cfg, default="OPENAI_API_KEY", adapter_name=name, allow_empty=False
+        ),
         streams=_stream_flag(cfg, name),
     )
 
@@ -84,7 +86,9 @@ def _build_anthropic(cfg: dict[str, Any], name: str = "anthropic") -> Adapter:
         base_url=cfg.get("base_url") or "https://api.anthropic.com",
         default_model=cfg.get("default_model") or AnthropicAdapter.default_model,
         max_tokens=int(cfg.get("max_tokens") or 4096),
-        api_key_env=resolve_api_key_env(cfg, default="ANTHROPIC_API_KEY", adapter_name=name),
+        api_key_env=resolve_api_key_env(
+            cfg, default="ANTHROPIC_API_KEY", adapter_name=name, allow_empty=False
+        ),
         streams=_stream_flag(cfg, name),
     )
 
@@ -391,7 +395,9 @@ def _build_azure_openai(cfg: dict[str, Any], name: str = "azure-openai") -> Adap
         endpoint=cfg.get("endpoint") or cfg.get("base_url") or "",
         api_version=cfg.get("api_version") or "2024-10-21",
         default_model=cfg.get("default_model") or "",
-        api_key_env=resolve_api_key_env(cfg, default="AZURE_OPENAI_API_KEY", adapter_name=name),
+        api_key_env=resolve_api_key_env(
+            cfg, default="AZURE_OPENAI_API_KEY", adapter_name=name, allow_empty=False
+        ),
         streams=_stream_flag(cfg, name),
     )
 
@@ -401,7 +407,9 @@ def _build_replicate(cfg: dict[str, Any], name: str = "replicate") -> Adapter:
         name=name,
         base_url=cfg.get("base_url") or "https://api.replicate.com/v1",
         default_model=cfg.get("default_model") or "meta/meta-llama-3-70b-instruct",
-        api_key_env=resolve_api_key_env(cfg, default="REPLICATE_API_TOKEN", adapter_name=name),
+        api_key_env=resolve_api_key_env(
+            cfg, default="REPLICATE_API_TOKEN", adapter_name=name, allow_empty=False
+        ),
     )
 
 
@@ -412,7 +420,9 @@ def _build_watsonx(cfg: dict[str, Any], name: str = "watsonx") -> Adapter:
         default_model=cfg.get("default_model")
         or "meta-llama/llama-3-3-70b-instruct",
         api_version=cfg.get("api_version") or "2024-03-14",
-        api_key_env=resolve_api_key_env(cfg, default="WATSONX_API_KEY", adapter_name=name),
+        api_key_env=resolve_api_key_env(
+            cfg, default="WATSONX_API_KEY", adapter_name=name, allow_empty=False
+        ),
     )
 
 
@@ -435,13 +445,23 @@ def _string_list(
 _ENV_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
-def resolve_api_key_env(cfg: dict[str, Any], *, default: str, adapter_name: str) -> str:
+def resolve_api_key_env(
+    cfg: dict[str, Any],
+    *,
+    default: str,
+    adapter_name: str,
+    allow_empty: bool = True,
+) -> str:
     """``cfg["api_key_env"]`` when present, else *default* -- the name of the
     environment variable an adapter reads its credential from.
 
     An empty string is a valid, explicit override (self-hosted endpoints
     that take no key at all); only a present, non-empty value must match
-    an environment-variable name. Only config ever reaches here:
+    an environment-variable name. ``allow_empty=False`` (``openai``,
+    ``anthropic``, ``replicate``, ``watsonx``, ``azure-openai``) rejects
+    ``""`` the same way any other invalid name is rejected: those adapters
+    always send a credential, so there is no endpoint for an explicit
+    "no key" to describe. Only config ever reaches here:
     ``runtime.adapters.<name>.api_key_env`` from an orchestration document
     is stripped before merge (see ``cli.effective_settings``), on the
     security grounds in ``docs/threat-model.md`` -- a document that could
@@ -451,7 +471,10 @@ def resolve_api_key_env(cfg: dict[str, Any], *, default: str, adapter_name: str)
     if "api_key_env" not in cfg:
         return default
     raw = cfg["api_key_env"]
-    if not isinstance(raw, str) or (raw != "" and not _ENV_NAME_RE.fullmatch(raw)):
+    valid = isinstance(raw, str) and (raw == "" or _ENV_NAME_RE.fullmatch(raw))
+    if raw == "" and not allow_empty:
+        valid = False
+    if not valid:
         raise ValueError(
             f"runtime.adapters.{adapter_name}.api_key_env must be an environment "
             f"variable name, got {raw!r}"
@@ -611,20 +634,44 @@ def alias_config_errors(runtime: dict[str, Any] | None) -> list[str]:
     return errors
 
 
+#: Adapters that always send a credential -- unlike the OpenAI-compatible
+#: self-hosted family, there is no endpoint of theirs an explicit ``""``
+#: ("no key") could describe, so :func:`adapter_api_key_env_errors` rejects
+#: it for them the same way their own builder does (``allow_empty=False``
+#: at each of their call sites in this module).
+_ALWAYS_KEYED_ADAPTERS = frozenset(
+    {"openai", "anthropic", "replicate", "watsonx", "azure-openai"}
+)
+
+
 def adapter_api_key_env_errors(runtime: dict[str, Any] | None) -> list[str]:
     """Why each ``runtime.adapters.<name>.api_key_env`` is invalid, in name
     order; ``[]`` when every one present is a valid environment-variable
-    name (or ``""``, an explicit "no key"). Checked for every adapter
-    entry -- built-in or alias -- whether or not any effect selects it, the
-    same way :func:`alias_config_errors` checks every alias target."""
+    name (or, for an adapter that doesn't always need one, ``""``, an
+    explicit "no key"). Checked for every adapter entry -- built-in or
+    alias -- whether or not any effect selects it, the same way
+    :func:`alias_config_errors` checks every alias target.
+
+    An alias's own entry is checked against its *target*'s rule (an alias
+    of ``openai`` rejects ``""`` exactly as ``openai`` itself does), not
+    its own name's -- the same substitution :func:`_build_alias` makes
+    when it calls the target's builder with the alias's settings.
+    """
     adapters_cfg = (runtime or {}).get("adapters") or {}
     errors: list[str] = []
     for name in sorted(adapters_cfg):
         cfg = adapters_cfg[name]
         if not isinstance(cfg, dict) or "api_key_env" not in cfg:
             continue
+        raw_target = cfg.get("adapter")
+        target = raw_target.strip().lower() if isinstance(raw_target, str) else name
         try:
-            resolve_api_key_env(cfg, default="", adapter_name=name)
+            resolve_api_key_env(
+                cfg,
+                default="",
+                adapter_name=name,
+                allow_empty=target not in _ALWAYS_KEYED_ADAPTERS,
+            )
         except ValueError as exc:
             errors.append(str(exc))
     return errors

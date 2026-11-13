@@ -309,6 +309,17 @@ fn is_env_name(name: &str) -> bool {
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
+/// `adapters/factory.py::_ALWAYS_KEYED_ADAPTERS` -- adapters that always
+/// send a credential, so `api_key_env: ""` is rejected for them like any
+/// other invalid name, unlike the OpenAI-compatible self-hosted family.
+const ALWAYS_KEYED_ADAPTERS: &[&str] = &[
+    "openai",
+    "anthropic",
+    "replicate",
+    "watsonx",
+    "azure-openai",
+];
+
 fn value_error(message: String) -> AdapterError {
     AdapterError {
         message,
@@ -365,10 +376,17 @@ impl AdapterRegistry {
     /// `adapters/factory.py::adapter_api_key_env_errors` -- why each
     /// `runtime.adapters.<name>.api_key_env` is invalid, in name order;
     /// `[]` when every one present is a valid environment-variable name
-    /// (or `""`, an explicit "no key"). Checked for every adapter entry
-    /// -- built-in or alias -- whether or not any effect selects it, the
-    /// same way [`AdapterRegistry::alias_config_errors`] checks every
-    /// alias target.
+    /// (or, for an adapter that doesn't always need one, `""`, an
+    /// explicit "no key"). Checked for every adapter entry -- built-in or
+    /// alias -- whether or not any effect selects it, the same way
+    /// [`AdapterRegistry::alias_config_errors`] checks every alias
+    /// target.
+    ///
+    /// An alias's own entry is checked against its *target*'s rule (an
+    /// alias of `openai` rejects `""` exactly as `openai` itself does),
+    /// not its own name's -- the same substitution actually building the
+    /// alias makes when it calls the target's builder with the alias's
+    /// settings.
     pub fn adapter_api_key_env_errors(&self, runtime_config: &Value) -> Vec<String> {
         let Some(adapters) = runtime_config
             .as_dict()
@@ -387,8 +405,18 @@ impl AdapterRegistry {
             .filter_map(|name| {
                 let entry = adapters.get(&Value::Str(name.clone()))?.as_dict()?;
                 let raw = entry.get(&Value::Str("api_key_env".to_string()))?;
+                let target = entry
+                    .get(&Value::Str("adapter".to_string()))
+                    .and_then(Value::as_str)
+                    .map(str::to_lowercase)
+                    .unwrap_or_else(|| name.clone());
+                let allow_empty = !ALWAYS_KEYED_ADAPTERS.contains(&target.as_str());
                 match raw {
-                    Value::Str(s) if s.is_empty() || is_env_name(s) => None,
+                    Value::Str(s)
+                        if (!s.is_empty() || allow_empty) && (s.is_empty() || is_env_name(s)) =>
+                    {
+                        None
+                    }
                     other => Some(format!(
                         "runtime.adapters.{name}.api_key_env must be an environment \
                          variable name, got {}",
@@ -1028,6 +1056,35 @@ mod tests {
         assert_eq!(
             registry.adapter_api_key_env_errors(&rt),
             Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn adapter_api_key_env_errors_rejects_empty_string_for_an_always_keyed_adapter() {
+        let rt = runtime(entry(&[
+            (
+                "anthropic",
+                entry(&[("api_key_env", Value::Str(String::new()))]),
+            ),
+            (
+                "claude_team",
+                entry(&[
+                    ("adapter", Value::Str("anthropic".to_string())),
+                    ("api_key_env", Value::Str(String::new())),
+                ]),
+            ),
+        ]));
+        let registry = AdapterRegistry::new();
+        assert_eq!(
+            registry.adapter_api_key_env_errors(&rt),
+            vec![
+                "runtime.adapters.anthropic.api_key_env must be an environment variable \
+                 name, got ''"
+                    .to_string(),
+                "runtime.adapters.claude_team.api_key_env must be an environment variable \
+                 name, got ''"
+                    .to_string(),
+            ]
         );
     }
 

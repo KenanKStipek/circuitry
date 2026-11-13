@@ -152,19 +152,34 @@ def test_watsonx_api_key_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
     captured: dict[str, Any] = {}
 
-    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+    class _IamCapturingProc:
+        def __init__(self, returncode: int, stdout: str) -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = ""
+
+        def communicate(
+            self, input: str | None = None, timeout: object = None
+        ) -> tuple[str, str]:
+            if input is not None:
+                captured.setdefault("iam_bodies", []).append(input)
+            return (self.stdout, self.stderr)
+
+        def __enter__(self) -> _IamCapturingProc:
+            return self
+
+        def __exit__(self, *exc: object) -> bool:
+            return False
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> _IamCapturingProc:
         call = read_config(cmd)
         captured.setdefault("calls", []).append(call)
         url = call[0]
         if url and "iam.cloud.ibm.com" in url:
-            return FakeProc(
-                returncode=0,
-                stdout=json.dumps({"access_token": "iam-token", "expires_in": 3600}),
+            return _IamCapturingProc(
+                0, json.dumps({"access_token": "iam-token", "expires_in": 3600})
             )
-        return FakeProc(
-            returncode=0,
-            stdout=json.dumps({"results": [{"generated_text": "ok"}]}),
-        )
+        return _IamCapturingProc(0, json.dumps({"results": [{"generated_text": "ok"}]}))
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
 
@@ -175,6 +190,9 @@ def test_watsonx_api_key_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
     result = adapter.generate(model="m", prompt="p")
     assert result.text == "ok"
     iam_call = next(c for c in captured["calls"] if c[0] and "iam.cloud.ibm.com" in c[0])
+    # The team key reached the IAM exchange (on stdin, never argv/headers)...
+    assert any("apikey=watsonx-team-value" in body for body in captured["iam_bodies"])
+    # ...and never anywhere read_config can see (URL/headers only).
     assert "watsonx-team-value" not in str(iam_call)
 
 
@@ -307,6 +325,57 @@ def test_build_adapter_raises_for_invalid_api_key_env_on_a_built_in() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "name", ["openai", "anthropic", "replicate", "watsonx", "azure-openai"]
+)
+def test_api_key_env_empty_string_is_rejected_for_an_always_keyed_adapter(name: str) -> None:
+    """Unlike the OpenAI-compatible self-hosted family (vllm, llamacpp,
+    lmstudio, nvidia-nim, tgi), these adapters always send a credential, so
+    "" has no endpoint it could describe -- it is rejected like any other
+    invalid name, both at build time and in `adapter_api_key_env_errors`."""
+    with pytest.raises(ValueError, match=rf"runtime\.adapters\.{name}\.api_key_env"):
+        build_adapter(
+            adapter_name=name,
+            runtime={"adapters": {name: {"api_key_env": ""}}},
+        )
+    assert adapter_api_key_env_errors({"adapters": {name: {"api_key_env": ""}}}) == [
+        f"runtime.adapters.{name}.api_key_env must be an environment variable name, got ''",
+    ]
+
+
+@pytest.mark.parametrize(
+    "name", ["openai", "anthropic", "replicate", "watsonx", "azure-openai"]
+)
+def test_api_key_env_empty_string_is_rejected_for_an_alias_of_an_always_keyed_adapter(
+    name: str,
+) -> None:
+    with pytest.raises(ValueError, match=r"runtime\.adapters\.my_alias\.api_key_env"):
+        build_adapter(
+            adapter_name="my_alias",
+            runtime={"adapters": {"my_alias": {"adapter": name, "api_key_env": ""}}},
+        )
+    assert adapter_api_key_env_errors(
+        {"adapters": {"my_alias": {"adapter": name, "api_key_env": ""}}}
+    ) == [
+        "runtime.adapters.my_alias.api_key_env must be an environment variable name, got ''",
+    ]
+
+
+def test_adapter_api_key_env_errors_does_not_duplicate_an_alias_error() -> None:
+    """An alias's own malformed `api_key_env` is reported once by
+    `alias_config_errors` (building it); `adapter_api_key_env_errors` must
+    not add the identical message a second time for the same entry --
+    that de-duplication is `cli.runtime_shim.validate`'s job, exercised
+    directly on the two error lists it combines."""
+    from circuitry.adapters.factory import alias_config_errors
+
+    runtime = {"adapters": {"openai_team": {"adapter": "openai", "api_key_env": ""}}}
+    alias_errors = alias_config_errors(runtime)
+    api_key_env_errors = adapter_api_key_env_errors(runtime)
+    assert alias_errors == api_key_env_errors
+    assert len(alias_errors) == 1
+
+
 # ---------------------------------------------------------------------------
 # config only (#669's security ruling, R3): a document never chooses it
 # ---------------------------------------------------------------------------
@@ -370,3 +439,22 @@ def test_document_api_key_env_does_not_reach_the_merged_runtime_at_all() -> None
     assert (
         effective.runtime["adapters"]["openai"]["api_key_env"] == "HOST_CHOSEN_VAR"
     )
+
+
+def test_document_api_key_env_falls_back_to_the_adapters_own_default_variable() -> None:
+    """When config names none at all (not merely a different one from the
+    document's), the built adapter still reads its own default variable --
+    the document's attempt never substitutes for it."""
+    cfg = _minimal_config({"adapters": {}})
+    effective = resolve_effective_settings(
+        cfg=cfg,
+        orch={
+            "runtime": {
+                "adapters": {"openai": {"api_key_env": "ATTACKER_CHOSEN_VAR"}}
+            },
+        },
+        trust_document=True,
+        document_name="evil.yml",
+    )
+    adapter = build_adapter(adapter_name="openai", runtime=effective.runtime)
+    assert adapter.api_key_env == "OPENAI_API_KEY"

@@ -2,7 +2,9 @@
 //! API, over [`crate::transport`]: system-turn hoisting, image blocks
 //! ahead of text, and `stop_reason`'s own truncation signal.
 
-use crate::config::{cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, stream_flag};
+use crate::config::{
+    cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url, stream_flag,
+};
 use crate::curl_text::{classify_curl_outcome, curl_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
@@ -844,7 +846,7 @@ pub fn build_anthropic(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         default_model: cfg_str_or(cfg, "default_model", "claude-sonnet-5"),
         max_tokens,
         streams: stream_flag(cfg, name)?,
-        api_key_env: resolve_api_key_env(cfg, "ANTHROPIC_API_KEY", name)?,
+        api_key_env: resolve_required_api_key_env(cfg, "ANTHROPIC_API_KEY", name)?,
     }))
 }
 

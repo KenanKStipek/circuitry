@@ -4,7 +4,7 @@
 //! the reference); no conformance case (issue #503's own ruling).
 
 use crate::config::{
-    cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, value_is_truthy,
+    cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url, value_is_truthy,
 };
 use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
@@ -385,7 +385,7 @@ pub fn build_watsonx(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapte
         base_url: cfg_value_or(cfg, "base_url", ""),
         default_model: cfg_str_or(cfg, "default_model", "meta-llama/llama-3-3-70b-instruct"),
         api_version: cfg_str_or(cfg, "api_version", "2024-03-14"),
-        api_key_env: resolve_api_key_env(cfg, "WATSONX_API_KEY", name)?,
+        api_key_env: resolve_required_api_key_env(cfg, "WATSONX_API_KEY", name)?,
         iam_url: "https://iam.cloud.ibm.com/identity/token".to_string(),
         token_cache: TokenCache,
     }))

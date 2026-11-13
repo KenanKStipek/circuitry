@@ -7,7 +7,8 @@
 //! `together`, `vllm`, `xai`) shares, over [`crate::transport`].
 
 use crate::config::{
-    cfg_get, cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, value_is_truthy,
+    cfg_get, cfg_str_or, cfg_value_or, resolve_api_key_env, resolve_required_api_key_env,
+    rstrip_base_url, value_is_truthy,
 };
 use crate::curl_text::{classify_curl_outcome, curl_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
@@ -1238,7 +1239,7 @@ pub fn build_azure_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, A
         .cloned()
         .unwrap_or_else(|| Value::Str(String::new()));
     let api_version = cfg_str_or(cfg, "api_version", "2024-10-21");
-    let api_key_env = resolve_api_key_env(cfg, "AZURE_OPENAI_API_KEY", name)?;
+    let api_key_env = resolve_required_api_key_env(cfg, "AZURE_OPENAI_API_KEY", name)?;
     let mut openai_cfg =
         OpenAiCompatibleConfig::new(raw_endpoint, "", cfg_str_or(cfg, "default_model", ""))
             .with_path(format!(
@@ -1516,6 +1517,48 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn check_reports_a_custom_named_variable_when_it_is_unset() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::remove_var("GROQ_API_KEY");
+            std::env::remove_var("GROQ_TEAM_KEY");
+        }
+        let mut cfg = Dict::new();
+        dict_insert(
+            &mut cfg,
+            "api_key_env",
+            Value::Str("GROQ_TEAM_KEY".to_string()),
+        );
+        let adapter = build_groq("groq", &Value::Dict(cfg)).unwrap();
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert_eq!(result.missing, vec!["env:GROQ_TEAM_KEY".to_string()]);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn check_does_not_report_the_adapters_own_default_variable_once_overridden() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("GROQ_API_KEY", "unused-default-value");
+            std::env::remove_var("GROQ_TEAM_KEY");
+        }
+        let mut cfg = Dict::new();
+        dict_insert(
+            &mut cfg,
+            "api_key_env",
+            Value::Str("GROQ_TEAM_KEY".to_string()),
+        );
+        let adapter = build_groq("groq", &Value::Dict(cfg)).unwrap();
+        let result = adapter.check().await;
+        unsafe {
+            std::env::remove_var("GROQ_API_KEY");
+        }
+        assert_eq!(result.missing, vec!["env:GROQ_TEAM_KEY".to_string()]);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
     async fn generate_fails_like_python_for_a_non_string_base_url_after_the_api_key_check() {
         // Every OpenAI-compatible provider shares
         // the one `_openai_compat.py::chat_completion` call that
@@ -1753,6 +1796,25 @@ mod tests {
             status: None,
             retry_after: None,
         }
+    }
+
+    #[test]
+    fn interpret_outcome_never_echoes_a_custom_named_variables_value() {
+        // The secret's own value, however the adapter was told to read it,
+        // never survives into the failure text (#669's own masking
+        // requirement) -- here it leaks into the provider's own error body,
+        // exactly the kind of accidental echo masking exists to catch.
+        let secret = "alt-secret-value-1234567";
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 22,
+            stdout: format!("{{\"error\": \"invalid key {secret}\"}}"),
+            stderr: String::new(),
+            status: Some(401),
+            retry_after: None,
+        };
+        let err = interpret_outcome("OpenAI-compatible", &outcome, "m", "http://x", &[secret])
+            .unwrap_err();
+        assert!(!err.message.contains(secret), "{}", err.message);
     }
 
     #[test]

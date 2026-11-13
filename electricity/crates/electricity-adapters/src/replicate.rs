@@ -2,7 +2,7 @@
 //! predictions API (`Prefer: wait=N` for a synchronous-feeling call),
 //! over [`crate::transport`].
 
-use crate::config::{cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url};
+use crate::config::{cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url};
 use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -255,7 +255,7 @@ pub fn build_replicate(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "https://api.replicate.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "meta/meta-llama-3-70b-instruct"),
-        api_key_env: resolve_api_key_env(cfg, "REPLICATE_API_TOKEN", name)?,
+        api_key_env: resolve_required_api_key_env(cfg, "REPLICATE_API_TOKEN", name)?,
     }))
 }
 

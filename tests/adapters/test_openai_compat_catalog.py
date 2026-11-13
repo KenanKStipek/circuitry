@@ -296,10 +296,15 @@ def test_api_key_env_override_value_is_masked_on_failure(
     base_url_substr: str,
 ) -> None:
     """A curl failure's message never echoes the credential, however it was
-    named (#669's own masking requirement)."""
+    named (#669's own masking requirement) -- and the credential did reach
+    the request (via the override, even for a normally keyless adapter), so
+    this isn't vacuously true of a call that never sent one at all."""
     monkeypatch.setenv("ALT_KEY_VAR", "alt-secret-value-1234567")
 
+    captured: dict[str, Any] = {}
+
     def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["headers"] = read_config_headers(cmd)
         return FakeProc(returncode=22, stdout="", stderr="HTTP 401")
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
@@ -312,4 +317,5 @@ def test_api_key_env_override_value_is_masked_on_failure(
 
     with pytest.raises(AdapterCallError) as exc_info:
         adapter.generate(model="any-model", prompt="ping")
+    assert captured["headers"]["Authorization"] == "Bearer alt-secret-value-1234567"
     assert "alt-secret-value-1234567" not in str(exc_info.value)
