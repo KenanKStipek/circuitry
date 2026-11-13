@@ -1175,6 +1175,73 @@ settings left behind). `c579-cli-alias-config-errors` is replaced by `c656-alias
 cases (two `claude_code` aliases, a `pi` alias and both bases in one run, a default-adapter
 alias, an alias's missing binary hard and soft) are unchanged.
 
+### 3.15 Per-adapter `api_key_env`
+
+`adapters/factory.py::resolve_api_key_env`/`adapter_api_key_env_errors`,
+`electricity_adapters::config::resolve_api_key_env`, `electricity_vm::adapter::AdapterRegistry::
+adapter_api_key_env_errors` (issue #669). Any keyed adapter's own `runtime.adapters.<name>` block
+— built-in or an alias's own (3.14) — accepts `api_key_env`, naming the environment variable it
+reads its credential from in place of the provider's own default: `OpenAiAdapter`,
+`AnthropicAdapter`, `ReplicateAdapter`, `WatsonXAdapter` and every `OpenAiCompatibleConfig`-backed
+adapter (`ai21`, `azure-openai` via its own `extra_key_env` field — kept apart from
+`api_key_env`, which stays empty there so `chat_completion`'s own Bearer path never fires —
+`cloudflare-workers-ai`, `cohere`, `databricks`, `deepseek`, `fireworks`, `gemini`, `groq`,
+`huggingface-inference`, `llamacpp`, `lmstudio`, `mistral`, `nvidia-nim`, `openrouter`,
+`perplexity`, `qwen-dashscope`, `tgi`, `together`, `vllm`, `xai`) carry an `api_key_env` field
+now, resolved at build time and read at both `generate()` and `check()` in place of the literal
+name each used before. A keyless OpenAI-compatible adapter (`lmstudio`, `vllm`, `llamacpp`, ...)
+sends `Authorization: Bearer <value>` once its own `api_key_env` is set to a non-empty name;
+unset, it behaves exactly as before.
+
+**Resolution.** `resolve_api_key_env(cfg, default, adapter_name)`: absent key → *default*;
+present and `""` → `""` (an explicit "no key", same meaning the keyless adapters' own default
+already has); present, a string matching `[A-Za-z_][A-Za-z0-9_]*` → that string; anything else
+(a non-string, or a string matching neither) → a `ValueError`/`AdapterError`
+(`PyExc::ValueError`) reading `runtime.adapters.<name>.api_key_env must be an environment
+variable name, got <repr>`, identical text in both engines (Rust's `Value::py_repr()` matches
+Python's `repr()` for a string, an int, `None`, a bool and a list/dict the same way the rest of
+this codebase's error texts do). The missing-variable report at `check()`/preflight names the
+configured variable, not the provider's default: `missing ['env:<NAME>']`.
+
+**Validated up front**, the same way as 3.14's aliases: every `runtime.adapters.<name>
+.api_key_env` present in the run's merged runtime is checked — built-in or alias, whether or not
+any effect selects it — by `adapter_api_key_env_errors`/`AdapterRegistry::
+adapter_api_key_env_errors`, in name order. Checked *after* `alias_config_errors`
+(`electricity::lib`'s own run wiring and `cli/runtime_shim.py::run` agree on the order): an
+alias whose own `api_key_env` is malformed fails while the alias itself is being built, so it
+surfaces under `Invalid adapter aliases:` already and the separate `api_key_env`-only check never
+reruns it; a *built-in* adapter's malformed `api_key_env` is the only thing the dedicated check
+ever actually reports, under its own `Invalid adapter api_key_env:` block plus one `  - ` line per
+bad entry, identical text to `cof`'s. `cof check` surfaces the same errors list-first, the same
+way it does for aliases.
+
+**Config-only, unconditionally.** `electricity-config::effective_settings_with_profile`'s own
+`strip_document_api_key_env`, and `electricity-compiler::pipeline`'s own
+`strip_document_api_key_env_for_notice` (for the "Applied host settings" line electricity prints
+for a document electricity treats as trusted without ever merging its runtime), both drop a
+document's `adapters.<name>.api_key_env` before anything downstream ever sees it —
+unconditionally, not gated on `enabled_adapters` the way 3.14's alias-retarget strip is, and not
+restored for a trusted document either: unlike an alias retarget, there is no document trust
+level at which this key applies. Dropping it emits `runtime.adapters.<name>.api_key_env from
+<document> ignored: only config chooses which environment variable an adapter's key comes from`,
+identical text to `cli/effective_settings.py::_strip_document_api_key_env`'s. Other keys in the
+same block (a `base_url` override, say) still apply; if dropping `api_key_env` leaves the block
+empty, the whole `adapters.<name>` entry is dropped too, the same cleanup 3.14's strip does. See
+`docs/threat-model.md` for the reasoning: a document run by path can already set `base_url`, so a
+document that could also choose `api_key_env` could send any environment variable the host
+process can read to a URL it names, not just that provider's own key.
+
+**Masking.** The resolved value is a credential like any other: never echoed in a curl failure
+message (`curl_failure_message`/`AdapterError`'s own masking already takes the actual key value,
+not its variable name, so this needed no change), never written to saved state, an event or an
+error — only the variable *name* ever appears, in `missing`, in the config-error text above, and
+in the ignored-document warning.
+
+Ported with `c669-*` conformance cases (both engines, through the mock HTTP server): an override
+on a built-in and on two aliases (one of them normally keyless) each sending its own variable's
+value, the config error's exact text for a bad name on two built-in blocks, and a document's own
+`api_key_env` ignored with the warning while the host's own variable's value still goes out.
+
 ---
 
 ## 4. Runtime plugins electricity v1 needs
