@@ -1292,6 +1292,59 @@ impl EtaOutput {
     }
 }
 
+/// Applies a resolved whole-run ETA and its own statistics onto
+/// `header`'s own `history_*` fields (issue #649) -- the one place
+/// every reader of history (a live run's own `Header`, issue #712's
+/// own per-slot tile) turns an already-computed `(EtaOutput,
+/// DocumentStats)` pair into what a screen actually shows. Pure:
+/// the caller already did whatever file I/O resolved `eta`/`stats`
+/// in the first place -- `read_records`/`compute_stats`/
+/// `compute_eta`, never anything this function touches itself.
+pub fn apply_eta_to_header(
+    header: &mut crate::render::Header,
+    eta: &EtaOutput,
+    stats: &DocumentStats,
+    state: Option<&Value>,
+    now: &str,
+) {
+    header.history_eta_past_usual = eta.past_usual;
+    let anchor_now = state.map(|s| eta_anchor_now(s, now)).unwrap_or(now);
+    header.history_eta_ts = eta.eta_ts(anchor_now);
+    header.history_eta_remaining_s = eta.remaining_s;
+    header.history_eta_low_ts = eta_ts_for(eta.low_s, anchor_now);
+    header.history_eta_high_ts = eta_ts_for(eta.high_s, anchor_now);
+    header.history_vs_usual_s = eta.vs_usual_s;
+    header.history_usual_total_s = eta.usual_total_s;
+    header.history_usual_total_tokens = stats.whole_run.and_then(|r| r.tokens_p50);
+    header.history_same_hash_count = Some(stats.same_hash_ok_count);
+    header.history_step_usual = stats.per_step.clone();
+}
+
+/// Once a run has truly ended (issue #649), the ETA freezes at its
+/// own end rather than the wall clock: the TUI can stay open on a
+/// finished run's own state for as long as the user likes, and
+/// measuring elapsed time against a live `now` would show an ETA
+/// that kept sliding forward, eventually past its own usual end.
+fn eta_anchor_now<'a>(state: &'a Value, now: &'a str) -> &'a str {
+    if crate::model::run_ended(state) {
+        if let Some(ts) = state
+            .pointer("/runtime/last_run/completed_at")
+            .and_then(Value::as_str)
+        {
+            return ts;
+        }
+    }
+    now
+}
+
+fn eta_ts_for(seconds: Option<f64>, now: &str) -> Option<String> {
+    seconds.and_then(|s| {
+        parse_instant(now).map(|now_dt| {
+            (now_dt + chrono::Duration::milliseconds((s * 1000.0).round() as i64)).to_rfc3339()
+        })
+    })
+}
+
 /// The whole-run ETA (issue #649's own rules): the anchor is the most
 /// recently finished step with known per-step statistics (or the
 /// run's own start, before any has); a running step's own usual time
