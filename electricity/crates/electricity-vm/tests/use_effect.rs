@@ -803,7 +803,7 @@ effects:
     );
 }
 
-/// R4 (issue #662): a `use` effect nested inside a `use` child
+/// Issue #662: a `use` effect nested inside a `use` child
 /// registers its own live root, forwarded unchanged through the outer
 /// child's own `ChildObserver` -- both grafts land at their own,
 /// correctly nested paths, and both clear once their own child

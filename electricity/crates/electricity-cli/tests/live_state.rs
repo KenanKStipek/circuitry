@@ -758,3 +758,74 @@ fn mid_run_live_state_shows_a_use_childs_own_running_step() {
         "the final --live-state write must equal --out byte for byte"
     );
 }
+
+/// An unnamed `flow: tree` loop of two passes, `max_concurrency: 2`:
+/// its body is a *named* `use` (`job`), so both passes' own live roots
+/// register at the exact same path, `prime.job` -- the loop itself
+/// contributes no `iter_<N>` segment to tell them apart (the
+/// orchestration reference's own `dispatch` row: "several instances
+/// share a path (an unnamed loop body)"). One pass's child runs for
+/// `0.1s`, the other for `1.5s`, so the fast one finishes and clears
+/// its own graft long before the slow one does. `prime.job` itself
+/// only shows done once *both* passes have actually merged (the
+/// loop's own tree overlay at its enclosing container governs that,
+/// not either pass's own graft), so this watches `prime.job.slow`
+/// directly: a runner that clears every graft at a shared path the
+/// moment any one of them clears, rather than only the one that did,
+/// makes the slow pass's own overlay vanish right along with the fast
+/// one's, and `prime.job.slow` never shows as running again for the
+/// rest of the slow pass's own run.
+const CONCURRENT_USE_CHILDREN_SHARE_A_PATH_DOC: &str = "\
+effects:\n  - name: seconds\n    type: tool\n    provider: json\n    params: {mode: parse, input: '[0.1, 1.5]'}\n  - type: loop\n    flow: tree\n    max_concurrency: 2\n    each:\n      in: prime.seconds.value\n      as: s\n    body:\n      - type: use\n        name: job\n        inline: |\n          effects:\n            - name: quick\n              type: tool\n              provider: json\n              params: {mode: stringify, value: {a: 1}}\n            - name: slow\n              type: tool\n              provider: sleep\n              params: {seconds: {{s}}}\n";
+
+#[test]
+fn mid_run_live_state_keeps_a_use_childs_running_step_visible_after_a_sibling_graft_clears() {
+    let home = TempHome::new("use-children-share-a-path");
+    let config = home.write("config.json", "{}");
+    let doc = home.write("doc.yml", CONCURRENT_USE_CHILDREN_SHARE_A_PATH_DOC);
+    let live = home.path.join("live.json");
+    let out = home.path.join("out.json");
+    let child = spawn(&home, &config, &doc, &live, &out);
+
+    let (observations, exit_code) = observe_live_state(child, &live);
+    assert_eq!(exit_code, 0, "the run itself must succeed");
+
+    let is_done = |v: &serde_json::Value, path: &[&str]| -> bool {
+        get(v, path)
+            .and_then(|node| node.get("meta"))
+            .and_then(|meta| meta.get("completed_at"))
+            .is_some_and(|c| !c.is_null())
+    };
+    let is_started = |v: &serde_json::Value, path: &[&str]| -> bool {
+        get(v, path)
+            .and_then(|node| node.get("meta"))
+            .and_then(|meta| meta.get("created_at"))
+            .is_some_and(|c| !c.is_null())
+    };
+
+    let saw_the_slow_siblings_overlay_survive_the_fast_ones_merge =
+        observations.iter().any(|(_, contents)| {
+            let parsed: serde_json::Value = serde_json::from_str(contents).unwrap();
+            !is_done(&parsed, &["prime", "job"])
+                && is_started(&parsed, &["prime", "job", "slow"])
+                && !is_done(&parsed, &["prime", "job", "slow"])
+        });
+    assert!(
+        saw_the_slow_siblings_overlay_survive_the_fast_ones_merge,
+        "expected at least one mid-run write showing `prime.job.slow` started but not \
+         finished (the slow pass's own overlay) while `prime.job` itself hadn't merged yet \
+         -- the fast pass shares the same path (the loop is unnamed) and finishes first; \
+         the bug this test pins clears the slow pass's own overlay the moment the fast one's \
+         own clears, leaving `prime.job.slow` invisible for the rest of the slow pass's own \
+         run; observed {} versions: {:#?}",
+        observations.len(),
+        observations.iter().map(|(_, c)| c).collect::<Vec<_>>()
+    );
+
+    let final_live = &observations.last().unwrap().1;
+    let out_text = fs::read_to_string(&out).unwrap();
+    assert_eq!(
+        final_live, &out_text,
+        "the final --live-state write must equal --out byte for byte"
+    );
+}

@@ -446,7 +446,7 @@ impl RunObserver for RecordingObserver {
         ));
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
+    fn clear_graft(&self, node_path: &EffectPath, _child_root: &electricity_vm::NodeRef) {
         self.events
             .borrow_mut()
             .push(Event::ClearGraft(node_path.to_string()));

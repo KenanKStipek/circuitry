@@ -296,20 +296,17 @@ pub struct LiveStateMirror {
     /// tree registers at the same path as that outer tree's own
     /// container (an unnamed loop appends no name segment either,
     /// `exec::loop_::run_each_tree`'s own `dispatch_path` comment); and
-    /// two concurrent sibling unnamed tree loops can collide the same
-    /// way with each other. [`Self::register_child_graft`] replaces its
-    /// own `GraftEntry::Child` entry's `NodeRef` *in place*, wherever it
-    /// already sits in the `Vec`, rather than moving it to the end, so
-    /// a path's own relative order between a child graft and a tree
-    /// overlay is fixed the moment both are first registered, never
-    /// reshuffled by a retried attempt's fresh child root;
-    /// [`Self::register_tree_branches`] always pushes a new
-    /// `GraftEntry::Tree` entry, never replacing one, and
-    /// [`Self::clear_tree_branches`] removes only the one entry whose
-    /// branches are *this* tree's own (matched by `Rc::ptr_eq` on the
-    /// first branch, since two different trees' `NodeRef`s are never
-    /// the same allocation) -- so a sibling or a nested tree at the
-    /// same path is untouched by this tree's own clear.
+    /// two concurrent sibling unnamed tree loops, or two concurrent
+    /// `use` children, can collide the same way with each other
+    /// (issue #662: an unnamed `flow: tree` loop's own body gives every
+    /// concurrent instance the same path). [`Self::register_child_graft`]
+    /// always pushes a new `GraftEntry::Child` entry, never replacing
+    /// one already there, exactly like [`Self::register_tree_branches`];
+    /// [`Self::clear_graft`] removes only the one entry whose root is
+    /// *this* child's own (matched by `Rc::ptr_eq`, the same way
+    /// [`Self::clear_tree_branches`] matches its own tree's branches) --
+    /// so a sibling `use` child, or a tree overlay, at the same path is
+    /// untouched by this child's own clear.
     grafts: RefCell<BTreeMap<String, Vec<GraftEntry>>>,
 }
 
@@ -330,10 +327,10 @@ impl LiveStateMirror {
     }
 
     /// [`electricity_vm::RunObserver::register_child_graft`]'s own
-    /// implementation: records *child_root* as *node_path*'s own live
-    /// overlay, read lazily -- straight off the still-running child's
-    /// own tree, through [`Self::apply_grafts`] -- every time this
-    /// mirror actually publishes, the same lazy-pull pattern
+    /// implementation: records *child_root* as a *new* live overlay at
+    /// *node_path*, read lazily -- straight off the still-running
+    /// child's own tree, through [`Self::apply_grafts`] -- every time
+    /// this mirror actually publishes, the same lazy-pull pattern
     /// [`Self::register_tree_branches`] already used for a tree's own
     /// branches (issue #662: a `use` child's own overlay used to be a
     /// snapshot pushed, throttled, on every child write instead).
@@ -341,39 +338,38 @@ impl LiveStateMirror {
     /// could have written anything yet -- so, like
     /// [`Self::register_tree_branches`], this never marks a write
     /// pending on its own; the child's own first write does that
-    /// through the ordinary [`Self::mark_pending`] path. A second call
-    /// at a path already carrying a `GraftEntry::Child` (a retried
-    /// `use` attempt's own fresh child root) replaces that entry's
-    /// `NodeRef` *in place*, at whatever position it already holds in
-    /// the `Vec` (this struct's own `grafts` field doc comment) --
-    /// never appended anew, so a tree overlay already registered at
-    /// the same path keeps whichever relative order the two were
-    /// first registered in.
+    /// through the ordinary [`Self::mark_pending`] path. Always pushed,
+    /// never replacing an existing entry there (this struct's own
+    /// `grafts` field doc comment): two concurrent `use` children can
+    /// share a path (an unnamed `flow: tree` loop's own body), and each
+    /// gets its own entry, undone independently by [`Self::clear_graft`].
     pub fn register_child_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
-        let mut grafts = self.grafts.borrow_mut();
-        let entries = grafts.entry(node_path.to_string()).or_default();
-        match entries
-            .iter_mut()
-            .find(|entry| matches!(entry, GraftEntry::Child(_)))
-        {
-            Some(GraftEntry::Child(existing)) => *existing = child_root.clone(),
-            _ => entries.push(GraftEntry::Child(child_root.clone())),
-        }
+        self.grafts
+            .borrow_mut()
+            .entry(node_path.to_string())
+            .or_default()
+            .push(GraftEntry::Child(child_root.clone()));
     }
 
     /// [`electricity_vm::RunObserver::clear_graft`]'s own
-    /// implementation: *node_path* no longer needs its own
-    /// `GraftEntry::Child` overlay (the child it named finished) -- a
-    /// no-op if nothing was grafted there (or it was already cleared).
-    /// Leaves any `GraftEntry::Tree` entry at the same path untouched
-    /// (PR #549's review): a tree nested directly at a
-    /// `use` child's own root path must keep overlaying after the
-    /// child's own graft is gone.
-    pub fn clear_graft(&self, node_path: &EffectPath) {
+    /// implementation: *node_path* no longer needs *child_root*'s own
+    /// `GraftEntry::Child` overlay (that child finished) -- a no-op if
+    /// nothing matching was registered there (or it was already
+    /// cleared). Matches by `Rc::ptr_eq` (this struct's own `grafts`
+    /// field doc comment), not by *node_path* alone: a sibling `use`
+    /// child sharing the same path, or a `GraftEntry::Tree` entry
+    /// there (PR #549's review -- a tree nested directly at a
+    /// `use` child's own root path must keep overlaying after this
+    /// child's own graft is gone), is untouched.
+    pub fn clear_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
         let path = node_path.to_string();
         let mut grafts = self.grafts.borrow_mut();
         if let Some(entries) = grafts.get_mut(&path) {
-            entries.retain(|entry| !matches!(entry, GraftEntry::Child(_)));
+            if let Some(pos) = entries.iter().position(
+                |entry| matches!(entry, GraftEntry::Child(root) if Rc::ptr_eq(root, child_root)),
+            ) {
+                entries.remove(pos);
+            }
             if entries.is_empty() {
                 grafts.remove(&path);
             }
@@ -677,7 +673,7 @@ mod tests {
         );
         let node_path = EffectPath::root().push_name("fetch");
         mirror.register_child_graft(&node_path, &child_store.root);
-        mirror.clear_graft(&node_path);
+        mirror.clear_graft(&node_path, &child_store.root);
 
         mirror.mark_pending();
         let store = Store::new();
@@ -687,7 +683,85 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// R4 (issue #662): a nested `use` composes through two live
+    /// Issue #662: two concurrent `use` children sharing the exact
+    /// same path (an unnamed `flow: tree` loop's own body, its two
+    /// passes both naming the same `use` effect) each get their own
+    /// entry -- clearing the one that finished first must not clear
+    /// the one still running, even though both were registered at the
+    /// same *node_path*. The regression this guards: an earlier
+    /// version matched a `clear_graft` call to its own path alone,
+    /// which removed every `Child` entry there, sibling included.
+    #[test]
+    fn two_concurrent_use_children_at_the_same_path_clear_independently() {
+        let path = temp_path("concurrent-use-children");
+        let mirror = LiveStateMirror::with_interval(path.clone(), Duration::from_millis(1));
+        let store = Store::new();
+        let prime = store.ensure_dict(&store.root, str_key("prime")).unwrap();
+        let job = store.ensure_dict(&prime, str_key("job")).unwrap();
+        store.set_leaf(&job, str_key("value"), Value::None);
+        store.set_leaf(&job, str_key("meta"), Value::Dict(Dict::new()));
+        mirror.write_initial(&store.saved(&store.root)).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+
+        let node_path = EffectPath::root().push_name("job");
+
+        let fast_child = Store::new();
+        let fast_prime = fast_child
+            .ensure_dict(&fast_child.root, str_key("prime"))
+            .unwrap();
+        fast_child.set_leaf(&fast_prime, str_key("value"), Value::None);
+        fast_child.set_leaf(&fast_prime, str_key("meta"), Value::Dict(Dict::new()));
+        fast_child.set_leaf(&fast_prime, str_key("slow"), Value::from("finished"));
+        mirror.register_child_graft(&node_path, &fast_child.root);
+
+        let slow_child = Store::new();
+        let slow_prime = slow_child
+            .ensure_dict(&slow_child.root, str_key("prime"))
+            .unwrap();
+        slow_child.set_leaf(&slow_prime, str_key("value"), Value::None);
+        slow_child.set_leaf(&slow_prime, str_key("meta"), Value::Dict(Dict::new()));
+        slow_child.set_leaf(&slow_prime, str_key("slow"), Value::from("running"));
+        mirror.register_child_graft(&node_path, &slow_child.root);
+
+        // The fast child finishes and clears its own graft by identity
+        // -- the slow child's own entry, registered at the same path,
+        // must survive.
+        mirror.clear_graft(&node_path, &fast_child.root);
+
+        mirror.mark_pending();
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+
+        let get = |v: &Value, key: &str| -> Value {
+            v.as_dict()
+                .and_then(|d| d.get(&str_key(key)))
+                .cloned()
+                .unwrap_or(Value::None)
+        };
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let job_node = get(&get(&parsed, "prime"), "job");
+        assert_eq!(
+            get(&job_node, "slow"),
+            Value::from("running"),
+            "the slow child's own overlay must survive the fast child's own clear, got {text}"
+        );
+
+        mirror.clear_graft(&node_path, &slow_child.root);
+        mirror.mark_pending();
+        std::thread::sleep(Duration::from_millis(5));
+        mirror.flush_if_due(&store, || store.saved(&store.root));
+        let text = fs::read_to_string(&path).unwrap();
+        let parsed = electricity_json::loads(&text).unwrap();
+        let job_node = get(&get(&parsed, "prime"), "job");
+        assert_eq!(
+            get(&job_node, "slow"),
+            Value::None,
+            "no overlay remains once both children have cleared, got {text}"
+        );
+        fs::remove_file(&path).unwrap();
+    }
+
+    /// Issue #662: a nested `use` composes through two live
     /// grafts the same way [`grafted_snapshot_composes_at_a_nested_path`]
     /// already proves for the pure transform -- here through the real
     /// [`LiveStateMirror::register_child_graft`]/[`LiveStateMirror::
@@ -767,7 +841,7 @@ mod tests {
         fs::remove_file(&path).unwrap();
     }
 
-    /// R4 (issue #662): a child that finishes *between* two flushes --
+    /// Issue #662: a child that finishes *between* two flushes --
     /// the first flush still sees the running overlay off the child's
     /// own live store; once the child's real output merges into the
     /// parent's own store and its graft is cleared (the exact order
@@ -821,7 +895,7 @@ mod tests {
         // `execute_use`'s own merge write does, mirrored here
         // directly), and its graft is cleared.
         store.set_leaf(&step, str_key("inner"), Value::from("merged for real"));
-        mirror.clear_graft(&node_path);
+        mirror.clear_graft(&node_path, &child_store.root);
 
         mirror.mark_pending();
         std::thread::sleep(Duration::from_millis(5));

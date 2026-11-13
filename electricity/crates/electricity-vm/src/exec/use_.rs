@@ -1878,8 +1878,8 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.register_child_graft(node_path, child_root);
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
-        self.parent.clear_graft(node_path);
+    fn clear_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
+        self.parent.clear_graft(node_path, child_root);
     }
 
     // Issue #465: a tree nested inside this `use` child registers its
@@ -1968,7 +1968,7 @@ async fn run_isolated_inner(
         resume_active,
     )
     .await;
-    observer.clear_graft(&root_path);
+    observer.clear_graft(&root_path, &child_store.root);
     (child_store, result)
 }
 

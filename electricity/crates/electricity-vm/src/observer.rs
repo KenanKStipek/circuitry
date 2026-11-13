@@ -103,24 +103,32 @@ pub trait RunObserver {
     /// depth because *node_path* always arrives as this call's own
     /// argument rather than being derived here -- a nested child's own
     /// register call lands at its own, deeper *node_path*
-    /// independently of this one. A retried attempt that creates a
-    /// fresh child [`crate::Store`] calls this again at the same
-    /// *node_path*, replacing the previous attempt's own root.
+    /// independently of this one. Two concurrent `use` children can
+    /// share the same *node_path* (an unnamed `flow: tree` loop's own
+    /// body gives every concurrent instance the same path) -- each
+    /// call registers its own entry, undone independently by
+    /// [`RunObserver::clear_graft`], never replacing one another's.
     ///
     /// Default no-op, like every other hook here; only the run wiring's
     /// own live-state mirror (`electricity` (lib), `src/live_state.rs`)
-    /// implements it for real. [`RunObserver::clear_graft`] removes a
-    /// path this call registered once the child's own real output
+    /// implements it for real. [`RunObserver::clear_graft`] removes the
+    /// overlay this call registered once the child's own real output
     /// merges into the parent for good -- a later snapshot no longer
-    /// needs (or should show) the overlay at all.
+    /// needs (or should show) it at all.
     fn register_child_graft(&self, _node_path: &EffectPath, _child_root: &NodeRef) {}
 
-    /// *node_path* no longer needs [`RunObserver::register_child_graft`]'s
-    /// own overlay -- the child it named has finished (merged for real,
-    /// or failed) and a later snapshot reads its own now-final state
-    /// directly. A no-op for a path that was never grafted (or already
-    /// cleared), same as every other hook's own tolerant default here.
-    fn clear_graft(&self, _node_path: &EffectPath) {}
+    /// *node_path* no longer needs *child_root*'s own
+    /// [`RunObserver::register_child_graft`] overlay -- that child has
+    /// finished (merged for real, or failed) and a later snapshot
+    /// reads its own now-final state directly. *child_root* must be
+    /// the exact same [`NodeRef`] that call passed (not merely the
+    /// same *node_path*): a sibling `use` child sharing the same path
+    /// is identified by its own root, the same way
+    /// [`RunObserver::clear_tree_branches`] identifies a tree by its
+    /// own branches. A no-op for a path with no entry matching
+    /// *child_root* (never registered, or already cleared), same as
+    /// every other hook's own tolerant default here.
+    fn clear_graft(&self, _node_path: &EffectPath, _child_root: &NodeRef) {}
 
     /// A `flow: tree` dynamic/loop is about to dispatch *branches* --
     /// every branch's own [`NodeRef`], in index order, at *node_path*
@@ -249,8 +257,9 @@ mod tests {
         observer.dispatch(&path, 3, 2);
         observer.write();
         observer.warning("a run-time warning with no effect of its own");
-        observer.register_child_graft(&path, &crate::store::new_node());
-        observer.clear_graft(&path);
+        let child_root = crate::store::new_node();
+        observer.register_child_graft(&path, &child_root);
+        observer.clear_graft(&path, &child_root);
         observer.record_totals(&Value::None);
         observer.register_tree_branches(&path, &[]);
         observer.clear_tree_branches(&path, &[]);

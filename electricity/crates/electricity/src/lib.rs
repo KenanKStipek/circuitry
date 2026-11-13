@@ -837,9 +837,9 @@ impl RunObserver for Observer<'_> {
         }
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
+    fn clear_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.clear_graft(node_path);
+            mirror.clear_graft(node_path, child_root);
         }
     }
 
