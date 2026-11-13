@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #720: the agent tool, pi engine, a valid result_file on the first turn",
+  "description": "`provider: agent` with `engine: pi` and `result_file` + `result_schema`: the fake writes a valid result and reports usage/a tool call on its first turn, so no repair turn runs. `meta.raw` carries the session id, turn/tool-call counts, tokens, cost and the transcript path; `meta.tokens_sent`/`tokens_received`/`cost_usd` feed the run's own totals.",
+  "engines": ["python", "electricity"],
+  "cli_args": ["-e", "work_dir=__CASE_DIR__"],
+  "expect": "success"
+}

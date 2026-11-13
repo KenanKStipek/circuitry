@@ -1272,14 +1272,16 @@ fn validate_prompt_schema_impl(
 /// rest -- `plugins/cel.py`'s own `_MAX_QUOTED_ERRORS`.
 const CEL_SCHEMA_ERROR_CAP: usize = 5;
 
-/// [`cel_schema_errors`]'s own result.
+/// [`cel_schema_errors`]'s/[`result_schema_errors`]'s own result.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CelSchemaCheck {
+pub enum SchemaErrorList {
     Valid,
     /// Already formatted and ordered exactly like `plugins/cel.py::
-    /// schema_errors`'s own return value -- each entry `"{path}: {message}"`,
+    /// schema_errors`'s own return value (shared by `plugins/agent.py::
+    /// _read_result`, whose own list comprehension and cap are the same
+    /// shape with a different cap) -- each entry `"{path}: {message}"`,
     /// sorted by instance path, with a trailing `"... and N more"` summary
-    /// once there are more than [`CEL_SCHEMA_ERROR_CAP`].
+    /// once there are more entries than the caller's own cap.
     Invalid(Vec<String>),
     SchemaError(String),
 }
@@ -1292,7 +1294,7 @@ pub enum CelSchemaCheck {
 /// [`validate_prompt_schema`] picks), sorted by `list(error.absolute_path)`
 /// and capped at [`CEL_SCHEMA_ERROR_CAP`].
 ///
-/// Also reports [`CelSchemaCheck::SchemaError`] for *schema* itself being
+/// Also reports [`SchemaErrorList::SchemaError`] for *schema* itself being
 /// malformed, the same two checks [`schema_well_formedness_error`] makes
 /// (`find_invalid_pattern`, then the well-formedness probe on the
 /// fully-supported path) -- in practice a `cel` effect's own `schema:`
@@ -1307,19 +1309,44 @@ pub enum CelSchemaCheck {
 pub fn cel_schema_errors(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
-) -> CelSchemaCheck {
+) -> SchemaErrorList {
+    schema_errors(schema, instance, CEL_SCHEMA_ERROR_CAP)
+}
+
+/// How many mismatches [`result_schema_errors`] quotes before summarising
+/// the rest -- `plugins/agent.py`'s own `_MAX_QUOTED_ERRORS`.
+const RESULT_SCHEMA_ERROR_CAP: usize = 20;
+
+/// An `agent` effect's own `result_schema` check (issue #720):
+/// `plugins/agent.py::_read_result`'s own `jsonschema.iter_errors` list,
+/// in the same words, order and cap-then-summarise shape
+/// [`cel_schema_errors`] already gives the `cel` tool's `schema:` check,
+/// just with `plugins/agent.py`'s own, wider cap
+/// ([`RESULT_SCHEMA_ERROR_CAP`], 20 rather than 5).
+pub fn result_schema_errors(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+) -> SchemaErrorList {
+    schema_errors(schema, instance, RESULT_SCHEMA_ERROR_CAP)
+}
+
+fn schema_errors(
+    schema: &electricity_value::Value,
+    instance: &electricity_value::Value,
+    cap: usize,
+) -> SchemaErrorList {
     std::thread::scope(|scope| {
         let spawned = std::thread::Builder::new()
             .stack_size(VALIDATION_THREAD_STACK_BYTES)
             .spawn_scoped(scope, move || {
                 engine::set_stack_guard(VALIDATION_THREAD_STACK_GUARD_BYTES);
-                cel_schema_errors_impl(schema, instance)
+                schema_errors_impl(schema, instance, cap)
             });
         match spawned {
             Ok(handle) => handle.join().unwrap(),
             Err(_) => {
                 engine::set_stack_guard(FALLBACK_STACK_GUARD_BYTES);
-                cel_schema_errors_impl(schema, instance)
+                schema_errors_impl(schema, instance, cap)
             }
         }
     })
@@ -1362,10 +1389,11 @@ fn cel_path_segments(pointer: &str) -> Vec<engine::PathSegment> {
         .collect()
 }
 
-fn cel_schema_errors_impl(
+fn schema_errors_impl(
     schema: &electricity_value::Value,
     instance: &electricity_value::Value,
-) -> CelSchemaCheck {
+    cap: usize,
+) -> SchemaErrorList {
     engine::take_recursion_exceeded();
     engine::take_python_exception();
     engine::clear_pattern_cache();
@@ -1430,31 +1458,31 @@ fn cel_schema_errors_impl(
     }
 
     if engine::take_recursion_exceeded() {
-        return CelSchemaCheck::SchemaError(
+        return SchemaErrorList::SchemaError(
             "maximum recursion depth exceeded while calling a Python object".to_string(),
         );
     }
     if let Some(message) = engine::take_python_exception() {
-        return CelSchemaCheck::SchemaError(message);
+        return SchemaErrorList::SchemaError(message);
     }
     if let Some(message) = schema_error {
-        return CelSchemaCheck::SchemaError(message);
+        return SchemaErrorList::SchemaError(message);
     }
 
     if messages.is_empty() {
-        return CelSchemaCheck::Valid;
+        return SchemaErrorList::Valid;
     }
     messages.sort_by(|a, b| engine::compare_paths(&a.0, &b.0));
     let total = messages.len();
     let mut rendered: Vec<String> = messages
         .into_iter()
-        .take(CEL_SCHEMA_ERROR_CAP)
+        .take(cap)
         .map(|(path, message)| format!("{}: {}", cel_path_string(&path), message))
         .collect();
-    if total > CEL_SCHEMA_ERROR_CAP {
-        rendered.push(format!("... and {} more", total - CEL_SCHEMA_ERROR_CAP));
+    if total > cap {
+        rendered.push(format!("... and {} more", total - cap));
     }
-    CelSchemaCheck::Invalid(rendered)
+    SchemaErrorList::Invalid(rendered)
 }
 
 /// The exact `$schema` URIs Python's own `jsonschema.validators._META_SCHEMAS`
@@ -2179,17 +2207,17 @@ mod prompt_schema_tests {
 
 #[cfg(test)]
 mod cel_schema_errors_tests {
-    use super::{CelSchemaCheck, cel_schema_errors, value_from_json};
+    use super::{SchemaErrorList, cel_schema_errors, value_from_json};
     use serde_json::json;
 
-    fn check(schema: serde_json::Value, instance: serde_json::Value) -> CelSchemaCheck {
+    fn check(schema: serde_json::Value, instance: serde_json::Value) -> SchemaErrorList {
         cel_schema_errors(&value_from_json(&schema), &value_from_json(&instance))
     }
 
     #[test]
     fn a_matching_instance_is_valid() {
         let schema = json!({"type": "object", "required": ["a"]});
-        assert_eq!(check(schema, json!({"a": 1})), CelSchemaCheck::Valid);
+        assert_eq!(check(schema, json!({"a": 1})), SchemaErrorList::Valid);
     }
 
     #[test]
@@ -2197,7 +2225,7 @@ mod cel_schema_errors_tests {
         let schema = json!({"type": "object", "required": ["a"]});
         assert_eq!(
             check(schema, json!({})),
-            CelSchemaCheck::Invalid(vec!["(root): 'a' is a required property".to_string()])
+            SchemaErrorList::Invalid(vec!["(root): 'a' is a required property".to_string()])
         );
     }
 
@@ -2212,7 +2240,7 @@ mod cel_schema_errors_tests {
         });
         assert_eq!(
             check(schema, json!({"a": 1, "b": 2})),
-            CelSchemaCheck::Invalid(vec![
+            SchemaErrorList::Invalid(vec![
                 "a: 1 is not of type 'string'".to_string(),
                 "b: 2 is not of type 'string'".to_string(),
             ])
@@ -2224,7 +2252,7 @@ mod cel_schema_errors_tests {
         let schema = json!({"items": {"type": "string"}});
         assert_eq!(
             check(schema, json!(["ok", 1])),
-            CelSchemaCheck::Invalid(vec!["1: 1 is not of type 'string'".to_string()])
+            SchemaErrorList::Invalid(vec!["1: 1 is not of type 'string'".to_string()])
         );
     }
 
@@ -2242,7 +2270,7 @@ mod cel_schema_errors_tests {
             }
         });
         let instance = json!({"a": 1, "b": 1, "c": 1, "d": 1, "e": 1, "f": 1});
-        let CelSchemaCheck::Invalid(errors) = check(schema, instance) else {
+        let SchemaErrorList::Invalid(errors) = check(schema, instance) else {
             panic!("expected Invalid");
         };
         assert_eq!(errors.len(), 6);

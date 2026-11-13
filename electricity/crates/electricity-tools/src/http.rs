@@ -1794,6 +1794,7 @@ fn finalize_streamed_save(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        cost_usd: None,
     })
 }
 
@@ -1886,6 +1887,7 @@ fn finalize_response_save(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        cost_usd: None,
     })
 }
 
@@ -1975,6 +1977,7 @@ fn finalize_response(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        cost_usd: None,
     })
 }
 

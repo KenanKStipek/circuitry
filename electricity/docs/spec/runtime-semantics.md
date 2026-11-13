@@ -1033,8 +1033,8 @@ the text; `meta.params_rendered.prompt` is `{file: <resolved path>, within:
 `params_json` parses as a JSON object, compiling fails with `<effect_path>:
 params_json must not set params.prompt ...`, and the rendered one is checked
 again at dispatch. electricity compiles the same checks (the IR's
-`ToolOp::prompt_file`) but refuses the cof-only `agent` plugin, so it never
-reads the file.
+`ToolOp::prompt_file`) and runs the `agent` plugin too, reading the file the
+same way, once per dispatch, strictly before `params_json` is rendered.
 
 **Routing/scoring/decomposition** — see §5.8.
 

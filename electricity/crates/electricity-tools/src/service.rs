@@ -1793,6 +1793,7 @@ mod imp {
                     stdout_parsed: false,
                     tokens_sent: None,
                     tokens_received: None,
+                    cost_usd: None,
                 });
             }
 
@@ -2001,6 +2002,7 @@ mod imp {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            cost_usd: None,
         })
     }
 
@@ -2108,6 +2110,7 @@ mod imp {
                 stdout_parsed: false,
                 tokens_sent: None,
                 tokens_received: None,
+                cost_usd: None,
             }));
         }
         drop_record(&dir, &name);
@@ -2322,6 +2325,9 @@ mod imp {
                 secret_headers: &[],
                 scrub: None,
                 on_live: None,
+                on_agent_live: None,
+                agent_attempt: 1,
+                agent_earlier_attempts: None,
                 limited: false,
                 confine_to: None,
             }
