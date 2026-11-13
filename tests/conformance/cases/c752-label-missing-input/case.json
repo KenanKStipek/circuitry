@@ -2,5 +2,6 @@
   "spec_case": "#752",
   "description": "`label:` renders entirely from a missing input (no `interface.inputs` default, nothing on the command line): a missing name renders empty, same as any other template, so the result is empty after cleaning -- no `label` key anywhere, and no warning.",
   "engines": ["python", "electricity"],
-  "expect": "success"
+  "expect": "success",
+  "compare_run_warnings": true
 }
