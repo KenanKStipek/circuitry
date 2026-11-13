@@ -96,12 +96,15 @@ pub struct ToolResult {
     pub tokens_received: Option<i64>,
     /// `plugins/base.py::ToolResult.cost_usd` -- `None` for every
     /// provider but `agent` (issue #720), which reports the CLI's own
-    /// cost figure on a successful turn only, never on a returned or
-    /// raised failure. `exec/tool.rs` writes this into `meta.cost_usd`
-    /// the same way a prompt's adapter reply does; unlike `tokens_sent`/
-    /// `tokens_received`, it has no `_total` accumulation across a
-    /// pass's retried attempts (cof's own `agent.py`/`core/tool.py`
-    /// never sum a cost across attempts either).
+    /// running cost figure on every `ToolResult` it returns, `ok: false`
+    /// included (`agent.py`'s own `_Session.result` sets it either way,
+    /// the same total `raw.cost` carries) -- only a turn that raises
+    /// outright, with no `ToolResult` at all, has none. `exec/tool.rs`
+    /// writes this into `meta.cost_usd` the same way a prompt's adapter
+    /// reply does; unlike `tokens_sent`/`tokens_received`, it has no
+    /// `_total` accumulation across a pass's retried attempts (cof's own
+    /// `agent.py`/`core/tool.py` never sum a cost across attempts
+    /// either).
     pub cost_usd: Option<f64>,
 }
 

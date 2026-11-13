@@ -14,14 +14,11 @@
 //! tool) whose `raw` still carries `session_id`/`transcript`/`timed_out`;
 //! one that fails before either raises, unchanged.
 //!
-//! Known, documented differences from cof (see `electricity/DESIGN.md`
-//! §13): `result_schema` reports at most the first violation (never the
-//! full `jsonschema.iter_errors` list), labelled `(root)` rather than its
-//! own JSON Pointer; `meta.live` is always cleared when the attempt ends,
-//! even when the run itself is interrupted (cof leaves it in place then,
-//! as the one record of that attempt's session and transcript); and
-//! `meta.live.earlier_attempts` (a retried attempt's own token totals
-//! from earlier attempts of the same pass) is never present.
+//! A cancelled or decode-failed turn (`AgentCliRunError::Cancelled`/
+//! `Decode`) always raises, never becomes an `ok: false` result --
+//! those are never wrapped as a CLI failure in the first place, the
+//! same as every other process-backed tool's own `ProcError::Cancelled`/
+//! `Decode`.
 
 use crate::agent_cli::{
     AgentCliParseError, AgentCliRunError, ClaudeCommandOpts, DEFAULT_UNSET_ENV,
@@ -312,7 +309,12 @@ fn stream_json(cmd: Vec<String>) -> Vec<String> {
     out
 }
 
-fn write_prompt_file(scratch_dir: &Path, prompt: &str) -> std::io::Result<PathBuf> {
+/// `plugins/agent.py::_write_prompt_file`. Uncaught in Python (no
+/// `try`/`except` around `tempfile.mkstemp`/the write), so a failure
+/// here carries no `"agent: "` prefix either -- the bare OS-error text
+/// [`crate::fs::os_error`] already gives every other plugin's own
+/// uncaught `OSError`.
+fn write_prompt_file(scratch_dir: &Path, prompt: &str) -> Result<PathBuf, ToolError> {
     use std::io::Write;
     let name = format!(
         "prompt-{}-{}.md",
@@ -323,8 +325,11 @@ fn write_prompt_file(scratch_dir: &Path, prompt: &str) -> std::io::Result<PathBu
             .unwrap_or(0)
     );
     let path = scratch_dir.join(name);
-    let mut file = std::fs::File::create(&path)?;
-    file.write_all(prompt.as_bytes())?;
+    let path_display = path.display().to_string();
+    let mut file =
+        std::fs::File::create(&path).map_err(|err| crate::fs::os_error(&err, &path_display))?;
+    file.write_all(prompt.as_bytes())
+        .map_err(|err| crate::fs::os_error(&err, &path_display))?;
     Ok(path)
 }
 
@@ -339,8 +344,7 @@ async fn run_pi_turn(
     live: &LiveTracker<'_>,
     token: &CancellationToken,
 ) -> Result<AgentTurn, TurnOutcome> {
-    let prompt_file = write_prompt_file(scratch_dir, prompt)
-        .map_err(|err| TurnOutcome::Raise(ToolError::message(format!("agent: {err}"))))?;
+    let prompt_file = write_prompt_file(scratch_dir, prompt).map_err(TurnOutcome::Raise)?;
     let mut extra: Vec<String> = Vec::new();
     if !options.tools.is_empty() {
         extra.push("--tools".to_string());
@@ -659,32 +663,47 @@ fn repair_prompt(result_file: &Path, errors: &[String]) -> String {
     )
 }
 
-/// `plugins/agent.py::_read_result`.
-fn read_result(result_file: &Path, result_schema: Option<&Value>) -> (Value, Vec<String>) {
+/// `plugins/agent.py::_read_result`. Only `FileNotFoundError`/`OSError`
+/// become one of this turn's own, quoted "not valid" reasons; a
+/// `UnicodeDecodeError` (`result_file.read_text(encoding="utf-8")`'s
+/// own strict decode, with no `except` of its own) raises instead,
+/// uncaught exactly as it is in Python.
+fn read_result(
+    result_file: &Path,
+    result_schema: Option<&Value>,
+) -> Result<(Value, Vec<String>), ToolError> {
     let bytes = match std::fs::read(result_file) {
         Ok(bytes) => bytes,
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-            return (Value::None, vec!["the file was not written".to_string()]);
+            return Ok((Value::None, vec!["the file was not written".to_string()]));
         }
         Err(err) => {
-            return (
+            let path_display = result_file.display().to_string();
+            return Ok((
                 Value::None,
-                vec![format!("the file could not be read: {err}")],
-            );
+                vec![format!(
+                    "the file could not be read: {}",
+                    crate::fs::os_error(&err, &path_display).message
+                )],
+            ));
         }
     };
-    let text = String::from_utf8_lossy(&bytes);
-    let value = match electricity_json::loads(&text) {
+    let text = std::str::from_utf8(&bytes).map_err(|_| ToolError {
+        py_class: PyExc::UnicodeDecodeError,
+        message: crate::process::describe_utf8_error(&bytes),
+        cause: ErrorCause::None,
+    })?;
+    let value = match electricity_json::loads(text) {
         Ok(value) => value,
         Err(err) => {
-            return (
+            return Ok((
                 Value::None,
                 vec![format!("the file is not valid JSON: {err}")],
-            );
+            ));
         }
     };
     let Some(schema) = result_schema else {
-        return (value, Vec::new());
+        return Ok((value, Vec::new()));
     };
     let errors = match electricity_schema::result_schema_errors(schema, &value) {
         electricity_schema::SchemaErrorList::Valid => Vec::new(),
@@ -693,7 +712,7 @@ fn read_result(result_file: &Path, result_schema: Option<&Value>) -> (Value, Vec
             vec![format!("(root): {message}")]
         }
     };
-    (value, errors)
+    Ok((value, errors))
 }
 
 fn invalid_result(
@@ -900,7 +919,7 @@ async fn run_agent_session(
         ));
     };
 
-    let (value, errors) = read_result(result_file, result_schema);
+    let (value, errors) = read_result(result_file, result_schema)?;
     if errors.is_empty() {
         return Ok(session.result(engine_name, transcript_path, live, value, None, true));
     }
@@ -961,7 +980,7 @@ async fn run_agent_session(
             return turn_outcome_to_result(&session, engine_name, transcript_path, live, outcome);
         }
     }
-    let (value, errors) = read_result(result_file, result_schema);
+    let (value, errors) = read_result(result_file, result_schema)?;
     if !errors.is_empty() {
         return Ok(invalid_result(
             &session,
@@ -1139,8 +1158,9 @@ impl ToolPlugin for AgentPlugin {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(|err| {
                     value_error(format!(
-                        "agent: params['transcript'] {} directory could not be created: {err}",
-                        Value::Str(path.display().to_string()).py_repr()
+                        "agent: params['transcript'] {}'s directory could not be created: {}",
+                        Value::Str(path.display().to_string()).py_repr(),
+                        crate::fs::os_error(&err, &parent.display().to_string()).message
                     ))
                 })?;
             }
@@ -1188,9 +1208,11 @@ impl ToolPlugin for AgentPlugin {
         if let Some(path) = &result_file {
             if let Err(err) = std::fs::remove_file(path) {
                 if err.kind() != std::io::ErrorKind::NotFound {
+                    let path_display = path.display().to_string();
                     return Err(value_error(format!(
-                        "agent: result_file {} could not be cleared before the session: {err}",
-                        Value::Str(path.display().to_string()).py_repr()
+                        "agent: result_file {} could not be cleared before the session: {}",
+                        Value::Str(path_display.clone()).py_repr(),
+                        crate::fs::os_error(&err, &path_display).message
                     )));
                 }
             }
@@ -1339,6 +1361,9 @@ fn shellexpand_home(path: &str) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// `(cwd_path / path).resolve()`: `result_file`/`transcript`, the two
+/// params cof resolves (`cwd_path` itself stays as `expanduser()` left
+/// it).
 fn resolve_relative(base: &Path, path: &str) -> PathBuf {
     let candidate = Path::new(path);
     let joined = if candidate.is_absolute() {
@@ -1346,8 +1371,12 @@ fn resolve_relative(base: &Path, path: &str) -> PathBuf {
     } else {
         base.join(candidate)
     };
+    python_resolve(&joined)
+}
+
+fn normalize_lexically(path: &Path) -> PathBuf {
     let mut out = PathBuf::new();
-    for component in joined.components() {
+    for component in path.components() {
         match component {
             std::path::Component::ParentDir => {
                 out.pop();
@@ -1357,6 +1386,43 @@ fn resolve_relative(base: &Path, path: &str) -> PathBuf {
         }
     }
     out
+}
+
+/// `pathlib.Path.resolve()`'s own `strict=False` default: every symlink
+/// in the longest existing ancestor is followed (so a symlinked `/tmp`
+/// resolves to `/private/tmp` on macOS), and whatever doesn't exist yet
+/// (a `result_file`/`transcript` effect's own params usually name a
+/// path not yet written) is appended lexically -- `.`/`..` collapsed,
+/// never resolved against the filesystem, exactly as Python leaves a
+/// nonexistent tail.
+fn python_resolve(path: &Path) -> PathBuf {
+    let normalized = normalize_lexically(path);
+    if let Ok(resolved) = normalized.canonicalize() {
+        return resolved;
+    }
+    let mut existing = normalized.clone();
+    let mut tail: Vec<std::ffi::OsString> = Vec::new();
+    loop {
+        match existing.canonicalize() {
+            Ok(resolved) => {
+                let mut out = resolved;
+                for part in tail.iter().rev() {
+                    out.push(part);
+                }
+                return out;
+            }
+            Err(_) => {
+                let Some(name) = existing.file_name().map(|n| n.to_os_string()) else {
+                    return normalized;
+                };
+                tail.push(name);
+                match existing.parent() {
+                    Some(parent) => existing = parent.to_path_buf(),
+                    None => return normalized,
+                }
+            }
+        }
+    }
 }
 
 /// `plugins/agent.py::make_plugin`.

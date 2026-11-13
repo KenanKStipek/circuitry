@@ -799,7 +799,7 @@ fn universal_newlines(text: &str) -> String {
 /// owned-lane) helper of the same shape: that module belongs to a
 /// different vm-lanes.md row, so this crate carries its own copy rather
 /// than reaching across the lane boundary for it.
-fn describe_utf8_error(bytes: &[u8]) -> String {
+pub(crate) fn describe_utf8_error(bytes: &[u8]) -> String {
     let (start, consumed, reason) =
         find_utf8_error(bytes).expect("describe_utf8_error called on valid UTF-8");
     if consumed == 1 {

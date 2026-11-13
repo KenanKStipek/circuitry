@@ -448,9 +448,15 @@ impl<'a> LiveTracker<'a> {
         for (k, v) in fields {
             line.insert(k, v);
         }
+        // `agent_live.py::_write_transcript`'s own `json.dumps(...,
+        // ensure_ascii=False)` -- unlike `WriteMode::COMPACT`, never
+        // escaping a non-ASCII codepoint.
+        let transcript_mode = electricity_json::WriteMode {
+            ensure_ascii: false,
+            ..electricity_json::WriteMode::COMPACT
+        };
         let encoded =
-            electricity_json::dumps(&Value::Dict(line), electricity_json::WriteMode::COMPACT)
-                .unwrap_or_default();
+            electricity_json::dumps(&Value::Dict(line), transcript_mode).unwrap_or_default();
         if let Some(parent) = self.transcript_path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
