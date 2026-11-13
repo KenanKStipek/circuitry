@@ -7,7 +7,7 @@ from the same env vars the plugin uses in production — ``SURREAL_USER`` /
 
 Local server:
 
-    docker run --rm -p 8000:8000 surrealdb/surrealdb:latest \\
+    docker run --rm -p 8000:8000 surrealdb/surrealdb:v4.0.1 \\
         start --user root --pass root
 
 In CI this runs against a SurrealDB service container; see
@@ -23,6 +23,7 @@ from typing import Any
 import pytest
 
 from circuitry.plugins.surrealdb import DEFAULT_URL, SurrealDBPlugin
+from circuitry.surrealdb_sdk import run_query
 
 if os.getenv("CIRCUITRY_RUN_INTEGRATION") != "1":
     pytest.skip(
@@ -75,13 +76,17 @@ def scoped_users(plugin: SurrealDBPlugin) -> dict[str, str]:
         client.use(_NAMESPACE, _DATABASE)
         # Passwords are hex-only (uuid4().hex), so string interpolation into
         # SurrealQL here can't break out of the quoted literal.
-        client.query(
-            f"DEFINE USER editor_user ON DATABASE PASSWORD '{editor_password}' "
-            "ROLES EDITOR"
+        run_query(
+            client.query(
+                f"DEFINE USER editor_user ON DATABASE PASSWORD '{editor_password}' "
+                "ROLES EDITOR"
+            )
         )
-        client.query(
-            f"DEFINE USER viewer_user ON DATABASE PASSWORD '{viewer_password}' "
-            "ROLES VIEWER"
+        run_query(
+            client.query(
+                f"DEFINE USER viewer_user ON DATABASE PASSWORD '{viewer_password}' "
+                "ROLES VIEWER"
+            )
         )
     finally:
         client.close()

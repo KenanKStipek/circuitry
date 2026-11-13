@@ -115,6 +115,145 @@ def _plugin() -> SurrealDBPlugin:
     return SurrealDBPlugin(url=DEFAULT_URL, namespace="test_ns", database="test_db")
 
 
+class _FakeBuilder:
+    """Mimics SDK 3.x's builder: nothing runs until ``.execute()``."""
+
+    def __init__(self, run: Callable[[], Any]) -> None:
+        self._run = run
+        self.executed = False
+
+    def execute(self) -> Any:
+        self.executed = True
+        return self._run()
+
+
+class FakeSurrealBuilderSDK(FakeSurreal):
+    """SDK 3.x API shape: ``query`` / ``select`` / ``delete`` hand back a
+    builder; ``create`` / ``upsert`` (always called here with data) run
+    eagerly, same as SDK 2.x -- matches the real SDK's own split.
+    """
+
+    instances: ClassVar[list[FakeSurreal]] = []
+
+    def _deferred_op(self, name: str, *args: Any) -> _FakeBuilder:
+        self.calls.append((name, args))
+
+        def _run() -> Any:
+            if type(self).op_error is not None:
+                raise type(self).op_error
+            return type(self).op_result
+
+        return _FakeBuilder(_run)
+
+    def query(self, *args: Any) -> Any:
+        return self._deferred_op("query", *args)
+
+    def select(self, target: str) -> Any:
+        return self._deferred_op("select", target)
+
+    def delete(self, record: str) -> Any:
+        return self._deferred_op("delete", record)
+
+
+@pytest.fixture
+def fake_builder_sdk(monkeypatch: pytest.MonkeyPatch) -> type[FakeSurrealBuilderSDK]:
+    """Like ``fake_sdk``, but installs the SDK 3.x builder-shaped fake."""
+    FakeSurrealBuilderSDK.instances = []
+    FakeSurrealBuilderSDK.connect_error = None
+    FakeSurrealBuilderSDK.signin_error = None
+    FakeSurrealBuilderSDK.signin_accepts = None
+    FakeSurrealBuilderSDK.op_error = None
+    FakeSurrealBuilderSDK.op_result = [{"id": "person:1", "name": "ada"}]
+
+    module = types.ModuleType("surrealdb")
+    module.Surreal = FakeSurrealBuilderSDK  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "surrealdb", module)
+
+    monkeypatch.setenv("SURREAL_USER", "root")
+    monkeypatch.setenv("SURREAL_PASS", "root-secret-value")
+    monkeypatch.delenv("SURREAL_TOKEN", raising=False)
+    return FakeSurrealBuilderSDK
+
+
+# ---------------------------------------------------------------------------
+# SDK 3.x builder shape -- same modes, same errors, same auth failure
+# ---------------------------------------------------------------------------
+
+
+def test_builder_sdk_query_executes_and_returns_the_result(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    # `.execute()` on SDK 3.x's query builder returns one entry per
+    # statement; a single `SELECT` sends one statement.
+    fake_builder_sdk.op_result = [[{"name": "ada"}]]
+
+    result = _plugin().execute(
+        params={"mode": "query", "query": "SELECT * FROM person"}
+    )
+
+    db = fake_builder_sdk.instances[-1]
+    assert ("query", ("SELECT * FROM person",)) in db.calls
+    assert result.value == [{"name": "ada"}]
+
+
+def test_builder_sdk_select_create_upsert_delete_dispatch(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    plugin = _plugin()
+
+    selected = plugin.execute(params={"mode": "select", "target": "person"})
+    assert ("select", ("person",)) in fake_builder_sdk.instances[-1].calls
+    assert selected.value == [{"id": "person:1", "name": "ada"}]
+
+    created = plugin.execute(
+        params={"mode": "create", "table": "person", "data": {"name": "ada"}}
+    )
+    assert ("create", ("person", {"name": "ada"})) in fake_builder_sdk.instances[-1].calls
+    assert created.value == [{"id": "person:1", "name": "ada"}]
+
+    upserted = plugin.execute(
+        params={"mode": "upsert", "record": "person:1", "data": {"name": "grace"}}
+    )
+    assert (
+        "upsert",
+        ("person:1", {"name": "grace"}),
+    ) in fake_builder_sdk.instances[-1].calls
+    assert upserted.value == [{"id": "person:1", "name": "ada"}]
+
+    deleted = plugin.execute(params={"mode": "delete", "record": "person:1"})
+    assert ("delete", ("person:1",)) in fake_builder_sdk.instances[-1].calls
+    assert deleted.value == [{"id": "person:1", "name": "ada"}]
+
+
+def test_builder_sdk_surrealql_error_raised_from_execute(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    fake_builder_sdk.op_error = Exception("Parse error: Failed to parse query at line 1")
+
+    with pytest.raises(RuntimeError, match="surrealdb query failed: Parse error"):
+        _plugin().execute(params={"mode": "query", "query": "SELEC * FROM person"})
+
+
+def test_builder_sdk_auth_failure_maps_to_credentials_hint(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    fake_builder_sdk.signin_error = Exception("There was a problem with authentication")
+
+    with pytest.raises(RuntimeError, match="authentication rejected"):
+        _plugin().execute(params={"mode": "select", "target": "person"})
+
+
+def test_builder_sdk_client_is_closed_even_when_execute_fails(
+    fake_builder_sdk: type[FakeSurrealBuilderSDK],
+) -> None:
+    fake_builder_sdk.op_error = Exception("boom")
+
+    with pytest.raises(RuntimeError):
+        _plugin().execute(params={"mode": "select", "target": "person"})
+
+    assert fake_builder_sdk.instances[-1].closed is True
+
+
 # ---------------------------------------------------------------------------
 # Registration / config
 # ---------------------------------------------------------------------------

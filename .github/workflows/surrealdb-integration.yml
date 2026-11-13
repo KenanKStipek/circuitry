@@ -7,12 +7,17 @@ on:
     paths:
       - "src/circuitry/plugins/surrealdb.py"
       - "src/circuitry/runtime_plugins/surrealdb.py"
+      - "src/circuitry/surrealdb_sdk.py"
       - "tests/integration/**"
       - ".github/workflows/surrealdb-integration.yml"
 
 jobs:
   surrealdb-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        surrealdb-sdk: ["surrealdb>=2,<3", "surrealdb>=3,<4"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,7 +26,7 @@ jobs:
 
       - name: Start SurrealDB
         run: |
-          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:latest \
+          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:v4.0.1 \
             start --user root --pass root --bind 0.0.0.0:8000
           for _ in $(seq 1 30); do
             curl -sf http://localhost:8000/health && break
@@ -32,6 +37,7 @@ jobs:
         run: |
           pip install -e ".[tools,surrealdb]"
           pip install -r requirements-dev.txt
+          pip install "${{ matrix.surrealdb-sdk }}"
 
       - name: Run SurrealDB integration tests
         env:

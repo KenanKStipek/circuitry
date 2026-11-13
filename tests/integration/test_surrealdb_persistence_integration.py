@@ -3,14 +3,11 @@
 Requires a reachable SurrealDB instance. Point it at one with
 ``SURREAL_URL`` (default ``ws://localhost:8000/rpc``) plus
 ``SURREAL_USER`` / ``SURREAL_PASS`` (default SurrealDB dev credentials
-``root`` / ``root``), matching the CI service container this test is
-meant to run against.
-
-Not wired into any CI workflow yet — the runtime-plugin code and its
-unit tests (``tests/runtime_plugins/test_surrealdb.py``) are covered
-today via a fake SDK; this file is the live counterpart for whoever
-adds the ``surrealdb/surrealdb`` service container to
-``.github/workflows/quality.yml``.
+``root`` / ``root``), matching the container
+``.github/workflows/surrealdb-integration.yml`` runs this test against.
+The runtime-plugin code and its unit tests
+(``tests/runtime_plugins/test_surrealdb.py``) are also covered via a
+fake SDK; this file is the live counterpart.
 """
 
 from __future__ import annotations
@@ -23,6 +20,7 @@ import pytest
 
 from circuitry.cli.config import CircuitryConfig
 from circuitry.cli.runtime_shim import RunRequest, run
+from circuitry.surrealdb_sdk import run_query
 
 if os.getenv("CIRCUITRY_RUN_INTEGRATION") != "1":
     pytest.skip(
@@ -99,11 +97,15 @@ def test_surrealdb_run_persists_one_run_and_n_effect_rows(tmp_path: Path) -> Non
         client.signin({"username": user, "password": password})
         client.use(namespace, database)
 
-        run_rows = client.query(
-            "SELECT * FROM runs WHERE run_id = $run_id", {"run_id": persisted_run_id}
+        run_rows = run_query(
+            client.query(
+                "SELECT * FROM runs WHERE run_id = $run_id", {"run_id": persisted_run_id}
+            )
         )
-        effect_rows = client.query(
-            "SELECT * FROM effects WHERE run_id = $run_id", {"run_id": persisted_run_id}
+        effect_rows = run_query(
+            client.query(
+                "SELECT * FROM effects WHERE run_id = $run_id", {"run_id": persisted_run_id}
+            )
         )
     finally:
         client.close()

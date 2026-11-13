@@ -137,7 +137,7 @@ Failures map to actionable messages and mark the run `ok=False`:
 ## Running the integration tests
 
 ```bash
-docker run --rm -p 8000:8000 surrealdb/surrealdb:latest start --user root --pass root
+docker run --rm -p 8000:8000 surrealdb/surrealdb:v4.0.1 start --user root --pass root
 
 export CIRCUITRY_RUN_INTEGRATION=1
 export SURREAL_URL=ws://localhost:8000/rpc
@@ -145,13 +145,19 @@ export SURREAL_USER=root SURREAL_PASS=root
 pytest -m integration tests/integration/test_surrealdb_integration.py
 ```
 
-In CI the same suite runs against a SurrealDB container. GitHub `services:`
-entries cannot pass a command, and the SurrealDB image needs `start ...`, so
-the container is launched as a step:
+In CI the same suite runs against a pinned SurrealDB container, once per
+SurrealDB SDK major version the `surrealdb` extra supports
+(`.github/workflows/surrealdb-integration.yml`). GitHub `services:` entries
+cannot pass a command, and the SurrealDB image needs `start ...`, so the
+container is launched as a step:
 
 ```yaml
   surrealdb-integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        surrealdb-sdk: ["surrealdb>=2,<3", "surrealdb>=3,<4"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -160,7 +166,7 @@ the container is launched as a step:
 
       - name: Start SurrealDB
         run: |
-          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:latest \
+          docker run -d --name surrealdb -p 8000:8000 surrealdb/surrealdb:v4.0.1 \
             start --user root --pass root --bind 0.0.0.0:8000
           for _ in $(seq 1 30); do
             curl -sf http://localhost:8000/health && break
@@ -171,6 +177,7 @@ the container is launched as a step:
         run: |
           pip install -e ".[tools,surrealdb]"
           pip install -r requirements-dev.txt
+          pip install "${{ matrix.surrealdb-sdk }}"
 
       - name: Run SurrealDB integration tests
         env:
