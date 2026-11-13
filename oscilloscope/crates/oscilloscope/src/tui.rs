@@ -22136,6 +22136,64 @@ mod tape_frame_goldens {
         }
     }
 
+    /// A CJK label counts cells, not chars, for the NAME column's
+    /// own width (issue #752's own display-width rule) -- a char-
+    /// counting pad would widen or narrow this row's own NAME
+    /// column against the other row's (whose name is plain ASCII),
+    /// shifting ENGINE out from under the other row's own ENGINE.
+    #[test]
+    fn select_a_cjk_label_does_not_shift_the_engine_column() {
+        let runs = vec![
+            labelled_select_run("936ff268-5f52-479a-887f-fda1a47dae63", Some("注注注注")),
+            labelled_select_run("d2c8267e-2864-4e04-89d6-4f174bc64516", None),
+        ];
+        let rows = oscilloscope_core::select::build_rows(&runs);
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| {
+                draw_select(
+                    f,
+                    &SelectBody::Running(&rows),
+                    1,
+                    "2026-01-01T00:00:05Z",
+                    true,
+                    &ctx,
+                )
+            })
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        // Every row in the box (`All` included) starts with its own
+        // bullet `●`, and so does the header band above the box --
+        // this run's own two Run rows are the last two of the three
+        // bulleted rows inside the box, `All` always listed first.
+        let bulleted_ys: Vec<u16> = (1..buffer.area.height)
+            .filter(|&y| (0..buffer.area.width).any(|x| buffer[(x, y)].symbol() == "●"))
+            .collect();
+        assert_eq!(bulleted_ys.len(), 3, "{bulleted_ys:?}");
+        let run_row_ys = &bulleted_ys[1..3];
+        let engine_x: Vec<u16> = run_row_ys
+            .iter()
+            .map(|&y| {
+                (0..buffer.area.width.saturating_sub(2))
+                    .find(|&x| {
+                        buffer[(x, y)].symbol() == "c"
+                            && buffer[(x + 1, y)].symbol() == "o"
+                            && buffer[(x + 2, y)].symbol() == "f"
+                    })
+                    .unwrap_or_else(|| panic!("no 'cof' found on row {y}"))
+            })
+            .collect();
+        assert_eq!(engine_x[0], engine_x[1], "{engine_x:?}");
+    }
+
     #[test]
     fn select_empty_80x24_matches_the_frame() {
         let theme = Theme::for_name(ThemeName::CatppuccinMocha);
