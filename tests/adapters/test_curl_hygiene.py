@@ -95,7 +95,7 @@ def test_openai_canary_key_and_prompt_never_touch_argv(
         )
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
-    OpenAIAdapter().generate(model="gpt-4o-mini", prompt=canary_prompt)
+    OpenAIAdapter(streams=False).generate(model="gpt-4o-mini", prompt=canary_prompt)
 
     assert_q_first(captured["cmd"])
     assert_not_in_argv(captured["cmd"], secret, canary_prompt)
@@ -115,7 +115,7 @@ def test_openai_curl_failure_message_has_no_argv_and_no_secret(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
-        OpenAIAdapter().generate(model="gpt-4o-mini", prompt="x")
+        OpenAIAdapter(streams=False).generate(model="gpt-4o-mini", prompt="x")
     message = str(exc.value)
     assert secret not in message
     assert "cmd=" not in message
@@ -142,7 +142,7 @@ def test_anthropic_canary_key_and_prompt_never_touch_argv(
         )
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
-    AnthropicAdapter().generate(model="claude-sonnet-5", prompt=canary_prompt)
+    AnthropicAdapter(streams=False).generate(model="claude-sonnet-5", prompt=canary_prompt)
 
     assert_q_first(captured["cmd"])
     assert_not_in_argv(captured["cmd"], secret, canary_prompt)
@@ -163,7 +163,7 @@ def test_anthropic_curl_failure_message_has_no_argv_and_no_secret(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
-        AnthropicAdapter().generate(model="claude-sonnet-5", prompt="x")
+        AnthropicAdapter(streams=False).generate(model="claude-sonnet-5", prompt="x")
     message = str(exc.value)
     assert secret not in message
     assert "cmd=" not in message
@@ -187,7 +187,7 @@ def test_ollama_canary_prompt_never_touches_argv(
         )
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
-    OllamaAdapter().generate(model="phi3", prompt=canary_prompt)
+    OllamaAdapter(streams=False).generate(model="phi3", prompt=canary_prompt)
 
     assert_q_first(captured["cmd"])
     assert_not_in_argv(captured["cmd"], canary_prompt)
@@ -204,7 +204,7 @@ def test_ollama_curl_failure_message_has_no_argv(
 
     monkeypatch.setattr("subprocess.Popen", fake_run)
     with pytest.raises(RuntimeError) as exc:
-        OllamaAdapter().generate(model="phi3", prompt="x")
+        OllamaAdapter(streams=False).generate(model="phi3", prompt="x")
     assert "cmd=" not in str(exc.value)
 
 
@@ -242,7 +242,7 @@ def test_openai_end_to_end_against_local_server(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("subprocess.Popen", spying_run)
 
     with local_server(_OpenAIShapedHandler) as base_url:
-        adapter = OpenAIAdapter(base_url=base_url)
+        adapter = OpenAIAdapter(base_url=base_url, streams=False)
         result = adapter.generate(model="gpt-4o-mini", prompt=canary_prompt, timeout_seconds=10)
 
     assert result.text == "hi from local server"
@@ -281,7 +281,7 @@ def test_ollama_429_retry_after_reaches_adapter_call_error() -> None:
     at the `classify_curl_exit`/`extract_retry_after` level."""
     with local_server(_RetryAfter429Handler) as base_url:
         with pytest.raises(AdapterCallError) as exc:
-            OllamaAdapter(base_url=base_url).generate(model="phi3", prompt="x")
+            OllamaAdapter(base_url=base_url, streams=False).generate(model="phi3", prompt="x")
 
     assert exc.value.retry_info.retryable is True
     assert exc.value.retry_info.status == 429

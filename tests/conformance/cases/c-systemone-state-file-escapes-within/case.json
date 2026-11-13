@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "params.state_file resolves outside params.within -- refused before any request is made, no mock server needed.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "config": "config.json",
+  "cli_args": ["-e", "state_file=__CASE_DIR__/outside/secret.json", "-e", "within=__CASE_DIR__/data"]
+}

@@ -14,7 +14,15 @@ use std::path::PathBuf;
 /// than every flag becoming its own function parameter.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunRequest {
-    pub config_path: PathBuf,
+    /// `None` for `electricity run` with no `--config` (issue #728) --
+    /// this is the CLI flag's own raw value, not the config file
+    /// discovery actually resolved (`--events`' own `run_start.config`
+    /// mirrors `cli/runtime_shim.py::run`'s own `req.config_path.name
+    /// if req.config_path is not None else None`, which is likewise
+    /// the raw `--config` flag, never the resolved file). Always
+    /// `Some` for the legacy `electricity <config.json> <doc>` form
+    /// (its first positional).
+    pub config_path: Option<PathBuf>,
     pub orchestration_path: PathBuf,
     /// `-e key=value`, in command-line order ([`crate::parse_inputs`]'s
     /// own output).
@@ -31,7 +39,43 @@ pub struct RunRequest {
     /// only (DESIGN §1, §6.11: no name discovery, no
     /// `--profile-from-state`).
     pub profile_path: Option<PathBuf>,
-    /// `true` only for a CLI-driven run (`ToolCall::armed`'s own doc
+    /// `--allow-capabilities a,b` (issue #728), already split and
+    /// trimmed -- threaded into `runtime_config["_capability_allow"]`
+    /// (`electricity_config::allowlist::capability_allow`) exactly as
+    /// `cof run`'s own `RunRequest.allow_capabilities` is. Has no
+    /// observable effect on any document electricity runs today (that
+    /// module's own doc comment) -- ported for parity with `cof run`,
+    /// not because electricity's own capability-consent gate needs it
+    /// yet.
+    pub allow_capabilities: Vec<String>,
+    /// `--adapter <name>` (issue #728) -- this run's default adapter,
+    /// ranked above a loaded `--profile`/the orchestration's own
+    /// `adapter:`/the config's `default_adapter`, exactly as `cof
+    /// run`'s own `--adapter`/`RunRequest.adapter_override` ranks
+    /// (`cli` tier, `cli/effective_settings.py::
+    /// resolve_effective_settings`).
+    pub adapter_override: Option<String>,
+    /// `--label TEXT` (#752, `run` only) -- literal text, never
+    /// rendered, that wins over the document's own top-level `label:`
+    /// template. Cleaned the same way either way
+    /// (`crate::label::clean_label`) before it reaches `--events`'
+    /// `run_start` or `runtime.last_run.label`, exactly as `cof run`'s
+    /// own `RunRequest.label_override` does. `None` for the legacy
+    /// `electricity <config.json> <doc>` form, which has no `--label`
+    /// of its own.
+    pub label_override: Option<String>,
+    /// Warnings from resolving this run's own config, before
+    /// `RunRequest` even existed (issue #728's config-discovery
+    /// branch: a discovered-but-skipped project config's one line,
+    /// `electricity::config_error_for_run`'s own return value) --
+    /// seeded into `RunResult.warnings` ahead of anything this run
+    /// itself adds, exactly as `cli/runtime_shim.py::run`'s own
+    /// `warnings.extend(cfg.resolution_warnings())` runs ahead of
+    /// every other `warnings.extend` call there. Always empty for the
+    /// legacy explicit-`<config.json>` form, which never discovers
+    /// anything to warn about.
+    pub config_warnings: Vec<String>,
+    /// `true` for a CLI-driven run (`ToolCall::armed`'s own doc
     /// comment, `electricity_tools::ToolCall`) -- a run option on
     /// *this* struct, not a literal `run_orchestration` hard-codes,
     /// so an embedding caller that isn't
@@ -39,6 +83,37 @@ pub struct RunRequest {
     /// `main` always passes `true`: this crate has no embedding
     /// caller of its own yet (M1-A).
     pub armed: bool,
+    /// `--state <path>` (issue #727) -- the whole saved state this run
+    /// seeds its store from (every top-level key, not just `input`),
+    /// relinking a `last` alias the same way [`electricity_vm::
+    /// hydrate_resumed_state`] does for any loaded JSON object. `None`
+    /// seeds the ordinary way ([`state::seed_state`]'s own `-e`-only
+    /// seed).
+    pub state_path: Option<PathBuf>,
+    /// `--resume` (issue #727) -- with [`RunRequest::state_path`], a
+    /// named effect whose saved node already finished without error is
+    /// skipped and reused; every effect-type container's own partial-
+    /// continue rule (a loop's first unfinished pass, a conditional's
+    /// saved branch, a `use` with `runtime.state.record_children`)
+    /// follows from there. Ignored with no `state_path` (cof's own
+    /// `--resume last`/`--resume <run-id>` modes are out of scope for
+    /// issue #727 -- they need a persistence/stash lookup, and
+    /// `runtime.persistence` itself stays refused on electricity).
+    pub resume: bool,
+    /// `--resume` with no explicit `--out` of its own (issue #727,
+    /// DESIGN.md §6.8) -- the `--state` file itself, named by the CLI
+    /// layer so this crate never has to re-derive it from `resume`/
+    /// `state_path` alone. Ranked *below* a loaded `--profile`'s own
+    /// `out:` and *above* writing nothing at all (`cli/effective_
+    /// settings.py::resolve_effective_settings`'s own `cli > profile >
+    /// resume source > default` order) -- [`RunRequest::out_path`]
+    /// itself is the `cli` tier and always outranks this field.
+    pub resume_default_out: Option<PathBuf>,
+    /// `--force` (issue #727) -- with `resume`, continue even though
+    /// *orchestration_path*'s own content changed since the saved run
+    /// (`runtime.last_run.document_hash` mismatch) or it carries no
+    /// recorded hash at all.
+    pub force: bool,
 }
 
 /// `run_orchestration`'s own result -- success and failure both carry a

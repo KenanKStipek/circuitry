@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #672 acceptance case 3/4: a mapping input is cut into whole-entry groups, reduced",
+  "description": "runtime.complexity.splitting.max_input_tokens: 5. input.doc (6 keys) is cut into contiguous groups of keys in stored order; split.merge.template runs a reduce prompt over parts (the part replies, in part order), itself a prompt dispatch -- meta.decomposition records merge: reduce.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc={\"a\": \"aa\", \"b\": \"bb\", \"c\": \"cc\", \"d\": \"dd\", \"e\": \"ee\", \"f\": \"ff\"}"],
+  "expect": "success"
+}

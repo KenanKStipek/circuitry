@@ -1,0 +1,40 @@
+interface:
+  inputs:
+    issue: {type: string, default: "parse_duration fails on 1h30m with ValueError: invalid duration. 90m works."}
+    topics: {type: array, default: ["cats", "dogs", "birds"]}
+effects:
+  - name: kind
+    type: prompt
+    template: "Is this issue a bug, a feature or a question? One word. Issue: {{input.issue}}"
+  - name: tests
+    type: tool
+    provider: shell
+    params: {command: sleep, args: ["4"], allowed_commands: ["sleep"]}
+  - name: gate
+    type: if
+    if: {mode: cel, expr: 'state.prime.kind.value != ""'}
+    then:
+      - name: reply
+        type: prompt
+        template: "Reply as the maintainer (kind: {{prime.kind.value}}). Issue: {{input.issue}}"
+    else:
+      - name: reply
+        type: tool
+        provider: shell
+        params: {command: echo, args: ["no kind"]}
+  - name: drafts
+    type: loop
+    flow: tree
+    max_concurrency: 2
+    each: {in: input.topics, as: topic}
+    body:
+      - name: draft
+        type: prompt
+        template: "Write one sentence about {{topic}}."
+      - name: pause
+        type: tool
+        provider: shell
+        params: {command: sleep, args: ["2"], allowed_commands: ["sleep"]}
+  - name: summary
+    type: prompt
+    template: "Summarize the drafts in one line."

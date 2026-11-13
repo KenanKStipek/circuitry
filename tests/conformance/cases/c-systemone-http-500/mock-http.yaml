@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 500
+    reason: Internal Server Error
+    headers:
+      Content-Type: application/json
+    body: '{"error": "boom"}'

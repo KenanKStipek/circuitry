@@ -417,6 +417,11 @@ fn send_error_outcome(err: SendError) -> CurlOutcome {
             format!("transfer closed with {expected} bytes remaining to read (got {read})"),
         ),
         SendError::Other(text) => (2, text),
+        // Never actually reached: only `http.rs`'s own `save_to`
+        // dispatch ever builds a `BodySink`. Kept here only so this
+        // match stays exhaustive.
+        SendError::BodyOverCap { declared } => (2, format!("{declared:?}")),
+        SendError::Sink(text) => (2, text),
     };
     CurlOutcome {
         returncode: code,
@@ -457,6 +462,10 @@ fn body_error_outcome(err: SendError, partial_body: &[u8]) -> CurlOutcome {
         SendError::Timeout => (28, "Operation timed out".to_string()),
         SendError::Connect { kind, text } => (connect_kind_exit(kind), text),
         SendError::Other(text) => (2, text),
+        // Never actually reached (same reasoning as `send_error_outcome`
+        // above).
+        SendError::BodyOverCap { declared } => (2, format!("{declared:?}")),
+        SendError::Sink(text) => (2, text),
     };
     CurlOutcome {
         returncode: code,
@@ -470,9 +479,13 @@ fn body_error_outcome(err: SendError, partial_body: &[u8]) -> CurlOutcome {
 /// curl exit codes a failed request can retry on (`adapters/_retry.py::
 /// RETRYABLE_CURL_EXIT_CODES`) -- shared here so every adapter's own
 /// retry-info construction reads the same set this module's own exit
-/// mapping produces, rather than re-listing it.
+/// mapping produces, rather than re-listing it. Includes 18 (a
+/// premature EOF partway through the body, fewer bytes delivered than
+/// promised): this transport can reach it today on a non-streaming
+/// request too (`a_short_body_against_content_length_maps_to_exit_18`),
+/// and the Python engine's own set must stay exactly in step (#674).
 pub fn is_retryable_exit(returncode: i32) -> bool {
-    matches!(returncode, 6 | 7 | 28 | 35 | 52 | 56)
+    matches!(returncode, 6 | 7 | 18 | 28 | 35 | 52 | 56)
 }
 
 // ---------------------------------------------------------------------
@@ -500,12 +513,16 @@ pub(crate) fn host_header_value(host: &str, port: u16, scheme: &str) -> String {
 /// either carries a body and is a `POST`, or carries none and is a
 /// `GET`). *timeout_seconds* is curl's own `--max-time`, one total
 /// deadline; `0` means no limit.
-pub async fn run_curl(
+/// *url*/*headers*/*body* turned into the [`ConnectTarget`]/[`RawRequest`]
+/// pair [`run_curl`] and [`run_curl_streaming`] both send -- every
+/// header electricity itself adds (`Host`, `Accept`, a URL-userinfo
+/// `Authorization`, `Content-Length`, `User-Agent`), in that order,
+/// then *headers* verbatim.
+fn prepare_request(
     url: &str,
     headers: &[(String, String)],
     body: Option<&str>,
-    timeout_seconds: u32,
-) -> Result<CurlOutcome, TransportFailure> {
+) -> Result<(ConnectTarget, RawRequest), TransportFailure> {
     validate_request(url, headers)?;
     let parsed = parse_url(url)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
@@ -564,50 +581,143 @@ pub async fn run_curl(
         headers: wire_headers,
         body: body.map(|b| b.as_bytes().to_vec()),
     };
+    Ok((connect_target, raw_request))
+}
 
-    let client = build_client()?;
+fn total_timeout(timeout_seconds: u32) -> TimeoutModel {
     let duration = if timeout_seconds == 0 {
         Duration::from_secs(u32::MAX as u64)
     } else {
         Duration::from_secs(u64::from(timeout_seconds))
     };
-    let timeout = TimeoutModel::Total(duration);
+    TimeoutModel::Total(duration)
+}
+
+/// [`http_client::RawResponse`] turned into a [`CurlOutcome`] -- the
+/// one place both [`run_curl`] and [`run_curl_streaming`] turn a
+/// completed response into curl's own exit-code/stdout/stderr shape,
+/// so the two can't drift on what counts as success, a 4xx/5xx, or a
+/// body-phase failure.
+fn response_outcome(response: http_client::RawResponse) -> Result<CurlOutcome, TransportFailure> {
+    let retry_after = response
+        .headers
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
+        .map(|(_, value)| value.clone());
+    if let Some(err) = response.body_error {
+        let mut outcome = body_error_outcome(err, &response.partial_body);
+        outcome.retry_after = retry_after;
+        return Ok(outcome);
+    }
+    let stdout = decode_curl_text(&response.body)?;
+    if response.status >= 400 {
+        Ok(CurlOutcome {
+            returncode: 22,
+            stdout,
+            stderr: format!(
+                "curl: (22) The requested URL returned error: {}",
+                response.status
+            ),
+            status: Some(response.status),
+            retry_after,
+        })
+    } else {
+        Ok(CurlOutcome {
+            returncode: 0,
+            stdout,
+            stderr: String::new(),
+            status: None,
+            retry_after,
+        })
+    }
+}
+
+pub async fn run_curl(
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+    timeout_seconds: u32,
+) -> Result<CurlOutcome, TransportFailure> {
+    let (connect_target, raw_request) = prepare_request(url, headers, body)?;
+    let client = build_client()?;
+    let timeout = total_timeout(timeout_seconds);
 
     match http_client::send(&client, &connect_target, &raw_request, timeout).await {
         Err(err) => Ok(send_error_outcome(err)),
-        Ok(response) => {
-            let retry_after = response
-                .headers
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("retry-after"))
-                .map(|(_, value)| value.clone());
-            if let Some(err) = response.body_error {
-                let mut outcome = body_error_outcome(err, &response.partial_body);
-                outcome.retry_after = retry_after;
-                return Ok(outcome);
-            }
-            let stdout = decode_curl_text(&response.body)?;
-            if response.status >= 400 {
-                Ok(CurlOutcome {
-                    returncode: 22,
-                    stdout,
-                    stderr: format!(
-                        "curl: (22) The requested URL returned error: {}",
-                        response.status
-                    ),
-                    status: Some(response.status),
-                    retry_after,
-                })
-            } else {
-                Ok(CurlOutcome {
-                    returncode: 0,
-                    stdout,
-                    stderr: String::new(),
-                    status: None,
-                    retry_after,
-                })
-            }
+        Ok(response) => response_outcome(response),
+    }
+}
+
+/// Splits *buffer* (every byte received so far) on `\n`, calling
+/// *on_line* with each complete line (its trailing `\r`, if any,
+/// stripped) as soon as it is available, and leaving any trailing
+/// partial line in *buffer* for the next chunk -- `curl_support.
+/// run_curl_streaming`'s own ``on_line`` contract, ported: a line is
+/// never handed over until its own terminator has actually arrived.
+/// Decoded lossily (`String::from_utf8_lossy`): this feeds only a
+/// best-effort progress callback, never the authoritative result,
+/// which is always parsed from the complete, strictly-decoded body
+/// once the call finishes ([`response_outcome`]'s own [`decode_curl_text`]).
+fn drain_lines(buffer: &mut Vec<u8>, on_line: &mut dyn FnMut(&str)) {
+    while let Some(pos) = buffer.iter().position(|&b| b == b'\n') {
+        let mut line: Vec<u8> = buffer.drain(..=pos).collect();
+        line.pop(); // the '\n' itself
+        if line.last() == Some(&b'\r') {
+            line.pop();
         }
+        on_line(&String::from_utf8_lossy(&line));
+    }
+}
+
+/// Like [`run_curl`], but calls *on_line* with each line of the
+/// response body as it arrives, rather than only once the whole call
+/// is done -- `curl_support.run_curl_streaming`, ported onto
+/// [`http_client::send_streaming`] rather than a real `curl`
+/// subprocess (this crate never shells out at all, see this module's
+/// own doc comment): the same request-building, proxy/userinfo
+/// handling and exit-code mapping [`run_curl`] has, plus incremental
+/// line delivery. The returned [`CurlOutcome`] carries the complete
+/// body exactly as a non-streaming call would -- *on_line* only ever
+/// drives a caller's own progress callback, never the authoritative
+/// result.
+pub async fn run_curl_streaming(
+    url: &str,
+    headers: &[(String, String)],
+    body: Option<&str>,
+    timeout_seconds: u32,
+    on_line: &mut dyn FnMut(&str),
+) -> Result<CurlOutcome, TransportFailure> {
+    let (connect_target, raw_request) = prepare_request(url, headers, body)?;
+    let client = build_client()?;
+    let timeout = total_timeout(timeout_seconds);
+
+    let mut buffer: Vec<u8> = Vec::new();
+    let mut on_chunk = |chunk: &[u8]| {
+        buffer.extend_from_slice(chunk);
+        drain_lines(&mut buffer, on_line);
+    };
+    let result = http_client::send_streaming(
+        &client,
+        &connect_target,
+        &raw_request,
+        timeout,
+        &mut on_chunk,
+    )
+    .await;
+    // `curl_support._read_lines_promptly` iterates `stdout` with a plain
+    // `for raw_line in stdout:`, whose last item is a final line with no
+    // trailing newline when the stream didn't end in one -- delivered to
+    // `on_line` exactly like every other line, regardless of whether the
+    // call that produced it went on to succeed or fail. `drain_lines` only
+    // ever hands over a `\n`-terminated line, so whatever is left once the
+    // stream has actually ended (success or failure) is this call's own
+    // analogue of that last, unterminated item.
+    if !buffer.is_empty() {
+        on_line(&String::from_utf8_lossy(&buffer));
+    }
+    match result {
+        Err(err) => Ok(send_error_outcome(err)),
+        Ok(response) => response_outcome(response),
     }
 }
 
@@ -872,6 +982,9 @@ mod tests {
         // empty the way `http_client`'s own urllib-parity clearing (for
         // the `http` tool) would otherwise make it.
         assert_eq!(outcome.stdout, "12345");
+        // #674: retryable in both engines (`adapters/_retry.py::
+        // RETRYABLE_CURL_EXIT_CODES`).
+        assert!(is_retryable_exit(18));
     }
 
     #[tokio::test]
@@ -889,6 +1002,26 @@ mod tests {
         // `timeout_seconds` is whole seconds; 1 is the smallest that
         // still lets the test run fast while the server sleeps 2s.
         let outcome = run_curl(&url, &[], None, 1).await.unwrap();
+        assert_eq!(outcome.returncode, 28);
+        assert!(is_retryable_exit(28));
+    }
+
+    #[tokio::test]
+    async fn run_curl_streaming_times_out_like_run_curl() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = stream.read(&mut buf);
+            std::thread::sleep(Duration::from_secs(2));
+            let _ = stream.write_all(b"HTTP/1.1 200 OK\r\n\r\n");
+        });
+        let url = format!("http://{addr}/x");
+        let mut on_line = |_: &str| {};
+        let outcome = run_curl_streaming(&url, &[], None, 1, &mut on_line)
+            .await
+            .unwrap();
         assert_eq!(outcome.returncode, 28);
         assert!(is_retryable_exit(28));
     }
@@ -1180,6 +1313,34 @@ mod tests {
             request_text
                 .to_ascii_lowercase()
                 .contains("authorization: basic dxnlcjpwyxnz")
+        );
+    }
+
+    #[test]
+    fn drain_lines_leaves_an_unterminated_line_in_the_buffer() {
+        let mut buffer = b"complete\npartial".to_vec();
+        let mut seen = Vec::new();
+        drain_lines(&mut buffer, &mut |line| seen.push(line.to_string()));
+        assert_eq!(seen, vec!["complete".to_string()]);
+        assert_eq!(buffer, b"partial");
+    }
+
+    #[tokio::test]
+    async fn run_curl_streaming_delivers_a_final_line_with_no_trailing_newline() {
+        let addr = spawn_server(
+            "HTTP/1.1 200 OK\r\nContent-Length: 18\r\nConnection: close\r\n\r\nfirst\nunterminated",
+        );
+        let url = format!("http://{addr}/path");
+        let seen = std::cell::RefCell::new(Vec::new());
+        let mut on_line = |line: &str| seen.borrow_mut().push(line.to_string());
+        let outcome = run_curl_streaming(&url, &[], None, 5, &mut on_line)
+            .await
+            .unwrap();
+        assert_eq!(outcome.returncode, 0);
+        assert_eq!(outcome.stdout, "first\nunterminated");
+        assert_eq!(
+            *seen.borrow(),
+            vec!["first".to_string(), "unterminated".to_string()]
         );
     }
 }

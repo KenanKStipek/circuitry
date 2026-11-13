@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-11-08T20:48:49.413Z","ev":"run_start","run_id":"936ff268-5f52-479a-887f-fda1a47dae63","orchestration":"demo.yml","engine":"cof 0.1.0","pid":96939}
+{"v":1,"seq":1,"ts":"2026-11-08T20:48:49.418Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-08T20:48:49.418Z","ev":"start","id":1,"path":"prime.kind"}
+{"v":1,"seq":3,"ts":"2026-11-08T20:48:49.420Z","ev":"end","id":1,"path":"prime.kind","ok":true,"ms":1}
+{"v":1,"seq":4,"ts":"2026-11-08T20:48:49.420Z","ev":"start","id":2,"path":"prime.tests"}
+{"v":1,"seq":5,"ts":"2026-11-08T20:48:49.420Z","ev":"end","id":2,"path":"prime.tests","ok":false,"ms":0,"error":"shell: command 'sleep' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."}
+{"v":1,"seq":6,"ts":"2026-11-08T20:48:49.420Z","ev":"end","id":0,"path":"prime","ok":false,"ms":2,"error":"prime.tests: shell: command 'sleep' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."}
+{"v":1,"seq":7,"ts":"2026-11-08T20:48:49.420Z","ev":"run_end","ok":false,"error":"prime.tests: shell: command 'sleep' not in allowlist ['cat', 'date', 'echo', 'head', 'ls', 'pwd', 'tail', 'wc']. Add it via params['allowed_commands'] or pick a different command."}

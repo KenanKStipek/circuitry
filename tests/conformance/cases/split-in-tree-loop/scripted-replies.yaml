@@ -1,0 +1,8 @@
+prime.per.iter_0.big.parts.iter_0.map:
+  - text: "L0 summary"
+prime.per.iter_0.big.parts.iter_1.map:
+  - text: "L1 summary"
+prime.per.iter_1.big.parts.iter_0.map:
+  - text: "R0 summary"
+prime.per.iter_1.big.parts.iter_1.map:
+  - text: "R1 summary"

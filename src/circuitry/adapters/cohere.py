@@ -29,11 +29,14 @@ class CohereAdapter:
     default_model: str = "command-r-plus"
     api_key_env: str = "COHERE_API_KEY"
 
+    streams: bool = True
+
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
             api_key_env=self.api_key_env,
             default_model=self.default_model,
+            streams=self.streams,
             chat_completions_path="/compatibility/v1/chat/completions",
         )
 

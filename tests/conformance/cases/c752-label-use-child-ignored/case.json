@@ -1,0 +1,7 @@
+{
+  "spec_case": "#752",
+  "description": "Only the root document's `label:` counts: an inline `use` child carries its own `label:`, valid in its own right, but it is never read, rendered or surfaced when it runs as a child -- the run's label is still the parent's.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "compare_run_warnings": true
+}

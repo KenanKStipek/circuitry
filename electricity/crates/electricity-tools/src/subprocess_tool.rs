@@ -75,6 +75,7 @@ impl ToolPlugin for GenericSubprocessTool {
             &hint,
             call.armed,
             call.token,
+            call.on_live,
         )
         .await?;
         if parse_json {
@@ -107,7 +108,20 @@ pub fn plugin_binary_override(cfg: &Value) -> Option<String> {
 }
 
 /// `plugins/_subprocess.py::plugin_env_override` -- the mapping-shape
-/// validation and its exact error text.
+/// validation and its exact error text. Issue #725: a `{secret: ...}`
+/// value, well-formed or not, is left out entirely -- never a
+/// placeholder in its place, which would override any inherited
+/// variable of the same name with literal placeholder text for a
+/// preflight `check()`'s own build (`electricity`'s own preflight
+/// never calls `execute`, so it has no secret to resolve one into
+/// anyway). The real dispatch (`electricity_vm::exec::tool`) always
+/// resolves every `runtime.plugins.<name>.env` secret into a plain
+/// string *before* calling [`crate::build_plugin`], so this function
+/// never actually sees an unresolved one on that path at all; a
+/// malformed one is left out here exactly like a well-formed one,
+/// never raised -- the same backstop `electricity_config::
+/// runtime_env_secret_errors` already is for everywhere else that
+/// reads this same config.
 pub fn plugin_env_override(
     cfg: &Value,
     plugin_name: &str,
@@ -134,22 +148,8 @@ pub fn plugin_env_override(
     };
     let mut map = HashMap::with_capacity(dict.len());
     for (k, v) in dict {
-        // Issue #598: `cof run` resolves a `{secret: ...}` value when the
-        // tool dispatches; this build resolves none (the run is refused up
-        // front for a tool the document names; this catches the rest).
-        if matches!(v, Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())))
-        {
-            return Err(ToolError {
-                py_class: PyExc::RuntimeError,
-                message: format!(
-                    "electricity {} {}: a secret in runtime.plugins.{plugin_name}.env.{} is not \
-                     supported until a later milestone; use `cof run` instead",
-                    env!("CARGO_PKG_VERSION"),
-                    electricity_bytecode::PREVIEW_MARKER,
-                    k.py_str()
-                ),
-                cause: ErrorCause::None,
-            });
+        if electricity_bytecode::secrets::has_secret_key(v) {
+            continue;
         }
         map.insert(k.py_str(), v.py_str());
     }
@@ -190,7 +190,7 @@ pub(crate) fn merged_env(
 /// `plugins/_subprocess.py::_expand_and_validate` -- `~` expansion plus
 /// the absolute/executable validation; returns `(resolved_path, None)`
 /// when it's fine to run, else `(resolved_path, Some(reason))`.
-fn expand_and_validate(path_str: &str) -> (String, Option<&'static str>) {
+pub(crate) fn expand_and_validate(path_str: &str) -> (String, Option<&'static str>) {
     let expanded = expand_user(path_str);
     let path = Path::new(&expanded);
     if !path.is_absolute() {
@@ -362,6 +362,7 @@ pub(crate) async fn run_binary(
     not_found_hint: &str,
     armed: bool,
     token: &CancellationToken,
+    on_live: Option<&dyn Fn(process::LiveTail)>,
 ) -> Result<ToolResult, ToolError> {
     let validated_args = validate_args(args)?;
     let mut cmd = Vec::with_capacity(validated_args.len() + 1);
@@ -378,7 +379,7 @@ pub(crate) async fn run_binary(
         env_set: Vec::new(),
     };
 
-    let completed = match process::run_tracked(&cmd, &opts, token).await {
+    let completed = match process::run_tracked(&cmd, &opts, token, on_live, None, None).await {
         Ok(completed) => completed,
         Err(ProcError::NotFound(_)) => {
             return Err(ToolError {
@@ -449,6 +450,9 @@ pub(crate) async fn run_binary(
         exit_code: Some(completed.exit_code),
         ok: true,
         stdout_parsed: false,
+        tokens_sent: None,
+        tokens_received: None,
+        cost_usd: None,
     })
 }
 
@@ -596,19 +600,47 @@ mod tests {
     }
 
     #[test]
-    fn plugin_env_override_refuses_a_secret_with_the_preview_marker() {
+    fn plugin_env_override_leaves_a_well_formed_secret_out_entirely() {
+        // Issue #725: `plugins/_subprocess.py::plugin_env_override` never
+        // puts a secret-shaped value into the overrides map at all --
+        // not even a placeholder, which `merged_env`'s own `{**os.
+        // environ, **overrides}` would otherwise use to override any
+        // inherited variable of the same name for a preflight `check()`
+        // build. The real dispatch always resolves it into a plain
+        // string before this function ever sees the env map.
         let mut reference = DictType::new();
         reference.insert(Value::from("secret"), Value::from("api"));
         let mut env = DictType::new();
         env.insert(Value::from("TOKEN"), Value::Dict(reference));
+        env.insert(Value::from("PLAIN"), Value::from("kept"));
         let mut cfg = DictType::new();
         cfg.insert(Value::from("env"), Value::Dict(env));
-        let err = plugin_env_override(&Value::Dict(cfg), "awk").unwrap_err();
-        assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
-        assert!(
-            err.message
-                .contains("a secret in runtime.plugins.awk.env.TOKEN")
-        );
+        let overrides = plugin_env_override(&Value::Dict(cfg), "awk")
+            .unwrap()
+            .unwrap();
+        assert_eq!(overrides.get("PLAIN").unwrap(), "kept");
+        assert!(!overrides.contains_key("TOKEN"));
+    }
+
+    #[test]
+    fn plugin_env_override_leaves_a_malformed_secret_out_too_never_raising() {
+        // cof's own `plugin_env_override` has no well-formedness check
+        // at all -- `has_secret_key` alone decides whether an entry is
+        // left out, so a malformed one is silently skipped here exactly
+        // like a well-formed one; the malformed-reference error belongs
+        // to the document's own compile-time check and the dispatch-time
+        // one, never this preflight-only path.
+        let mut malformed = DictType::new();
+        malformed.insert(Value::from("secret"), Value::from("api"));
+        malformed.insert(Value::from("extra"), Value::from("x"));
+        let mut env = DictType::new();
+        env.insert(Value::from("TOKEN"), Value::Dict(malformed));
+        let mut cfg = DictType::new();
+        cfg.insert(Value::from("env"), Value::Dict(env));
+        let overrides = plugin_env_override(&Value::Dict(cfg), "awk")
+            .unwrap()
+            .unwrap();
+        assert!(!overrides.contains_key("TOKEN"));
     }
 
     #[test]
@@ -639,6 +671,9 @@ mod tests {
             exit_code: Some(exit_code),
             ok: true,
             stdout_parsed: false,
+            tokens_sent: None,
+            tokens_received: None,
+            cost_usd: None,
         }
     }
 
@@ -842,6 +877,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -884,6 +920,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -911,6 +948,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -931,6 +969,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -980,6 +1019,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap();
@@ -1011,6 +1051,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -1043,6 +1084,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap_err();
@@ -1071,6 +1113,7 @@ mod tests {
             "set runtime.plugins.awk.binary",
             false,
             &token,
+            None,
         )
         .await
         .unwrap();

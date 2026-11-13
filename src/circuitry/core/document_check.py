@@ -29,11 +29,13 @@ from pathlib import Path
 from typing import Any
 
 from .interface_inputs import _TYPE_NAMES, _matches_type
+from .templates import template_syntax_error
 
 __all__ = [
     "group_field_errors",
     "interface_default_type_errors",
     "interface_unknown_type_errors",
+    "label_syntax_error",
     "orchestration_schema",
     "schema_errors",
     "structural_errors",
@@ -336,6 +338,30 @@ def interface_default_type_errors(orch: Any) -> list[str]:
             f"but {value!r} is {type(value).__name__}{hint}."
         )
     return errors
+
+
+def label_syntax_error(orch: Any) -> str | None:
+    """Why the top-level ``label:`` template does not parse, or ``None``.
+
+    Checked only by ``cof check`` (``cli.runtime_shim.validate``) —
+    deliberately *not* folded into :func:`structural_errors`, which
+    ``cof run`` and a ``use`` effect loading its child also call: a
+    malformed ``label:`` is still worth flagging before a run starts, but a
+    run that reaches one anyway (an unchecked file, or a child document,
+    whose own ``label:`` is never read at all) must not abort over cosmetic
+    display text — it warns once and continues with no label instead (see
+    ``core.label``). A non-string ``label:`` stays a :func:`schema_errors`
+    violation like any other wrong-typed key, shared everywhere as usual.
+    """
+    if not isinstance(orch, Mapping):
+        return None
+    label = orch.get("label")
+    if not isinstance(label, str):
+        return None
+    reason = template_syntax_error(label)
+    if reason is None:
+        return None
+    return f"label: malformed Mustache template: {reason}"
 
 
 def structural_errors(orch: Any) -> list[str]:

@@ -23,6 +23,7 @@
                     "inputs": null,
                     "outputs": null,
                     "parent_trusted": true,
+                    "resume_mode": "Continue",
                     "retries": {
                       "backoff_ms": 1000,
                       "max_attempts": 1
@@ -48,7 +49,8 @@
                 {
                   "Name": "sub"
                 }
-              ]
+              ],
+              "resume_mode": "Continue"
             }
           ],
           "overlay": false
@@ -62,7 +64,8 @@
       {
         "Name": "prime"
       }
-    ]
+    ],
+    "resume_mode": "Continue"
   },
   "runtime_block": null
 }

@@ -4,10 +4,15 @@
 //! the generic OpenAI-compatible shape doesn't cover (the `seed`
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
-use crate::config::{cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url};
-use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
-use crate::openai_compat::{chat_messages, parse_chat_response, sampling_fields};
-use crate::transport::{TransportFailure, run_curl};
+use crate::config::{cfg_str_or, cfg_value_or, resolve_api_key_env, rstrip_base_url, stream_flag};
+use crate::curl_text::{
+    classify_curl_outcome_with_error_code, curl_error_code, curl_failure_message,
+};
+use crate::openai_compat::{
+    chat_messages, parse_chat_response, parse_sse_stream, sampling_fields, stream_error_retry_info,
+    stream_on_line_progress, usage_tokens,
+};
+use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
 use electricity_json::WriteMode;
 use electricity_value::{Dict, Value};
@@ -26,7 +31,7 @@ const DETERMINISTIC_SEED: i64 = 0;
 /// own request-building cases through this exact function (issue
 /// #515 -- `openai` had no request-building
 /// case at all).
-pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Dict {
+pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions, stream: bool) -> Dict {
     let mut payload = Dict::new();
     payload.insert(
         Value::Str("model".to_string()),
@@ -43,6 +48,15 @@ pub fn build_request(model: &str, prompt: &str, options: &GenerateOptions) -> Di
         payload
             .entry(Value::Str("seed".to_string()))
             .or_insert(Value::from(DETERMINISTIC_SEED));
+    }
+    if stream {
+        payload.insert(Value::Str("stream".to_string()), Value::Bool(true));
+        let mut stream_options = Dict::new();
+        stream_options.insert(Value::Str("include_usage".to_string()), Value::Bool(true));
+        payload.insert(
+            Value::Str("stream_options".to_string()),
+            Value::Dict(stream_options),
+        );
     }
     payload
 }
@@ -108,6 +122,41 @@ fn coerce_token_count(value: Option<&Value>) -> Result<Option<i64>, AdapterError
     }
 }
 
+/// Shared by the streamed and non-streamed failure paths -- on the
+/// streaming path, a non-22 failure leaves whatever OpenAI had
+/// already answered in *outcome*'s own stdout -- only a complete HTTP
+/// response (22) has a body worth reporting.
+fn curl_failure_error(
+    outcome: &crate::transport::CurlOutcome,
+    model: &str,
+    url: &str,
+    api_key: &str,
+    streaming: bool,
+) -> AdapterError {
+    let stdout_for_message: &str = if outcome.returncode == 22 || !streaming {
+        &outcome.stdout
+    } else {
+        ""
+    };
+    let message = curl_failure_message(
+        "openai",
+        Some(model),
+        url,
+        outcome.returncode,
+        stdout_for_message,
+        &outcome.stderr,
+        "",
+        &[api_key],
+    );
+    let mut retry = classify_curl_outcome_with_error_code(outcome, &[api_key]);
+    retry.error_code = curl_error_code(stdout_for_message, &[api_key]);
+    AdapterError {
+        message,
+        retry,
+        py_class: PyExc::AdapterCallError,
+    }
+}
+
 /// The pure half of [`Adapter::generate`] -- everything after
 /// [`run_curl`] returns, replayed by `generate_adapter_corpus.py`'s
 /// own scripted `(returncode, stdout, stderr)` triples
@@ -119,21 +168,7 @@ pub fn interpret_outcome(
     api_key: &str,
 ) -> Result<GenerateResult, AdapterError> {
     if outcome.returncode != 0 {
-        let message = curl_failure_message(
-            "openai",
-            Some(model),
-            url,
-            outcome.returncode,
-            &outcome.stdout,
-            &outcome.stderr,
-            "",
-            &[api_key],
-        );
-        return Err(AdapterError {
-            message,
-            retry: classify_curl_outcome_with_error_code(outcome, &[api_key]),
-            py_class: PyExc::AdapterCallError,
-        });
+        return Err(curl_failure_error(outcome, model, url, api_key, false));
     }
 
     let raw = electricity_json::loads(&outcome.stdout).map_err(|_| AdapterError {
@@ -172,6 +207,131 @@ pub fn interpret_outcome(
     })
 }
 
+/// The pure half of [`Adapter::generate`]'s streaming path.
+pub fn interpret_streaming_outcome(
+    outcome: &crate::transport::CurlOutcome,
+    model: &str,
+    url: &str,
+    api_key: &str,
+) -> Result<GenerateResult, AdapterError> {
+    if outcome.returncode != 0 {
+        return Err(curl_failure_error(outcome, model, url, api_key, true));
+    }
+
+    let parsed = parse_sse_stream(&outcome.stdout);
+    if !parsed.saw_data_line {
+        let raw = electricity_json::loads(&outcome.stdout).map_err(|_| AdapterError {
+            message: format!(
+                "OpenAI returned non-JSON response: {}",
+                truncate_chars(&outcome.stdout, 200)
+            ),
+            retry: RetryInfo::not_retryable(),
+            py_class: PyExc::RuntimeError,
+        })?;
+        let (text, finish_reason) = parse_chat_response(&raw)?;
+        let usage = raw
+            .as_dict()
+            .and_then(|d| d.get(&Value::Str("usage".to_string())));
+        let usage_dict = match usage {
+            None => None,
+            Some(Value::Dict(d)) => Some(d),
+            Some(other) => return Err(attribute_error(other, "get")),
+        };
+        let tokens_sent = coerce_token_count(
+            usage_dict.and_then(|d| d.get(&Value::Str("prompt_tokens".to_string()))),
+        )?;
+        let tokens_received = coerce_token_count(
+            usage_dict.and_then(|d| d.get(&Value::Str("completion_tokens".to_string()))),
+        )?;
+        return Ok(GenerateResult {
+            text,
+            raw,
+            tokens_sent,
+            tokens_received,
+            finish_reason,
+            warnings: Vec::new(),
+            cost_usd: None,
+        });
+    }
+
+    if let Some(error) = parsed.error {
+        let mut error_dict = Dict::new();
+        error_dict.insert(Value::Str("error".to_string()), error.clone());
+        let error_body = electricity_json::dumps(&Value::Dict(error_dict), WriteMode::COMPACT)
+            .unwrap_or_default();
+        let message = curl_failure_message(
+            "openai",
+            Some(model),
+            url,
+            22,
+            &error_body,
+            "",
+            "",
+            &[api_key],
+        );
+        let mut retry = stream_error_retry_info(&error);
+        retry.error_code = curl_error_code(&error_body, &[api_key]);
+        return Err(AdapterError {
+            message,
+            retry,
+            py_class: PyExc::AdapterCallError,
+        });
+    }
+
+    if !parsed.saw_done {
+        let message = curl_failure_message(
+            "openai",
+            Some(model),
+            url,
+            18,
+            "",
+            "curl: (18) transfer closed with outstanding read data remaining",
+            "",
+            &[api_key],
+        );
+        return Err(AdapterError {
+            message,
+            retry: RetryInfo::retryable(),
+            py_class: PyExc::AdapterCallError,
+        });
+    }
+
+    let (tokens_sent, tokens_received) = usage_tokens(parsed.usage.as_ref());
+    let mut message_dict = Dict::new();
+    message_dict.insert(
+        Value::Str("content".to_string()),
+        Value::Str(parsed.text.clone()),
+    );
+    let mut choice = Dict::new();
+    choice.insert(Value::Str("message".to_string()), Value::Dict(message_dict));
+    choice.insert(
+        Value::Str("finish_reason".to_string()),
+        parsed
+            .finish_reason
+            .clone()
+            .map(Value::Str)
+            .unwrap_or(Value::None),
+    );
+    let mut raw = Dict::new();
+    raw.insert(
+        Value::Str("choices".to_string()),
+        Value::List(vec![Value::Dict(choice)]),
+    );
+    raw.insert(
+        Value::Str("usage".to_string()),
+        parsed.usage.clone().unwrap_or(Value::None),
+    );
+    Ok(GenerateResult {
+        text: electricity_value::pycompat::py_strip(&parsed.text).to_string(),
+        raw: Value::Dict(raw),
+        tokens_sent,
+        tokens_received,
+        finish_reason: parsed.finish_reason,
+        warnings: Vec::new(),
+        cost_usd: None,
+    })
+}
+
 /// `adapters/openai.py::OpenAIAdapter`.
 pub struct OpenAiAdapter {
     /// `openai`, or an alias's own name (#656).
@@ -182,6 +342,7 @@ pub struct OpenAiAdapter {
     /// non-string value must fail `generate()`, not preflight).
     pub base_url: Value,
     pub default_model: String,
+    pub streams: bool,
     pub api_key_env: String,
 }
 
@@ -207,8 +368,8 @@ impl Adapter for OpenAiAdapter {
         if api_key.is_empty() {
             return Err(AdapterError {
                 message: format!(
-                    "OpenAI API key not found. Set {} in the environment \
-                     (recommended: ~/.config/circuitry/.env). Run `cof doctor` to verify.",
+                    "OpenAI API key not found. Set {} in the environment (recommended: \
+                     ~/.config/circuitry/.env). Run `cof doctor` to verify.",
                     self.api_key_env
                 ),
                 retry: RetryInfo::not_retryable(),
@@ -217,7 +378,7 @@ impl Adapter for OpenAiAdapter {
         }
 
         let url = format!("{}/chat/completions", rstrip_base_url(&self.base_url)?);
-        let payload = build_request(model, prompt, options);
+        let payload = build_request(model, prompt, options, self.streams);
         let body =
             // `json.dumps(payload)` raises Python's own `TypeError` for a
             // value it can't serialize, uncaught -- never `RuntimeError`.
@@ -230,10 +391,29 @@ impl Adapter for OpenAiAdapter {
             })?;
 
         let headers = request_headers(&api_key);
-        let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
+        if self.streams {
+            let on_progress = call.on_progress;
+            let mut on_line = |line: &str| stream_on_line_progress(line, on_progress);
+            let outcome = run_curl_streaming(
+                &url,
+                &headers,
+                Some(&body),
+                call.timeout_seconds,
+                &mut on_line,
+            )
             .await
             .map_err(transport_failure_error)?;
-        interpret_outcome(&outcome, model, &url, &api_key)
+            interpret_streaming_outcome(&outcome, model, &url, &api_key)
+        } else {
+            let outcome = run_curl(&url, &headers, Some(&body), call.timeout_seconds)
+                .await
+                .map_err(transport_failure_error)?;
+            interpret_outcome(&outcome, model, &url, &api_key)
+        }
+    }
+
+    fn streams(&self) -> bool {
+        self.streams
     }
 
     async fn check(&self) -> CheckResult {
@@ -262,6 +442,7 @@ pub fn build_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
         name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "https://api.openai.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
+        streams: stream_flag(cfg, name)?,
         api_key_env: resolve_api_key_env(cfg, "OPENAI_API_KEY", name)?,
     }))
 }
@@ -269,6 +450,7 @@ pub fn build_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
 #[cfg(test)]
 mod tests {
     use super::*;
+    use electricity_vm::adapter::GenerateProgress;
     use std::sync::{Mutex, OnceLock};
 
     /// `OPENAI_API_KEY` is process environment, shared by every test in
@@ -342,6 +524,7 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
@@ -370,11 +553,202 @@ mod tests {
             path: &path,
             timeout_seconds: 5,
             token: &token,
+            on_progress: None,
         };
         let err = adapter
             .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
             .await
             .unwrap_err();
         assert!(err.message.contains("OpenAI API key not found"));
+    }
+
+    // -- streaming (#676) --
+
+    fn spawn_sse_server(body: &'static str) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        addr
+    }
+
+    /// Like [`spawn_sse_server`], but the response's own `Content-Length`
+    /// claims more bytes than *body* actually has, so the connection
+    /// looks closed mid-body to the client -- a mid-stream disconnect
+    /// after whatever deltas *body* already carries.
+    fn spawn_truncated_sse_server(body: &'static str) -> std::net::SocketAddr {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len() + 64
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buf = [0u8; 65536];
+            let _ = stream.read(&mut buf);
+            let _ = stream.write_all(response.as_bytes());
+        });
+        addr
+    }
+
+    #[test]
+    fn build_request_adds_stream_fields_only_when_streaming() {
+        let payload = build_request("m", "hi", &GenerateOptions::default(), true);
+        assert_eq!(
+            payload.get(&Value::Str("stream".to_string())),
+            Some(&Value::Bool(true))
+        );
+        assert!(payload.contains_key(&Value::Str("stream_options".to_string())));
+        let payload = build_request("m", "hi", &GenerateOptions::default(), false);
+        assert!(!payload.contains_key(&Value::Str("stream".to_string())));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // single-threaded tokio test runtime; see env_guard's own doc comment
+    async fn generate_streams_and_matches_the_non_streamed_shape() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"there\"},\"finish_reason\":\"stop\"}],",
+            "\"usage\":{\"prompt_tokens\":3,\"completion_tokens\":2}}\n",
+            "data: [DONE]\n",
+        );
+        let addr = spawn_sse_server(body);
+        let adapter = OpenAiAdapter {
+            name: "openai".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "gpt-4o-mini".to_string(),
+            streams: true,
+            api_key_env: "OPENAI_API_KEY".to_string(),
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let seen = std::cell::RefCell::new(Vec::new());
+        let on_progress = |p: GenerateProgress| seen.borrow_mut().push(p.delta_chars);
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: Some(&on_progress),
+        };
+        let result = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert_eq!(result.text, "hi there");
+        assert_eq!(result.tokens_sent, Some(3));
+        assert_eq!(result.tokens_received, Some(2));
+        assert_eq!(result.finish_reason, Some("stop".to_string()));
+        assert_eq!(*seen.borrow(), vec![3, 5]);
+    }
+
+    #[test]
+    fn interpret_streaming_outcome_carries_the_provider_error_code_from_a_mid_stream_error() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+                "data: {\"error\":{\"type\":\"BadRequestError\",\"code\":400}}\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let err = interpret_streaming_outcome(&outcome, "m", "http://x", "sk-test").unwrap_err();
+        assert_eq!(err.retry.error_code, Some("BadRequestError".to_string()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_a_mid_stream_error_payload() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n",
+            "data: {\"error\":{\"type\":\"BadRequestError\",\"code\":400}}\n",
+        );
+        let addr = spawn_sse_server(body);
+        let adapter = OpenAiAdapter {
+            name: "openai".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "gpt-4o-mini".to_string(),
+            streams: true,
+            api_key_env: "OPENAI_API_KEY".to_string(),
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert_eq!(err.retry.error_code, Some("BadRequestError".to_string()));
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)]
+    async fn generate_streaming_fails_on_disconnect_after_two_deltas() {
+        let _guard = env_guard().lock().unwrap();
+        unsafe {
+            std::env::set_var("OPENAI_API_KEY", "sk-test");
+        }
+        let body = concat!(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"hi \"}}]}\n",
+            "data: {\"choices\":[{\"delta\":{\"content\":\"there\"}}]}\n",
+        );
+        let addr = spawn_truncated_sse_server(body);
+        let adapter = OpenAiAdapter {
+            name: "openai".to_string(),
+            base_url: Value::Str(format!("http://{addr}")),
+            default_model: "gpt-4o-mini".to_string(),
+            streams: true,
+            api_key_env: "OPENAI_API_KEY".to_string(),
+        };
+        let path = electricity_bytecode::EffectPath::root();
+        let token = electricity_value::CancellationToken::new();
+        let call = CallContext {
+            path: &path,
+            timeout_seconds: 5,
+            token: &token,
+            on_progress: None,
+        };
+        let err = adapter
+            .generate("gpt-4o-mini", "hi", &GenerateOptions::default(), &call)
+            .await
+            .unwrap_err();
+        unsafe {
+            std::env::remove_var("OPENAI_API_KEY");
+        }
+        assert!(err.retry.retryable);
     }
 }

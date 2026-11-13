@@ -1,0 +1,39 @@
+#! tui-mockup 1
+#! size: 80x24
+#! caps: attrs=bold,dim,italic,underline,inverse colors=truecolor glyphs=unicode source=docs
+#! title: osi — signal view
+#! state: normal
+#! theme: catppuccin-mocha
+#! note: data: osi-spike/demo/run2 (events.jsonl, state.json), frozen 3.62 s after run_start; cof 0.1.0 + scripted adapter, so prompts finish instantly and tokens arrive as bursts
+#! note: invented: nothing. ETA reads — because this document has no run history
+#! note: craft-ok CR6 a 14-effect demo run leaves rows free; a real run fills them
+#! note: usual = median of 3 real history runs (demo/hist)
+#! region r1 header 0,0,80,1
+#! region r2 chart 0,1,80,17 Signal · Sent Above · Received Below · Fixed Scale
+#! region r3 list 0,18,80,4 Now · 2 of 2 Slots Busy
+#! region r4 keybar 0,23,80,1
+#! focus r2
+{accent.primary bold on:statusbar.bg} osi  {/}{fg.default on:statusbar.bg}demo.yml {/}{fg.faint on:statusbar.bg}· {/}{fg.default on:statusbar.bg}ochre-desert {/}{fg.faint on:statusbar.bg}· {/}{accent.primary bold on:statusbar.bg}● Running {/}{fg.default on:statusbar.bg}3.6s             {/}{fg.on-accent on:accent.secondary}  SIGNAL  {/}{statusbar.fg on:statusbar.bg}  12:50:50 {/}
+{border.focus}╭─ {/}{fg.title bold}Signal · Sent Above · Received Below · Fixed Scale {/}{border.focus}─────────────────────────╮{/}
+{border.focus}│{/}{fg.faint}600 t                               {/}{accent.primary}▇     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│                                    {/}{accent.primary}█     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│{/}{fg.faint}300 t                               {/}{accent.primary}█     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│      {/}{accent.primary}▆                             █     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│      {/}{accent.primary}█                             █     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│    {/}{fg.faint}0 {/}{status.success}✓{/}{border.default}─────────────────────────────{/}{accent.secondary bold}◆{/}{border.default}─────{/}{accent.primary bold}┃{/}{fg.faint}╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌{/}{border.focus}│{/}
+{border.focus}│      {/}{status.success}▔                             █     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│ {/}{fg.faint}80 t                               {/}{status.success}▀     {/}{accent.primary bold}┃                                   {/}{border.focus}│{/}
+{border.focus}│      {/}{fg.faint}0s        1s        2s        3s   {/}{accent.primary bold}Now 12:50:50 · 3.6s  {/}{fg.faint}Ahead ▸         {/}{border.focus}│{/}
+{border.focus}│      {/}{status.success}✓ kind {/}{fg.muted}215 t · +6% · Bug.                                               {/}{border.focus}│{/}
+{border.focus}│      {/}{status.success}━ tests · sleep 3 · 3.0s ━━━━━                                          {/}{border.focus}│{/}
+{border.focus}│                                    {/}{accent.secondary bold}◆ gate → then · {/}{fg.default}reply {/}{fg.default bold}389 t {/}{status.warning bold}+47% {/}{fg.muted}· drafts {/}{border.focus}│{/}
+{border.focus}│                                    {/}{accent.primary bold}⟳ drafts {/}{fg.default bold}2 Running · 1 Queued  {/}{fg.faint}· iter_2   {/}{border.focus}│{/}
+{border.focus}│{/}{border.default}──────────────────────────────────────────────────────────────────────────────{/}{border.focus}│{/}
+{border.focus}│ {/}{fg.title bold}Totals {/}{fg.default}↑796 ↓69 · {/}{fg.default bold}865 t  +12% {/}{fg.muted}Usual  {/}{fg.default}6/14 {/}{fg.muted}Effects  ETA {/}{fg.default}12:50:52  {/}{fg.muted}Cost {/}{fg.faint}—      {/}{border.focus}│{/}
+{border.focus}╰──────────────────────────────────────────────────────────────────────────────╯{/}
+{border.default}╭─ {/}{fg.title bold}Now · 2 of 2 Slots Busy {/}{border.default}────────────────────────────────────────────────────╮{/}
+{border.default}│ {/}{accent.primary bold}● {/}{fg.default bold}drafts › iter_0 › pause   {/}{fg.muted}0.6s · sleep 1 · slot 1                          {/}{border.default}│{/}
+{border.default}│ {/}{accent.primary bold}● {/}{fg.default bold}drafts › iter_1 › pause   {/}{fg.muted}0.6s · sleep 1 · slot 2                          {/}{border.default}│{/}
+{border.default}╰──────────────────────────────────────────────────────────────────────────────╯{/}
+{status.success} ✓ {/}{fg.default}gate › reply finished {/}{fg.faint}· ↑348 ↓41 · 0.6s ago{/}
+{keyhint.key bold on:statusbar.bg} ←→ {/}{keyhint.desc on:statusbar.bg}Scrub  {/}{keyhint.key bold on:statusbar.bg}+/- {/}{keyhint.desc on:statusbar.bg}Zoom  {/}{keyhint.key bold on:statusbar.bg}n {/}{keyhint.desc on:statusbar.bg}Now  {/}{keyhint.key bold on:statusbar.bg}enter {/}{keyhint.desc on:statusbar.bg}Open  {/}{keyhint.key bold on:statusbar.bg}0-3 {/}{keyhint.desc on:statusbar.bg}Screens              {/}{keyhint.key bold on:statusbar.bg}? {/}{keyhint.desc on:statusbar.bg}Help  {/}{keyhint.key bold on:statusbar.bg}q {/}{keyhint.desc on:statusbar.bg}Quit {/}

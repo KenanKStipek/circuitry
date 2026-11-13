@@ -1,0 +1,12 @@
+name: c752-label-not-html-escaped
+label: "{{input.raw}}"
+interface:
+  inputs:
+    raw:
+      type: string
+      required: true
+effects:
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {x: 1}}

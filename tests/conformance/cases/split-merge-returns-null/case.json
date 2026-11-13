@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #682: a reduce-mode merge prompt whose own reply parses to null",
+  "description": "A result_path that resolves to nothing records the split trigger's own missing-result text ('the split child completed...'), distinct from the score trigger's wording ('the decomposition child completed...') -- decompose-execution-failed is that case's own companion.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "cli_args": ["-e", "doc=aaaaaaaaaa bbbbbbbbbb cccccccccc dddddddddd eeeeeeeeee ffffffffff gggggggggg hhhhhhhhhh"],
+  "expect": "success"
+}

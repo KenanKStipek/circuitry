@@ -1,0 +1,14 @@
+prime.kind:
+  - {text: "This is a bug report.", tokens_sent: 260, tokens_received: 6}
+prime.gate.reply:
+  - {text: "Thanks for reporting this. The 1h30m case is a parser bug; a fix is on the way and 90m keeps working meanwhile.", tokens_sent: 410, tokens_received: 88}
+prime.reply:
+  - {text: "Thanks for reporting this.", tokens_sent: 410, tokens_received: 88}
+prime.drafts.iter_0.draft:
+  - {text: "Cats claim every warm surface in the house as their own.", tokens_sent: 140, tokens_received: 21}
+prime.drafts.iter_1.draft:
+  - {text: "Dogs remember every person who ever gave them a treat.", tokens_sent: 140, tokens_received: 19}
+prime.drafts.iter_2.draft:
+  - {text: "Birds rebuild the same nest each spring without a plan.", tokens_sent: 140, tokens_received: 20}
+prime.summary:
+  - {text: "One bug triaged with a maintainer reply, and three sentences about animals.", tokens_sent: 480, tokens_received: 31}

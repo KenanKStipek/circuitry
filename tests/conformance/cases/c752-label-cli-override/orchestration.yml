@@ -1,0 +1,7 @@
+name: c752-label-cli-override
+label: "from the document"
+effects:
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {x: 1}}

@@ -1,0 +1,18 @@
+interface:
+  inputs:
+    url: {type: string, default: "https://example.com/changelog"}
+effects:
+  - name: fetch
+    type: tool
+    provider: shell
+    params: {command: sleep, args: ["1"], allowed_commands: ["sleep"]}
+  - name: extract
+    type: prompt
+    template: "Extract the three most important changes from {{input.url}}."
+  - name: wait
+    type: tool
+    provider: shell
+    params: {command: sleep, args: ["3"], allowed_commands: ["sleep"]}
+  - name: digest
+    type: prompt
+    template: "Write a two-sentence digest of the changes."

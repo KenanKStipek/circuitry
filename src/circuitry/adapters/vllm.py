@@ -32,12 +32,14 @@ class VllmAdapter:
     #: can name a variable to send as a Bearer token (a gateway in front of
     #: vLLM that does check one).
     api_key_env: str = ""
+    streams: bool = True
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
             api_key_env=self.api_key_env,
             default_model=self.default_model,
+    streams=self.streams,
         )
 
     def generate(

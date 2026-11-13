@@ -68,7 +68,7 @@ def test_openai_api_key_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
 
     adapter = build_adapter(
         adapter_name="openai",
-        runtime={"adapters": {"openai": {"api_key_env": "OPENAI_TEAM_KEY"}}},
+        runtime={"adapters": {"openai": {"api_key_env": "OPENAI_TEAM_KEY", "stream": False}}},
     )
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
     assert result.text == "ok"
@@ -105,7 +105,9 @@ def test_anthropic_api_key_env_override(monkeypatch: pytest.MonkeyPatch) -> None
 
     adapter = build_adapter(
         adapter_name="anthropic",
-        runtime={"adapters": {"anthropic": {"api_key_env": "CLAUDE_TEAM_KEY"}}},
+        runtime={
+            "adapters": {"anthropic": {"api_key_env": "CLAUDE_TEAM_KEY", "stream": False}}
+        },
     )
     adapter.generate(model="claude-sonnet-5", prompt="ping")
     assert captured["headers"]["x-api-key"] == "claude-team-value"
@@ -191,7 +193,9 @@ def test_azure_openai_api_key_env_override(monkeypatch: pytest.MonkeyPatch) -> N
 
     adapter = build_adapter(
         adapter_name="azure-openai",
-        runtime={"adapters": {"azure-openai": {"api_key_env": "AZURE_TEAM_KEY"}}},
+        runtime={
+            "adapters": {"azure-openai": {"api_key_env": "AZURE_TEAM_KEY", "stream": False}}
+        },
     )
     result = adapter.generate(model="dep", prompt="ping")
     assert result.text == "azure"
@@ -216,7 +220,11 @@ def test_cloudflare_workers_ai_api_key_env_override(
 
     adapter = build_adapter(
         adapter_name="cloudflare-workers-ai",
-        runtime={"adapters": {"cloudflare-workers-ai": {"api_key_env": "CF_TEAM_TOKEN"}}},
+        runtime={
+            "adapters": {
+                "cloudflare-workers-ai": {"api_key_env": "CF_TEAM_TOKEN", "stream": False}
+            }
+        },
     )
     result = adapter.generate(model="@cf/m", prompt="ping")
     assert result.text == "cf"
@@ -238,7 +246,11 @@ def test_databricks_api_key_env_override(monkeypatch: pytest.MonkeyPatch) -> Non
 
     adapter = build_adapter(
         adapter_name="databricks",
-        runtime={"adapters": {"databricks": {"api_key_env": "DATABRICKS_TEAM_TOKEN"}}},
+        runtime={
+            "adapters": {
+                "databricks": {"api_key_env": "DATABRICKS_TEAM_TOKEN", "stream": False}
+            }
+        },
     )
     result = adapter.generate(model="endpoint", prompt="p")
     assert result.text == "db"

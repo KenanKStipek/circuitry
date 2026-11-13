@@ -60,7 +60,7 @@ fn write_executable(dir: &Path, name: &str, script: &str) -> PathBuf {
 
 fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
     RunRequest {
-        config_path,
+        config_path: Some(config_path),
         orchestration_path,
         inputs: IndexMap::new(),
         out_path: None,
@@ -68,7 +68,15 @@ fn request(config_path: PathBuf, orchestration_path: PathBuf) -> RunRequest {
         live_state_path: None,
         events_path: None,
         profile_path: None,
+        allow_capabilities: Vec::new(),
+        config_warnings: Vec::new(),
+        adapter_override: None,
+        label_override: None,
         armed: true,
+        state_path: None,
+        resume: false,
+        resume_default_out: None,
+        force: false,
     }
 }
 

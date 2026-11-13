@@ -532,7 +532,7 @@
       "ok": true,
       "errors": [],
       "warnings": [
-        "top level: unknown key 1 (YAML read the unquoted key as a int) on the document is ignored. Known keys: adapter, description, effects, finally, flow, interface, model, plugins, prompts, runtime, steps, strategy, version."
+        "top level: unknown key 1 (YAML read the unquoted key as a int) on the document is ignored. Known keys: adapter, description, effects, finally, flow, interface, label, model, plugins, prompts, runtime, steps, strategy, version."
       ]
     },
     "run_error": null,
@@ -2461,7 +2461,8 @@
           "on_error": "fail",
           "description": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "split": null
         }
       ],
       "flow": "chain",
@@ -2923,7 +2924,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             },
             {
               "name": "second",
@@ -2945,7 +2947,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "while_def": null,
@@ -3031,7 +3034,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "while_def": null,
@@ -3116,7 +3120,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             },
             {
               "name": "second",
@@ -3138,7 +3143,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "while_def": null,
@@ -3224,7 +3230,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "while_def": null,
@@ -3315,7 +3322,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "else_effects": [],
@@ -3542,7 +3550,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "while_def": null,
@@ -3634,7 +3643,8 @@
                   "on_error": "fail",
                   "description": null,
                   "enabled": true,
-                  "group": null
+                  "group": null,
+                  "split": null
                 }
               ],
               "while_def": {
@@ -3910,7 +3920,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             },
             {
               "name": "second",
@@ -3932,7 +3943,8 @@
               "on_error": "fail",
               "description": null,
               "enabled": true,
-              "group": null
+              "group": null,
+              "split": null
             }
           ],
           "while_def": null,
@@ -4125,7 +4137,8 @@
           "on_error": "fail",
           "description": null,
           "enabled": true,
-          "group": null
+          "group": null,
+          "split": null
         }
       ],
       "flow": "chain",

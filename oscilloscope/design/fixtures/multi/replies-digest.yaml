@@ -1,0 +1,4 @@
+prime.extract:
+  - {text: "1. Faster parser. 2. New --events flag. 3. Fixed duration bug.", tokens_sent: 1840, tokens_received: 62}
+prime.digest:
+  - {text: "The release speeds up parsing and adds an events stream. A long-standing duration bug is fixed.", tokens_sent: 2210, tokens_received: 48}

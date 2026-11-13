@@ -547,6 +547,7 @@ class RunsScreen(ViewScreen):
             scoring_override=stashed.scoring,
             routing_override=stashed.routing,
             decompose_override=stashed.decompose,
+            split_override=stashed.split,
             trust_document=stashed.trust_document,
             remote_library_source=stashed.remote_library_source,
         )

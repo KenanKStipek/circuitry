@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #724",
+  "description": "Two systemone tool effects in a tree dynamic, both joining a runtime.concurrency_groups group capped at 1 -- both still run to completion and land in state identically; the group only affects dispatch timing.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml",
+  "sort_http_requests": true
+}

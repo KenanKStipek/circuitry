@@ -65,7 +65,7 @@ jobs:
             runner: ubuntu-latest
             zigbuild: true
           - target: aarch64-apple-darwin
-            runner: macos-14
+            runner: macos-latest
             zigbuild: false
     runs-on: ${{ matrix.runner }}
     steps:

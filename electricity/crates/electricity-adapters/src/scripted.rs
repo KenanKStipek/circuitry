@@ -224,6 +224,11 @@ fn py_truthy(value: &Value) -> bool {
 enum Reply {
     Text {
         text: String,
+        /// `chunks`, when the reply had any -- delivered as deltas
+        /// before the reply completes (#676), each one a call to
+        /// `on_progress`. `text`, when also given, equals their
+        /// concatenation already (checked at load time below).
+        chunks: Option<Vec<String>>,
         tokens_sent: Option<i64>,
         tokens_received: Option<i64>,
         finish_reason: Option<String>,
@@ -235,8 +240,15 @@ enum Reply {
     },
 }
 
-/// `adapters/scripted.py::_TEXT_REPLY_KEYS`.
-const TEXT_REPLY_KEYS: &[&str] = &["text", "tokens_sent", "tokens_received", "finish_reason"];
+/// `adapters/scripted.py::_TEXT_REPLY_KEYS`. `chunks` (#674/#676)
+/// delivers each chunk as a progress delta before the reply completes.
+const TEXT_REPLY_KEYS: &[&str] = &[
+    "text",
+    "chunks",
+    "tokens_sent",
+    "tokens_received",
+    "finish_reason",
+];
 /// `adapters/scripted.py::_ERROR_KEYS`.
 const ERROR_KEYS: &[&str] = &["kind", "status", "message", "code"];
 /// `adapters/scripted.py::_DEFAULT_STATUS`'s own key set.
@@ -478,9 +490,32 @@ fn parse_reply(
         return parse_error(dict, &prefix);
     }
     reject_unknown_keys(dict, TEXT_REPLY_KEYS, &prefix)?;
+    let chunks = parse_chunks(dict, &prefix)?;
+    // `entry.get("text")` in the Python original treats an absent key and
+    // an explicit `text: null` identically -- the same convention every
+    // other optional field in this reply already follows (`tokens_sent:
+    // null`, `finish_reason: null`, ...) -- so `None`/`Value::None` share
+    // one branch here too, distinct from a *present, wrong-type* value.
     let text = match dict.get(&key("text")) {
-        Some(Value::Str(s)) => s.clone(),
-        _ => {
+        None | Some(Value::None) => match &chunks {
+            Some(chunks) => chunks.join(""),
+            None => {
+                return Err(scripted_error(format!(
+                    "{prefix} needs a string 'text' (or 'chunks'), or an 'error'"
+                )));
+            }
+        },
+        Some(Value::Str(s)) => {
+            if let Some(chunks) = &chunks {
+                if *s != chunks.join("") {
+                    return Err(scripted_error(format!(
+                        "{prefix}: 'text' does not equal the concatenation of 'chunks'"
+                    )));
+                }
+            }
+            s.clone()
+        }
+        Some(_) => {
             return Err(scripted_error(format!(
                 "{prefix} needs a string 'text', or an 'error'"
             )));
@@ -499,10 +534,42 @@ fn parse_reply(
     };
     Ok(Reply::Text {
         text,
+        chunks,
         tokens_sent,
         tokens_received,
         finish_reason,
     })
+}
+
+/// `adapters/scripted.py::_parse_reply`'s own `chunks` handling: `None`
+/// when the key is absent, else a non-empty list of strings or a load
+/// error -- this engine never delivers them as deltas (it doesn't stream),
+/// only ever folds them into `text` (above).
+fn parse_chunks(dict: &Dict, prefix: &str) -> Result<Option<Vec<String>>, AdapterError> {
+    match dict.get(&key("chunks")) {
+        // `entry.get("chunks")` in the Python original treats an absent
+        // key and an explicit `chunks: null` identically (`if raw_chunks
+        // is not None:` in `adapters/scripted.py`) -- shared with every
+        // other optional field in this reply.
+        None | Some(Value::None) => Ok(None),
+        Some(Value::List(items)) if !items.is_empty() => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                match item {
+                    Value::Str(s) => out.push(s.clone()),
+                    _ => {
+                        return Err(scripted_error(format!(
+                            "{prefix}: 'chunks' must be a non-empty list of strings"
+                        )));
+                    }
+                }
+            }
+            Ok(Some(out))
+        }
+        Some(_) => Err(scripted_error(format!(
+            "{prefix}: 'chunks' must be a non-empty list of strings"
+        ))),
+    }
 }
 
 /// `isinstance(value, int) and not isinstance(value, bool)` plus
@@ -749,10 +816,27 @@ impl Adapter for ScriptedAdapter {
             }
             Reply::Text {
                 text,
+                chunks,
                 tokens_sent,
                 tokens_received,
                 finish_reason,
             } => {
+                // `adapters/scripted.py::ScriptedAdapter.generate`: each
+                // `chunks` entry is one delta, delivered in order before
+                // the reply completes (#676) -- never when there is no
+                // `on_progress` wired for this call at all.
+                if let Some(chunks) = chunks {
+                    if let Some(on_progress) = call.on_progress {
+                        for chunk in chunks {
+                            on_progress(electricity_vm::adapter::GenerateProgress {
+                                delta_chars: chunk.chars().count(),
+                                delta_count: 1,
+                                tokens_sent: None,
+                                tokens_received: None,
+                            });
+                        }
+                    }
+                }
                 let mut raw = Dict::new();
                 raw.insert(key("path"), Value::Str(path));
                 Ok(GenerateResult {
@@ -766,6 +850,10 @@ impl Adapter for ScriptedAdapter {
                 })
             }
         }
+    }
+
+    fn streams(&self) -> bool {
+        true
     }
 
     /// `adapters/scripted.py::ScriptedAdapter.check` -- loads the file
@@ -851,6 +939,7 @@ mod tests {
             path,
             timeout_seconds: 30,
             token,
+            on_progress: None,
         }
     }
 
@@ -1332,7 +1421,7 @@ mod tests {
         assert_eq!(
             err.message,
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of \
-             ['finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+             ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
         );
     }
 
@@ -1345,8 +1434,64 @@ mod tests {
         assert_eq!(
             err.message,
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of \
-             ['finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+             ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
         );
+    }
+
+    #[test]
+    fn a_null_chunks_is_treated_as_absent_like_python() {
+        let mut entry = Dict::new();
+        entry.insert(key("text"), Value::Str("x".to_string()));
+        entry.insert(key("chunks"), Value::None);
+        let reply = parse_reply(&Value::Dict(entry), "prime.x", 0, "<replies>").unwrap();
+        match reply {
+            Reply::Text { text, .. } => assert_eq!(text, "x"),
+            Reply::Error { .. } => panic!("expected a text reply"),
+        }
+    }
+
+    #[test]
+    fn chunks_folds_into_text_when_text_is_absent() {
+        let mut entry = Dict::new();
+        entry.insert(
+            key("chunks"),
+            Value::List(vec![
+                Value::Str("a".to_string()),
+                Value::Str("b".to_string()),
+            ]),
+        );
+        let reply = parse_reply(&Value::Dict(entry), "prime.x", 0, "<replies>").unwrap();
+        match reply {
+            Reply::Text { text, .. } => assert_eq!(text, "ab"),
+            Reply::Error { .. } => panic!("expected a text reply"),
+        }
+    }
+
+    #[test]
+    fn streams_reports_true() {
+        let adapter = ScriptedAdapter::new("scripted", Value::Str("x.yaml".to_string()));
+        assert!(adapter.streams());
+    }
+
+    #[tokio::test]
+    async fn generate_delivers_each_chunk_as_a_progress_delta() {
+        let yaml = "prime.x:\n  - chunks: [\"a\", \"bc\"]\n";
+        let (_dir, file) = write_replies(yaml, ".yaml");
+        let adapter =
+            ScriptedAdapter::new("scripted", Value::Str(file.to_string_lossy().into_owned()));
+        let token = CancellationToken::new();
+        let path = EffectPath::root().push_name("x");
+        let seen = std::cell::RefCell::new(Vec::new());
+        let on_progress =
+            |p: electricity_vm::adapter::GenerateProgress| seen.borrow_mut().push(p.delta_chars);
+        let mut call = call_ctx(&path, &token);
+        call.on_progress = Some(&on_progress);
+        let result = adapter
+            .generate("m", "p", &GenerateOptions::default(), &call)
+            .await
+            .unwrap();
+        assert_eq!(result.text, "abc");
+        assert_eq!(*seen.borrow(), vec![1, 2]);
     }
 
     #[test]

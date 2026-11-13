@@ -900,9 +900,11 @@ placement and absence rules; this section is only the adapter-level classificati
 `AdapterCallError(RuntimeError)` (`:137-151`) carries a `retry_info: RetryInfo` set at raise
 time by adapters that can classify their own failure. For the reference implementation's
 curl-based adapters this comes from `classify_curl_exit(returncode, stderr)` (`:92-109`):
-`RETRYABLE_CURL_EXIT_CODES = {6, 7, 28, 35, 52, 56}` (DNS failure, connect refused, --max-time
-elapsed, SSL connect error, server stopped mid-transfer, network failed mid-transfer) are
-retryable regardless of what the request was; curl's own `--fail-with-body` collapses every
+`RETRYABLE_CURL_EXIT_CODES = {6, 7, 18, 28, 35, 52, 56}` (DNS failure, connect refused, --max-time
+elapsed, SSL connect error, server stopped mid-transfer, network failed mid-transfer, a
+premature EOF partway through the body with fewer bytes delivered than promised -- the shape a
+streamed reply's own mid-stream disconnect takes, #674) are retryable regardless of what the
+request was; curl's own `--fail-with-body` collapses every
 HTTP error onto exit 22, whose *actual* status is parsed back out of curl's stderr text
 (`returned error:\s*(\d{3})`, `_CURL_STATUS_RE`) since `--fail-with-body` never surfaces it on
 `proc.returncode`. electricity, using a native HTTP client, reads the real status code directly
@@ -931,9 +933,9 @@ through curl.
 | anything else | 2 | the error's own text |
 
 The retryable set this table's own exits feed into `is_retryable_exit` is exactly
-`RETRYABLE_CURL_EXIT_CODES` above, `{6, 7, 28, 35, 52, 56}` (`transport.rs:474`) — 60
-(certificate), 18 (incomplete read) and 2 (anything else) are not retryable, and are not in
-#448's own decision 2 list either (that decision names only 22/6/7/28/35/52/56). The "connect
+`RETRYABLE_CURL_EXIT_CODES` above, `{6, 7, 18, 28, 35, 52, 56}` (`transport.rs:474`) — 60
+(certificate) and 2 (anything else) are not retryable; 18 is retryable in both engines as of
+#674, extending #448's own decision 2 list (22/6/7/28/35/52/56) by one. The "connect
  error's own text" rows are electricity's own wording, never curl's: a native HTTP client has no
 curl stderr to reproduce for a connect failure, so a conformance case matches that text by
 pattern (`third_party_text`, DESIGN.md §13), never byte-for-byte against a real curl's own
@@ -1437,8 +1439,8 @@ dict every subsystem above reads from directly.
 
 Environment-variable overlays that win over all of the above when set (`CONFIG_ENV_VARS`,
 `config.py:72-81`): `CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, `CIRCUITRY_ADAPTER_URL`,
-`CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_SYSTEMONE_URL` (`cof` only: electricity does not run the
-`systemone` tool), `CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`,
+`CIRCUITRY_COMFYUI_URL`, `CIRCUITRY_SYSTEMONE_URL` (electricity runs `systemone` too, issue #724;
+the overlay applies identically on both engines), `CIRCUITRY_ENABLED_ADAPTERS`, `CIRCUITRY_ENABLED_PLUGINS`,
 `CIRCUITRY_ENABLED_TOOLS`, `CIRCUITRY_ENVIRONMENT` — plus every per-plugin env var documented in
 §2–§4 (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `SURREAL_*`, `CIRCUITRY_<NAME>_STORE_RAW`,
 `CIRCUITRY_JSONL_PATH`, `DATABASE_URL`, `CIRCUITRY_SQLITE_PATH`, ...), which take precedence over

@@ -1,0 +1,1 @@
+{"default_adapter": "ollama", "default_model": "demo", "runtime": {"adapters": {"ollama": {"base_url": "http://127.0.0.1:62236"}}}}

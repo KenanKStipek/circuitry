@@ -417,6 +417,14 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "params": prompt.model_params.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
                 "timeout_ms": project_timeout_ms(&prompt.timeout_ms),
                 "deterministic": prompt.deterministic,
+                // The compiler only ever retains `budget_tokens` out of a
+                // prompt's `split:` block (issue #672: electricity refuses
+                // the feature up front and never needs the rest), so this
+                // can't reconstruct Circuitry's full `split` dict. None of
+                // this corpus's own cases set `split:`, so both sides are
+                // `null` here; a case that did would need `budget_tokens`
+                // compared on its own, not through this generic projection.
+                "split": Json::Null,
                 "inputs": prompt.inputs.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
                 "assets": if prompt.assets.is_empty() { Json::Null } else { Json::Array(prompt.assets.iter().map(|a| json!({"kind": a.kind, "ref": a.reference})).collect()) },
                 "retries": project_prompt_retries(prompt.retries),
@@ -506,6 +514,7 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                     on_error: OnError::Fail,
                     labels: None,
                     enabled: true,
+                    resume_mode: electricity_bytecode::ResumeMode::Continue,
                 },
                 &reflector.inner,
             ),

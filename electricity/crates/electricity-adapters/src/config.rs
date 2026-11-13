@@ -296,6 +296,25 @@ pub fn rstrip_base_url(value: &Value) -> Result<String, AdapterError> {
     }
 }
 
+/// `adapters/factory.py::_stream_flag` -- `runtime.adapters.<name>.stream`,
+/// defaulting to `true`. Only `ollama`, `anthropic`, `openai` and the
+/// OpenAI-compatible family read this; every other adapter never
+/// streams and ignores it.
+pub fn stream_flag(cfg: &Value, adapter_name: &str) -> Result<bool, AdapterError> {
+    match cfg_get(cfg, "stream") {
+        None => Ok(true),
+        Some(Value::Bool(b)) => Ok(*b),
+        Some(other) => Err(AdapterError {
+            message: format!(
+                "runtime.adapters.{adapter_name}.stream must be a boolean, got {}",
+                other.py_repr()
+            ),
+            retry: RetryInfo::not_retryable(),
+            py_class: PyExc::ValueError,
+        }),
+    }
+}
+
 /// `int(cfg.get(key) or default)` -- the eager `int()` coercion
 /// `adapters/factory.py`'s own builders apply to a handful of numeric
 /// config fields (`cyberdiner`'s `poll_interval_ms`/`timeout_seconds`/
@@ -414,6 +433,25 @@ mod tests {
         let err = cfg_int_or(&cfg, "timeout_seconds", 30).unwrap_err();
         assert_eq!(err.message, "invalid literal for int() with base 10: 'x'");
         assert_eq!(err.py_class, PyExc::ValueError);
+    }
+
+    #[test]
+    fn stream_flag_defaults_true_and_keeps_an_explicit_boolean() {
+        assert!(stream_flag(&Value::None, "ollama").unwrap());
+        let cfg = dict(&[("stream", Value::Bool(false))]);
+        assert!(!stream_flag(&cfg, "ollama").unwrap());
+    }
+
+    #[test]
+    fn stream_flag_rejects_a_non_boolean() {
+        let cfg = dict(&[("stream", Value::Str("yes".to_string()))]);
+        let err = stream_flag(&cfg, "ollama").unwrap_err();
+        assert_eq!(
+            err.message,
+            "runtime.adapters.ollama.stream must be a boolean, got 'yes'"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
+        assert!(!err.retry.retryable);
     }
 
     #[test]

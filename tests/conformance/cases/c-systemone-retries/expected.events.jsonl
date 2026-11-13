@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-11-12T04:56:41.355Z","ev":"run_start","run_id":"2cbc35c6-846f-4111-b169-675106db9e2f","orchestration":"orchestration.yml","config":"materialized-config.json","engine":"cof 0.1.0","pid":95687}
+{"v":1,"seq":1,"ts":"2026-11-12T04:56:41.357Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-12T04:56:41.357Z","ev":"start","id":1,"path":"prime.decide"}
+{"v":1,"seq":3,"ts":"2026-11-12T04:56:41.360Z","ev":"end","id":1,"path":"prime.decide","ok":true,"ms":3}
+{"v":1,"seq":4,"ts":"2026-11-12T04:56:41.360Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3}
+{"v":1,"seq":5,"ts":"2026-11-12T04:56:41.360Z","ev":"run_end","ok":true}

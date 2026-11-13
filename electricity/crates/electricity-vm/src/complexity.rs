@@ -361,6 +361,11 @@ mod tests {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
+            split_enabled: None,
+            split_max_parts: None,
+            split_separator: None,
+            split_merge_template: None,
         }
     }
 
@@ -471,6 +476,7 @@ mod tests {
             },
             routing,
             decomposition: electricity_config::DecompositionSettings::default(),
+            splitting: electricity_config::SplittingSettings::default(),
         }
     }
 
@@ -534,6 +540,7 @@ mod tests {
             on_error: electricity_bytecode::OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 

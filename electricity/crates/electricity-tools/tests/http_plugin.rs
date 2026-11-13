@@ -29,6 +29,14 @@ fn call(token: &CancellationToken) -> ToolCall<'_> {
         config: &NONE,
         token,
         armed: false,
+        secret_headers: &[],
+        scrub: None,
+        on_live: None,
+        on_agent_live: None,
+        agent_attempt: 1,
+        agent_earlier_attempts: None,
+        limited: false,
+        confine_to: None,
     }
 }
 
@@ -314,6 +322,64 @@ async fn redirects_strip_auth_never_follows_to_http() {
 }
 
 #[tokio::test]
+async fn a_secret_header_defaults_redirects_to_strip_auth_not_follow() {
+    // Issue #725: `ToolCall::secret_headers` makes the default `strip_auth`
+    // (never `follow`) when `params.redirects` is absent -- proven here by
+    // `strip_auth`'s own `https`-only rule refusing a plain `http` redirect
+    // this same document would otherwise follow under the old `follow`
+    // default. The cross-origin header-drop itself (`strip_auth` already
+    // ported, issue #598) needs a `https` target to exercise at all, which
+    // this crate's own conformance suite -- not a raw-wire unit test --
+    // covers.
+    let redirect_body =
+        b"HTTP/1.1 301 Moved Permanently\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+    let entry_addr = respond_once(redirect_body);
+
+    let token = CancellationToken::new();
+    let secret_headers = vec!["x-api-key".to_string()];
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{entry_addr}/"))),
+            (
+                "headers",
+                Value::Dict({
+                    let mut headers = Dict::new();
+                    headers.insert(
+                        Value::Str("X-Api-Key".to_string()),
+                        Value::Str("Bearer sekret".to_string()),
+                    );
+                    headers
+                }),
+            ),
+        ]),
+        &ToolCall {
+            timeout_seconds: 5,
+            config: &NONE,
+            token: &token,
+            armed: false,
+            secret_headers: &secret_headers,
+            scrub: None,
+            on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
+            limited: false,
+            confine_to: None,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(!result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some(
+            "HTTP 301: Moved Permanently: redirect not followed (redirects: strip_auth follows https only)"
+        )
+    );
+}
+
+#[tokio::test]
 async fn an_unknown_redirects_value_is_a_value_error() {
     let token = CancellationToken::new();
     let err = ToolPlugin::execute(
@@ -434,6 +500,53 @@ async fn a_non_utf8_body_decodes_with_replacement_characters() {
 }
 
 #[tokio::test]
+async fn a_secret_straddling_the_error_excerpts_own_cut_leaves_no_fragment_on_either_side() {
+    // Issue #725: the scrub callback runs *before* `http_error_excerpt`
+    // cuts the body to its own 500-character cap, so no part of a
+    // secret -- not even a fragment that would otherwise land on
+    // either side of the cut -- survives into `stderr`.
+    const SECRET: &str = "circuitry-test-fragment-secret-725";
+    let body = format!("{}{SECRET}{}", "a".repeat(490), "b".repeat(200));
+    assert!(body.find(SECRET).unwrap() < 500);
+    assert!(body.find(SECRET).unwrap() + SECRET.len() > 500);
+    let response = format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let addr = respond_once(Box::leak(response.into_bytes().into_boxed_slice()));
+    let token = CancellationToken::new();
+    let scrub = |s: &str| s.replace(SECRET, "[secret:api]");
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/")))]),
+        &ToolCall {
+            timeout_seconds: 5,
+            config: &NONE,
+            token: &token,
+            armed: false,
+            secret_headers: &[],
+            scrub: Some(&scrub),
+            on_live: None,
+            on_agent_live: None,
+            agent_attempt: 1,
+            agent_earlier_attempts: None,
+            limited: false,
+            confine_to: None,
+        },
+    )
+    .await
+    .unwrap();
+    let stderr = result.stderr.unwrap();
+    assert!(!stderr.contains(SECRET), "{stderr}");
+    // No four-character fragment from either side of the secret
+    // survives either -- a weaker scrub that only matched the whole
+    // value, applied after the cut split it, could still leak one.
+    assert!(!stderr.contains(&SECRET[..4]), "{stderr}");
+    assert!(!stderr.contains(&SECRET[SECRET.len() - 4..]), "{stderr}");
+    assert!(stderr.contains("[secret:"), "{stderr}");
+}
+
+#[tokio::test]
 async fn a_connection_refused_raises_the_wrapped_runtime_error() {
     let addr = closed_port();
     let token = CancellationToken::new();
@@ -452,32 +565,484 @@ async fn a_connection_refused_raises_the_wrapped_runtime_error() {
     assert_eq!(err.cause, electricity_tools::ErrorCause::NoReply);
 }
 
+/// A `save_to_temp_dir`'s own directory, removed on `Drop` -- unlike a
+/// bare `PathBuf`, nothing this file's own tests do with the returned
+/// value leaves it behind afterward (issue #661's own fixed-cap
+/// reasoning, applied to a test's own scratch directory rather than a
+/// fake process).
+struct TempDirGuard(std::path::PathBuf);
+
+impl std::ops::Deref for TempDirGuard {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for TempDirGuard {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDirGuard {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn save_to_temp_dir(name: &str) -> TempDirGuard {
+    let dir = std::env::temp_dir().join(format!(
+        "electricity-http-save-to-test-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    TempDirGuard(dir.canonicalize().unwrap())
+}
+
 #[tokio::test]
-async fn save_to_fails_with_the_preview_marker_before_any_request() {
-    // Issue #602: `cof run` saves the body to a file; electricity does not.
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
+async fn save_to_writes_the_body_and_reports_path_bytes_and_sha256() {
+    let body = b"hello save_to";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("basic");
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("out/a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+
+    let expected_path = within.join("out").join("a.bin");
+    assert_eq!(
+        dict_get(&result.value, "path"),
+        Some(&Value::Str(expected_path.display().to_string()))
+    );
+    assert_eq!(
+        dict_get(&result.value, "bytes"),
+        Some(&Value::from(body.len() as i64))
+    );
+    let expected_sha256 = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(body);
+        format!("{:x}", hasher.finalize())
+    };
+    assert_eq!(
+        dict_get(&result.value, "sha256"),
+        Some(&Value::Str(expected_sha256))
+    );
+    assert_eq!(
+        dict_get(&result.value, "content_type"),
+        Some(&Value::Str("text/plain".to_string()))
+    );
+    assert_eq!(
+        dict_get(&result.value, "status"),
+        Some(&Value::from(200i64))
+    );
+    assert_eq!(dict_get(&result.raw, "body"), None);
+    assert_eq!(std::fs::read(&expected_path).unwrap(), body);
+}
+
+#[tokio::test]
+async fn save_to_streams_a_multi_chunk_body_without_buffering_it_whole() {
+    // Big enough that hyper hands it to the client across several
+    // frames over loopback (never one single read) -- a correctness
+    // proof that the chunk-by-chunk hash/write in `send_hop` agrees
+    // with the whole body, not a memory-usage measurement in itself.
+    let body: Vec<u8> = (0..600_000usize).map(|i| (i % 251) as u8).collect();
+    let response_head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response_head.into_bytes(), body.clone()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("multi-chunk");
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("big.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::from(10_000_000i64)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(
+        dict_get(&result.value, "bytes"),
+        Some(&Value::from(body.len() as i64))
+    );
+    let expected_sha256 = {
+        use sha2::{Digest, Sha256};
+        let mut hasher = Sha256::new();
+        hasher.update(&body);
+        format!("{:x}", hasher.finalize())
+    };
+    assert_eq!(
+        dict_get(&result.value, "sha256"),
+        Some(&Value::Str(expected_sha256))
+    );
+    assert_eq!(std::fs::read(within.join("big.bin")).unwrap(), body);
+}
+
+#[tokio::test]
+async fn save_to_writes_nothing_on_a_non_2xx_status() {
+    let body = b"not found";
+    let response = format!(
+        "HTTP/1.1 404 Not Found\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("404");
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(!result.ok);
+    assert_eq!(dict_get(&result.value, "path"), Some(&Value::None));
+    assert_eq!(dict_get(&result.value, "bytes"), Some(&Value::from(0i64)));
+    assert_eq!(dict_get(&result.value, "sha256"), Some(&Value::None));
+    assert!(!within.join("a.bin").exists());
+}
+
+#[tokio::test]
+async fn save_to_refuses_an_existing_file_without_overwrite_and_replaces_it_with() {
+    let within = save_to_temp_dir("overwrite");
+    let target = within.join("a.bin");
+    std::fs::write(&target, b"old").unwrap();
+
+    let body = b"new-body";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.clone().into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
     let token = CancellationToken::new();
     let err = ToolPlugin::execute(
         &electricity_tools::http::HttpPlugin,
         params(vec![
-            ("url", Value::Str(format!("http://{addr}/a.png"))),
-            ("save_to", Value::Str("a.png".to_string())),
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
         ]),
         &call(&token),
     )
     .await
     .unwrap_err();
-    assert!(err.message.contains(electricity_bytecode::PREVIEW_MARKER));
-    assert!(
-        err.message
-            .contains("an http effect with save_to is not supported")
-    );
-    listener.set_nonblocking(true).unwrap();
+    assert!(err.message.contains("already exists"));
+    assert_eq!(std::fs::read(&target).unwrap(), b"old");
+
+    let full2: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full2: &'static [u8] = Box::leak(full2.into_boxed_slice());
+    let addr2 = respond_once(full2);
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr2}/"))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("overwrite", Value::Bool(true)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(std::fs::read(&target).unwrap(), body);
+}
+
+#[tokio::test]
+async fn save_to_max_bytes_true_is_rejected_not_coerced_to_one() {
+    let within = save_to_temp_dir("max-bytes-bool");
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::Bool(true)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
     assert_eq!(
-        listener.accept().unwrap_err().kind(),
-        std::io::ErrorKind::WouldBlock
+        err.message,
+        "HttpPlugin: params['max_bytes'] must be a positive integer, got True."
     );
+}
+
+#[tokio::test]
+async fn save_to_max_bytes_with_a_leading_sign_is_rejected() {
+    let within = save_to_temp_dir("max-bytes-sign");
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::Str("+5".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: params['max_bytes'] must be a positive integer, got '+5'."
+    );
+}
+
+#[tokio::test]
+async fn save_to_over_max_bytes_fails_and_leaves_no_file() {
+    let body = b"0123456789";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("max-bytes");
+
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::from(5i64)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: the response body is 10 bytes, over max_bytes (5); nothing was saved."
+    );
+    assert!(!within.join("a.bin").exists());
+    assert_eq!(
+        std::fs::read_dir(&within).unwrap().count(),
+        0,
+        "no partial/temp file left behind"
+    );
+}
+
+#[tokio::test]
+async fn save_to_over_max_bytes_with_no_content_length_fails_mid_stream_and_leaves_no_file() {
+    // No `Content-Length` (so nothing to check up front, unlike the
+    // test above): the cap is only discovered once the running total
+    // actually passes it, mid-stream -- cof's own text for that case
+    // has no byte count in it at all.
+    let body = b"0123456789";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n{}",
+        String::from_utf8_lossy(body)
+    );
+    let addr = respond_once(Box::leak(response.into_bytes().into_boxed_slice()));
+    let within = save_to_temp_dir("max-bytes-no-length");
+
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+            ("max_bytes", Value::from(5i64)),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "HttpPlugin: the response body is over max_bytes (5); nothing was saved."
+    );
+    assert!(!within.join("a.bin").exists());
+    assert_eq!(
+        std::fs::read_dir(&within).unwrap().count(),
+        0,
+        "no partial/temp file left behind"
+    );
+}
+
+#[tokio::test]
+async fn save_to_refuses_an_absolute_path() {
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("/etc/passwd".to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("must be a relative path"));
+}
+
+#[tokio::test]
+async fn save_to_refuses_escaping_within_via_dot_dot() {
+    let within = save_to_temp_dir("escape");
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("../escaped.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("resolves outside"));
+}
+
+#[tokio::test]
+async fn save_to_a_dot_dot_that_cancels_out_still_lands_inside_within() {
+    let body = b"hello";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+    let within = save_to_temp_dir("dot-dot-cancels-out");
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("a/../b.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(std::fs::read(within.join("b.bin")).unwrap(), body);
+    assert!(!within.join("a").exists(), "no stray 'a' directory");
+}
+
+#[tokio::test]
+async fn save_to_a_trailing_dot_component_is_refused() {
+    let token = CancellationToken::new();
+    let within = save_to_temp_dir("trailing-dot");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("out/.".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        err.message.contains("does not name a file"),
+        "{}",
+        err.message
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn save_to_through_a_symlinked_directory_inside_within_saves_at_the_resolved_path() {
+    let within = save_to_temp_dir("symlink-inside");
+    let real_dir = within.join("real");
+    std::fs::create_dir(&real_dir).unwrap();
+    std::os::unix::fs::symlink(&real_dir, within.join("link")).unwrap();
+
+    let body = b"via a symlink";
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    let full: Vec<u8> = [response.into_bytes(), body.to_vec()].concat();
+    let full: &'static [u8] = Box::leak(full.into_boxed_slice());
+    let addr = respond_once(full);
+
+    let token = CancellationToken::new();
+    let result = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{addr}/"))),
+            ("save_to", Value::Str("link/c.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap();
+    assert!(result.ok, "{:?}", result.stderr);
+    assert_eq!(std::fs::read(real_dir.join("c.bin")).unwrap(), body);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn save_to_through_a_symlink_leading_outside_within_is_refused_before_any_request() {
+    let within = save_to_temp_dir("symlink-outside-within");
+    let outside = save_to_temp_dir("symlink-outside-target");
+    std::os::unix::fs::symlink(&outside, within.join("link")).unwrap();
+
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![
+            ("url", Value::Str(format!("http://{}/", closed_port()))),
+            ("save_to", Value::Str("link/c.bin".to_string())),
+            ("within", Value::Str(within.display().to_string())),
+        ]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(err.message.contains("resolves outside"), "{}", err.message);
 }
 
 #[tokio::test]

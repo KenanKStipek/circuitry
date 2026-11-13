@@ -32,9 +32,15 @@ from ..core.compiler import (
 )
 from ..core.concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from ..core.concurrency import RunConcurrencyLimiter
-from ..core.document_check import structural_errors, unknown_key_warnings
+from ..core.document_check import (
+    label_syntax_error,
+    structural_errors,
+    unknown_key_warnings,
+)
 from ..core.dynamic import DynamicRuntime
 from ..core.interface_inputs import check_interface_inputs
+from ..core.label import clean_label as _clean_label
+from ..core.label import render_document_label
 from ..core.parsed_stdout import parsed_stdout_errors
 from ..core.prompt_record import prompt_sent_errors
 from ..core.report import build_report_payload
@@ -134,6 +140,13 @@ class RunRequest:
     # cli.app's run commands, the only built-in caller that passes True.
     show_loop_progress: bool = False
     config: CircuitryConfig | None = None
+    # The ``--config`` path exactly as given on the command line (``None``
+    # when the caller passed none and config was discovered instead) --
+    # distinct from ``config`` above, which is the already-resolved
+    # ``CircuitryConfig``. Its file name (never the whole path) is named
+    # in ``--events``' own ``run_start`` line, the same way
+    # ``orchestration_path``'s own file name already is.
+    config_path: Path | None = None
     live_state_path: Path | None = None
     # ``--events``: a JSONL stream of effect starts and ends, written by
     # ``cli.events.EventLog`` next to the ``--live-state`` mirror (#419).
@@ -182,6 +195,14 @@ class RunRequest:
     scoring_override: bool | None = None
     routing_override: bool | None = None
     decompose_override: bool | None = None
+    split_override: bool | None = None
+    # ``--label TEXT`` (#752): literal text, never rendered, that wins over
+    # the document's own top-level ``label:`` template. Cleaned the same way
+    # either way (``core.label.clean_label``) before it reaches ``--events``'
+    # ``run_start`` or ``runtime.last_run.label`` — both omit the key with no
+    # label, the same whether that's because neither was given or because
+    # cleaning emptied one out.
+    label_override: str | None = None
     profile_name: str | None = None
     # A recorded `runtime.effective_settings.profile` mapping ({name, content})
     # to reconstruct and apply instead of discovering a profile file by name.
@@ -539,6 +560,7 @@ def run(req: RunRequest) -> RunResult:
             cli_scoring=req.scoring_override,
             cli_routing=req.routing_override,
             cli_decompose=req.decompose_override,
+            cli_split=req.split_override,
             profile=profile,
             trust_document=document_trust_document,
             document_name=req.orchestration_path.name,
@@ -683,6 +705,25 @@ def run(req: RunRequest) -> RunResult:
             label="",
         )
 
+        # Run label (#752): rendered once, here, now that `input_ns` holds
+        # its final resolved values (declared `default:`s applied, `-e`/
+        # `--state` overrides merged, and — for `--resume` — the resumed
+        # run's own inputs). `--label` is literal text and always wins over
+        # the document's own; otherwise the document's top-level `label:`
+        # template renders against `{"input": ...}` only — nothing has run
+        # yet. A render failure warns once (`core.label`) and the run
+        # continues with no label; either way the result passes through
+        # the same cleaning before it reaches `--events`/`runtime.last_run`.
+        if req.label_override is not None:
+            run_label = _clean_label(req.label_override) or None
+        else:
+            run_label, label_warning = render_document_label(
+                orch.get("label") if isinstance(orch, dict) else None,
+                {"input": input_ns},
+            )
+            if label_warning is not None:
+                warnings.append(label_warning)
+
         state.setdefault("runtime", {})
         run_id = str(uuid4())
         # Assigned here, immediately, rather than right before execution:
@@ -728,6 +769,10 @@ def run(req: RunRequest) -> RunResult:
             "started_at": _now_iso(),
             "completed_at": None,
         }
+        if run_label:
+            # Absent entirely with no label, so an existing --out/state file
+            # with no `label:`/`--label` is byte-for-byte unchanged (#752).
+            state["runtime"]["last_run"]["label"] = run_label
 
         # Redact credential-bearing fields before embedding in state, since
         # state is serialized to --out, --json, --live-state, and last-run.json.
@@ -977,7 +1022,12 @@ def run(req: RunRequest) -> RunResult:
             callbacks.append(live_mirror)
         if req.events_path is not None:
             event_log = EventLog(req.events_path)
-            event_log.run_start(run_id=run_id, orchestration=req.orchestration_path.name)
+            event_log.run_start(
+                run_id=run_id,
+                orchestration=req.orchestration_path.name,
+                label=run_label,
+                config=req.config_path.name if req.config_path is not None else None,
+            )
         if req.state_observer is not None:
             callbacks.append(req.state_observer)
 
@@ -1008,11 +1058,13 @@ def run(req: RunRequest) -> RunResult:
         ]
         dispatch_observers: list[Callable[[str, int, int], None]] = []
         report_observers: list[Callable[[str, str, str, Any], None]] = []
+        progress_observers: list[Callable[[str, dict[str, Any]], None]] = []
         if event_log is not None:
             start_observers.append(event_log.on_start)
             effect_observers.append(event_log.on_complete)
             dispatch_observers.append(event_log.on_dispatch)
             report_observers.append(event_log.on_report)
+            progress_observers.append(event_log.on_progress)
         if req.concurrent_dispatch_observer is not None:
             dispatch_observers.append(req.concurrent_dispatch_observer)
         if plugins:
@@ -1086,6 +1138,8 @@ def run(req: RunRequest) -> RunResult:
             concurrent_dispatch=_compose_dispatch_observers(dispatch_observers),
             branch_settled=req.branch_settled_observer,
             report=_compose_report_observers(report_observers),
+            progress=_compose_progress_observers(progress_observers),
+            open_instance_id=None if event_log is None else event_log.current_instance,
             _lock=store_lock,
         )
 
@@ -1365,6 +1419,24 @@ def _compose_report_observers(
     return fan_out
 
 
+def _compose_progress_observers(
+    observers: list[Callable[[str, dict[str, Any]], None]],
+) -> Callable[[str, dict[str, Any]], None] | None:
+    """Fold ``--events``' own progress observer into the single callback
+    ``Store`` takes (#674), the same way :func:`_compose_report_observers`
+    composes ``report``."""
+    if not observers:
+        return None
+    if len(observers) == 1:
+        return observers[0]
+
+    def fan_out(path: str, data: dict[str, Any]) -> None:
+        for observer in observers:
+            observer(path, data)
+
+    return fan_out
+
+
 def _record_library_pins(
     state: dict[str, Any], runtime_config: dict[str, Any] | None
 ) -> None:
@@ -1464,6 +1536,14 @@ def validate(
                 "warnings": lint_warnings,
             }
 
+        label_error = label_syntax_error(orch)
+        if label_error is not None:
+            return {
+                "ok": False,
+                "errors": [label_error],
+                "warnings": lint_warnings,
+            }
+
         # Allowlist gate. Skipped when caller supplies no config — keeps
         # programmatic callers (tests, MCP server, internal scripts)
         # default-open. The CLI resolves a config from disk + env vars and
@@ -1520,6 +1600,9 @@ def validate(
         merged_runtime = _merge_runtime(
             (config.runtime if config is not None else {}) or {}, accepted_orch_runtime
         )
+        from ..core.lint import splitting_merge_warnings
+
+        lint_warnings += splitting_merge_warnings(orch, merged_runtime)
         secret_sources = secret_definition_sources(
             named_secrets,
             config_runtime=config.runtime if config is not None else None,

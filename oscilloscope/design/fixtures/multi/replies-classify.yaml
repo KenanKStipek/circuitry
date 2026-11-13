@@ -1,0 +1,14 @@
+prime.labels.iter_0.label:
+  - {text: "bug", tokens_sent: 184, tokens_received: 2}
+prime.labels.iter_1.label:
+  - {text: "feature", tokens_sent: 191, tokens_received: 2}
+prime.labels.iter_2.label:
+  - {text: "question", tokens_sent: 176, tokens_received: 3}
+prime.labels.iter_3.label:
+  - {text: "bug", tokens_sent: 203, tokens_received: 2}
+prime.labels.iter_4.label:
+  - {text: "bug", tokens_sent: 188, tokens_received: 2}
+prime.labels.iter_5.label:
+  - {text: "feature", tokens_sent: 197, tokens_received: 2}
+prime.report:
+  - {text: "3 bugs, 2 features, 1 question.", tokens_sent: 910, tokens_received: 14}

@@ -33,6 +33,15 @@ exactly as it did before the block existed.
         "max_depth": 2,
         "max_chunks": 8,
         "on_failure": "route_up"
+      },
+      "splitting": {
+        "enabled": false,
+        "max_input_tokens": 24000,
+        "models": {"llama3.1:8b": 24000, "gpt-4.1": 200000},
+        "max_parts": 16,
+        "max_depth": 2,
+        "max_concurrency": null,
+        "on_failure": "run_as_is"
       }
     }
   }
@@ -59,19 +68,23 @@ applied only from a file you run by path and ignored with a warning otherwise �
 see the
 [orchestration reference](./orchestration-reference.md#file-structure).
 
-## The three switches
+## The four switches
 
 | Switch | Default | Requires | What it turns on |
 | --- | --- | --- | --- |
 | `scoring` | `false` | — | The deterministic scorer: every prompt effect gets a complexity score and an explainable breakdown. |
 | `routing` | `false` | `scoring` | Band-based model selection from the score. |
-| `decomposition` | `false` | `scoring` | Splitting an effect that scores above `threshold` into chunks. |
+| `decomposition` | `false` | `scoring` | Splitting an effect that scores above `threshold` into chunks (the **score trigger**). |
+| `splitting` | `false` | — | Splitting an effect whose rendered input exceeds a token budget into parts (the **size trigger**). See [`splitting`](#splitting) below. |
 
-The switches are independent apart from one ordering constraint: **scoring is
-the substrate**. Routing and decomposition each read scores, so enabling either
-without `scoring.enabled: true` is a config error naming the missing
-prerequisite. Routing and decomposition do *not* require each other — score
-only, score + route, score + decompose, and all three are each valid.
+`scoring`, `routing` and `decomposition` are independent apart from one
+ordering constraint: **scoring is the substrate**. Routing and decomposition
+each read scores, so enabling either without `scoring.enabled: true` is a
+config error naming the missing prerequisite. Routing and decomposition do
+*not* require each other — score only, score + route, score + decompose, and
+all three are each valid. `splitting` is keyed to a token estimate, not a
+score, so it needs no scoring prerequisite at all and can be the only switch
+on.
 
 ## Fields
 
@@ -419,10 +432,10 @@ call with three bounded steps:
    the orchestration knows the substitution happened.
 
 The attempt is recorded at `meta.decomposition` on the effect node —
-`{decomposed, outcome, reason, score, threshold, depth, max_depth, plan,
-chunk_count, yaml, result_path, fallback_model, error}` — whether it
-decomposed, routed up, ran as-is, or failed. Like `meta.complexity`, the key is
-absent entirely when the feature never triggered.
+`{decomposed, trigger: "score", outcome, reason, score, threshold, depth,
+max_depth, plan, chunk_count, yaml, result_path, fallback_model, error}` —
+whether it decomposed, routed up, ran as-is, or failed. Like `meta.complexity`,
+the key is absent entirely when the feature never triggered.
 
 Chunks are scored too, inside the child, so an over-complex chunk decomposes
 again — that is what `max_depth` bounds. At the ceiling the effect **routes
@@ -515,17 +528,85 @@ same as any other orchestration file.
 
 Needs `runtime.complexity.decomposition.enabled: true`; a run that never
 triggers decomposition (or runs without `--decompose-out`) writes nothing.
+The header's own `# status:`/`# reason:` lines read the same whichever
+trigger produced the plan; a size-triggered plan's header additionally reads
+`# trigger: size` (a score-triggered plan's reads `# trigger: score`).
 
-## Per-run flags: `cof run --scoring/--routing/--decompose`
+### `splitting`
 
-`--scoring/--no-scoring`, `--routing/--no-routing`, and
-`--decompose/--no-decompose` force one switch's `enabled` field on or off for
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `enabled` | boolean | `false` | Turns the size trigger on for this run. Requires `max_input_tokens` or a non-empty `models` — `enabled: true` with neither is a config error. |
+| `max_input_tokens` | integer | — | The budget, in estimated tokens, for a model `models` does not name. `1` or greater. |
+| `models` | object | `{}` | Per-model budgets, keyed by the exact resolved model string (after routing). `1` or greater each. |
+| `max_parts` | integer | `16` | Widest fan-out; more parts than this is `too_many_parts`. `2` or greater. |
+| `max_depth` | integer | `2` | Recursion ceiling for the size trigger, on the same depth counter `decomposition.max_depth` shares. `0` or greater. |
+| `max_concurrency` | integer or `null` | `null` | Cap on parts in flight for one split. Unset runs every part at once, still bounded by `runtime.max_concurrency` and the effect's own `group`. |
+| `on_failure` | string | `run_as_is` | `run_as_is` runs the original prompt whole; `fail` propagates the error. There is no `route_up` for size — a bigger model is not a bigger context window. |
+
+#### What the size trigger actually does
+
+At the same dispatch seam as the score trigger — after the model is resolved
+(routing included), before the attempt chain — the runtime compares the
+estimated size of the input the effect is about to send (`meta.prompt_sent`,
+the scorer's own estimator) against a budget:
+
+1. the effect's own `split.budget_tokens`, when set — this splits even with
+   `splitting.enabled: false`;
+2. else, with `splitting.enabled: true`, `splitting.models.<resolved model>`;
+3. else `splitting.max_input_tokens`.
+
+An estimate strictly above the budget splits; `split.enabled: false` on the
+effect always opts it out, overriding everything else.
+
+Splitting is deterministic — no planner, no model call to produce a plan.
+The template's largest single state reference (the one with the biggest
+rendered size, after `{{> name}}` composition is expanded) is sliced into
+whole units: a list into contiguous item slices, a mapping into contiguous
+key groups, a string at its own structure (blank-line paragraphs, then
+lines, then sentence ends, then whitespace, then a last-resort hard cut).
+Parts come out balanced — `n = ceil(tokens / room)` parts, each filled to
+`ceil(tokens / n)`, never over the room per part. A single unit that alone
+doesn't fit the room — one list item, one mapping entry, an unbreakable run
+of text — can't be split: `no_split_point`, naming it.
+
+The runtime then generates (never asks a model for) a plan: one `loop` over
+the parts, whose body is a copy of the source prompt with every tag reading
+the split reference rewritten to the loop binding. It runs through the exact
+same validate/execute path a score-triggered plan does — schema, allowlists,
+capability ceiling, merge contract, isolated-child execution with namespaced
+observability — at `depth + 1` on the same `_decomposition_depth` counter
+`decomposition.max_depth` shares, so a part is scored and size-checked again
+like any other prompt.
+
+The parts merge back by the effect's own output type: `text` joins them
+(`split.separator`, default a blank line); `array`, or `json` with an array
+schema, concatenates them, then validates the result against the schema;
+anything else needs `split.merge.template` — a reduce prompt over `parts`
+(`{{#parts}}...{{/parts}}`), itself a prompt dispatch at `depth + 1`, so a
+reduce whose own input is over budget splits again (a hierarchical reduce,
+bounded by `max_depth`). An output type with no native rule and no
+`split.merge.template` is `no_merge`, checked before anything else runs.
+
+`meta.decomposition` carries the whole story for this trigger too —
+`{decomposed, trigger: "size", estimated_tokens, budget, depth, max_depth,
+merge, split: {path, kind, parts, sizes}, chunk_count, result_path, yaml,
+outcome, reason, error}` — `trigger` is the one field that tells the two
+triggers' records apart; a size record never has `plan`, `fallback_model` or
+`threshold`. Recorded reasons: `max_depth`, `no_split_point`,
+`too_many_parts`, `no_merge`, `execution_failed`, `merge_invalid`.
+
+## Per-run flags: `cof run --scoring/--routing/--decompose/--split`
+
+`--scoring/--no-scoring`, `--routing/--no-routing`, `--decompose/--no-decompose`
+and `--split/--no-split` force one switch's `enabled` field on or off for
 a single run, without touching the orchestration or config file:
 
 ```bash
 cof run pipeline.yml --scoring --routing            # turn scoring and routing on
 cof run pipeline.yml --no-routing                    # turn routing off, whatever config says
 cof run pipeline.yml --scoring --decompose --dry-run # try decomposition without editing config
+cof run pipeline.yml --split                         # turn splitting on; needs no --scoring
 ```
 
 Each flag only flips its own switch — the rest of that sub-block (weights,
@@ -534,7 +615,13 @@ already set, so `--routing` alone reuses an existing band table rather than
 needing one restated on the command line. The scoring prerequisite still
 applies: `--routing`/`--decompose` without scoring on (from `--scoring` or the
 config) raise the identical `ComplexityConfigError` the config path raises —
-the flag doesn't invent a way around it.
+the flag doesn't invent a way around it. `--split` has no such prerequisite:
+it needs `max_input_tokens` or a non-empty `models` (from config, or an
+effect's own `split.budget_tokens`), never scoring. `--split`/`--no-split`
+does not opt an effect with its own `split.budget_tokens` in or out —
+`--no-split` only turns off the run-wide switch; an effect's own
+`budget_tokens` keeps splitting regardless, and only `split.enabled: false`
+on the effect itself opts it out.
 
 `--no-routing` also overrides a `--profile` per-effect `routing` pin (see
 [Per-Effect Routing Control](profiles.md#per-effect-routing-control)): a pin
@@ -544,7 +631,7 @@ beats the pin the same way it beats the config switch, rather than letting one
 pinned effect quietly keep routing on. `--routing` (forcing it *on*) does not
 touch pins or opt-outs either way; those still apply exactly as documented.
 
-The TUI's Run view offers the same three switches as tri-state dropdowns
+The TUI's Run view offers the same four switches as tri-state dropdowns
 (default / on / off) in the launch form — picking "on"/"off" there is
 equivalent to the matching flag; left on "— default" a launch resolves
 identically to `cof run` with no flag.
@@ -556,7 +643,7 @@ config** — with no separate plumbing, except for the per-run flags above,
 which sit at the very top:
 
 ```
---scoring/--routing/--decompose  >  orchestration runtime.complexity  >
+--scoring/--routing/--decompose/--split  >  orchestration runtime.complexity  >
 config runtime.complexity  >  defaults
 ```
 
@@ -569,9 +656,10 @@ level deeper, key by key — see [Threat model](threat-model.md).)
 
 `resolve_effective_settings` records the winning layer under
 `sources["complexity"]`, plus `sources["complexity.scoring"]`,
-`sources["complexity.routing"]` and `sources["complexity.decomposition"]` for
-each sub-block (`cli`, `orchestration`, `config`, or `default`) — `cli` only
-when the matching flag was passed for that run.
+`sources["complexity.routing"]`, `sources["complexity.decomposition"]` and
+`sources["complexity.splitting"]` for each sub-block (`cli`, `orchestration`,
+`config`, or `default`) — `cli` only when the matching flag was passed for
+that run.
 
 The *model* has its own chain, which routing joins — see [Where the router
 sits](#where-the-router-sits-model-precedence). When the router wins it,
@@ -596,7 +684,8 @@ if settings.routing.enabled:
 `EffectiveSettings.complexity` carries the same object, already validated at
 resolution time. Consumers read these typed dataclasses
 (`ComplexitySettings`, `ScoringSettings`, `RoutingSettings`,
-`DecompositionSettings`, `ComplexityBand`) rather than re-parsing raw dicts.
+`DecompositionSettings`, `SplittingSettings`, `ComplexityBand`) rather than
+re-parsing raw dicts.
 `ComplexitySettings.as_dict()` renders the resolved block for machine-readable
 output.
 
@@ -617,4 +706,11 @@ runtime.complexity.decomposition.enabled is true but
 runtime.complexity.scoring.enabled is false. Decomposition consumes complexity
 scores, so it requires the scorer — set runtime.complexity.scoring.enabled to
 true or turn decomposition off.
+```
+
+```
+runtime.complexity.splitting.enabled is true but neither
+runtime.complexity.splitting.max_input_tokens nor a non-empty
+runtime.complexity.splitting.models is set. Splitting needs a budget to
+compare the prompt's estimated size against.
 ```

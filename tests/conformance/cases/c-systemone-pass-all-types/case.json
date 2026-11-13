@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #724",
+  "description": "A systemone tool call against a mock server answering all three question types (noul, choice, score) in one request -- value, raw and tokens match on both engines.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "config": "config.json",
+  "mock_http_fixture": "mock-http.yaml"
+}

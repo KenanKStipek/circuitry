@@ -863,8 +863,12 @@ failure both raise `SchemaValidationError` (carries `raw_response_text`).
 *pass* (one full `provider`+`provider_fallbacks` chain attempt) retries only
 if the **last** failure in that chain's attempt log classifies as retryable
 — `classify_exception()` (adapters/_retry.py): HTTP 429/408/5xx, a timeout,
-a dropped connection → retryable; 400/401/403/404/422, a missing API key →
-not. **Exception**: a decode/schema failure (`AnswerParseError`/
+a dropped connection, a premature EOF partway through the body (curl exit
+18, the shape a mid-stream disconnect takes, #674) → retryable; 400/401/
+403/404/422, a missing API key → not. `RETRYABLE_CURL_EXIT_CODES`
+(`{6, 7, 18, 28, 35, 52, 56}`) is shared byte-for-byte with electricity's
+own `transport::is_retryable_exit` (the full exit/stderr mapping is in
+`tools-adapters-plugins.md`). **Exception**: a decode/schema failure (`AnswerParseError`/
 `SchemaValidationError`) is *always* classified retryable at the pass level
 (`_retry_info_for`, `core/prompt.py:99`) regardless of HTTP status — "maybe a
 re-ask gets a parseable reply" — but is treated inside the **fallback chain**
@@ -1029,8 +1033,8 @@ the text; `meta.params_rendered.prompt` is `{file: <resolved path>, within:
 `params_json` parses as a JSON object, compiling fails with `<effect_path>:
 params_json must not set params.prompt ...`, and the rendered one is checked
 again at dispatch. electricity compiles the same checks (the IR's
-`ToolOp::prompt_file`) but refuses the cof-only `agent` plugin, so it never
-reads the file.
+`ToolOp::prompt_file`) and runs the `agent` plugin too, reading the file the
+same way, once per dispatch, strictly before `params_json` is rendered.
 
 **Routing/scoring/decomposition** — see §5.8.
 
@@ -1453,6 +1457,38 @@ max_depth, plan?, chunk_count?, yaml?, result_path?, fallback_model?,
 error?}` — present **only** when the attempt was actually triggered (score
 over threshold); absent otherwise, same all-or-nothing-key rule as scoring.
 
+**Splitting (size trigger)** (`core/split.py`/`core/decompose.py`'s own
+`_maybe_split`): runs before the score trigger, on its own schedule — no
+score, no planner, no model call to produce the plan. When the effect's
+rendered input (`meta.prompt_sent`, the scorer's own estimator) strictly
+exceeds a token budget, the budget resolved per effect
+(`split.budget_tokens` on the prompt itself, outranking
+`runtime.complexity.splitting.models.<resolved model>`, outranking
+`runtime.complexity.splitting.max_input_tokens` — only `split.budget_tokens`
+still splits with `runtime.complexity.splitting.enabled: false`; the table
+and the top-level default are read only with the switch on. `split.enabled:
+false` on the prompt always opts it out), the template/messages' own single
+largest state reference is sliced into whole units (list items, mapping
+entries, or text at its own structure — blank lines, then lines, then
+sentence ends, then whitespace, then a hard character cut) and a plan is
+*generated*, never asked for: one `flow: tree` loop over the parts with a
+copy of the source prompt as the loop body, and (for an output type the
+native `join`/`concat` merge doesn't cover) an author-supplied
+`split.merge.template` reduce prompt, forwarded the source's own `split:`
+block so a part — or the merge prompt's own input — that is itself still
+over budget splits again. The plan runs through the same validate/execute
+path a score-trigger plan does (schema, allowlists, the merge contract, the
+isolated-child run with namespaced observability) and shares the one
+`max_depth` ceiling (`_decomposition_depth`) with the score trigger — size
+is checked first, so a part is scored and size-checked again like any other
+prompt at `depth + 1`. There is no route-up for size (a bigger model is not
+a bigger context window), so `on_failure` is only `run_as_is`/`fail`.
+Recorded in `meta.decomposition.{decomposed, trigger: "size", estimated_tokens,
+budget, depth, max_depth, merge, split: {path, kind, parts, sizes},
+chunk_count, yaml, result_path, outcome, reason, error?}`, the same
+all-or-nothing-key rule — present only when the budget was actually
+exceeded.
+
 ---
 
 ## 6. The error model
@@ -1685,6 +1721,11 @@ than one carried over from a `--state`/persistence seed):
   "started_at": "<iso8601>", "completed_at": null
 }
 ```
+`label` (#752) is added to this object — only when the run has one: the
+document's own top-level `label:` template, rendered (against `{"input":
+...}` only) and cleaned, or `--label`'s literal text, cleaned the same way,
+whichever the run resolved to. Absent (never `null`) with no label, so an
+unlabelled run's state is unchanged by this field existing.
 `document_hash` is `document_content_digest`: SHA-256 over the document
 file's own bytes; then, for each prompt file it references (`{file: ...}`),
 in ascending order of resolved absolute paths compared component by
@@ -1881,8 +1922,8 @@ unfinished **named `if`** (`core/conditional.py`, `resume`) reads its saved
 `meta.branch` before anything else, evaluates its condition again (a model
 condition asks again), and, when the condition selects that branch again,
 runs the branch by the same positional rule; the other branch runs from its
-start. An unnamed `if` and a `reflector` rerun whole. electricity has no
-`--resume` yet (M2-G), so this is reference behaviour only.
+start. An unnamed `if` and a `reflector` rerun whole. electricity run
+accepts --state/--resume/--force too (issue #727), with the same rules.
 
 An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
 `_SavedChildRun`) reruns its child from the start in a fresh state, unless
@@ -1960,7 +2001,8 @@ from both `--out` serializations (§8.3), which space their separators the
 way a bare `json.dumps(payload)` call does.
 
 ```json
-{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","engine":"cof 0.2.0","pid":4242}
+{"v":1,"seq":0,"ts":"2026-10-08T19:56:22.433Z","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","config":"config.json","engine":"cof 0.2.0","pid":4242}
+{"v":1,"seq":0,"ts":"…","ev":"run_start","run_id":"…","orchestration":"do-thing.yml","label":"ticket 42","config":null,"engine":"cof 0.2.0","pid":4242}
 {"v":1,"seq":7,"ts":"…","ev":"dispatch","path":"prime.each_tree","branches":3,"concurrency":2}
 {"v":1,"seq":8,"ts":"…","ev":"start","id":8,"path":"prime.each_tree.iter_0.t_nap"}
 {"v":1,"seq":12,"ts":"…","ev":"end","id":8,"path":"prime.each_tree.iter_0.t_nap","ok":true,"ms":1008}
@@ -1974,7 +2016,9 @@ way a bare `json.dumps(payload)` call does.
 | `v` | Format version, `1`. |
 | `seq` | Strictly increasing in file order, starting at `0`. |
 | `ts` | Wall-clock UTC, millisecond precision, `isoformat(timespec="milliseconds")` with the `+00:00` suffix replaced by `Z`. |
-| `ev` | `run_start`, `dispatch`, `start`, `end`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so a reader built before `report` existed (#605) still reads the rest of the stream fine. |
+| `ev` | `run_start`, `dispatch`, `start`, `end`, `progress`, `report` or `run_end`. A reader skips an `ev` value it doesn't know, so a reader built before `report`/`progress` existed (#605/#674) still reads the rest of the stream fine. |
+| `config` | `run_start` only, between `orchestration` and `engine` — after `label` when the run has one (#752). The `--config` file's name (its last path component), the same form `orchestration` already uses (`cof run --config some/dir/X.json` → `"X.json"`; `electricity some/dir/X.json doc.yml` → `"X.json"`) — never the full path given, never resolved or made absolute. `null` on `cof` when no `--config` was given: discovery (`CIRCUITRY_CONFIG`, project, global) can merge more than one file, so there is no single path to report. `electricity run <doc>` (issue #728) discovers a config the same way and is `null` there too; only the legacy `electricity <config.json> <doc>` form always has one, its config argument being a required positional. Always present. |
+| `label` | `run_start` only, right after `orchestration`, present only when this run has one (#752): the document's own top-level `label:` template, rendered and cleaned, or `--label`'s literal text, cleaned the same way — whichever the run resolved to. Absent (never `null`) when neither was given, or the result was empty after cleaning, so an unlabelled run's `run_start` line is byte-for-byte what it was before this field existed. |
 | `id` | Present on `start`/`end` only. Unique per effect *instance* — a loop pass or a tree branch each get their own — from one counter, incremented under the same lock as every write. An unnamed loop's repeated pass, or several `flow: tree` branches sharing one path, still pair `start` with the right `end`: `EventLog` keeps a per-thread stack keyed by path (`threading.local`), since one effect instance's `start` and `end` always arrive on the same thread (including nested instances) — `on_start` pushes, `on_complete` pops. **An `end` whose `start` was not seen carries `id: null`** (and no `ms`) rather than erroring — popping from an empty per-path stack is simply treated as a double-fire or an unseen start, not a bug to raise on. None of the reference's own `fire_effect_complete` call sites double-fire for one instance today, so this cannot actually happen from `cof` itself; it is a defensive invariant for any reader, and for any other engine (or any future composed observer) that might call `on_complete` without a matching `on_start`. electricity's own `EventLog` (`electricity/src/events.rs`) has no per-thread stack — it has no threads to key one by — but gives the same observable pairing: `on_start` returns the instance id it assigned instead of pushing it onto thread-local storage, and the caller hands that same id back to `on_complete`, which removes it from wherever it sits on *path*'s own stack (by id, never by position, so two overlapping instances at the same path — an unnamed `flow: tree` loop's own concurrent passes — still pair correctly even when they finish out of start order). A completion whose id isn't found on that stack gets the same `id: null`/no-`ms` treatment as the reference's own unseen-start case. |
 | `path` | The absolute dotted state path, exactly as in `--live-state` and in scripted-replies keys (`electricity/docs/spec/scripted-replies.md`). |
 | `dispatch` | `path`/`branches`/`concurrency`. Sent once by a tree loop or tree `dynamic` before its branches start — the reference composes this with the pre-existing `Store.concurrent_dispatch` callback (`RunRequest.concurrent_dispatch_observer`) rather than replacing it; both observers fire. `branches` is the true branch count — the loop's item total, or the dynamic's `len(effects)`. `concurrency` is the ceiling the pool actually enforces: every branch when `max_concurrency` is unset (so `branches == concurrency`), else `min(max_concurrency, branches)` — a 3-item `each` loop under `max_concurrency: 2` sends `"branches":3,"concurrency":2`. MCP's `RunManager` (the one other listener on the underlying `Store.concurrent_dispatch` callback) uses only `concurrency`, unchanged by this split. |
@@ -1982,6 +2026,7 @@ way a bare `json.dumps(payload)` call does.
 | `error` | Present only when `ok` is `false`: the first 500 characters of the effect's (`end`) or the run's (`run_end`) error text — the exact same string already in `meta.error`/`RunResult.error`, never a new message. |
 | `signal` | `run_end` only, present only after an interruption: `"SIGINT"`, `"SIGTERM"` or `"SIGHUP"` — the reference reads it from the already-built `RunResult`'s `sigterm`/`sighup`/`interrupted` flags (`run()`'s `finally:`), the same flags `--live-state`'s own distinction already relies on (§6.5); those flags are themselves set from the cancellation token. |
 | `report` | `path`/`level`/`message`, then `data` or `data_truncated` (#605). Fired by a `report` effect (`circuitry.core.report.ReportRuntime`/`electricity-vm`'s `exec::report`) through a dedicated hook (`Store.fire_report`/`RunObserver::report`) — never `fire_effect_start`/`fire_effect_complete`, so a `report` line never carries `id`, never pairs with a `start`/`end`, and the effect it names is never counted toward `runtime.last_run.totals.effects_run`. `path` is the report's own state path when it is named, otherwise the path of the container it runs in — the same fallback `dispatch`'s own `path` uses for an unnamed loop/dynamic (`prime` at the top level, `prime.<loop>.iter_N` inside an unnamed report in a named loop's pass, and so on). `level` is `"info"` or `"warning"`. `data` is the already-resolved value, omitted when the report has none; when its own compact JSON (same separators, same `ensure_ascii`) exceeds 16384 bytes, `data_truncated` (that byte count) replaces it instead — a named report still keeps the full value in the shadow state regardless of this line. Both engines render the line byte for byte alike. |
+| `progress` | `id`/`path`/`ms`/`tokens_received_estimate`/`chars_received`/`tokens_sent`/`tokens_sent_estimate`/`first_token_ms` (#674). Fired by a streaming prompt effect's own throttled live publisher — the same once-immediately-then-at-most-once-a-second cadence `meta.live` itself updates on — never on the write that starts or clears `meta.live`, so a non-streaming adapter's event stream carries no `progress` lines at all. `id` is the open `start` instance for `path` (`null` if there is none, the same meaning as `start`/`end`'s own `id`); `ms` is the elapsed time since that instance's own `start`, computed the identical way `end`'s own `ms` is; `first_token_ms` is `ms` at the first `progress` line this `id`'s *current attempt* produced, held fixed for the rest of that attempt and reset when the next attempt's own first delta arrives (one `start`/`end` pair covers every attempt of a retried prompt, so a later attempt must never inherit an earlier, failed one's `first_token_ms`). `tokens_received_estimate` (one per delta received so far), `chars_received` and `tokens_sent_estimate` (`ceil(prompt_chars / 4)`) are always present; `tokens_sent` is the provider's own exact input-token count once reported (Anthropic's `message_start` reports it before any text; the others only at the very end, outside this line's own window) — `null` until then. Produced by both engines (#674/#676): electricity's own adapter transport streams by default too, through the identical observer hook (`RunObserver::progress`), so a conformance case comparing this line between the two engines (timing fields excluded) sees the same values. |
 
 **Ordering.**
 - `run_start` is always the first line.

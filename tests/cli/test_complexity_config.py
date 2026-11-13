@@ -226,7 +226,7 @@ def test_unknown_top_level_key_is_rejected_with_the_valid_set() -> None:
 
     message = str(excinfo.value)
     assert "unknown key 'scorring'" in message
-    assert "Valid keys: decomposition, routing, scoring" in message
+    assert "Valid keys: decomposition, routing, scoring, splitting" in message
 
 
 @pytest.mark.parametrize(
@@ -552,6 +552,111 @@ def test_invalid_block_fails_at_effective_settings_resolution() -> None:
 
     with pytest.raises(ComplexityConfigError):
         resolve_effective_settings(cfg=cfg, orch={})
+
+
+# --------------------------------------------------------------------------
+# splitting: the size trigger, no scoring prerequisite
+# --------------------------------------------------------------------------
+
+
+def test_splitting_defaults() -> None:
+    settings = parse_complexity_settings({})
+
+    assert settings.splitting.enabled is False
+    assert settings.splitting.max_input_tokens is None
+    assert settings.splitting.models == {}
+    assert settings.splitting.max_parts == 16
+    assert settings.splitting.max_depth == 2
+    assert settings.splitting.max_concurrency is None
+    assert settings.splitting.on_failure == "run_as_is"
+
+
+def test_splitting_enabled_needs_no_scoring_prerequisite() -> None:
+    settings = parse_complexity_settings(
+        {"splitting": {"enabled": True, "max_input_tokens": 1000}}
+    )
+
+    assert settings.scoring.enabled is False
+    assert settings.splitting.enabled is True
+
+
+def test_splitting_enabled_without_a_budget_is_an_error() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"enabled": True}})
+
+    message = str(excinfo.value)
+    assert "runtime.complexity.splitting.enabled is true but neither" in message
+    assert "max_input_tokens" in message
+    assert "models" in message
+
+
+def test_splitting_enabled_with_only_models_is_valid() -> None:
+    settings = parse_complexity_settings(
+        {"splitting": {"enabled": True, "models": {"llama3.1:8b": 24000}}}
+    )
+
+    assert settings.splitting.models == {"llama3.1:8b": 24000}
+
+
+def test_splitting_max_input_tokens_must_be_positive() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"max_input_tokens": 0}})
+
+    assert (
+        "runtime.complexity.splitting.max_input_tokens must be 1 or greater; "
+        "found 0." in str(excinfo.value)
+    )
+
+
+def test_splitting_models_values_must_be_positive_ints() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"models": {"m": 0}}})
+
+    assert "runtime.complexity.splitting.models.m must be 1 or greater" in str(
+        excinfo.value
+    )
+
+
+def test_splitting_max_parts_must_be_at_least_two() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"max_parts": 1}})
+
+    assert "runtime.complexity.splitting.max_parts must be 2 or greater" in str(
+        excinfo.value
+    )
+
+
+def test_splitting_max_depth_allows_zero() -> None:
+    settings = parse_complexity_settings({"splitting": {"max_depth": 0}})
+
+    assert settings.splitting.max_depth == 0
+
+
+def test_splitting_max_concurrency_must_be_positive() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"max_concurrency": 0}})
+
+    assert "runtime.complexity.splitting.max_concurrency must be 1 or greater" in str(
+        excinfo.value
+    )
+
+
+def test_splitting_on_failure_must_be_a_valid_choice() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"on_failure": "retry"}})
+
+    assert (
+        "runtime.complexity.splitting.on_failure must be one of run_as_is, fail"
+        in str(excinfo.value)
+    )
+
+
+def test_splitting_unknown_key_is_rejected() -> None:
+    with pytest.raises(ComplexityConfigError) as excinfo:
+        parse_complexity_settings({"splitting": {"budget": 100}})
+
+    message = str(excinfo.value)
+    assert "runtime.complexity.splitting: unknown key 'budget'" in message
 
 
 # --------------------------------------------------------------------------

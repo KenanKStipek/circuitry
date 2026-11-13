@@ -16,6 +16,7 @@ use std::io::IsTerminal as _;
 use std::path::Path;
 
 pub mod events;
+pub mod label;
 pub mod live_state;
 pub mod out;
 pub mod preflight;
@@ -29,6 +30,13 @@ pub mod state;
 pub use electricity_adapters::write_leftover_export;
 pub use electricity_vm::CancellationToken;
 pub use run::{RunRequest, RunResult, Signal};
+
+/// `electricity_tools::service::join_pending_teardowns` -- re-exported
+/// so `electricity-cli`'s own exit path (the only caller) doesn't need
+/// its own direct dependency on `electricity-tools` just for this one
+/// function (issue #721's own follow-up: a `service` teardown or stop
+/// a cancelled run displaced must finish before the process exits).
+pub use electricity_tools::service::join_pending_teardowns;
 
 /// The crate's version, taken from the workspace's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -225,33 +233,6 @@ fn tool_registry() -> electricity_tools::ToolRegistry {
         registry.register(Box::new(electricity_tools::test_tools::FailTool));
     }
     registry
-}
-
-/// `runtime.plugins.<name>.env.<VAR>` for the first variable whose value
-/// is a mapping with a `secret` key (issue #598), among the tools
-/// *document* names -- in sorted order, so the refusal names the same one
-/// every run.
-fn env_secret_in_use(document: &Value, runtime: Option<&Value>) -> Option<String> {
-    let plugins = runtime
-        .and_then(Value::as_dict)
-        .and_then(|d| d.get(&Value::Str("plugins".to_string())))
-        .and_then(Value::as_dict)?;
-    let (_adapters, mut tools) = electricity_config::preflight::preflight_refs(document, false);
-    tools.sort();
-    tools.into_iter().find_map(|tool| {
-        let name = electricity_value::pycompat::py_strip(&tool).to_lowercase();
-        let env = plugins
-            .get(&Value::Str(name.clone()))
-            .and_then(Value::as_dict)
-            .and_then(|cfg| cfg.get(&Value::Str("env".to_string())))
-            .and_then(Value::as_dict)?;
-        env.iter().find_map(|(var, value)| match value {
-            Value::Dict(inner) if inner.contains_key(&Value::Str("secret".to_string())) => {
-                Some(format!("runtime.plugins.{name}.env.{}", var.py_str()))
-            }
-            _ => None,
-        })
-    })
 }
 
 /// Whether *runtime* (the already-merged, effective `runtime:` block)
@@ -560,10 +541,26 @@ fn orchestration_dir_string(path: &std::path::Path) -> String {
 /// effective_settings.runtime` (confirmed byte-for-byte against the
 /// golden run corpus's own `json_parse_failure` case) -- one value, not
 /// two that could drift apart.
+/// `plugins/capabilities.py::capabilities_of`, unioned over every tool
+/// provider *document*'s own top-level effects reference -- `cli/
+/// document_consent.py::required_capabilities`'s own top-level half
+/// (`use` children are each a separate call, at the two call sites
+/// below, same as the reference's own `ref_child_requirements` loop).
+fn required_capabilities(document: &Value) -> std::collections::BTreeSet<String> {
+    let (_, tools) = electricity_config::walk_orchestration_refs(document, false);
+    let mut required = std::collections::BTreeSet::new();
+    for tool in &tools {
+        required.extend(electricity_config::capabilities_of(tool));
+    }
+    required
+}
+
 fn build_runtime_config(
     effective_runtime: Option<&Value>,
     cfg: &CircuitryConfig,
     orchestration_dir: &str,
+    allow_capabilities: &[String],
+    capability_ceiling: Option<&std::collections::BTreeSet<String>>,
 ) -> Value {
     let mut dict = effective_runtime
         .and_then(Value::as_dict)
@@ -596,12 +593,26 @@ fn build_runtime_config(
     dict.insert(
         Value::Str("_capability_allow".to_string()),
         Value::List(
-            electricity_config::capability_allow()
+            electricity_config::capability_allow(allow_capabilities)
                 .into_iter()
                 .map(Value::Str)
                 .collect(),
         ),
     );
+    // `capability_gate.py::install_capability_ceiling`: a document run
+    // outside the library cache directory has no ceiling at all
+    // (`None`, the key popped/never written -- matches this function's
+    // own pre-#728 behavior exactly, unchanged); one run from inside it
+    // gets the consented set actually installed, sorted, even when
+    // that set is empty (a document needing no capability still gets
+    // `_capability_ceiling: []`, not an absent key, once the gate
+    // itself applies).
+    if let Some(ceiling) = capability_ceiling {
+        dict.insert(
+            Value::Str("_capability_ceiling".to_string()),
+            Value::List(ceiling.iter().cloned().map(Value::Str).collect()),
+        );
+    }
     Value::Dict(dict)
 }
 
@@ -897,6 +908,18 @@ impl RunObserver for Observer<'_> {
     fn record_totals(&self, meta: &Value) {
         self.totals.observe_meta(meta);
     }
+
+    fn progress(
+        &self,
+        path: &EffectPath,
+        instance: electricity_vm::observer::InstanceId,
+        attempt: u32,
+        data: &electricity_vm::observer::ProgressData,
+    ) {
+        if let Some(log) = self.events {
+            log.on_progress(&path.to_string(), instance, attempt, data);
+        }
+    }
 }
 
 /// Whether the report console line may use ANSI color, mirroring Rich's
@@ -1056,6 +1079,34 @@ pub fn config_error(config_path: &Path) -> Result<CircuitryConfig, String> {
     electricity_config::resolve_config(config_path, &current_env_vars()).map_err(|err| err.0)
 }
 
+/// [`config_error`]'s own counterpart for `electricity run` (issue
+/// #728), where `--config` is optional: *explicit_path* is `--config`'s
+/// own value, `None` when it was omitted -- ported from `cli/config.py::
+/// resolve_config`'s *other* branch (`electricity_config::
+/// resolve_config_for_run`'s own doc comment), so this additionally
+/// returns the run's own config-resolution warnings (a discovered but
+/// untrusted/changed project config's one line) for the caller to merge
+/// into `RunResult.warnings` the same way `cli/runtime_shim.py::run`
+/// does (`warnings.extend(cfg.resolution_warnings())`) -- there is no
+/// `RunRequest`/`RunResult` seam of its own for a *pre*-run warning, so
+/// `electricity-cli`'s own caller folds this `Vec` into the one it
+/// already prints via [`crate::run::RunResult::warnings`] once the run
+/// itself returns.
+pub fn config_error_for_run(
+    explicit_path: Option<&Path>,
+    cwd: &Path,
+) -> Result<(CircuitryConfig, Vec<String>), String> {
+    let home = std::env::home_dir();
+    electricity_config::resolve_config_for_run(
+        explicit_path,
+        cwd,
+        home.as_deref(),
+        &current_env_vars(),
+    )
+    .map(|resolved| (resolved.config, resolved.warnings))
+    .map_err(|err| err.0)
+}
+
 /// Runs *req* the way `electricity <config.json> <doc> ...` does (issue
 /// #431's run-wiring table, steps 1-19) -- resolving the config,
 /// seeding and checking the document, refusing unsupported content,
@@ -1083,7 +1134,21 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
     // `electricity_config::resolve_config`'s own `log::warn!` ("Unknown
     // environment ...", issue #442) fires for them.
     let env_vars = current_env_vars();
-    match electricity_config::resolve_config(&req.config_path, &env_vars) {
+    let Some(config_path) = req.config_path.as_ref() else {
+        return RunResult {
+            ok: false,
+            out_path: None,
+            state: None,
+            error: Some(
+                "no config path given to run_orchestration; use run_orchestration_with_config \
+                 for config discovery (electricity::config_error_for_run)"
+                    .to_string(),
+            ),
+            warnings: Vec::new(),
+            signal: None,
+        };
+    };
+    match electricity_config::resolve_config(config_path, &env_vars) {
         Ok(cfg) => run_orchestration_with_config(cfg, req, token).await,
         Err(err) => RunResult {
             ok: false,
@@ -1113,14 +1178,65 @@ pub async fn run_orchestration_with_config(
     token: &CancellationToken,
 ) -> RunResult {
     let run_t0 = Instant::now();
-    let mut warnings: Vec<String> = Vec::new();
+    let mut warnings: Vec<String> = req.config_warnings.clone();
 
-    // Step 4: seed state (`input` namespace, from the CLI's own `-e`
-    // entries) -- every failure from here on reports *some* state,
-    // even if sparse, and carries the same `input` a `cof run` of the
-    // same `-e` values would (PR #441).
-    let store = Store::new();
-    state::seed_state(&store, &req.inputs);
+    // Step 4: seed state -- every failure from here on reports *some*
+    // state, even if sparse, and carries the same `input` a `cof run`
+    // of the same `-e` values would (PR #441). `--state <path>` (issue
+    // #727) seeds the *whole* saved tree instead of just `input`,
+    // relinking a `last` alias the same way `cli/runtime_shim.py::
+    // _load_state`'s own `link_last_refs` does -- a missing or
+    // unparseable file is this run's own failure, reported with no
+    // state at all (`state: None`), the same shape a config error
+    // reports (this function's own doc comment): nothing has been
+    // seeded yet for either to show.
+    let store = match &req.state_path {
+        Some(state_path) => {
+            let text = match std::fs::read_to_string(state_path) {
+                Ok(text) => text,
+                Err(_) => {
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(format!("state file not found: {}", state_path.display())),
+                        warnings,
+                        signal: None,
+                    };
+                }
+            };
+            let loaded_state = match electricity_json::loads(&text) {
+                Ok(value @ Value::Dict(_)) => value,
+                Ok(_) => {
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(
+                            "The saved state to resume from is not a JSON object.".to_string(),
+                        ),
+                        warnings,
+                        signal: None,
+                    };
+                }
+                Err(err) => {
+                    return RunResult {
+                        ok: false,
+                        out_path: None,
+                        state: None,
+                        error: Some(format!("{}: {err}", state_path.display())),
+                        warnings,
+                        signal: None,
+                    };
+                }
+            };
+            Store::with_resumed_state(loaded_state)
+        }
+        None => Store::new(),
+    };
+    if req.state_path.is_none() {
+        state::seed_state(&store, &req.inputs);
+    }
 
     // A loaded `--profile`'s own `out:` (issue #495, lane R) -- `None`
     // until a profile actually resolves one; every `fail!` from that
@@ -1168,6 +1284,31 @@ pub async fn run_orchestration_with_config(
         }};
     }
 
+    // `--resume`'s own document-hash refusal (`cli/app.py::
+    // _resolve_resume_state`) happens entirely *before* `cof run`'s own
+    // `run()` is ever called, so a refused resume writes nothing at
+    // all -- not even back to the file it would have resumed from. The
+    // ordinary `fail!` above reports the whole (seeded, but never run)
+    // state, which `--resume`'s own `--out` default (DESIGN.md §6.8)
+    // would otherwise write straight back onto `--state`'s own file.
+    macro_rules! fail_no_resume_state {
+        ($message:expr) => {{
+            let signal = signal_from_token(token);
+            let error = match signal {
+                Some(signal) => signal.interrupt_text().to_string(),
+                None => $message,
+            };
+            return RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(error),
+                warnings,
+                signal,
+            };
+        }};
+    }
+
     // Step 5: load the document -- a load error still writes --out.
     let mut check_options = electricity_compiler::CheckOptions {
         skip_preflight: true,
@@ -1192,9 +1333,106 @@ pub async fn run_orchestration_with_config(
     // `build_input_namespace` (step 10) itself. Never `apply_declared_
     // inputs`'d yet (that's step 10's own job, below) -- this is still
     // just the sniffed-and-string-restored seed.
-    let (restored_input, _) =
-        electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
-    state::replace_input_namespace(&store, restored_input);
+    // `--state <path>` (issue #727): never a wholesale replace --
+    // `cli/app.py`'s own `apply_inline_overrides` merges fresh `-e`
+    // values onto the *resumed* `input` dict, `-e` winning, rather
+    // than rebuilding the namespace from `-e` alone the way the
+    // ordinary (no `--state`) path below does; with no `-e` at all,
+    // the resumed `input` is left exactly as the saved state had it.
+    if req.state_path.is_some() {
+        if !req.inputs.is_empty() {
+            let (restored_input, _) =
+                electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+            match store.child(&store.root, &Value::Str("input".to_string())) {
+                Ok(Some(input_node)) => {
+                    for (k, v) in restored_input {
+                        store.set_leaf(&input_node, k, v);
+                    }
+                }
+                _ => state::replace_input_namespace(&store, restored_input),
+            }
+        }
+    } else {
+        let (restored_input, _) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        state::replace_input_namespace(&store, restored_input);
+    }
+
+    // `cof run --resume` (issue #727): refuse a document that changed
+    // since the run being resumed -- a stale node's recorded
+    // `params_rendered`/output could no longer match what this
+    // document would now produce for it. Only checked with `--resume`
+    // itself (a plain `--state` with no `--resume` trusts the file
+    // outright, matching `cli/runtime_shim.py`'s own `_load_state`,
+    // which never checks a hash at all) and skipped entirely by
+    // `--force`.
+    if req.resume && !req.force {
+        // `cli/app.py::_resolve_resume_state`'s own `last_run_record =
+        // loaded.get("runtime", {}).get("last_run") if isinstance(...,
+        // dict) else None` -- a missing/non-dict `runtime` means
+        // `recorded_hash` is `None` outright; it never falls back to a
+        // root-level `last_run` the way a plain-state load's own
+        // `hydrate_resumed_state` tolerates for other purposes. An empty
+        // string is `not recorded_hash` too (`if not recorded_hash:`'s
+        // own Python truthiness) -- the same "no document_hash" refusal
+        // as a missing one, never "changed".
+        let recorded_hash = match store.child(&store.root, &Value::Str("runtime".to_string())) {
+            Ok(Some(runtime_node)) => {
+                match store.peek(&runtime_node, &Value::Str("last_run".to_string())) {
+                    Some(electricity_vm::Slot::Node(last_run)) => {
+                        match store.peek(&last_run, &Value::Str("document_hash".to_string())) {
+                            Some(electricity_vm::Slot::Value(Value::Str(ref s)))
+                                if !s.is_empty() =>
+                            {
+                                Some(s.clone())
+                            }
+                            _ => None,
+                        }
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        match recorded_hash {
+            None => fail_no_resume_state!(
+                "The saved state to resume from has no \
+                 runtime.last_run.document_hash \u{2014} it wasn't written by `cof run` (or \
+                 predates this field), so there is no way to tell whether this document \
+                 changed since it ran. Pass --force to resume anyway."
+                    .to_string()
+            ),
+            Some(recorded_hash) => {
+                let current_hash = electricity_compiler::document_content_digest(
+                    &loaded.path,
+                    &loaded.document,
+                    &loaded.confinement_root,
+                )
+                .ok();
+                let matches = current_hash.as_ref().is_none_or(|current| {
+                    if *current == recorded_hash {
+                        return true;
+                    }
+                    // `core/resume.py::_legacy_document_sha256` fallback
+                    // (pre-#407 algorithm): a state file an older
+                    // release wrote still resumes without --force.
+                    electricity_compiler::legacy_document_sha256(
+                        &loaded.path,
+                        &loaded.document,
+                        &loaded.confinement_root,
+                    )
+                    .is_ok_and(|legacy| legacy == recorded_hash)
+                });
+                if !matches {
+                    fail_no_resume_state!(format!(
+                        "{} changed since the run being resumed (content hash differs) \
+                         \u{2014} rerun from scratch, or pass --force to resume anyway.",
+                        req.orchestration_path.display()
+                    ));
+                }
+            }
+        }
+    }
 
     // `electricity-config`'s own first caller (vm-lanes.md's own row for
     // this module): between resolve_config and effective_settings, the
@@ -1219,6 +1457,69 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
+    // Capability consent for a document inside the library cache
+    // directory (issue #337, ported for #728): naming that path
+    // directly must not dodge the same gate a library-name run would
+    // hit. `cli/document_consent.py::enforce_consent`'s own
+    // `gate_whole_document` is also true for a `cof fetch`/`cof
+    // run-library` asset and a remote library-source run by bare
+    // name -- neither has an electricity equivalent (every electricity
+    // run names a document by path), so [`electricity_config::
+    // is_cache_path`] is the only condition that can ever gate a
+    // electricity run. An ordinary path run outside the cache
+    // directory is never gated (`ceiling` stays `None`, same as
+    // today).
+    let capability_ceiling: Option<std::collections::BTreeSet<String>> =
+        if electricity_config::is_cache_path(
+            &req.orchestration_path,
+            &current_env_vars(),
+            std::env::home_dir().as_deref(),
+        ) {
+            let mut required = required_capabilities(&loaded.document);
+            for (_, child) in electricity_compiler::use_children::iter_use_children(
+                &loaded.document,
+                Some(&req.orchestration_path),
+            ) {
+                required.extend(required_capabilities(&child));
+            }
+            if required.is_empty() {
+                Some(std::collections::BTreeSet::new())
+            } else {
+                let allowed: std::collections::BTreeSet<String> =
+                    req.allow_capabilities.iter().cloned().collect();
+                // `document_content_digest`'s own byte identity, minus
+                // its `{file: ...}` prompt-reference extension (#396):
+                // a document that itself names no prompt file digests
+                // identically either way, which covers every document
+                // this gate's own conformance coverage exercises; one
+                // that does would compute a different digest here than
+                // `cof trust` recorded it under, so a past consent for
+                // it would never be found (fails closed, never open).
+                let digest = electricity_config::config_trust::config_digest(
+                    &std::fs::read(&req.orchestration_path).unwrap_or_default(),
+                );
+                let consented = std::env::home_dir()
+                    .map(|home| electricity_config::trust_store_path(&home))
+                    .and_then(|store_path| {
+                        electricity_config::consented_capabilities(&digest, &store_path)
+                    })
+                    .unwrap_or_default();
+                let covered: std::collections::BTreeSet<String> =
+                    consented.union(&allowed).cloned().collect();
+                let missing: std::collections::BTreeSet<String> =
+                    required.difference(&covered).cloned().collect();
+                if !missing.is_empty() {
+                    fail!(electricity_config::refusal_message(
+                        &req.orchestration_path.display().to_string(),
+                        &missing,
+                    ));
+                }
+                Some(covered)
+            }
+        } else {
+            None
+        };
+
     // `--profile <path>` (issue #495, lane R): loaded right after the
     // allowlist check and before effective settings (DESIGN §6.11,
     // `electricity_config::profile`'s own vm-lanes.md row) -- an
@@ -1234,21 +1535,40 @@ pub async fn run_orchestration_with_config(
         None => None,
     };
     if let Some(profile) = &profile {
-        // Profile `inputs:` become the base layer under `-e` (DESIGN
-        // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
-        // own seam) -- re-seeding `state["input"]` again now, the same
-        // way the step-5 reseed above already does, so every failure
-        // from here on reports the profile-layered namespace too, not
-        // only the one `build_input_namespace` (step 10) itself
-        // produces.
         check_options.profile_inputs = profile
             .inputs
             .iter()
             .filter_map(|(k, v)| k.as_str().map(|k| (k.to_string(), v.clone())))
             .collect();
-        let (restored_input, _) =
-            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
-        state::replace_input_namespace(&store, restored_input);
+        if req.state_path.is_some() {
+            // `cli/runtime_shim.py::run`, ~:542-551: profile inputs are
+            // a lower-priority base layer *under* whatever `--state`
+            // already resumed (itself possibly already `-e`-overridden,
+            // by the earlier merge above) -- `dict(profile.inputs)`
+            // updated by the existing namespace, not the other way
+            // round, so only a key the resumed namespace doesn't
+            // already have is filled in from the profile.
+            if let Ok(input_node) = store.ensure_dict(&store.root, Value::Str("input".to_string()))
+            {
+                for (key, value) in &check_options.profile_inputs {
+                    let key = Value::Str(key.clone());
+                    if store.peek(&input_node, &key).is_none() {
+                        store.set_leaf(&input_node, key, value.clone());
+                    }
+                }
+            }
+        } else {
+            // Profile `inputs:` become the base layer under `-e` (DESIGN
+            // §6.11; `electricity_compiler::CheckOptions::profile_inputs`'s
+            // own seam) -- re-seeding `state["input"]` again now, the same
+            // way the step-5 reseed above already does, so every failure
+            // from here on reports the profile-layered namespace too, not
+            // only the one `build_input_namespace` (step 10) itself
+            // produces.
+            let (restored_input, _) =
+                electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+            state::replace_input_namespace(&store, restored_input);
+        }
     }
 
     // Step 6 (part 1): effective settings -- model/adapter/plugins/
@@ -1263,6 +1583,7 @@ pub async fn run_orchestration_with_config(
         &loaded.document,
         document_name,
         profile.as_ref(),
+        req.adapter_override.as_deref(),
     ) {
         Ok(effective) => effective,
         Err(err) => fail!(err.0),
@@ -1272,6 +1593,21 @@ pub async fn run_orchestration_with_config(
     // still outranks it (set below, at the same point the existing
     // `sources["out"] = "cli"` override already runs); every `fail!`
     // from here on reports whichever of the two actually applies.
+    //
+    // `--resume` with no `--out` of its own (DESIGN §6.8,
+    // `RunRequest::resume_default_out`'s own doc comment): ranks below
+    // a profile's own `out:` (just set, if any) and above writing
+    // nothing -- applied only when `effective_settings_with_profile`
+    // left `out` at its own "default" (`None`) tier, so a profile's
+    // `out:` is never displaced by it.
+    if effective.out.is_none() {
+        if let Some(resume_out) = &req.resume_default_out {
+            effective.out = Some(resume_out.clone());
+            effective
+                .sources
+                .insert("out".to_string(), "resume".to_string());
+        }
+    }
     resolved_out_path = effective.out.clone();
 
     // Step 6 (part 2)/7/9: complexity validation (before the limiter),
@@ -1400,40 +1736,64 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // Issue #598: a `{secret: ...}` in the host `env` of a tool this
-    // document names. `cof run` resolves it when the tool dispatches; this
-    // build resolves no secret, so the run is refused up front instead of
-    // starting the tool without the variable.
-    if let Some(path) = env_secret_in_use(&loaded.document, effective.runtime.as_ref()) {
-        return RunResult {
-            ok: false,
-            out_path: None,
-            state: None,
-            error: Some(format_config_refusal(&format!("a secret in {path}"))),
-            warnings,
-            signal: None,
-        };
-    }
-
     // Step 10: check_interface_inputs -- replaces `state["input"]`
     // wholesale with the coerced/defaulted namespace (PR #441: a
     // key the final namespace doesn't carry forward,
     // e.g. an optional input whose seed was `null`, must not survive
-    // from the step-5 reseed above).
-    match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
-        Ok(namespace) => state::replace_input_namespace(&store, namespace),
-        Err(err) => {
-            // Step 10 itself failed partway
-            // through -- mirror Python's own in-place mutation of
-            // `state["input"]` as far as it got before the first
-            // violation (`build_input_namespace_best_effort`'s own doc
-            // comment), replacing wholesale same as the success arm.
-            let partial = electricity_compiler::build_input_namespace_best_effort(
-                &loaded.document,
-                &check_options,
-            );
-            state::replace_input_namespace(&store, partial);
-            fail!(err)
+    // from the step-5 reseed above). `--state` (issue #727): never a
+    // rebuild from `-e` alone -- `core/interface_inputs.py::
+    // check_interface_inputs` mutates whatever `input_ns` it's handed
+    // in place (default-fill/require/coerce only; an undeclared key
+    // stays untouched), so a resumed run's own already-merged `input`
+    // (step 5's own merge above) is this step's starting point
+    // instead of a fresh `-e`-only namespace that would drop every
+    // resumed key `-e` didn't name again.
+    let input_namespace_for_label: Value;
+    if req.state_path.is_some() {
+        let mut namespace: indexmap::IndexMap<Value, Value> = store
+            .child(&store.root, &Value::Str("input".to_string()))
+            .ok()
+            .flatten()
+            .map(|node| store.snapshot(&node))
+            .and_then(|mut v| v.as_dict_mut().map(std::mem::take))
+            .unwrap_or_default();
+        let (_, iface_inputs) =
+            electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
+        let apply_result = match iface_inputs {
+            Some(iface_inputs) => {
+                electricity_compiler::apply_declared_inputs(&mut namespace, iface_inputs)
+            }
+            None => Ok(()),
+        };
+        match apply_result {
+            Ok(()) => {
+                input_namespace_for_label = Value::Dict(namespace.clone());
+                state::replace_input_namespace(&store, namespace);
+            }
+            Err(err) => {
+                state::replace_input_namespace(&store, namespace);
+                fail!(err)
+            }
+        }
+    } else {
+        match electricity_compiler::build_input_namespace(&loaded.document, &check_options) {
+            Ok(namespace) => {
+                input_namespace_for_label = Value::Dict(namespace.clone());
+                state::replace_input_namespace(&store, namespace);
+            }
+            Err(err) => {
+                // Step 10 itself failed partway
+                // through -- mirror Python's own in-place mutation of
+                // `state["input"]` as far as it got before the first
+                // violation (`build_input_namespace_best_effort`'s own doc
+                // comment), replacing wholesale same as the success arm.
+                let partial = electricity_compiler::build_input_namespace_best_effort(
+                    &loaded.document,
+                    &check_options,
+                );
+                state::replace_input_namespace(&store, partial);
+                fail!(err)
+            }
         }
     }
 
@@ -1446,8 +1806,13 @@ pub async fn run_orchestration_with_config(
     // private keys a tool dispatch and this run's own metadata both
     // read off the identical value.
     let orchestration_dir = orchestration_dir_string(&req.orchestration_path);
-    let runtime_config_value =
-        build_runtime_config(effective.runtime.as_ref(), &cfg, &orchestration_dir);
+    let runtime_config_value = build_runtime_config(
+        effective.runtime.as_ref(),
+        &cfg,
+        &orchestration_dir,
+        &req.allow_capabilities,
+        capability_ceiling.as_ref(),
+    );
 
     // Step 12 (part 1): `state.setdefault("runtime", {})` -- Python's
     // own order has this *before* `_run_id`/`_timestamp` are assigned
@@ -1474,6 +1839,39 @@ pub async fn run_orchestration_with_config(
         Value::Str(timestamp),
     );
 
+    // Run label (#752): rendered once, here, now that `input_namespace_
+    // for_label` holds its final resolved values (the same namespace
+    // step 10 above just wrote into the store). `--label` is literal
+    // text and always wins over the document's own; otherwise the
+    // document's top-level `label:` template renders against
+    // `{"input": ...}` only -- nothing has run yet. A render failure
+    // warns once (`crate::label`) and the run continues with no label;
+    // either way the result passes through the same cleaning before it
+    // reaches `--events`/`runtime.last_run`.
+    let run_label = match req.label_override.as_deref() {
+        Some(override_text) => {
+            let cleaned = label::clean_label(override_text);
+            if cleaned.is_empty() {
+                None
+            } else {
+                Some(cleaned)
+            }
+        }
+        None => {
+            let label_template = loaded
+                .document
+                .as_dict()
+                .and_then(|d| d.get(&Value::Str("label".to_string())))
+                .and_then(|v| v.as_str());
+            let (label_value, label_warning) =
+                label::render_document_label(label_template, input_namespace_for_label);
+            if let Some(warning) = label_warning {
+                warnings.push(warning);
+            }
+            label_value
+        }
+    };
+
     // Step 12 (part 2): runtime.last_run -- `document_hash` is computed
     // independently of compilation, exactly as `cli/runtime_shim.py::run`
     // does (its own `document_content_digest` call, ~:666-683, happens
@@ -1488,6 +1886,15 @@ pub async fn run_orchestration_with_config(
     )
     .ok();
 
+    // `state["runtime"]["last_run"] = {...}` (`cli/runtime_shim.py::run`,
+    // ~:754) replaces the whole dict, rather than updating into whatever
+    // `--state` resumed -- a stale `label`/`totals` from the saved run
+    // must not survive into this run's own `runtime.last_run`.
+    store.set_leaf(
+        &runtime_node,
+        Value::Str("last_run".to_string()),
+        Value::Dict(Dict::new()),
+    );
     let last_run_node = store
         .ensure_dict(&runtime_node, Value::Str("last_run".to_string()))
         .expect("Store::ensure_dict never fails");
@@ -1531,6 +1938,15 @@ pub async fn run_orchestration_with_config(
         Value::Str("completed_at".to_string()),
         Value::None,
     );
+    if let Some(label_text) = &run_label {
+        // Absent entirely with no label, so an existing --out/state file
+        // with no `label:`/`--label` is byte-for-byte unchanged (#752).
+        store.set_leaf(
+            &last_run_node,
+            Value::Str("label".to_string()),
+            Value::Str(label_text.clone()),
+        );
+    }
 
     // Step 13: runtime.effective_settings (redacted, limiter dropped --
     // there never was one in this Value to begin with, unlike Python's
@@ -1635,7 +2051,13 @@ pub async fn run_orchestration_with_config(
     // entries at all (including no `--profile` at all).
     if let Some(profile) = &profile {
         if !profile.effects.is_empty() {
-            electricity_compiler::overrides::apply_effect_overrides(&mut program, &profile.effects);
+            if let Err(err) = electricity_compiler::overrides::apply_effect_overrides(
+                &mut program,
+                &profile.effects,
+                Some(&profile.name),
+            ) {
+                fail!(err);
+            }
         }
     }
 
@@ -1943,6 +2365,11 @@ pub async fn run_orchestration_with_config(
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(""),
+            req.config_path
+                .as_ref()
+                .and_then(|path| path.file_name())
+                .and_then(|n| n.to_str()),
+            run_label.as_deref(),
         );
         log
     });
@@ -2014,6 +2441,7 @@ pub async fn run_orchestration_with_config(
         &run_ctx,
         &observer,
         token,
+        req.resume,
     ));
     let exec_result = match &live_mirror {
         Some(mirror) => {
@@ -2176,6 +2604,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -2190,6 +2619,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         }
     }
 
@@ -2205,7 +2635,10 @@ mod tests {
             expect: None,
             description: None,
             group: None,
+            secret_headers: indexmap::IndexMap::new(),
             prompt_file: None,
+            limited: false,
+            confine_to: None,
         }
     }
 
@@ -2230,11 +2663,17 @@ mod tests {
             retries: None,
             description: None,
             group: None,
+            split_budget_tokens: None,
+            split_enabled: None,
+            split_max_parts: None,
+            split_separator: None,
+            split_merge_template: None,
         }
     }
 
     fn use_op() -> UseOp {
         UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             source: UseSource::Path("child.yml".to_string()),
             inputs: None,
@@ -2261,6 +2700,7 @@ mod tests {
     #[test]
     fn a_use_effects_own_model_mode_expect_calls_the_default_adapter() {
         let op = block(vec![leaf(LeafKind::Use(UseOp {
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
             parent_trusted: false,
             expect: Some(ExpectCondition::Model {
                 template: TemplateText::new("ok?".to_string(), false, Escape::None),
@@ -2311,6 +2751,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(default_adapter_called_directly(&op));
     }
@@ -2335,6 +2776,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(!default_adapter_called_directly(&op));
     }
@@ -2362,6 +2804,7 @@ mod tests {
             on_error: OnError::Fail,
             labels: None,
             enabled: true,
+            resume_mode: electricity_bytecode::ResumeMode::Continue,
         };
         assert!(default_adapter_called_directly(&op));
     }

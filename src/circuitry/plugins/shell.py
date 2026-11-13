@@ -46,6 +46,7 @@ effect — the binary is never invoked when the command isn't allowed.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
@@ -73,6 +74,7 @@ class ShellPlugin:
         *,
         params: dict[str, Any],
         timeout_seconds: int = 300,
+        on_live: Callable[[dict[str, Any] | None], None] | None = None,
     ) -> ToolResult:
         command = params.get("command")
         if not isinstance(command, str) or not command.strip():
@@ -148,6 +150,7 @@ class ShellPlugin:
             timeout_seconds=timeout_seconds,
             allow_nonzero=_as_bool(params.get("allow_nonzero")),
             parse_json=parse_json,
+            on_live=on_live,
         )
 
     def check(self) -> CheckResult:

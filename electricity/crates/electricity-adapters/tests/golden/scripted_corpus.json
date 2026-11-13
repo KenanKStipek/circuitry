@@ -708,7 +708,7 @@
       "calls": [
         {
           "kind": "check",
-          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of ['finish_reason', 'text', 'tokens_received', 'tokens_sent']",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']",
           "missing": [],
           "ok": false
         }
@@ -722,7 +722,7 @@
       "calls": [
         {
           "kind": "check",
-          "message": "replies.yaml: reply 0 for path 'prime.x' needs a string 'text', or an 'error'",
+          "message": "replies.yaml: reply 0 for path 'prime.x' needs a string 'text' (or 'chunks'), or an 'error'",
           "missing": [],
           "ok": false
         }
@@ -918,7 +918,7 @@
       "calls": [
         {
           "kind": "check",
-          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of ['finish_reason', 'text', 'tokens_received', 'tokens_sent']",
+          "message": "replies.yaml: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']",
           "missing": [],
           "ok": false
         }

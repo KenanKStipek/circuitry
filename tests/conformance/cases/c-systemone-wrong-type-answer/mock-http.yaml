@@ -1,0 +1,9 @@
+- request:
+    method: POST
+    path: /v1/systemone
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"model":"typesafe-1","usage":{"input_tokens":3,"output_tokens":2},"answers":{"risky":{"type":"choice","choice":"x"}}}'

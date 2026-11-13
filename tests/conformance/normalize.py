@@ -63,6 +63,7 @@ _FIELD_RULES: dict[str, str] = {
     "started_at": "timestamp_iso",
     "completed_at": "timestamp_iso",
     "created_at": "timestamp_iso",
+    "resolved_at": "timestamp_iso",
     "_timestamp": "timestamp_compact",
     "wall_time_s": "duration",
     "eta_s": "duration",
@@ -586,8 +587,54 @@ EVENT_ENGINE_PLACEHOLDER = "<ENGINE>"
 #: semantics §8.7, issue #431's events-conformance acceptance criterion):
 #: shape-checked, then replaced with a fixed placeholder. `run_id` reuses
 #: the same UUID check/placeholder `normalize()` uses for state's own
-#: `run_id`/`_run_id`.
-_EVENT_FIELD_RULES = ("ts", "ms", "run_id", "pid", "engine")
+#: `run_id`/`_run_id`. `first_token_ms` (#674, a `progress` line) is the
+#: same kind of wall-clock-derived value as `ms` and gets the same
+#: placeholder.
+_EVENT_FIELD_RULES = ("ts", "ms", "first_token_ms", "run_id", "pid", "engine")
+
+#: `run_start`'s own `config` field is not a `_EVENT_FIELD_RULES` entry --
+#: unlike `ts`/`ms`/`run_id`/`pid`/`engine`, it is not placeholdered the
+#: same way on both sides. A case that names a `config` in `case.json`
+#: gives both engines that same name -- except a case run against the mock
+#: server, where `harness.materialize_config` hands both engines its own
+#: `materialized-<config>` instead (the port it substitutes is different on
+#: every run); either way, the two engines' own actual streams and the
+#: committed fixture all carry the identical string, compared as-is. A case
+#: that names none gives `cof` nothing (it writes `null`, discovery never
+#: naming a single file) but still has to give electricity's required
+#: config argument *something*: the conformance electricity runner's own
+#: placeholder config (`test_electricity_runner.DEFAULT_CONFIG_PATH`, named
+#: by this file only through its fixed basename below, never a path).
+#: `_check_run_start_config` accepts either value on that side, rather than
+#: ever placeholdering `config` itself the way `engine` is -- that would
+#: leave this whole field untested.
+_ELECTRICITY_RUNNER_DEFAULT_CONFIG_NAME = "default_config.json"
+
+#: `run_start.config` is always present (never omitted) on both engines --
+#: a sentinel, not a default of `None`, so a stream from before this field
+#: existed (missing the key outright, distinct from carrying it as `null`)
+#: is caught as a mismatch rather than silently treated as `null`.
+_RUN_START_CONFIG_MISSING = object()
+
+
+def _check_run_start_config(actual: Any, expected: Any) -> None:
+    if actual is _RUN_START_CONFIG_MISSING or expected is _RUN_START_CONFIG_MISSING:
+        raise AssertionError(
+            "run_start.config is missing from one side -- a stream from before this "
+            f"field existed:\n  actual:   {actual!r}\n  expected: {expected!r}"
+        )
+    if expected is not None:
+        if actual != expected:
+            raise AssertionError(
+                f"run_start.config differs:\n  actual:   {actual!r}\n  expected: {expected!r}"
+            )
+        return
+    if actual not in (None, _ELECTRICITY_RUNNER_DEFAULT_CONFIG_NAME):
+        raise AssertionError(
+            "run_start.config differs: expected null (no config named by the case) "
+            f"or {_ELECTRICITY_RUNNER_DEFAULT_CONFIG_NAME!r} (the electricity runner's "
+            f"own placeholder), got {actual!r}"
+        )
 
 
 def _normalize_event_field(key: str, value: Any) -> Any:
@@ -595,7 +642,12 @@ def _normalize_event_field(key: str, value: Any) -> Any:
         if not isinstance(value, str) or not _EVENT_TS_RE.match(value):
             raise NormalizationError(f"event {key!r}: not a millisecond UTC timestamp: {value!r}")
         return EVENT_TS_PLACEHOLDER
-    if key == "ms":
+    if key in ("ms", "first_token_ms"):
+        # `progress`'s own `ms`/`first_token_ms` (#674) can be `null` --
+        # unlike `end`'s `ms`, which is omitted rather than nulled when
+        # there's nothing to report (see `cli/events.py::on_complete`).
+        if value is None:
+            return None
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise NormalizationError(f"event {key!r}: expected a non-negative int, got {value!r}")
         return EVENT_MS_PLACEHOLDER
@@ -625,7 +677,11 @@ def _comparable_event(event: dict[str, Any]) -> dict[str, Any]:
     cooperative scheduler); comparing their absolute values would assert
     an implementation detail neither engine commits to. Every other key
     (`v`, `ev`, `path`, `ok`, `error`, `branches`, `concurrency`,
-    `orchestration`, `signal`) is compared as-is."""
+    `orchestration`, `config`, `signal`) is compared as-is -- `config`
+    only here; `assert_events_equal` pops it back out of a `run_start`
+    comparison for its own dedicated rule (`_check_run_start_config`),
+    since unlike every other key here it is not always expected to
+    compare equal across engines."""
     comparable = {k: v for k, v in event.items() if k not in ("seq", "id")}
     for key in _EVENT_FIELD_RULES:
         if key in comparable:
@@ -843,11 +899,14 @@ def assert_events_equal(actual_text: str, expected_text: str) -> None:
 
     actual_start_c = _comparable_event(actual_start)
     expected_start_c = _comparable_event(expected_start)
+    actual_config = actual_start_c.pop("config", _RUN_START_CONFIG_MISSING)
+    expected_config = expected_start_c.pop("config", _RUN_START_CONFIG_MISSING)
     if actual_start_c != expected_start_c:
         raise AssertionError(
             f"run_start differs:\n  actual:   {actual_start_c!r}\n"
             f"  expected: {expected_start_c!r}"
         )
+    _check_run_start_config(actual_config, expected_config)
     actual_end_c = _comparable_event(actual_end)
     expected_end_c = _comparable_event(expected_end)
     if actual_end_c != expected_end_c:

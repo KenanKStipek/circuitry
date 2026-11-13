@@ -151,6 +151,48 @@ def _namespaced_report_cb(
     return _forward
 
 
+def _namespaced_progress_cb(
+    callback: Callable[[str, dict[str, Any]], None] | None, node_path: str
+) -> Callable[[str, dict[str, Any]], None] | None:
+    """Wrap ``progress`` the same way :func:`_namespaced_report_cb` wraps
+    ``report`` (#674) -- a streamed prompt running inside a ``use`` or
+    decomposition child nests its ``progress`` line under the child's own
+    path too, the same as its ``meta.live`` writes already do via
+    ``Store.child``.
+    """
+    if callback is None:
+        return None
+
+    def _forward(child_path: str, data: dict[str, Any]) -> None:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            callback(node_path, data)
+            return
+        callback(f"{node_path}.{relative}", data)
+
+    return _forward
+
+
+def _namespaced_open_instance_id_cb(
+    callback: Callable[[str], Any] | None, node_path: str
+) -> Callable[[str], Any] | None:
+    """Wrap ``open_instance_id`` the same way :func:`_namespaced_progress_cb`
+    wraps ``progress`` (#674) -- a query, not a notification, so this
+    returns the parent's own answer for the nested path rather than
+    forwarding void.
+    """
+    if callback is None:
+        return None
+
+    def _query(child_path: str) -> Any:
+        relative = _relative_child_path(child_path)
+        if relative is None:
+            return callback(node_path)
+        return callback(f"{node_path}.{relative}")
+
+    return _query
+
+
 def _grafted_snapshot(
     root_state: dict[str, Any],
     node_path: str,
@@ -1270,6 +1312,10 @@ class UseRuntime:
                             store.branch_settled, node_path
                         ),
                         report=_namespaced_report_cb(store.report, node_path),
+                        progress=_namespaced_progress_cb(store.progress, node_path),
+                        open_instance_id=_namespaced_open_instance_id_cb(
+                            store.open_instance_id, node_path
+                        ),
                         _lock=store._lock,
                     )
 

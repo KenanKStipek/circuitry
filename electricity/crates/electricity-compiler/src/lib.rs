@@ -178,7 +178,7 @@ pub mod structural;
 pub mod use_children;
 
 pub use compile::compile_document;
-pub use digest::document_content_digest;
+pub use digest::{document_content_digest, legacy_document_sha256};
 pub use lint::lint_warnings;
 pub use load::load_document;
 pub use pipeline::{

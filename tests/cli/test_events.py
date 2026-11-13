@@ -19,7 +19,7 @@ def _lines(path: Path) -> list[dict[str, Any]]:
 
 def test_run_start_is_first_line(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="do-thing.yml")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config=None)
     log.close()
 
     lines = _lines(tmp_path / "events.jsonl")
@@ -28,9 +28,44 @@ def test_run_start_is_first_line(tmp_path: Path) -> None:
     assert lines[0]["v"] == 1
     assert lines[0]["run_id"] == "r1"
     assert lines[0]["orchestration"] == "do-thing.yml"
+    assert lines[0]["config"] is None
     assert lines[0]["engine"].startswith("cof ")
     assert isinstance(lines[0]["pid"], int)
+    assert list(lines[0].keys()).index("config") == list(lines[0].keys()).index(
+        "orchestration"
+    ) + 1
     assert lines[0]["ts"].endswith("Z")
+
+
+def test_run_start_names_the_config_file(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config="config.json")
+    log.close()
+
+    assert _lines(tmp_path / "events.jsonl")[0]["config"] == "config.json"
+
+
+def test_run_start_omits_label_when_absent(tmp_path: Path) -> None:
+    """No `label` kwarg at all (the no-label call every existing caller
+    makes) carries no `label` key — an unlabelled run's line is unchanged
+    by this field existing (#752)."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config=None)
+    log.close()
+
+    assert "label" not in _lines(tmp_path / "events.jsonl")[0]
+
+
+def test_run_start_carries_label_right_after_orchestration(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.run_start(run_id="r1", orchestration="do-thing.yml", config=None, label="ticket 42")
+    log.close()
+
+    line = _lines(tmp_path / "events.jsonl")[0]
+    assert line["label"] == "ticket 42"
+    keys = list(line.keys())
+    assert keys.index("label") == keys.index("orchestration") + 1
+    assert keys.index("config") == keys.index("label") + 1
 
 
 def test_dispatch_payload_carries_branches_and_concurrency(tmp_path: Path) -> None:
@@ -50,7 +85,7 @@ def test_dispatch_payload_carries_branches_and_concurrency(tmp_path: Path) -> No
 
 def test_seq_strictly_increasing_across_event_kinds(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     log.on_dispatch("prime.each", 2, 3)
     log.on_start("prime.each.iter_0.t", {})
     log.on_complete("prime.each.iter_0.t", {"meta": {"error": None}})
@@ -164,7 +199,7 @@ def test_complete_without_a_matching_start_gets_a_null_id_and_no_crash(
     stream keeps going."""
     log = EventLog(tmp_path / "events.jsonl")
     log.on_complete("prime.step", {"meta": {"error": None}})
-    log.run_start(run_id="r1", orchestration="o.yml")  # still writing
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)  # still writing
     log.close()
 
     events = _lines(tmp_path / "events.jsonl")
@@ -220,7 +255,7 @@ def test_file_is_created_or_truncated_at_construction(tmp_path: Path) -> None:
     path = tmp_path / "events.jsonl"
     path.write_text("stale leftover line\n", encoding="utf-8")
     log = EventLog(path)
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     log.close()
 
     lines = path.read_text(encoding="utf-8").splitlines()
@@ -231,7 +266,7 @@ def test_file_is_created_or_truncated_at_construction(tmp_path: Path) -> None:
 def test_creates_missing_parent_directories(tmp_path: Path) -> None:
     path = tmp_path / "deep" / "nested" / "events.jsonl"
     log = EventLog(path)
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     assert log.close() is False
     assert path.exists()
 
@@ -243,7 +278,7 @@ def test_unwritable_path_disables_writes_without_raising(tmp_path: Path) -> None
 
     # Every call is a no-op, never an exception -- writing this stream must
     # never fail the run.
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     log.on_start("prime.step", {})
     log.on_complete("prime.step", {"meta": {"error": None}})
     log.run_end(ok=True, error=None, signal=None)
@@ -254,7 +289,7 @@ def test_a_write_failure_mid_run_disables_further_writes(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
 
     real_write = log._file.write
     calls = {"n": 0}
@@ -277,7 +312,7 @@ def test_a_write_failure_mid_run_disables_further_writes(
 
 def test_close_returns_false_when_nothing_ever_failed(tmp_path: Path) -> None:
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
     assert log.close() is False
 
 
@@ -288,7 +323,7 @@ def test_an_unexpected_non_oserror_also_disables_further_writes(
     anywhere in a method's body must not escape and must not re-fail on
     every subsequent call (#419 review)."""
     log = EventLog(tmp_path / "events.jsonl")
-    log.run_start(run_id="r1", orchestration="o.yml")
+    log.run_start(run_id="r1", orchestration="o.yml", config=None)
 
     def boom(data: str) -> int:
         raise RuntimeError("not an OSError")
@@ -396,3 +431,114 @@ def test_no_torn_lines_under_concurrent_writers(tmp_path: Path) -> None:
     assert len(raw_lines) == 300
     for line in raw_lines:
         json.loads(line)
+
+
+def test_on_progress_carries_the_open_starts_id_and_running_figures(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.p", {})
+    log.on_progress(
+        "prime.p",
+        {
+            "tokens_received_estimate": 1,
+            "chars_received": 6,
+            "tokens_sent": None,
+            "tokens_sent_estimate": 3,
+        },
+    )
+    log.close()
+
+    start, progress = _lines(tmp_path / "events.jsonl")
+    assert progress["ev"] == "progress"
+    assert progress["id"] == start["id"]
+    assert progress["path"] == "prime.p"
+    assert progress["tokens_received_estimate"] == 1
+    assert progress["chars_received"] == 6
+    assert progress["tokens_sent"] is None
+    assert progress["tokens_sent_estimate"] == 3
+    assert isinstance(progress["ms"], int)
+    assert progress["first_token_ms"] == progress["ms"]
+
+
+def test_on_progress_with_no_open_start_has_a_null_id_and_ms(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_progress("prime.p", {"tokens_received_estimate": 1, "chars_received": 6})
+    log.close()
+
+    progress = _lines(tmp_path / "events.jsonl")[0]
+    assert progress["id"] is None
+    assert progress["ms"] is None
+    assert progress["first_token_ms"] is None
+
+
+def test_on_progress_reuses_first_token_ms_on_later_calls(tmp_path: Path) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.p", {})
+    log.on_progress("prime.p", {"tokens_received_estimate": 1, "chars_received": 6})
+    log.on_progress("prime.p", {"tokens_received_estimate": 2, "chars_received": 11})
+    log.close()
+
+    _start, first, second = _lines(tmp_path / "events.jsonl")
+    assert second["first_token_ms"] == first["first_token_ms"]
+    assert second["ms"] >= first["ms"]
+
+
+def test_on_progress_resets_first_token_ms_on_a_new_attempt(tmp_path: Path) -> None:
+    """One `start`/`end` pair covers every retry of a prompt (#674) --
+    `first_token_ms` must not carry an earlier, failed attempt's value
+    into a fresh one's own first delta."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.p", {})
+    log.on_progress(
+        "prime.p", {"tokens_received_estimate": 1, "chars_received": 6, "attempt": 0}
+    )
+    log.on_progress(
+        "prime.p", {"tokens_received_estimate": 1, "chars_received": 6, "attempt": 1}
+    )
+    log.close()
+
+    _start, first, second = _lines(tmp_path / "events.jsonl")
+    assert second["first_token_ms"] == second["ms"]
+    assert second["first_token_ms"] != first["first_token_ms"] or second["ms"] == first["ms"]
+
+
+def test_current_instance_matches_the_open_starts_id_and_is_none_after_complete(
+    tmp_path: Path,
+) -> None:
+    log = EventLog(tmp_path / "events.jsonl")
+    assert log.current_instance("prime.p") is None
+    log.on_start("prime.p", {})
+    instance = log.current_instance("prime.p")
+    assert instance is not None
+    instance_id, _started_at = instance
+    assert isinstance(instance_id, int)
+    log.on_complete("prime.p", {"meta": {"error": None}})
+    assert log.current_instance("prime.p") is None
+    log.close()
+
+
+def test_on_progress_prefers_a_captured_instance_over_a_later_same_path_start(
+    tmp_path: Path,
+) -> None:
+    """A same-path concurrent `start` (an unnamed
+    tree-flow loop sharing one compiled path) must not steal an earlier
+    attempt's own `progress` line -- the captured `_instance` (taken once,
+    when that attempt began) always wins over a fresh path lookup."""
+    log = EventLog(tmp_path / "events.jsonl")
+    log.on_start("prime.each.t", {})
+    captured = log.current_instance("prime.each.t")
+    assert captured is not None
+    first_id, _ = captured
+
+    # A second, concurrent instance of the same path opens before the
+    # first's own progress line fires -- `_open_by_path` now points at it.
+    log.on_start("prime.each.t", {})
+
+    log.on_progress(
+        "prime.each.t",
+        {"tokens_received_estimate": 1, "chars_received": 6, "_instance": captured},
+    )
+    log.close()
+
+    lines = _lines(tmp_path / "events.jsonl")
+    progress = next(line for line in lines if line["ev"] == "progress")
+    assert progress["id"] == first_id

@@ -36,6 +36,7 @@ cof run triage.yml --json | jq '.prime.reply.value'     # machine-readable state
 cof run triage.yml --out state.json --pretty            # write the finished state
 cof run issue_to_pr.yml --live-state agent.live.json    # mirror the state while it runs (≤ every 0.5 s, and at the end)
 cof run issue_to_pr.yml --events agent.events.jsonl      # a JSONL stream of effect starts/ends, written as they happen
+cof run issue_to_pr.yml --label "PR #412"               # literal text for this run's label; beats the document's own label:
 cof run issue_to_pr.yml --dry-run                       # no model calls; rendered prompts and shapes
 cof run issue_to_pr.yml --verbose                       # a start and a result line per effect, pass tags, timing
 cof run --last                                          # re-run the previous invocation
@@ -58,6 +59,8 @@ A tree branch, a `use` child, and a running chain leaf all show up in `--live-st
 A `report` effect is the orchestration's own voice: it renders a message (plus optional data from the shadow state) and publishes it without doing anything else — no model call, no retries, never a failure. `cof run` prints it as its own line, `▸ <message>` (styled as a warning when `level: warning`), above whatever else is printing, unless `--quiet`/`--json` is set; `--events` gets a matching `report` line. The console line only ever prints on an interactive terminal: never under `--quiet`/`--json`/`--tail`, and never when stdout is piped or redirected, the same auto-quiet check `cof run` already applies elsewhere; `electricity` has no such flags, so it prints the line only when stdout is a TTY. It never starts or ends — it isn't counted as work, so it never appears in `--verbose`'s own start/result lines and never adds to an effect count. A named report also lands in the state graph at its own path, the same as any other named effect; an unnamed one only ever shows up in `--events`/the console.
 
 A report also reaches every loaded runtime plugin that implements the optional `on_report` hook, and `cof tui`'s Run view — both whether or not `--events` is set. See [Observability](#observability) below and [Terminal UI](../tui.md)'s own "Watching it run" section.
+
+A run can carry a label, distinct from osi's generated per-run name: a top-level `label:` Mustache template in the document, rendered once against its resolved inputs when the run starts (`{{input.ticket}}`, nothing else has run yet), or `--label "TEXT"` — literal text, never rendered, that wins over the document's own. Either way the result is cleaned before it's shown: whitespace runs (line breaks included) collapse to one space, control characters and escape sequences drop, the result is trimmed and cut at 64 characters, and an empty result means no label. A render failure (a malformed template that reached a run without `cof check` catching it first) prints one warning and the run carries on with no label. `--events`' `run_start` and `runtime.last_run` in `--out`/`--live-state` both carry `label` only when the run has one. `--resume` re-renders the document's label from the resumed inputs unless `--label` is given; a `use` child's own `label:` is valid in its own file but never surfaces when it runs as a child.
 
 ### `cof gen` and `cof wizard`
 

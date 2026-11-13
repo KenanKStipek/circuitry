@@ -11,7 +11,7 @@ log:
   ▶ prime.each_chain.iter_2.nap  shell echo c
   ✓ prime.each_chain.iter_2.nap  0.0s  c
   ⟳ prime.each_chain pass 3/3  ETA 0.0s
-  ■ run ok  0.0s
+  ■ run piney-river  ok  0.0s
 status:
 prime: Done skip=None retrying=false
 prime.each_chain: Done skip=None retrying=false

@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #722 (gh tool, pass-through to the GitHub CLI)",
+  "description": "A failing `gh` call (nonzero exit, no `on_error`) fails the run with the same `meta.error` shape every other `GenericSubprocessTool` gets: the exit code and stderr, Circuitry's own message, compared byte for byte.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

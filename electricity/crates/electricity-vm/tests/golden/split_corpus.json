@@ -1,0 +1,1525 @@
+[
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": []
+    },
+    "kind": "list",
+    "name": "list_empty",
+    "parts": [],
+    "room": 10
+  },
+  {
+    "error": "item 0",
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "1"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_room_zero_refuses",
+    "parts": null,
+    "room": 0
+  },
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "t": "int",
+          "v": "2"
+        },
+        {
+          "t": "int",
+          "v": "3"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_single_item_fits",
+    "parts": [
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          }
+        ]
+      }
+    ],
+    "room": 50
+  },
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "0"
+        },
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "t": "int",
+          "v": "2"
+        },
+        {
+          "t": "int",
+          "v": "3"
+        },
+        {
+          "t": "int",
+          "v": "4"
+        },
+        {
+          "t": "int",
+          "v": "5"
+        },
+        {
+          "t": "int",
+          "v": "6"
+        },
+        {
+          "t": "int",
+          "v": "7"
+        },
+        {
+          "t": "int",
+          "v": "8"
+        },
+        {
+          "t": "int",
+          "v": "9"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_balanced_two_parts",
+    "parts": [
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "0"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "int",
+            "v": "4"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "5"
+          },
+          {
+            "t": "int",
+            "v": "6"
+          },
+          {
+            "t": "int",
+            "v": "7"
+          },
+          {
+            "t": "int",
+            "v": "8"
+          },
+          {
+            "t": "int",
+            "v": "9"
+          }
+        ]
+      }
+    ],
+    "room": 5
+  },
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "int",
+          "v": "0"
+        },
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "t": "int",
+          "v": "2"
+        },
+        {
+          "t": "int",
+          "v": "3"
+        },
+        {
+          "t": "int",
+          "v": "4"
+        },
+        {
+          "t": "int",
+          "v": "5"
+        },
+        {
+          "t": "int",
+          "v": "6"
+        },
+        {
+          "t": "int",
+          "v": "7"
+        },
+        {
+          "t": "int",
+          "v": "8"
+        },
+        {
+          "t": "int",
+          "v": "9"
+        },
+        {
+          "t": "int",
+          "v": "10"
+        },
+        {
+          "t": "int",
+          "v": "11"
+        },
+        {
+          "t": "int",
+          "v": "12"
+        },
+        {
+          "t": "int",
+          "v": "13"
+        },
+        {
+          "t": "int",
+          "v": "14"
+        },
+        {
+          "t": "int",
+          "v": "15"
+        },
+        {
+          "t": "int",
+          "v": "16"
+        },
+        {
+          "t": "int",
+          "v": "17"
+        },
+        {
+          "t": "int",
+          "v": "18"
+        },
+        {
+          "t": "int",
+          "v": "19"
+        },
+        {
+          "t": "int",
+          "v": "20"
+        },
+        {
+          "t": "int",
+          "v": "21"
+        },
+        {
+          "t": "int",
+          "v": "22"
+        },
+        {
+          "t": "int",
+          "v": "23"
+        },
+        {
+          "t": "int",
+          "v": "24"
+        },
+        {
+          "t": "int",
+          "v": "25"
+        },
+        {
+          "t": "int",
+          "v": "26"
+        },
+        {
+          "t": "int",
+          "v": "27"
+        },
+        {
+          "t": "int",
+          "v": "28"
+        },
+        {
+          "t": "int",
+          "v": "29"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_many_small_parts",
+    "parts": [
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "0"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "int",
+            "v": "4"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "5"
+          },
+          {
+            "t": "int",
+            "v": "6"
+          },
+          {
+            "t": "int",
+            "v": "7"
+          },
+          {
+            "t": "int",
+            "v": "8"
+          },
+          {
+            "t": "int",
+            "v": "9"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "10"
+          },
+          {
+            "t": "int",
+            "v": "11"
+          },
+          {
+            "t": "int",
+            "v": "12"
+          },
+          {
+            "t": "int",
+            "v": "13"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "14"
+          },
+          {
+            "t": "int",
+            "v": "15"
+          },
+          {
+            "t": "int",
+            "v": "16"
+          },
+          {
+            "t": "int",
+            "v": "17"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "18"
+          },
+          {
+            "t": "int",
+            "v": "19"
+          },
+          {
+            "t": "int",
+            "v": "20"
+          },
+          {
+            "t": "int",
+            "v": "21"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "22"
+          },
+          {
+            "t": "int",
+            "v": "23"
+          },
+          {
+            "t": "int",
+            "v": "24"
+          },
+          {
+            "t": "int",
+            "v": "25"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "int",
+            "v": "26"
+          },
+          {
+            "t": "int",
+            "v": "27"
+          },
+          {
+            "t": "int",
+            "v": "28"
+          },
+          {
+            "t": "int",
+            "v": "29"
+          }
+        ]
+      }
+    ],
+    "room": 4
+  },
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "str",
+          "v": "a"
+        },
+        {
+          "t": "int",
+          "v": "1"
+        },
+        {
+          "bits": "4004000000000000",
+          "t": "float"
+        },
+        {
+          "t": "bool",
+          "v": true
+        },
+        {
+          "t": "none"
+        },
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        },
+        {
+          "t": "dict",
+          "v": [
+            [
+              {
+                "t": "str",
+                "v": "k"
+              },
+              {
+                "t": "str",
+                "v": "v"
+              }
+            ]
+          ]
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_mixed_types",
+    "parts": [
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "bits": "4004000000000000",
+            "t": "float"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "bool",
+            "v": true
+          },
+          {
+            "t": "none"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "k"
+                },
+                {
+                  "t": "str",
+                  "v": "v"
+                }
+              ]
+            ]
+          }
+        ]
+      }
+    ],
+    "room": 4
+  },
+  {
+    "error": "item 1",
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "str",
+          "v": "x"
+        },
+        {
+          "t": "str",
+          "v": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_one_item_too_big",
+    "parts": null,
+    "room": 2
+  },
+  {
+    "error": "item 2",
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "str",
+          "v": "café"
+        },
+        {
+          "t": "str",
+          "v": "日本語"
+        },
+        {
+          "t": "str",
+          "v": "aaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_strings_unicode",
+    "parts": null,
+    "room": 4
+  },
+  {
+    "error": null,
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": []
+    },
+    "name": "mapping_empty",
+    "parts": [],
+    "room": 10
+  },
+  {
+    "error": "key 'a'",
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "name": "mapping_room_zero_refuses",
+    "parts": null,
+    "room": 0
+  },
+  {
+    "error": null,
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ]
+      ]
+    },
+    "name": "mapping_single_entry_fits",
+    "parts": [
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ]
+        ]
+      }
+    ],
+    "room": 50
+  },
+  {
+    "error": null,
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "k0"
+          },
+          {
+            "t": "int",
+            "v": "0"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k1"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k2"
+          },
+          {
+            "t": "int",
+            "v": "2"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k3"
+          },
+          {
+            "t": "int",
+            "v": "3"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k4"
+          },
+          {
+            "t": "int",
+            "v": "4"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k5"
+          },
+          {
+            "t": "int",
+            "v": "5"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k6"
+          },
+          {
+            "t": "int",
+            "v": "6"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k7"
+          },
+          {
+            "t": "int",
+            "v": "7"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k8"
+          },
+          {
+            "t": "int",
+            "v": "8"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "k9"
+          },
+          {
+            "t": "int",
+            "v": "9"
+          }
+        ]
+      ]
+    },
+    "name": "mapping_balanced_two_parts",
+    "parts": [
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "k0"
+            },
+            {
+              "t": "int",
+              "v": "0"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "k1"
+            },
+            {
+              "t": "int",
+              "v": "1"
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "k2"
+            },
+            {
+              "t": "int",
+              "v": "2"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "k3"
+            },
+            {
+              "t": "int",
+              "v": "3"
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "k4"
+            },
+            {
+              "t": "int",
+              "v": "4"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "k5"
+            },
+            {
+              "t": "int",
+              "v": "5"
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "k6"
+            },
+            {
+              "t": "int",
+              "v": "6"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "k7"
+            },
+            {
+              "t": "int",
+              "v": "7"
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "k8"
+            },
+            {
+              "t": "int",
+              "v": "8"
+            }
+          ],
+          [
+            {
+              "t": "str",
+              "v": "k9"
+            },
+            {
+              "t": "int",
+              "v": "9"
+            }
+          ]
+        ]
+      }
+    ],
+    "room": 6
+  },
+  {
+    "error": "key 'small'",
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "small"
+          },
+          {
+            "t": "str",
+            "v": "x"
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "huge"
+          },
+          {
+            "t": "str",
+            "v": "yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy"
+          }
+        ]
+      ]
+    },
+    "name": "mapping_one_entry_too_big",
+    "parts": null,
+    "room": 2
+  },
+  {
+    "error": null,
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "x"
+                },
+                {
+                  "t": "int",
+                  "v": "1"
+                }
+              ],
+              [
+                {
+                  "t": "str",
+                  "v": "y"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "b"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              },
+              {
+                "t": "int",
+                "v": "2"
+              },
+              {
+                "t": "int",
+                "v": "3"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "c"
+          },
+          {
+            "t": "str",
+            "v": "plain"
+          }
+        ]
+      ]
+    },
+    "name": "mapping_nested_values",
+    "parts": [
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "a"
+            },
+            {
+              "t": "dict",
+              "v": [
+                [
+                  {
+                    "t": "str",
+                    "v": "x"
+                  },
+                  {
+                    "t": "int",
+                    "v": "1"
+                  }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "y"
+                  },
+                  {
+                    "t": "int",
+                    "v": "2"
+                  }
+                ]
+              ]
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "b"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "int",
+                  "v": "1"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                },
+                {
+                  "t": "int",
+                  "v": "3"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "c"
+            },
+            {
+              "t": "str",
+              "v": "plain"
+            }
+          ]
+        ]
+      }
+    ],
+    "room": 6
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_empty",
+    "parts": [],
+    "room": 10,
+    "text": ""
+  },
+  {
+    "error": "a run of text",
+    "kind": "text",
+    "name": "text_room_zero_refuses",
+    "parts": null,
+    "room": 0,
+    "text": "x"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_fits_whole",
+    "parts": [
+      {
+        "t": "str",
+        "v": "short text"
+      }
+    ],
+    "room": 50,
+    "text": "short text"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_blank_line_level",
+    "parts": [
+      {
+        "t": "str",
+        "v": "Paragraph one here.\n\n"
+      },
+      {
+        "t": "str",
+        "v": "Paragraph two here.\n\n"
+      },
+      {
+        "t": "str",
+        "v": "Paragraph three here."
+      }
+    ],
+    "room": 6,
+    "text": "Paragraph one here.\n\nParagraph two here.\n\nParagraph three here."
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_single_newline_level",
+    "parts": [
+      {
+        "t": "str",
+        "v": "line one\n"
+      },
+      {
+        "t": "str",
+        "v": "line two\n"
+      },
+      {
+        "t": "str",
+        "v": "line three\n"
+      },
+      {
+        "t": "str",
+        "v": "line four\n"
+      },
+      {
+        "t": "str",
+        "v": "line five\n"
+      },
+      {
+        "t": "str",
+        "v": "line six"
+      }
+    ],
+    "room": 4,
+    "text": "line one\nline two\nline three\nline four\nline five\nline six"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_sentence_level",
+    "parts": [
+      {
+        "t": "str",
+        "v": "First sentence here. "
+      },
+      {
+        "t": "str",
+        "v": "Second sentence here. "
+      },
+      {
+        "t": "str",
+        "v": "Third sentence here. "
+      },
+      {
+        "t": "str",
+        "v": "Fourth one."
+      }
+    ],
+    "room": 6,
+    "text": "First sentence here. Second sentence here. Third sentence here. Fourth one."
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_whitespace_level",
+    "parts": [
+      {
+        "t": "str",
+        "v": "one two "
+      },
+      {
+        "t": "str",
+        "v": "three four "
+      },
+      {
+        "t": "str",
+        "v": "five six "
+      },
+      {
+        "t": "str",
+        "v": "seven eight "
+      },
+      {
+        "t": "str",
+        "v": "nine ten "
+      },
+      {
+        "t": "str",
+        "v": "eleven "
+      },
+      {
+        "t": "str",
+        "v": "twelve"
+      }
+    ],
+    "room": 3,
+    "text": "one two three four five six seven eight nine ten eleven twelve"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_whitespace_level_extra_control_whitespace",
+    "parts": [
+      {
+        "t": "str",
+        "v": "aaaa\u001c"
+      },
+      {
+        "t": "str",
+        "v": "bbbb\u001c"
+      },
+      {
+        "t": "str",
+        "v": "cccc\u001c"
+      },
+      {
+        "t": "str",
+        "v": "dddd\u001d"
+      },
+      {
+        "t": "str",
+        "v": "eeee\u001e"
+      },
+      {
+        "t": "str",
+        "v": "ffff\u001f"
+      },
+      {
+        "t": "str",
+        "v": "gggg"
+      }
+    ],
+    "room": 2,
+    "text": "aaaa\u001cbbbb\u001ccccc\u001cdddd\u001deeee\u001effff\u001fgggg"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_whitespace_level_unicode_whitespace",
+    "parts": [
+      {
+        "t": "str",
+        "v": "aaaa "
+      },
+      {
+        "t": "str",
+        "v": "bbbb "
+      },
+      {
+        "t": "str",
+        "v": "cccc "
+      },
+      {
+        "t": "str",
+        "v": "dddd"
+      }
+    ],
+    "room": 2,
+    "text": "aaaa bbbb cccc dddd"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_hard_cut_level",
+    "parts": [
+      {
+        "t": "str",
+        "v": "xxxxxxxxxxxx"
+      },
+      {
+        "t": "str",
+        "v": "xxxxxxxxxxxx"
+      },
+      {
+        "t": "str",
+        "v": "xxxxxxxxxxxx"
+      },
+      {
+        "t": "str",
+        "v": "xxxxxxxxxxxx"
+      },
+      {
+        "t": "str",
+        "v": "xxxxxxxxxxxx"
+      }
+    ],
+    "room": 3,
+    "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_hard_cut_multibyte",
+    "parts": [
+      {
+        "t": "str",
+        "v": "日日日日日日日日"
+      },
+      {
+        "t": "str",
+        "v": "日日日日日日日日"
+      },
+      {
+        "t": "str",
+        "v": "日日日日日日日日"
+      },
+      {
+        "t": "str",
+        "v": "日日日日日日日日"
+      },
+      {
+        "t": "str",
+        "v": "日日日日日日日日"
+      }
+    ],
+    "room": 2,
+    "text": "日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日日"
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_mixed_cascade",
+    "parts": [
+      {
+        "t": "str",
+        "v": "Intro paragraph "
+      },
+      {
+        "t": "str",
+        "v": "with a sentence. "
+      },
+      {
+        "t": "str",
+        "v": "And another "
+      },
+      {
+        "t": "str",
+        "v": "sentence here.\n\n"
+      },
+      {
+        "t": "str",
+        "v": "Second paragraph,\n"
+      },
+      {
+        "t": "str",
+        "v": "with an embedded "
+      },
+      {
+        "t": "str",
+        "v": "newline and more "
+      },
+      {
+        "t": "str",
+        "v": "words after it to "
+      },
+      {
+        "t": "str",
+        "v": "push past the room "
+      },
+      {
+        "t": "str",
+        "v": "on this level too."
+      }
+    ],
+    "room": 5,
+    "text": "Intro paragraph with a sentence. And another sentence here.\n\nSecond paragraph,\nwith an embedded newline and more words after it to push past the room on this level too."
+  },
+  {
+    "error": null,
+    "kind": "text",
+    "name": "text_long_single_word_hard_cut",
+    "parts": [
+      {
+        "t": "str",
+        "v": "supercal"
+      },
+      {
+        "t": "str",
+        "v": "ifragili"
+      },
+      {
+        "t": "str",
+        "v": "sticexpi"
+      },
+      {
+        "t": "str",
+        "v": "alidocio"
+      },
+      {
+        "t": "str",
+        "v": "ussuperc"
+      },
+      {
+        "t": "str",
+        "v": "alifragi"
+      },
+      {
+        "t": "str",
+        "v": "listicex"
+      },
+      {
+        "t": "str",
+        "v": "pialidoc"
+      },
+      {
+        "t": "str",
+        "v": "ioussupe"
+      },
+      {
+        "t": "str",
+        "v": "rcalifra"
+      },
+      {
+        "t": "str",
+        "v": "gilistic"
+      },
+      {
+        "t": "str",
+        "v": "expialid"
+      },
+      {
+        "t": "str",
+        "v": "ocious"
+      }
+    ],
+    "room": 2,
+    "text": "supercalifragilisticexpialidocioussupercalifragilisticexpialidocioussupercalifragilisticexpialidocious"
+  }
+]

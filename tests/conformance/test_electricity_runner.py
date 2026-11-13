@@ -163,12 +163,15 @@ def _run_electricity(
     same `harness.materialize_config`/`materialize_cli_args` helpers, so
     generation and verification never diverge on how the port reaches
     either engine."""
-    if metadata.get("config") and mock_http_port is not None:
+    config_name = metadata.get("config")
+    if config_name and (
+        mock_http_port is not None or harness.config_needs_materializing(case_dir, config_name)
+    ):
         config_path = harness.materialize_config(
-            case_dir, metadata["config"], mock_http_port=mock_http_port, tmp_dir=out_path.parent
+            case_dir, config_name, mock_http_port=mock_http_port, tmp_dir=out_path.parent
         )
-    elif metadata.get("config"):
-        config_path = case_dir / metadata["config"]
+    elif config_name:
+        config_path = case_dir / config_name
     else:
         config_path = DEFAULT_CONFIG_PATH
     cmd = [
@@ -447,3 +450,61 @@ def test_a_date_as_a_dict_key_exits_nonzero_on_both_engines_with_no_out(
     assert electricity_proc.stdout == ""
     assert "could not serialize run state" in electricity_proc.stderr
     assert '{"error"' not in electricity_proc.stdout
+
+
+def test_split_text_join_cof_and_electricity_agree_live(
+    tmp_path: Path, electricity_binary: Path | None
+) -> None:
+    """Issue #682's own acceptance criterion: `cof run` and `electricity`,
+    run fresh side by side (never against a committed fixture) on the same
+    `split-text-join` case, produce the same `--out`/`--events` state once
+    timing and ids are normalized away -- the same size-trigger split,
+    parts, merged value and event paths on both engines."""
+    if electricity_binary is None:
+        _no_binary()
+
+    case_dir = Path(__file__).resolve().parent / "cases" / "split-text-join"
+    metadata = harness.load_case(case_dir)
+    replacements = harness.case_redaction_replacements(case_dir)
+
+    cof_out = tmp_path / "cof-out.json"
+    cof_events = tmp_path / "cof-events.jsonl"
+    cof_home = tmp_path / "cof-home"
+    cof_home.mkdir()
+    cof_result = harness.run_case(
+        case_dir,
+        metadata,
+        out_path=cof_out,
+        home_dir=cof_home,
+        events_path=cof_events,
+    )
+    assert cof_result.returncode == 0, (cof_result.stdout, cof_result.stderr)
+
+    electricity_out = tmp_path / "electricity-out.json"
+    electricity_events = tmp_path / "electricity-events.jsonl"
+    electricity_home = tmp_path / "electricity-home"
+    electricity_home.mkdir()
+    electricity_result = _run_electricity(
+        electricity_binary,
+        case_dir,
+        metadata,
+        out_path=electricity_out,
+        home_dir=electricity_home,
+        events_path=electricity_events,
+    )
+    assert electricity_result.returncode == 0, (
+        electricity_result.stdout,
+        electricity_result.stderr,
+    )
+
+    cof_state = json.loads(cof_out.read_text(encoding="utf-8"))
+    electricity_state = json.loads(electricity_out.read_text(encoding="utf-8"))
+    assert_states_equal(
+        prepare_for_comparison(electricity_state, replacements, []),
+        prepare_for_comparison(cof_state, replacements, []),
+    )
+
+    assert_events_equal(
+        redact_events_text(electricity_events.read_text(encoding="utf-8"), replacements, []),
+        redact_events_text(cof_events.read_text(encoding="utf-8"), replacements, []),
+    )

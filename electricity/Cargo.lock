@@ -231,12 +231,11 @@ dependencies = [
 [[package]]
 name = "cel"
 version = "0.15.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "044e21070125024b84c8058036de182400bd99212cab3faa4f19566f7733b6dc"
 dependencies = [
  "antlr4rust",
  "chrono",
  "chrono-tz",
+ "indexmap",
  "lazy_static",
  "nom",
  "pastey",
@@ -390,6 +389,7 @@ dependencies = [
  "electricity-config",
  "electricity-json",
  "electricity-redaction",
+ "electricity-template",
  "electricity-tools",
  "electricity-value",
  "electricity-vm",
@@ -436,6 +436,7 @@ dependencies = [
  "cel",
  "chrono",
  "electricity-value",
+ "indexmap",
  "log",
  "num-bigint 0.5.1",
  "serde",
@@ -498,12 +499,14 @@ name = "electricity-config"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "electricity-bytecode",
  "electricity-json",
  "electricity-value",
  "electricity-yaml",
  "indexmap",
  "log",
  "regex",
+ "sha2",
 ]
 
 [[package]]
@@ -572,6 +575,7 @@ dependencies = [
  "electricity-json",
  "electricity-pyre",
  "electricity-redaction",
+ "electricity-schema",
  "electricity-value",
  "electricity-yaml",
  "fancy-regex",
@@ -623,12 +627,14 @@ dependencies = [
  "electricity-complexity",
  "electricity-config",
  "electricity-json",
+ "electricity-pyre",
  "electricity-redaction",
  "electricity-schema",
  "electricity-template",
  "electricity-tools",
  "electricity-value",
  "electricity-yaml",
+ "fancy-regex",
  "futures",
  "indexmap",
  "log",
