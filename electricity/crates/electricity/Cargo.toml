@@ -24,6 +24,7 @@ electricity-compiler = { path = "../electricity-compiler" }
 electricity-config = { path = "../electricity-config" }
 electricity-json = { path = "../electricity-json" }
 electricity-redaction = { path = "../electricity-redaction" }
+electricity-template = { path = "../electricity-template" }
 electricity-tools = { path = "../electricity-tools" }
 electricity-value = { path = "../electricity-value" }
 electricity-vm = { path = "../electricity-vm" }

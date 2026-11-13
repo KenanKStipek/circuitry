@@ -1403,7 +1403,291 @@ fn help_text_names_every_run_subcommand_option() {
     let output = cmd.arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("electricity run <orchestration.yml>"));
-    for flag in ["--config", "--allow-capabilities", "--adapter", "--quiet"] {
+    for flag in [
+        "--config",
+        "--allow-capabilities",
+        "--adapter",
+        "--label",
+        "--quiet",
+    ] {
         assert!(stdout.contains(flag), "--help is missing {flag}: {stdout}");
     }
+}
+
+/// `label:` in the document, rendered once against this run's inputs
+/// (#752): `--out`'s `runtime.last_run.label` and `--events`' own
+/// `run_start.label` (right after `orchestration`) both carry it.
+#[test]
+fn run_subcommand_renders_the_document_label_from_an_input() {
+    let (mut cmd, home) = command("run-sub-label-from-input");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: 'ticket {{input.ticket}}'\n\
+         interface:\n  inputs:\n    ticket: {type: string, default: '42'}\n\
+         effects:\n  - type: tool\n    name: t\n    provider: json\n    \
+         params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let events = home.path.join("events.jsonl");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["runtime"]["last_run"]["label"], "ticket 42");
+    let events_text = fs::read_to_string(&events).unwrap();
+    let run_start_line = events_text.lines().next().unwrap();
+    let run_start: serde_json::Value = serde_json::from_str(run_start_line).unwrap();
+    assert_eq!(run_start["label"], "ticket 42");
+    // Checked against the raw line text, not `serde_json::Value`'s own
+    // key iteration -- without the `preserve_order` feature (never
+    // enabled in this workspace, LANE-CONTRACT/CLAUDE.md), its `Value::
+    // Object` is a sorted map, not insertion order.
+    let expected_fragment = "\"orchestration\":\"doc.yml\",\"label\":\"ticket 42\",\"config\":";
+    assert!(
+        run_start_line.contains(expected_fragment),
+        "{run_start_line}"
+    );
+}
+
+/// `--label` is literal text, never rendered, and wins over the
+/// document's own `label:` (#752).
+#[test]
+fn run_subcommand_label_flag_overrides_the_document_and_is_not_rendered() {
+    let (mut cmd, home) = command("run-sub-label-flag-wins");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: 'from the document'\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--label",
+            "{{input.ticket}}",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["runtime"]["last_run"]["label"], "{{input.ticket}}");
+}
+
+/// A missing input renders empty -- no label, no warning (#752).
+#[test]
+fn run_subcommand_missing_input_is_no_label_no_warning() {
+    let (mut cmd, home) = command("run-sub-label-missing-input");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: '{{input.ticket}}'\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    assert!(output.stderr.is_empty(), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert!(state["runtime"]["last_run"].get("label").is_none());
+}
+
+/// A malformed `label:` template warns once, on stderr, and the run
+/// still succeeds -- the same text `cof run` prints (#752).
+#[test]
+fn run_subcommand_malformed_label_template_warns_once_and_succeeds() {
+    let (mut cmd, home) = command("run-sub-label-malformed");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: '{{#open'\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(
+        stderr.trim(),
+        "Warning: label: malformed Mustache template: unclosed tag at line 1; the run \
+         continues without a label."
+    );
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert!(state["runtime"]["last_run"].get("label").is_none());
+}
+
+/// A non-string `label:` is a structural-check error, same as any
+/// other wrong-typed top-level key (#752) -- never a warning.
+#[test]
+fn run_subcommand_non_string_label_is_a_structural_error() {
+    let (mut cmd, home) = command("run-sub-label-non-string");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: 123\neffects:\n  - type: tool\n    name: t\n    \
+         provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+    let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        payload["error"],
+        "Orchestration validation failed:\n  - label: 123 is not of type 'string'"
+    );
+}
+
+/// Control characters and an overlong label are cleaned the same way
+/// `cof run` cleans them (#752).
+#[test]
+fn run_subcommand_cleans_control_characters_and_overlong_labels() {
+    let (mut cmd, home) = command("run-sub-label-control-chars");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "label: \"{{input.raw}}\"\n\
+         interface:\n  inputs:\n    raw: {type: string, required: true}\n\
+         effects:\n  - type: tool\n    name: t\n    provider: json\n    \
+         params: {input: '1'}\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let raw = format!("a\x1b[31mb\x07c{}", "x".repeat(70));
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "-e",
+            &format!("raw={raw}"),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let label = state["runtime"]["last_run"]["label"].as_str().unwrap();
+    let expected: String = format!("abc{}", "x".repeat(70)).chars().take(64).collect();
+    assert_eq!(label, expected);
+    assert_eq!(label.chars().count(), 64);
+}
+
+/// Only the root document's `label:` counts -- a `use` child's own is
+/// never read, rendered, or surfaced (#752).
+#[test]
+fn run_subcommand_use_childs_label_is_ignored() {
+    let (mut cmd, home) = command("run-sub-label-use-child-ignored");
+    let config = home.config("{}");
+    fs::write(
+        home.path.join("child.yml"),
+        "label: 'child label should never surface'\neffects:\n  - type: tool\n    \
+         name: ct\n    provider: json\n    params: {input: '1'}\n",
+    )
+    .unwrap();
+    let doc = home.path.join("parent.yml");
+    fs::write(
+        &doc,
+        "label: 'parent label'\neffects:\n  - type: use\n    name: child_use\n    \
+         path: child.yml\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(0), "{:?}", output.stderr);
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["runtime"]["last_run"]["label"], "parent label");
+}
+
+/// The legacy `electricity <config.json> <doc>` form has no `--label`
+/// of its own (#752's ruling: "the legacy positional form doesn't
+/// need it") -- an unrecognized option there, same as any other.
+#[test]
+fn legacy_form_does_not_accept_label_flag() {
+    let (mut cmd, home) = command("legacy-rejects-label-flag");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, "effects: []\n").unwrap();
+    let output = cmd
+        .args([
+            config.to_str().unwrap(),
+            doc.to_str().unwrap(),
+            "--label",
+            "text",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
 }

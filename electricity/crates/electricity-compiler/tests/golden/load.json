@@ -532,7 +532,7 @@
       "ok": true,
       "errors": [],
       "warnings": [
-        "top level: unknown key 1 (YAML read the unquoted key as a int) on the document is ignored. Known keys: adapter, description, effects, finally, flow, interface, model, plugins, prompts, runtime, steps, strategy, version."
+        "top level: unknown key 1 (YAML read the unquoted key as a int) on the document is ignored. Known keys: adapter, description, effects, finally, flow, interface, label, model, plugins, prompts, runtime, steps, strategy, version."
       ]
     },
     "run_error": null,

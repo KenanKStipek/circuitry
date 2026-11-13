@@ -53,7 +53,7 @@ Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out st
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
        electricity run <orchestration.yml> [-e key=value]... [--config config.json]
                     [--out state.json] [--live-state state.json] [--events events.jsonl]
-                    [--allow-capabilities cap,cap] [--adapter name] [--quiet]
+                    [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]
                     [--pretty] [--profile <path>]
 
 electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents
@@ -104,6 +104,13 @@ Options:
   --adapter <name>    This run's default adapter, beating a loaded
                       --profile, the orchestration and the config.
                       Available under either form.
+  --label <text>      `run` only: literal text for this run's label --
+                      beats the document's own top-level label: template.
+                      Never rendered. Cleaned the same way either way:
+                      whitespace collapsed to one space, control
+                      characters and escape sequences dropped, trimmed,
+                      cut at 64 characters; empty after cleaning means no
+                      label.
   --quiet             Suppress non-essential output (accepted for parity;
                       electricity prints no such output today). Available
                       under either form.
@@ -137,6 +144,9 @@ struct RunArgs {
     allow_capabilities: Option<String>,
     /// `--adapter <name>` (issue #728, `run` only).
     adapter: Option<String>,
+    /// `--label TEXT` (#752, `run` only) -- literal text, never
+    /// rendered, that wins over the document's own top-level `label:`.
+    label: Option<String>,
     /// `--quiet` (issue #728, `run` only) -- accepted for parity; has
     /// no observable effect today (USAGE's own note).
     quiet: bool,
@@ -229,6 +239,7 @@ const RUN_FLAGS: &[(&str, Arity)] = &[
     ("-c", Arity::Value),
     ("--allow-capabilities", Arity::Value),
     ("--adapter", Arity::Value),
+    ("--label", Arity::Value),
 ];
 
 fn flag_arity<'a>(flags: &'a [(&'static str, Arity)], flag: &str) -> Option<&'a Arity> {
@@ -266,6 +277,7 @@ struct ParsedFlags {
     config: Option<String>,
     allow_capabilities: Option<String>,
     adapter: Option<String>,
+    label: Option<String>,
     positionals: Vec<String>,
 }
 
@@ -287,6 +299,7 @@ fn parse_flags(
         config: None,
         allow_capabilities: None,
         adapter: None,
+        label: None,
         positionals: Vec::new(),
     };
     let mut i = 0;
@@ -350,6 +363,7 @@ fn parse_flags(
                     "--config" | "-c" => parsed.config = Some(value),
                     "--allow-capabilities" => parsed.allow_capabilities = Some(value),
                     "--adapter" => parsed.adapter = Some(value),
+                    "--label" => parsed.label = Some(value),
                     _ => unreachable!("every Arity::Value flag is handled above"),
                 }
                 i += if inline_value.is_some() { 1 } else { 2 };
@@ -442,6 +456,7 @@ fn classify(args: &[String]) -> Action {
             profile: parsed.profile,
             allow_capabilities: parsed.allow_capabilities,
             adapter: parsed.adapter,
+            label: None,
             quiet: parsed.quiet,
             via_run: false,
         }),
@@ -483,6 +498,7 @@ fn classify_run(args: &[String]) -> Action {
             profile: parsed.profile,
             allow_capabilities: parsed.allow_capabilities,
             adapter: parsed.adapter,
+            label: parsed.label,
             quiet: parsed.quiet,
             via_run: true,
         }),
@@ -1012,6 +1028,7 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         allow_capabilities: parse_allow_capabilities(run_args.allow_capabilities.as_deref()),
         config_warnings,
         adapter_override: run_args.adapter.clone(),
+        label_override: run_args.label.clone(),
         armed: true,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()

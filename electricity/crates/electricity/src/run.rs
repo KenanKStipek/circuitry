@@ -55,6 +55,15 @@ pub struct RunRequest {
     /// (`cli` tier, `cli/effective_settings.py::
     /// resolve_effective_settings`).
     pub adapter_override: Option<String>,
+    /// `--label TEXT` (#752, `run` only) -- literal text, never
+    /// rendered, that wins over the document's own top-level `label:`
+    /// template. Cleaned the same way either way
+    /// (`crate::label::clean_label`) before it reaches `--events`'
+    /// `run_start` or `runtime.last_run.label`, exactly as `cof run`'s
+    /// own `RunRequest.label_override` does. `None` for the legacy
+    /// `electricity <config.json> <doc>` form, which has no `--label`
+    /// of its own.
+    pub label_override: Option<String>,
     /// Warnings from resolving this run's own config, before
     /// `RunRequest` even existed (issue #728's config-discovery
     /// branch: a discovered-but-skipped project config's one line,
