@@ -180,11 +180,51 @@ fn wait_until_running(home: &TempHome) {
     }
 }
 
+/// Waits until the run's `--live-state` shows every step in `paths`
+/// (dotted, from the state root) with a `meta.created_at`, so a signal
+/// sent next lands while those steps run rather than merely once the
+/// file exists at all (which happens before `execute_root` even
+/// starts) -- duplicated from `signals_loop.rs`, as these test
+/// binaries don't share helpers. Returns the parsed state at the
+/// moment the wait succeeded, so a caller can assert about some other
+/// path's absence from that exact snapshot instead of re-reading the
+/// file.
+fn wait_until_started(home: &TempHome, paths: &[&str]) -> serde_json::Value {
+    let path = live_state_path(home);
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        if let Ok(state) = serde_json::from_str::<serde_json::Value>(&text) {
+            let started = paths.iter().all(|dotted| {
+                let node = dotted.split('.').fold(&state, |node, key| &node[key]);
+                node["meta"]["created_at"].is_string()
+            });
+            if started {
+                return state;
+            }
+        }
+        if std::time::Instant::now() >= deadline {
+            panic!(
+                "{} never showed {paths:?} running within 10s: {text}",
+                path.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
 /// Waits for *path* to exist -- used where `--live-state` itself can't
-/// stand in for "this step has actually started": it never republishes
-/// a `use` child's own effects past its own first write, so polling it
-/// for one of the child's steps would just hang. The blocking step's
-/// own script creates *path* only once it actually starts running.
+/// stand in for "this step has actually started". A `use` child's
+/// *first* graft onto the parent happens on its own first write, so
+/// `wait_until_started` works for a child's first step (as in
+/// `sigint_during_a_use_child_without_record_children_exits_130_with_no_leftover_child_effects`
+/// below), but every later graft is throttled to once per 100ms
+/// (`ChildObserver::write`'s own `CHILD_GRAFT_INTERVAL` in
+/// `electricity-vm/src/exec/use_.rs`): a later step that starts and
+/// finishes inside that window never appears in `--live-state` at
+/// all, so polling it for one of those steps could just hang. The
+/// blocking step's own script creates *path* only once it actually
+/// starts running, which works regardless of graft timing.
 fn wait_for_file(path: &Path) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !path.exists() {
@@ -455,18 +495,42 @@ effects:
     let config = home.write("config.json", "{}");
     let doc = home.write("doc.yml", DOC);
     let out = home.path.join("out.json");
-    let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
-    wait_until_running(&home);
+    let events = home.path.join("events.jsonl");
+    let mut child = spawn(
+        &home,
+        &config,
+        &doc,
+        &[
+            "--out",
+            out.to_str().unwrap(),
+            "--events",
+            events.to_str().unwrap(),
+        ],
+    );
+    // Neither branch's own state survives into `out`'s own final merge
+    // once the run is cancelled, so the event log -- which keeps a
+    // "start" line per effect no matter how the run ends -- is what
+    // proves the second branch never started, not `out`.
+    let live_before_signal = wait_until_started(&home, &["prime.fanout.first"]);
+    assert!(
+        live_before_signal["prime"]["fanout"]["second"]["meta"]["created_at"].is_null(),
+        "the second (queued) branch must not already be running when the \
+         signal is sent, or the event-log check below (no start event for \
+         it) would prove nothing: {live_before_signal}"
+    );
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
         .expect("electricity exited after SIGINT");
     assert_eq!(status.code(), Some(130));
-    let state: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    let events_text = fs::read_to_string(&events).unwrap();
     assert!(
-        state["prime"]["fanout"]["second"].is_null(),
-        "a queued branch must never have started: {state}"
+        events_text.contains("\"path\":\"prime.fanout.first\""),
+        "the first branch must have logged its own start event: {events_text}"
+    );
+    assert!(
+        !events_text.contains("\"path\":\"prime.fanout.second\""),
+        "a queued branch must never have started: {events_text}"
     );
 }
 
@@ -505,7 +569,12 @@ finally:
     let doc = home.write("doc.yml", DOC);
     let out = home.path.join("out.json");
     let mut child = spawn(&home, &config, &doc, &["--out", out.to_str().unwrap()]);
-    wait_until_running(&home);
+    // The child's own step never gets merged onto the use node at all
+    // once cancelled (the very thing this test proves below), so this
+    // wait is what establishes the precondition the assertions below
+    // rely on: the child's step was actually running -- not merely
+    // that `--live-state` existed -- when the signal was sent.
+    wait_until_started(&home, &["prime.wrapper.slow"]);
     child.send(libc::SIGINT);
     let status = child
         .wait_timeout(Duration::from_secs(10))
