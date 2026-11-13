@@ -2061,9 +2061,9 @@ mod imp {
         grace: Duration,
         expected_pgid: Option<u32>,
     ) -> Result<StopLocked, ToolError> {
-        let lock = LockGuard::acquire(&dir).await.map_err(|e| {
-            runtime_error(format!("service: cannot lock the state directory: {e}"))
-        })?;
+        let lock = LockGuard::acquire(&dir)
+            .await
+            .map_err(|e| runtime_error(format!("service: cannot lock the state directory: {e}")))?;
         let (mut record, stale) = live_record_nb(dir.clone(), name.clone()).await?;
         if let Some(rec) = &record {
             if let Some(expected) = expected_pgid {
@@ -2823,10 +2823,7 @@ mod imp {
                 !waiting_record_path.exists(),
                 "the waiting start's record should be gone"
             );
-            assert!(
-                !group_exists(stub_pgid),
-                "the stub's group should be gone"
-            );
+            assert!(!group_exists(stub_pgid), "the stub's group should be gone");
             assert!(
                 !stub_record_path.exists(),
                 "the stub's record should be gone"
