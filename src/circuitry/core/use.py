@@ -589,6 +589,20 @@ class UseDefinition:
     #: a child resolved through the library is always limited.
     parent_trusted: bool = False
 
+    # Generated-document ceiling (#772): the tool providers this effect's
+    # own, literal 'allow_tools:' field allows beyond the enclosing
+    # document's own static providers, for an inline child that counts as
+    # generated. Never set from a rendered value, params_json or state —
+    # compiler._compile_use rejects anything else at compile time.
+    allow_tools: frozenset[str] = frozenset()
+
+    #: True only for the synthetic 'use' a reflector builds to run its own
+    #: generated plan (#772) — never set by a document author. A reflector's
+    #: plan has no unrendered template of its own to compare against, so it
+    #: is unconditionally generated, unlike an ordinary 'inline:' child (see
+    #: ``generated_doc.is_generated_inline``).
+    force_generated: bool = False
+
 
 class UseRuntime:
     """
@@ -911,6 +925,44 @@ class UseRuntime:
                 "enforcement: " + "; ".join(denials)
             )
 
+    def _check_generated_document(self, child_orch: dict[str, Any]) -> None:
+        """Refuse a generated child that widens the shell allowlist, enables
+        a service's shell, or uses a tool provider its enclosing document
+        does not itself use (#772).
+
+        Checked right after the allowlist gate, before the child is even
+        compiled: a generated document (a reflector's plan, or an
+        'inline:' child whose structure only exists because it was
+        rendered, see ``generated_doc.is_generated_inline``) is judged
+        against the document that carries this ``use`` effect. A
+        ``path:``/``ref:`` child loads from disk and is never "generated"
+        in this sense -- it keeps its own, separate allowlist/capability
+        checks.
+        """
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_PROVIDERS_KEY,
+            generated_document_errors,
+            is_generated_inline,
+        )
+
+        if self.defn.inline is None:
+            return
+        generated = self.defn.force_generated or is_generated_inline(
+            self.defn.inline, child_orch
+        )
+        if not generated:
+            return
+        enclosing = frozenset(
+            self.runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ()
+        )
+        allowed_providers = enclosing | self.defn.allow_tools
+        errors = generated_document_errors(child_orch, allowed_providers=allowed_providers)
+        if errors:
+            raise ValueError(
+                f"use '{self.defn.name}': generated child failed the "
+                "generated-document ceiling: " + "; ".join(errors)
+            )
+
     def _check_capability_consent(
         self, child_orch: dict[str, Any], label: str, digest: str
     ) -> frozenset[str] | None:
@@ -1173,6 +1225,7 @@ class UseRuntime:
                     if self._pin is not None:
                         meta["library_ref"] = self._pin
                     self._check_allowlists(child_orch, label)
+                    self._check_generated_document(child_orch)
 
                     # Cycle detection — runtime call-stack tracking by resolved identity.
                     # The stack is derived per call-path rather than mutated in place:
@@ -1190,6 +1243,18 @@ class UseRuntime:
                         )
                     child_runtime_config = dict(self.runtime_config)
                     child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
+                    # The child becomes the "enclosing document" for any
+                    # use/reflector effect of its own (#772) -- recomputed
+                    # fresh from the child's own text, never inherited from
+                    # this document.
+                    from ..generated_doc import (
+                        GENERATED_DOCUMENT_PROVIDERS_KEY,
+                        static_tool_providers,
+                    )
+
+                    child_runtime_config[GENERATED_DOCUMENT_PROVIDERS_KEY] = sorted(
+                        static_tool_providers(child_orch)
+                    )
                     if child_capability_ceiling is not None:
                         install_capability_ceiling(
                             child_runtime_config, child_capability_ceiling

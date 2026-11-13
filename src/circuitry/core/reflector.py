@@ -91,6 +91,12 @@ class ReflectorDefinition:
     # disabled node ("turn agentic planning off for this run").
     enabled: bool = True
 
+    # Generated-document ceiling (#772): tool providers a generated plan may
+    # use beyond the enclosing document's own static providers. Literal only
+    # -- compiler._compile_allow_tools rejects a rendered value, params_json
+    # or state at compile time.
+    allow_tools: frozenset[str] = frozenset()
+
 
 class ReflectorRuntime:
     def __init__(
@@ -282,6 +288,10 @@ class ReflectorRuntime:
                 inline=plan_yaml,
                 validate=True,
                 on_error="fail",
+                allow_tools=self.defn.allow_tools,
+                # A reflector's plan has no author template of its own to
+                # compare against -- it is unconditionally generated (#772).
+                force_generated=True,
             )
 
             gen_parent = reflector_store.child(self.defn.generated_key)

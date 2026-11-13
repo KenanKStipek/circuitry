@@ -637,11 +637,12 @@ def _validate_plan(
 def _validate_generated_yaml(
     yaml_text: str, result_path: str, *, runtime_config: Mapping[str, Any]
 ) -> list[str]:
-    """The four checks every generated plan — planned (score trigger) or
+    """The five checks every generated plan — planned (score trigger) or
     deterministically generated (size trigger) — must pass before it runs:
-    the schema, the allowlists, the capability ceiling, and the merge
-    contract (#672). Shared so the size trigger's own, never-planned plan
-    runs through exactly the same gate as the score trigger's planner output.
+    the schema, the allowlists, the capability ceiling, the tool-provider
+    ceiling (#772), and the merge contract (#672). Shared so the size
+    trigger's own, never-planned plan runs through exactly the same gate as
+    the score trigger's planner output.
     """
     ok, errors = _validate_inline_yaml(yaml_text)
     if not ok:
@@ -650,6 +651,7 @@ def _validate_generated_yaml(
         *_check_merge_contract(yaml_text, result_path),
         *_check_allowlists(yaml_text, runtime_config),
         *_check_capability_ceiling(yaml_text, runtime_config),
+        *_check_generated_tool_ceiling(yaml_text, runtime_config),
     ]
 
 
@@ -700,6 +702,36 @@ def _check_capability_ceiling(yaml_text: str, runtime_config: Mapping[str, Any])
         "the plan needs capabilities beyond this document's consented ones: "
         + ", ".join(sorted(beyond))
     ]
+
+
+def _check_generated_tool_ceiling(
+    yaml_text: str, runtime_config: Mapping[str, Any]
+) -> list[str]:
+    """A decomposition plan is always generated (#772): its own
+    'allowed_commands' never widen the shell allowlist, and a 'service'
+    effect's 'shell: true' is always refused -- the same rules a 'use'/
+    'reflector' generated child follows.
+
+    Unlike those, a decomposition plan has no generating effect of its own
+    to carry a literal 'allow_tools:', so it is not held to the
+    tool-provider ceiling (rule 3): the planner's own 'merge' step
+    commonly needs a tool (json, say) the enclosing document never uses
+    itself, and the pre-existing capability ceiling
+    (:mod:`circuitry.capability_gate`) already confines it to the
+    enclosing document's consented capability classes.
+    """
+    import yaml as _yaml
+
+    from ..generated_doc import generated_document_errors
+
+    _ = runtime_config
+    try:
+        parsed = _yaml.safe_load(yaml_text or "")
+    except _yaml.YAMLError:
+        return []  # already reported by the schema check
+    if not isinstance(parsed, dict):
+        return []
+    return generated_document_errors(parsed, allowed_providers=None)
 
 
 def _check_merge_contract(yaml_text: str, result_path: str) -> list[str]:
