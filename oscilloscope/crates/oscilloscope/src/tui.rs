@@ -6251,6 +6251,7 @@ mod draw_all_tile_band_label_tests {
             oscilloscope_core::screens::Screen::Tape,
             &test_zone(),
             "2026-01-01T00:01:02Z",
+            None,
         );
         AllTile {
             document_label: document.to_string(),
@@ -13418,15 +13419,27 @@ fn flow_item_width(item: &RailItem, app: &App, area_width: u16) -> usize {
     }
 }
 
+/// A lane's own painted width: every item's own width, plus the
+/// `── ` connector `flow_paint_sequence` actually paints between two
+/// adjacent plain stations -- never between a station and a fork or
+/// between two forks, where the fork's own `─┬─ ` lead-in or `─┴── `
+/// tail already bridges the gap, so adding one here would count a
+/// connector nothing ever paints and leave a stray blank gap before
+/// whatever follows this lane (its own fork's join, say).
 fn flow_lane_width(items: &[RailItem], app: &App, area_width: u16) -> usize {
     if items.is_empty() {
         return rail::STATION_WIDTH;
     }
-    items
-        .iter()
-        .map(|it| flow_item_width(it, app, area_width))
-        .sum::<usize>()
-        + rail::NORMAL_CONNECTOR * (items.len() - 1)
+    let mut total = 0usize;
+    for (i, item) in items.iter().enumerate() {
+        total += flow_item_width(item, app, area_width);
+        let both_stations = matches!(item, RailItem::Station(_))
+            && matches!(items.get(i + 1), Some(RailItem::Station(_)));
+        if both_stations {
+            total += rail::NORMAL_CONNECTOR;
+        }
+    }
+    total
 }
 
 fn flow_fork_width(fork: &Fork, app: &App, area_width: u16) -> usize {
@@ -14865,6 +14878,58 @@ mod flow_layout_tests {
         };
         let app = App::new(false);
         assert_eq!(flow_fork_height(&fork, &app, 200), 6);
+    }
+
+    /// A lane that ends in a nested fork's own join (a station,
+    /// then an unnamed `if`, the pass's own last step) must report
+    /// exactly what `flow_paint_sequence` actually paints -- never
+    /// three cells more for a `── ` connector into the fork that
+    /// nothing paints, since the fork's own `─┬─ ` lead-in already
+    /// bridges the gap (issue #693 item 2: the padding `flow_paint_
+    /// fork` adds up to this width, right before the outer join,
+    /// must be zero when this lane is the one defining it).
+    #[test]
+    fn flow_lane_width_matches_what_a_lane_ending_in_a_nested_fork_actually_paints() {
+        let inner = Fork {
+            path: "prime.fan.iter_0.__if".to_string(),
+            kind: ForkKind::Decision,
+            source_status: StatusKind::Done,
+            lanes: vec![
+                Lane {
+                    items: vec![station("yes_step", StatusKind::Done)],
+                    ghost: None,
+                    running: false,
+                    waiting: false,
+                    path: None,
+                },
+                Lane {
+                    items: Vec::new(),
+                    ghost: Some("no_step".to_string()),
+                    running: false,
+                    waiting: false,
+                    path: None,
+                },
+            ],
+        };
+        let items = vec![station("setup", StatusKind::Done), RailItem::Fork(inner)];
+        let app = App::new(false);
+        let computed = flow_lane_width(&items, &app, 200);
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let area = Rect::new(0, 0, 200, 10);
+        let mut buf = ratatui::buffer::Buffer::empty(area);
+        let (painted_end, _, _) =
+            flow_paint_sequence(&mut buf, area, 0, 200, &items, 0, 0, &app, 200, 1, &ctx);
+        assert_eq!(
+            computed, painted_end,
+            "a lane ending in a fork must never report a width wider than what actually paints"
+        );
     }
 
     /// A lane holding a nested fork (an unnamed `if` inside a loop's
@@ -20386,6 +20451,7 @@ mod tape_frame_goldens {
                     screen_kind,
                     &zone,
                     now,
+                    None,
                 );
                 AllTile {
                     run_index,
