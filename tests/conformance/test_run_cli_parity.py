@@ -728,3 +728,354 @@ def test_a_running_tools_meta_live_tail_matches_byte_for_byte_on_both_engines(
 
     for key in ("stdout_tail", "stderr_tail", "stdout_bytes", "stderr_bytes"):
         assert cof_checkpoint[key] == electricity_checkpoint[key], key
+
+
+# --- issue #760: the `--last`/`--resume last` stash, shared by both engines ---
+
+ENGINES = ("cof", "electricity")
+
+#: A document with a declared input, so a plain `-e` round-trips into
+#: `state.input.topic` without the orchestration having to route it
+#: through a tool first -- the stash's own replay is what these tests
+#: check, not any particular tool's behavior.
+LAST_STASH_ORCHESTRATION = (
+    "interface:\n  inputs:\n    topic: {type: string, default: 'none'}\n"
+    "effects:\n  - name: ok\n    type: tool\n    provider: json\n"
+    "    params: {mode: parse, input: '{}'}\n"
+)
+
+#: step1 always succeeds, step2 always fails -- `--resume last` must
+#: reach step2 again (proving the source resolution worked) without
+#: re-dispatching step1 (proving the skip-and-continue behaviour did
+#: too), the same split `tests/cli/test_run_resume.py`'s own cof-only
+#: tests use.
+LAST_STASH_RESUME_ORCHESTRATION = (
+    "effects:\n"
+    "  - name: step1\n    type: tool\n    provider: uuid\n"
+    "  - name: step2\n    type: tool\n    provider: json\n"
+    "    params: {mode: parse, input: 'not valid json'}\n"
+)
+
+
+def _cmd(engine: str, binary: Path, args: list[str]) -> list[str]:
+    if engine == "cof":
+        return [sys.executable, "-m", "circuitry.cli.app", "run", *args]
+    return [str(binary), "run", *args]
+
+
+def _run(
+    engine: str, binary: Path, case_dir: Path, home_dir: Path, args: list[str],
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        _cmd(engine, binary, args), cwd=case_dir, env=_sandboxed_env(home_dir),
+        capture_output=True, text=True, timeout=30, check=False,
+    )
+
+
+def _write_last_stash_case(case_dir: Path, orchestration: str) -> None:
+    case_dir.mkdir()
+    (case_dir / "orchestration.yml").write_text(orchestration, encoding="utf-8")
+    (case_dir / "config.json").write_text("{}", encoding="utf-8")
+
+
+@pytest.mark.parametrize("replay_engine", ENGINES)
+@pytest.mark.parametrize("write_engine", ENGINES)
+def test_last_replays_the_same_run_regardless_of_which_engine_wrote_or_reads_the_stash(
+    tmp_path: Path, electricity_binary: Path, write_engine: str, replay_engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    written = _run(
+        write_engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "-e", "topic=widgets", "--out", "out.json"],
+    )
+    assert written.returncode == 0, (write_engine, written.stdout, written.stderr)
+
+    replayed = _run(replay_engine, electricity_binary, case_dir, home_dir, ["--last"])
+    assert replayed.returncode == 0, (replay_engine, replayed.stdout, replayed.stderr)
+
+    state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert state["input"]["topic"] == "widgets"
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("write_engine", ENGINES)
+def test_resume_last_resumes_the_same_state_regardless_of_which_engine_wrote_or_reads_the_stash(
+    tmp_path: Path, electricity_binary: Path, write_engine: str, resume_engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_RESUME_ORCHESTRATION)
+
+    first = _run(
+        write_engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json"],
+    )
+    assert first.returncode == 1, (write_engine, first.stdout, first.stderr)
+    first_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    step1_uuid = first_state["prime"]["step1"]["value"]
+
+    resumed = _run(
+        resume_engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    # step2's own input is always invalid JSON, so the resumed run still
+    # fails there -- proving the resume reached it again -- while step1's
+    # own uuid staying byte-identical proves it was skipped, not
+    # re-dispatched.
+    assert resumed.returncode == 1, (resume_engine, resumed.stdout, resumed.stderr)
+    resumed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert resumed_state["prime"]["step1"]["value"] == step1_uuid
+
+
+def _last_refusal_error(result: subprocess.CompletedProcess[str]) -> str:
+    """The refusal text from either engine's own `--last`/`--resume last`
+    stdout -- cof prints a plain `Error: <message>` line (`console.print`,
+    unconditional); electricity wraps the identical message in its own
+    `{"ok": false, "error": ...}` JSON payload (DESIGN.md's own row on
+    this framing difference) -- so only the message itself is compared,
+    never the surrounding frame.
+    """
+    stdout = result.stdout.strip()
+    if stdout.startswith("{"):
+        text = str(json.loads(stdout)["error"])
+    else:
+        assert stdout.startswith("Error: "), stdout
+        text = stdout[len("Error: ") :]
+    # cof's own `console.print` soft-wraps a long line at its console's
+    # width (even off a terminal) -- collapsed back to one line here so
+    # a wrap point newline never fails a comparison electricity's own
+    # single-line stdout would otherwise pass trivially.
+    return " ".join(text.split())
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_last_with_no_previous_run_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+
+    result = _run(engine, electricity_binary, case_dir, home_dir, ["--last"])
+    assert result.returncode == 2, (engine, result.stdout, result.stderr)
+    assert "No previous run found. Run an orchestration first." in result.stderr
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_resume_last_with_no_previous_run_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    result = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert result.returncode == 1, (engine, result.stdout, result.stderr)
+    assert _last_refusal_error(result) == "No previous run found — nothing to resume from."
+
+
+def test_resume_last_with_an_unreadable_stash_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    # Compared engine-to-engine, not against a hardcoded string: the
+    # message embeds this test's own absolute stash path, long enough
+    # that `console.print`'s soft-wrap can fold it at an arbitrary
+    # character (no space to re-join on), not just at a word boundary
+    # -- whitespace is stripped entirely on both sides instead of
+    # collapsed, so neither engine's own wrap point can fail this.
+    # Checked structurally (prefix contains, suffix matches) rather than
+    # by exact string equality between engines: the message embeds this
+    # test's own absolute stash path (necessarily different between the
+    # two engines' own separate home dirs, same as any other path-
+    # bearing message elsewhere in this suite), and `console.print`'s
+    # soft-wrap can fold a path that long at an arbitrary character --
+    # including inside the path itself -- making a literal substring
+    # replace on it unreliable too.
+    for engine in ENGINES:
+        home_dir = tmp_path / f"home-{engine}"
+        home_dir.mkdir()
+        stash_dir = home_dir / ".config" / "circuitry"
+        stash_dir.mkdir(parents=True)
+        (stash_dir / "last-run.json").write_text("not json", encoding="utf-8")
+        case_dir = tmp_path / f"case-{engine}"
+        _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+        result = _run(
+            engine, electricity_binary, case_dir, home_dir,
+            ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+        )
+        assert result.returncode == 1, (engine, result.stdout, result.stderr)
+        error = _last_refusal_error(result)
+        assert "is not valid JSON" in error and "Expecting value" in error, (engine, error)
+        assert error.endswith("Nothing to resume from."), (engine, error)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_resume_last_with_a_different_orchestration_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+    (case_dir / "other.yml").write_text(LAST_STASH_ORCHESTRATION, encoding="utf-8")
+
+    written = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json"],
+    )
+    assert written.returncode == 0, (engine, written.stdout, written.stderr)
+
+    result = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["other.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert result.returncode == 1, (engine, result.stdout, result.stderr)
+    assert _last_refusal_error(result) == (
+        "The last run was 'orchestration.yml', not other.yml — run that orchestration "
+        "again, or pass --state <file> to resume a specific saved state instead of 'last'."
+    )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_resume_last_with_no_out_from_the_last_run_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    written = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json"],
+    )
+    assert written.returncode == 0, (engine, written.stdout, written.stderr)
+
+    result = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert result.returncode == 1, (engine, result.stdout, result.stderr)
+    assert _last_refusal_error(result) == (
+        "The last run did not use --out, so it saved no state to resume from."
+    )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_resume_last_with_the_out_file_gone_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    written = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--out", "gone.json"],
+    )
+    assert written.returncode == 0, (engine, written.stdout, written.stderr)
+    (case_dir / "gone.json").unlink()
+
+    result = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert result.returncode == 1, (engine, result.stdout, result.stderr)
+    assert _last_refusal_error(result) == (
+        "The last run's --out file is gone: state file not found: gone.json"
+    )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_last_with_a_redacted_secret_refuses_to_replay_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    stash_dir = home_dir / ".config" / "circuitry"
+    stash_dir.mkdir(parents=True)
+    (stash_dir / "last-run.json").write_text(
+        json.dumps(
+            {
+                "orchestration": "orchestration.yml",
+                "env_vars": ["OPENAI_API_KEY=***REDACTED***"],
+            }
+        ),
+        encoding="utf-8",
+    )
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    result = _run(engine, electricity_binary, case_dir, home_dir, ["--last"])
+    assert result.returncode == 1, (engine, result.stdout, result.stderr)
+    # Two plain lines on stdout for both engines (never the JSON failure
+    # payload: this check runs before `run()`/`run_orchestration_with_
+    # config` is ever reached) -- collapsed to one for the same soft-wrap
+    # reason `_last_refusal_error` collapses its own single-line text.
+    expected = (
+        "Error: previous run included redacted secrets in -e values. "
+        "Re-run explicitly with the secret supplied via env var or config file "
+        "(recommended), or via -e for this invocation."
+    )
+    assert " ".join(result.stdout.split()) == expected
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_resume_and_last_together_are_mutually_exclusive_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    result = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last", "--last"],
+    )
+    assert result.returncode == 1, (engine, result.stdout, result.stderr)
+    assert result.stdout.strip() == "Error: --resume and --last are mutually exclusive."
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_resume_last_does_not_replay_the_stashs_own_e_values_on_either_engine(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """issue #760's own ruling: `--resume last` resumes from the loaded
+    `--out` file's own `input.*`, never replaying the stash's `-e`
+    values on top of it -- unlike plain `--last`, which replays the
+    whole prior invocation."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_RESUME_ORCHESTRATION)
+
+    first = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "-e", "unused=original", "--out", "out.json"],
+    )
+    assert first.returncode == 1, (engine, first.stdout, first.stderr)
+
+    resumed = _run(
+        engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "--resume", "last"],
+    )
+    assert resumed.returncode == 1, (engine, resumed.stdout, resumed.stderr)
+    resumed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    # The loaded state's own `input.unused` survives from the first run
+    # (the saved file already carries it); nothing from the stash's own
+    # `env_vars` is replayed a second time on top -- there is no second
+    # `-e` on this invocation at all for it to come from.
+    assert resumed_state["input"]["unused"] == "original"
+
