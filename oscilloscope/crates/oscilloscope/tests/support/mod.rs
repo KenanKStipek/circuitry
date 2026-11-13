@@ -766,6 +766,28 @@ pub fn wait_for_screen_text(
     }
 }
 
+/// [`wait_for_screen_text`] for several needles: polls until the
+/// replayed screen holds every one of them, or the deadline passes.
+/// osi writes a frame in several pieces, so a screen that shows one
+/// row of an overlay (its title, say) can still be missing the rows
+/// below it; waiting for everything a test then asserts on keeps it
+/// from reading a half-drawn frame.
+pub fn wait_for_screen_texts(
+    captured_buf: &Arc<Mutex<Vec<u8>>>,
+    needles: &[&str],
+    timeout: Duration,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let whole = captured_buf.lock().unwrap().clone();
+        let screen = screen_grid(&whole, 200, 60).join("\n");
+        if needles.iter().all(|needle| screen.contains(needle)) || Instant::now() >= deadline {
+            return screen;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+}
+
 /// [`wait_for_screen_text`], but waiting for `needle` to disappear
 /// instead.
 pub fn wait_for_screen_text_gone(

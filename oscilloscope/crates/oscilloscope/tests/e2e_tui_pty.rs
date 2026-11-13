@@ -24,8 +24,8 @@ use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
     drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
     screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
-    wait_for_screen_text, wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout,
-    write_doc,
+    wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start,
+    wait_with_timeout, write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -471,10 +471,17 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
+    // The step runs until this test creates `release` (at most 60 s), so
+    // the run is certainly still live when bare `osi` lists it below; a
+    // fixed `sleep` could end first on a loaded machine.
+    let release = work.path().join("release");
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n",
+        &format!(
+            "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sh\n      args: [\"-c\", \"i=0; while [ ! -f '{}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\"]\n      allowed_commands: [\"sh\"]\n",
+            release.display()
+        ),
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
@@ -561,6 +568,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
         1,
         "discovery must not have disturbed the still-live entry"
     );
+    std::fs::write(&release, b"").expect("release the step");
 
     // `q` opens a confirm-cancel dialog instead of quitting outright
     // as long as osi's own `child.try_wait()` hasn't yet observed the
@@ -2967,7 +2975,17 @@ fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
 
     // `?` opens on the Keys page, the same order the merged page reads in.
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &[
+            "Help · Tape · Keys",
+            "tokens:",
+            "usual",
+            "filter rows",
+            "errors only",
+        ],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("tokens:") && screen.contains("usual"),
         "expected the Tape's own t key listed; got:\n{screen}"
@@ -2978,7 +2996,11 @@ fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
     );
 
     send_bytes(&mut master, "\x1b[C".as_bytes());
-    let screen = wait_for_screen_text(&captured_buf, "done · failed", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Help · Tape · Key", "done · failed", "running · ahead"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
         "expected the Key page's own title; got:\n{screen}"
@@ -3025,7 +3047,17 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
     std::thread::sleep(Duration::from_millis(300));
 
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Tape", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &[
+            "Help · Tape",
+            "select a row",
+            "tokens:",
+            "done · failed",
+            "running · ahead",
+        ],
+        Duration::from_secs(10),
+    );
     assert!(
         !screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
         "expected the merged page's own title, with no page suffix; got:\n{screen}"
@@ -3056,18 +3088,32 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
     );
 
     send_bytes(&mut master, b"T");
-    let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["theme: ", "done · failed"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("Key"),
         "expected the Help overlay to stay open after T; got:\n{screen}"
     );
-    let after_bytes = captured_buf.lock().unwrap().clone();
-    let after_grid = screen_grid(&after_bytes, 200, 60);
-    let (glyph_row, glyph_col) =
-        find_glyph(&after_grid, "done · failed", '✓').unwrap_or_else(|| {
-            panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
-        });
-    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    // The new theme repaints the whole screen in several writes, so the
+    // ✓ cell may still carry the old colour when the theme banner shows;
+    // read it again until it changes or the deadline passes.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let (after_grid, after_fg) = loop {
+        let after_bytes = captured_buf.lock().unwrap().clone();
+        let after_grid = screen_grid(&after_bytes, 200, 60);
+        let fg = find_glyph(&after_grid, "done · failed", '✓')
+            .map(|(row, col)| screen_grid_fg(&after_bytes, 200, 60)[row][col].clone());
+        if fg.as_ref().is_some_and(|fg| *fg != before_fg) || std::time::Instant::now() >= deadline {
+            break (after_grid, fg);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let after_fg = after_fg.unwrap_or_else(|| {
+        panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
+    });
     assert_ne!(
         before_fg, after_fg,
         "expected the ✓ Key symbol's own cell colour to change after T, not just the text around it"
@@ -3105,7 +3151,11 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"1");
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Signal", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Help · Signal", "scrub the cursor", "finished prompt"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("scrub the cursor") && screen.contains("finished prompt"),
         "expected the Signal's own keys and Key; got:\n{screen}"
@@ -3115,7 +3165,11 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"2");
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Flow", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Help · Flow", "select a station", "a station: done"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("select a station") && screen.contains("a station: done"),
         "expected the Flow's own keys and Key; got:\n{screen}"
@@ -3125,7 +3179,15 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"3");
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Store", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &[
+            "Help · Store",
+            "select a row",
+            "area is its share of tokens",
+        ],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("select a row") && screen.contains("area is its share of tokens"),
         "expected the Store's own keys and Key; got:\n{screen}"
