@@ -1,0 +1,3 @@
+{
+  "error": "Reflector effect at 'prime.effects[0]': 'allow_tools' must be a literal list of plain strings; '{{input.tool}}' is a Mustache template, never honoured here."
+}

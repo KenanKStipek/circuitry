@@ -1,0 +1,15 @@
+name: c772-reflector-tool-outside-ceiling-allowed
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it. Goal: {goal}"
+    allow_tools: [json]
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

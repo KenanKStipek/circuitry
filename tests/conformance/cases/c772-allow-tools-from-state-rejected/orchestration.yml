@@ -1,0 +1,14 @@
+name: c772-allow-tools-from-state-rejected
+interface:
+  inputs:
+    tool:
+      type: string
+      default: shell
+effects:
+  - type: reflector
+    name: plan_it
+    allow_tools: ["{{input.tool}}"]
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"
