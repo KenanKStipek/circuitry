@@ -1278,9 +1278,13 @@ fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
 /// Issue #693 item 4: two unnamed `if`s sharing the same host, one
 /// resolving `then` and the other `else` -- selecting each decision
 /// in turn (← after the run ends, issue #704 rule 3) must show that
-/// decision's own condition and branch, never the other's, proving
-/// the two never swap suffixes depending on which got evidence
-/// first.
+/// decision's own condition and branch, never the other's. Both
+/// decisions are already settled by the time the run has ended and
+/// this test selects either one (`find_station` looks a station up
+/// by its own path once the run is over), so this alone does not
+/// prove the suffixes never swap mid-run before that -- see
+/// `rail::tests::a_selection_of_prime_if_keeps_as_own_decision_once_
+/// the_other_resolves` (`oscilloscope-core`) for that.
 #[test]
 fn selecting_either_of_two_unnamed_ifs_on_one_host_shows_its_own_decision() {
     if !e2e_enabled() {

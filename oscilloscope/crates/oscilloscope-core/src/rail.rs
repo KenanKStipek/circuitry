@@ -2839,6 +2839,69 @@ mod tests {
         );
     }
 
+    /// Issue #693 item 4: a selection held across two redraws, by
+    /// its own path alone (`crate::screens::build_flow`'s own
+    /// `selected_path`, the same way `App::selected_path` persists
+    /// in the real TUI without the user touching a key again), must
+    /// keep reading the same decision once the *other* unnamed `if`
+    /// on the same host gets real evidence in between -- the actual
+    /// failure mode the plan-order suffix fixes: the old counter,
+    /// recomputed fresh on every call from whichever decision had
+    /// evidence first, could repoint an already-selected `.__if` at
+    /// the other decision the moment the second one resolved.
+    #[test]
+    fn a_selection_of_prime_if_keeps_as_own_decision_once_the_other_resolves() {
+        let plan = compile_doc(&unnamed_if_yaml("a", "b"));
+        let before = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        });
+        let after = serde_json::json!({
+            "prime": {
+                "value": null,
+                "meta": {"created_at": "t0", "completed_at": null},
+                "b_then": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}
+            }
+        });
+        for (label, state) in [("before", &before), ("after", &after)] {
+            let mut model = crate::model::RunModel::new();
+            let rendered = crate::render::build(
+                "do.yml",
+                "test",
+                &plan,
+                &mut model,
+                Some(state),
+                crate::model::ProcessState::Running,
+                0.0,
+                "2026-01-01T00:00:00Z",
+                &[],
+            );
+            let flat = crate::model::flatten_state(state);
+            let zone = chrono::FixedOffset::east_opt(0).unwrap();
+            let screen = crate::screens::build_flow(
+                &rendered.rows,
+                &rendered.rows,
+                &flat,
+                &plan,
+                &model,
+                &rendered.header,
+                Some(state),
+                &[],
+                Some("prime.__if"),
+                &zone,
+                None,
+                "2026-01-01T00:00:00Z",
+            );
+            let decision = screen
+                .selected_decision
+                .unwrap_or_else(|| panic!("{label}: expected a selected decision"));
+            assert_eq!(
+                decision.branch, None,
+                "{label}: prime.__if is a's own decision, never resolved in this scenario -- \
+                 reading b's own `then` here means the suffix swapped"
+            );
+        }
+    }
+
     fn each_loop_yaml(body_tool: &str) -> String {
         format!(
             "effects:\n  - type: loop\n    name: fan\n    each:\n      in: input.items\n      as: item\n    body:\n      - name: {body_tool}\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n"
