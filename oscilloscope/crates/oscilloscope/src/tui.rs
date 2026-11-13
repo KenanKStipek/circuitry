@@ -6169,6 +6169,85 @@ fn draw_all_tile_band(frame: &mut Frame, area: Rect, tile: &AllTile, ctx: &DrawC
     frame.render_widget(Paragraph::new(Line::from(left)).style(base), area);
 }
 
+#[cfg(test)]
+mod draw_all_tile_band_label_tests {
+    use super::*;
+    use crate::theme::{Theme, ThemeName};
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
+
+    /// A labelled tile at [`oscilloscope_core::multi::TILE_MIN_WIDTH`]
+    /// (issue #752): even with the config already dropped, a label at
+    /// its own 32-cell column cap can still be wider than what's left
+    /// once the document, the glyph, the elapsed time and the engine
+    /// are all accounted for -- the name itself must give way too,
+    /// rather than pushing the elapsed time and engine off the band's
+    /// own right edge.
+    fn tile_with_label(document: &str, label: &str) -> AllTile {
+        let plan = oscilloscope_core::plan::PlanTree::empty();
+        let mut model = oscilloscope_core::model::RunModel::new();
+        model.observe_event(&oscilloscope_core::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "936ff268-5f52-479a-887f-fda1a47dae63".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: Some(label.to_string()),
+        });
+        let render = oscilloscope_core::multi::build_tile(
+            document,
+            "electricity",
+            &plan,
+            &mut model,
+            None,
+            oscilloscope_core::screens::Screen::Tape,
+            &test_zone(),
+            "2026-01-01T00:01:02Z",
+        );
+        AllTile {
+            document_label: document.to_string(),
+            config_label: Some("config-triage.json".to_string()),
+            name: Some(label.to_string()),
+            render,
+            run_index: 0,
+        }
+    }
+
+    fn band_row(tile: &AllTile, width: u16) -> String {
+        let theme = Theme::for_name(ThemeName::Terminal);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &test_zone(),
+            no_animation: true,
+        };
+        let backend = TestBackend::new(width, 1);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_all_tile_band(f, f.area(), tile, &ctx))
+            .unwrap();
+        // Built cell by cell, never `TestBackend::to_string()` (which
+        // quotes and escapes its own output for display, throwing
+        // off a byte-for-byte width check): exactly `width` cells,
+        // whatever each one actually holds.
+        let buf = terminal.backend().buffer();
+        (0..buf.area.width)
+            .map(|x| buf[(x, 0)].symbol().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_long_label_at_the_minimum_tile_width_never_pushes_out_the_elapsed_time_or_engine() {
+        let tile = tile_with_label("triage.yml", &"ticket ".repeat(10));
+        let row = band_row(&tile, oscilloscope_core::multi::TILE_MIN_WIDTH);
+        assert!(row.contains('⋯'), "the name itself must give way: {row:?}");
+        assert!(
+            row.trim_end().ends_with("electricity"),
+            "the elapsed time and engine must stay whole, at the row's own end: {row:?}"
+        );
+    }
+}
+
 /// A `… n more` tile (§9.6): the grid's own last slot once a page
 /// can't show every running run at once.
 fn draw_all_more_tile(frame: &mut Frame, area: Rect, more_count: usize, ctx: &DrawCtx) {
