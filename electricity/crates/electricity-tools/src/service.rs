@@ -177,14 +177,44 @@ mod imp {
         }
     }
 
-    /// Python's general float format (`{x:g}`) for the small, usually
-    /// whole-number timeout values this plugin ever formats.
-    fn format_g(seconds: f64) -> String {
-        if seconds == seconds.trunc() && seconds.abs() < 1e15 {
-            format!("{}", seconds as i64)
-        } else {
-            format!("{seconds}")
+    /// Python's general float format (`{x:g}`): 6 significant digits,
+    /// switching to scientific notation once the exponent falls
+    /// outside `-4..6`, with trailing zeros (and a bare trailing `.`)
+    /// trimmed either way.
+    fn format_g(x: f64) -> String {
+        if x == 0.0 {
+            return "0".to_string();
         }
+        let neg = x.is_sign_negative();
+        let ax = x.abs();
+        const PRECISION: i32 = 6;
+        // Scientific notation at `PRECISION` significant digits reads
+        // off the true base-10 exponent (with the rounding already
+        // applied) directly from where `{:e}` places the decimal
+        // point -- sidestepping `log10().floor()`'s own rounding
+        // trouble exactly at a power of ten.
+        let sci = format!("{ax:.*e}", (PRECISION - 1) as usize);
+        let (mantissa, exp_str) = sci.split_once('e').expect("`{:e}` always has an exponent");
+        let exp: i32 = exp_str.parse().expect("a valid exponent");
+        let body = if !(-4..PRECISION).contains(&exp) {
+            format!(
+                "{}e{}{:02}",
+                trim_trailing_zeros(mantissa),
+                if exp < 0 { '-' } else { '+' },
+                exp.abs()
+            )
+        } else {
+            let decimals = (PRECISION - 1 - exp).max(0) as usize;
+            trim_trailing_zeros(&format!("{ax:.decimals$}")).to_string()
+        };
+        if neg { format!("-{body}") } else { body }
+    }
+
+    fn trim_trailing_zeros(s: &str) -> &str {
+        if !s.contains('.') {
+            return s;
+        }
+        s.trim_end_matches('0').trim_end_matches('.')
     }
 
     fn is_linux_proc() -> bool {
@@ -624,6 +654,7 @@ mod imp {
         Url(String),
     }
 
+    #[derive(Clone)]
     struct ParsedUrl {
         scheme: String,
         host: String,
@@ -835,16 +866,29 @@ mod imp {
         std::sync::Arc::new(config)
     }
 
+    const MAX_RESPONSE_HEAD_BYTES: usize = 8192;
+
+    /// Reads until the blank line ending the response's headers (or
+    /// the connection closes, or [`MAX_RESPONSE_HEAD_BYTES`] is hit) --
+    /// enough to carry a `Location` header for [`fetch_status`]'s own
+    /// redirect following, not just the status line a single-read
+    /// 1024-byte buffer used to settle for.
     async fn read_response_head<S: tokio::io::AsyncRead + Unpin>(
         stream: &mut S,
     ) -> Option<Vec<u8>> {
-        let mut buf = vec![0u8; 1024];
-        let n = stream.read(&mut buf).await.ok()?;
-        if n == 0 {
-            return None;
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() >= MAX_RESPONSE_HEAD_BYTES {
+                break;
+            }
+            let n = stream.read(&mut chunk).await.ok()?;
+            if n == 0 {
+                break;
+            }
+            buf.extend_from_slice(&chunk[..n]);
         }
-        buf.truncate(n);
-        Some(buf)
+        if buf.is_empty() { None } else { Some(buf) }
     }
 
     fn parse_status_code(bytes: &[u8]) -> Option<u16> {
@@ -853,11 +897,78 @@ mod imp {
         line.split_whitespace().nth(1)?.parse().ok()
     }
 
+    /// The first header named *name* (case-insensitive), scanning only
+    /// up to the blank line ending the headers.
+    fn parse_header(bytes: &[u8], name: &str) -> Option<String> {
+        let text = String::from_utf8_lossy(bytes);
+        let mut lines = text.lines();
+        lines.next()?; // the status line
+        for line in lines {
+            if line.is_empty() {
+                break;
+            }
+            if let Some((key, value)) = line.split_once(':') {
+                if key.trim().eq_ignore_ascii_case(name) {
+                    return Some(value.trim().to_string());
+                }
+            }
+        }
+        None
+    }
+
+    /// *url*'s own `Host` header: bracketed when the host is an IPv6
+    /// literal, and carrying the port whenever it isn't the scheme's
+    /// default -- `http://[::1]:8080/` sends `Host: [::1]:8080`, not
+    /// bare `::1` (ambiguous with a port) or no port at all.
+    fn host_header(parsed: &ParsedUrl) -> String {
+        let default_port = if parsed.scheme == "https" { 443 } else { 80 };
+        let host = if parsed.host.contains(':') {
+            format!("[{}]", parsed.host)
+        } else {
+            parsed.host.clone()
+        };
+        if parsed.port == default_port {
+            host
+        } else {
+            format!("{host}:{}", parsed.port)
+        }
+    }
+
+    /// A redirect's `Location` header resolved against *current* --
+    /// an absolute `http(s)://` target is parsed outright; anything
+    /// else is treated as a path on *current*'s own host (a local dev
+    /// server's redirects are never anything more exotic than that in
+    /// practice), lexically normalized the same way [`resolve_path`]
+    /// normalizes a nonexistent filesystem path's own tail.
+    fn resolve_redirect(current: &ParsedUrl, location: &str) -> Option<ParsedUrl> {
+        if location.contains("://") {
+            return parse_url(location).filter(|p| p.scheme == "http" || p.scheme == "https");
+        }
+        let path = if location.starts_with('/') {
+            location.to_string()
+        } else {
+            let base = current.path.rsplit_once('/').map_or("", |(base, _)| base);
+            format!("{base}/{location}")
+        };
+        Some(ParsedUrl {
+            scheme: current.scheme.clone(),
+            host: current.host.clone(),
+            port: current.port,
+            path,
+        })
+    }
+
+    /// Up to this many redirects are followed -- `urllib.request`'s
+    /// own `HTTPRedirectHandler.max_redirections`, the limit cof's own
+    /// readiness probe (an `opener.open()` through the default
+    /// handlers) inherits.
+    const MAX_REDIRECTS: u32 = 10;
+
     /// A single GET, no redirect following (DESIGN.md §13): "ready on
     /// any status below 500" already treats a 3xx as ready, the common
     /// case; a redirect to a 5xx is the one divergence from cof, which
     /// follows it via urllib's own default `HTTPRedirectHandler`.
-    async fn fetch_status(parsed: &ParsedUrl) -> Option<u16> {
+    async fn fetch_once(parsed: &ParsedUrl) -> Option<Vec<u8>> {
         let host_for_addr = if parsed.host.contains(':') {
             format!("[{}]", parsed.host)
         } else {
@@ -867,21 +978,41 @@ mod imp {
         let tcp = tokio::net::TcpStream::connect(&addr).await.ok()?;
         let request = format!(
             "GET {} HTTP/1.1\r\nHost: {}\r\nConnection: close\r\n\r\n",
-            parsed.path, parsed.host
+            parsed.path,
+            host_header(parsed)
         );
         if parsed.scheme == "https" {
             let connector = tokio_rustls::TlsConnector::from(tls_config_no_verify());
             let server_name = rustls_pki_types::ServerName::try_from(parsed.host.clone()).ok()?;
             let mut tls = connector.connect(server_name, tcp).await.ok()?;
             tls.write_all(request.as_bytes()).await.ok()?;
-            let head = read_response_head(&mut tls).await?;
-            parse_status_code(&head)
+            read_response_head(&mut tls).await
         } else {
             let mut tcp = tcp;
             tcp.write_all(request.as_bytes()).await.ok()?;
-            let head = read_response_head(&mut tcp).await?;
-            parse_status_code(&head)
+            read_response_head(&mut tcp).await
         }
+    }
+
+    /// `_probe_ready`'s own `opener.open(url)` through urllib's
+    /// default `HTTPRedirectHandler`: follows up to [`MAX_REDIRECTS`]
+    /// redirects before reading the final response's status.
+    async fn fetch_status(parsed: &ParsedUrl) -> Option<u16> {
+        let mut current = parsed.clone();
+        for _ in 0..=MAX_REDIRECTS {
+            let head = fetch_once(&current).await?;
+            let status = parse_status_code(&head)?;
+            if matches!(status, 301 | 302 | 303 | 307 | 308) {
+                if let Some(location) = parse_header(&head, "location") {
+                    if let Some(next) = resolve_redirect(&current, &location) {
+                        current = next;
+                        continue;
+                    }
+                }
+            }
+            return Some(status);
+        }
+        None
     }
 
     async fn probe_url(text: &str) -> bool {
@@ -1178,10 +1309,7 @@ mod imp {
 
     /// [`other_claims`] off the async runtime's own thread (see
     /// [`helper`]'s own doc comment).
-    async fn other_claims_nb(
-        dir: PathBuf,
-        name: String,
-    ) -> Result<HashMap<i64, Dict>, ToolError> {
+    async fn other_claims_nb(dir: PathBuf, name: String) -> Result<HashMap<i64, Dict>, ToolError> {
         tokio::task::spawn_blocking(move || other_claims(&dir, &name))
             .await
             .map_err(|e| runtime_error(format!("service: internal error: {e}")))?
@@ -1547,9 +1675,16 @@ mod imp {
             Value::Dict(d) => d.clone(),
             _ => return Err(value_error("service: params['env'] must be a mapping.")),
         };
-        let mut env: HashMap<String, String> = std::env::vars().collect();
+        // `vars_os`, not `vars`: the latter panics on a non-UTF-8
+        // environment variable, which `os.environ` (Python surrogate-
+        // escapes it) never does.
+        let mut env: HashMap<std::ffi::OsString, std::ffi::OsString> =
+            std::env::vars_os().collect();
         for (k, v) in overrides.iter() {
-            env.insert(k.py_str(), v.py_str());
+            env.insert(
+                std::ffi::OsString::from(k.py_str()),
+                std::ffi::OsString::from(v.py_str()),
+            );
         }
 
         let cwd: PathBuf = match get(params, "cwd") {
@@ -1600,7 +1735,9 @@ mod imp {
                         pid: get(claim, "pgid").and_then(value_as_i64),
                         pgid: get(claim, "pgid").and_then(value_as_i64),
                         command: get(claim, "command").cloned(),
-                        cwd: get(claim, "cwd").and_then(Value::as_str).map(str::to_string),
+                        cwd: get(claim, "cwd")
+                            .and_then(Value::as_str)
+                            .map(str::to_string),
                         service: get(claim, "name")
                             .and_then(Value::as_str)
                             .map(str::to_string),
@@ -2313,6 +2450,7 @@ mod imp {
                 .await
                 .unwrap();
             assert!(!result.ok);
+            assert_eq!(result.value, Value::None);
             let raw = result.raw.as_dict().unwrap();
             assert_eq!(get(raw, "running"), Some(&Value::from(false)));
             let err = result.stderr.unwrap();
@@ -2347,6 +2485,184 @@ mod imp {
             assert!(result.stderr.unwrap().contains("not started"));
             let raw = result.raw.as_dict().unwrap();
             assert!(get(raw, "port_holders").is_some());
+        }
+
+        /// A `start` call's own future dropped outright while it is
+        /// still waiting for `ready` (`electricity_vm::exec::tool`'s
+        /// own cancellation race, reproduced directly here rather than
+        /// through a whole run) tears the group down the same way a
+        /// plain `stop` does: `SIGTERM` first -- observed through a
+        /// trap the child itself installs -- not an unconditional
+        /// `SIGKILL`, and the record is gone afterward.
+        #[tokio::test]
+        async fn a_cancelled_start_tears_the_group_down_gracefully() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let name = format!("svc-cancel-{}", std::process::id());
+            let marker = dir.path().join("sigterm-seen");
+            let script = format!("trap 'touch {} ; exit 0' TERM; sleep 30", marker.display());
+            let record_path = dir.path().join(format!("{name}.json"));
+            let the_call = call(&token);
+
+            // `Box::pin`, not `tokio::pin!`: the latter leaves this
+            // variable a mere `Pin<&mut F>>` to a hidden stack slot, so
+            // `drop`ping it drops only the reference, never running the
+            // future's own drop glue (`TeardownOnCancel`'s `Drop` among
+            // its captured locals) -- an owned `Pin<Box<F>>` is what
+            // `electricity_vm`'s own dispatch drops in the real
+            // cancellation race this test reproduces.
+            let mut start_fut = Box::pin(plugin.execute(
+                params(vec![
+                    ("action", Value::from("start")),
+                    ("name", Value::from(name.as_str())),
+                    ("command", Value::from(script.as_str())),
+                    ("shell", Value::from(true)),
+                    // Nothing ever listens on this port, so `wait_ready`
+                    // keeps polling until this test drops the future.
+                    ("ready", Value::from(1)),
+                    ("ready_timeout_ms", Value::from(30_000)),
+                    ("grace_ms", Value::from(2_000)),
+                ]),
+                &the_call,
+            ));
+
+            let find_pgid = async {
+                loop {
+                    if let Ok(text) = fs::read_to_string(&record_path) {
+                        if let Ok(v) = loads(&text) {
+                            if let Some(d) = v.as_dict() {
+                                if let Some(p) = get(d, "pgid").and_then(value_as_i64) {
+                                    return p as u32;
+                                }
+                            }
+                        }
+                    }
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+            };
+            let pgid = tokio::select! {
+                _ = &mut start_fut => panic!("start finished before a pgid could be observed"),
+                p = find_pgid => p,
+            };
+            drop(start_fut); // the dispatch cancellation this guards against
+
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while group_exists(pgid) && Instant::now() < deadline {
+                tokio::time::sleep(Duration::from_millis(50)).await;
+            }
+            assert!(
+                !group_exists(pgid),
+                "the group should be gone after cancellation"
+            );
+            assert!(
+                marker.exists(),
+                "SIGTERM should have reached the child before it died"
+            );
+            assert!(
+                !record_path.exists(),
+                "the record should be dropped once torn down"
+            );
+        }
+
+        /// Two `start`s, then two `stop`s, run in parallel on one
+        /// `current_thread` runtime -- electricity's own real dispatch
+        /// shape (every branch of a run polled from one
+        /// `FuturesUnordered` on a single thread). A blocking `flock`
+        /// acquire would deadlock this outright: branch A takes the
+        /// lock and yields; branch B's own blocking acquire attempt
+        /// then parks the only thread, so A can never resume to release
+        /// it. A non-blocking, polled acquire lets both progress.
+        #[tokio::test(flavor = "current_thread")]
+        async fn parallel_start_and_stop_branches_do_not_deadlock() {
+            let dir = tempdir();
+            let token = CancellationToken::new();
+            let plugin = plugin(dir.path());
+            let pid = std::process::id();
+            let name_a = format!("svc-par-a-{pid}");
+            let name_b = format!("svc-par-b-{pid}");
+            let the_call = call(&token);
+
+            let start = |name: &str| {
+                plugin.execute(
+                    params(vec![
+                        ("action", Value::from("start")),
+                        ("name", Value::from(name)),
+                        (
+                            "command",
+                            Value::List(vec![Value::from("sleep"), Value::from("30")]),
+                        ),
+                    ]),
+                    &the_call,
+                )
+            };
+            let (a, b) = tokio::join!(start(&name_a), start(&name_b));
+            let a = a.unwrap();
+            let b = b.unwrap();
+            assert!(a.ok, "{a:?}");
+            assert!(b.ok, "{b:?}");
+
+            let stop = |name: &str| {
+                plugin.execute(
+                    params(vec![
+                        ("action", Value::from("stop")),
+                        ("name", Value::from(name)),
+                    ]),
+                    &the_call,
+                )
+            };
+            let (a, b) = tokio::join!(stop(&name_a), stop(&name_b));
+            let a = a.unwrap();
+            let b = b.unwrap();
+            assert_eq!(
+                a.value.as_dict().and_then(|d| get(d, "stopped")),
+                Some(&Value::from(true))
+            );
+            assert_eq!(
+                b.value.as_dict().and_then(|d| get(d, "stopped")),
+                Some(&Value::from(true))
+            );
+        }
+
+        #[test]
+        fn format_g_matches_pythons_general_float_format() {
+            assert_eq!(format_g(60.0), "60");
+            assert_eq!(format_g(0.5), "0.5");
+            assert_eq!(format_g(5.0), "5");
+            assert_eq!(format_g(90.5), "90.5");
+            assert_eq!(format_g(300.0), "300");
+            assert_eq!(format_g(100000.0), "100000");
+            assert_eq!(format_g(999999.0), "999999");
+            assert_eq!(format_g(1000000.0), "1e+06");
+            assert_eq!(format_g(1234567.0), "1.23457e+06");
+            assert_eq!(format_g(1234.567), "1234.57");
+            assert_eq!(format_g(0.0001), "0.0001");
+            assert_eq!(format_g(0.00001), "1e-05");
+        }
+
+        #[tokio::test]
+        async fn fetch_status_follows_a_redirect_to_its_final_response() {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            tokio::spawn(async move {
+                for _ in 0..2 {
+                    let (mut sock, _) = listener.accept().await.unwrap();
+                    let mut buf = [0u8; 1024];
+                    let _ = sock.read(&mut buf).await;
+                    let request = String::from_utf8_lossy(&buf).to_string();
+                    let response = if request.starts_with("GET /old") {
+                        format!(
+                            "HTTP/1.1 302 Found\r\nLocation: http://127.0.0.1:{port}/new\r\n\r\n"
+                        )
+                    } else {
+                        "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n".to_string()
+                    };
+                    let _ = sock.write_all(response.as_bytes()).await;
+                }
+            });
+            let parsed = parse_url(&format!("http://127.0.0.1:{port}/old")).unwrap();
+            let status = fetch_status(&parsed).await;
+            assert_eq!(status, Some(200));
         }
 
         fn tempdir() -> tempfile_shim::TempDir {
