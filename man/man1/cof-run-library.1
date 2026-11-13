@@ -6,31 +6,31 @@ cof-run-library \- Fetch and run a shared library orchestration
 cof run-library [OPTIONS] {asset_id}
 .fi
 .SH DESCRIPTION
-Fetches a shared library orchestration and runs it in one step -- the same
-fetch cof fetch does, followed by the same execution cof run does.
+Fetches a shared library asset and runs it in one step -- the same fetch cof
+fetch does, followed by the same execution cof run does.
 .SH OPTIONS
 .TP
-.B asset_id
-ASSET_ID Shared library asset identifier.
+.B ASSET_ID
+Shared library asset identifier.
 .TP
 .B --version, -V
-VERSION Specific asset version. Defaults to latest.
+\fIVERSION\fR Specific asset version. Defaults to latest.
 .TP
 .B --config, -c
-CONFIG Path to config JSON (or use CIRCUITRY_CONFIG).
+\fICONFIG\fR Path to config JSON (or use CIRCUITRY_CONFIG).
 .TP
 .B --auth-token
-AUTH_TOKEN Shared library auth token (or set CIRCUITRY_LIBRARY_TOKEN).
+\fIAUTH_TOKEN\fR Shared library auth token (or set CIRCUITRY_LIBRARY_TOKEN).
 .TP
 .B --service-profile
-SERVICE_PROFILE Apply runtime overrides from
+\fISERVICE_PROFILE\fR Apply runtime overrides from
 runtime.library.service_profiles.<name>.
 .TP
 .B --state, -s
-STATE Optional input state JSON.
+\fISTATE\fR Optional input state JSON.
 .TP
 .B --out, -o
-OUT Write resulting state JSON to this path.
+\fIOUT\fR Write resulting state JSON to this path.
 .TP
 .B --pretty
 Pretty-print JSON when writing/printing.
@@ -51,16 +51,16 @@ Suppress non-essential output.
 Show detailed progress.
 .TP
 .B --live-state
-LIVE_STATE Mirror state atomically to this file while the run goes (at most
-every 0.5 s, and once more when it ends). For live monitoring.
+\fILIVE_STATE\fR Mirror state atomically to this file while the run goes (at
+most every 0.5 s, and once more when it ends). For live monitoring.
 .TP
 .B --events
-EVENTS Write a JSONL stream of effect starts and ends to this file as the run
-goes (created or truncated up front). Shows what --live-state cannot: a
-running tree branch, use child, or chain leaf.
+\fIEVENTS\fR Write a JSONL stream of effect starts and ends to this file as
+the run goes (created or truncated up front). Shows what --live-state cannot:
+a running tree branch, use child, or chain leaf.
 .TP
 .B -e
-ENV_VARS Inline state variable (KEY=VALUE). Repeatable.
+\fIENV_VARS\fR Inline state variable (KEY=VALUE). Repeatable.
 .TP
 .B --tail
 Print only the final effect's value as plain text. Ideal for piping.
@@ -69,21 +69,23 @@ Print only the final effect's value as plain text. Ideal for piping.
 Bypass dependency preflight; run even if check()s reported missing deps.
 .TP
 .B --allow-capabilities
-ALLOW_CAPABILITIES Comma-separated capabilities
+\fIALLOW_CAPABILITIES\fR Comma-separated capabilities
 (shell,python_eval,fs-write,network) to approve for this run without prompting
-— a scripted/CI escape hatch. Not persisted; see `cof trust` to approve a
-document permanently.
+\(em a scripted/CI escape hatch. Not persisted; see \fBcof trust\fR to approve
+a document permanently.
 .TP
 .B --profile
-PROFILE Named profile to apply (profiles/<name>.yml, orchestration-scoped wins
-over project-level). Precedence: CLI > profile > orchestration > config.
+\fIPROFILE\fR Named profile to apply (profiles/<name>.yml,
+orchestration-scoped wins over project-level). Precedence: CLI > profile >
+orchestration > config.
 .TP
 .B --adapter
-ADAPTER Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the
+\fIADAPTER\fR Adapter to use for this run. Beats CIRCUITRY_ADAPTER and the
 orchestration.
 .TP
 .B --model
-MODEL Model to use for this run. Beats CIRCUITRY_MODEL and the orchestration.
+\fIMODEL\fR Model to use for this run. Beats CIRCUITRY_MODEL and the
+orchestration.
 .TP
 .B --explain-routing
 Print each prompt effect's complexity score, band, and model choice as it
@@ -107,15 +109,14 @@ turned on.
 .TP
 .B --split, --no-split
 Force runtime.complexity.splitting on/off for this run. Beats --profile and
-the orchestration/config. Needs no scoring: an effect's own
-split.budget_tokens still splits even with this off, and --no-split does not
-stop it either — only an effect's own split.enabled: false opts it out.
+the orchestration/config. Needs no scoring: an effect's split.budget_tokens
+still splits even with this off, and --no-split does not stop it either \(em
+only an effect's split.enabled: false opts it out.
 .SH ENVIRONMENT
 .TP
 .B CIRCUITRY_CONFIG
-An explicit config JSON path. Checked before a trusted project config in the
-current directory and the global config; replaces both rather than layering on
-top of them.
+An explicit config JSON path (same as --config). When set, replaces the global
+config and any project config entirely, rather than layering on top of them.
 .TP
 .B CIRCUITRY_MODEL
 Overrides the resolved config's default_model.
@@ -124,13 +125,13 @@ Overrides the resolved config's default_model.
 Overrides the resolved config's default_adapter.
 .TP
 .B CIRCUITRY_ADAPTER_URL
-Overrides the resolved default adapter's own base_url.
+Overrides the resolved default adapter's base_url.
 .TP
 .B CIRCUITRY_COMFYUI_URL
-Overrides the comfyui plugin's own base_url.
+Overrides the comfyui plugin's base_url.
 .TP
 .B CIRCUITRY_SYSTEMONE_URL
-Overrides the systemone plugin's own base_url.
+Overrides the systemone plugin's base_url.
 .TP
 .B CIRCUITRY_ENABLED_ADAPTERS
 Comma-separated allowlist, narrowing (never widening) the resolved config's
@@ -150,10 +151,15 @@ Overrides the resolved config's environment (dev, prod, or test).
 .B CIRCUITRY_TRUST_PROJECT_CONFIG
 Trusts a project config in the current directory without running cof trust
 first.
+.TP
+.B CIRCUITRY_LIBRARY_TOKEN
+Shared library auth token, when the configured backend requires one;
+overridden by --auth-token.
 .SH FILES
 .TP
 .I ~/.config/circuitry/config.json
-The global config, the last layer config resolution tries.
+The global config, applied first; a trusted project config layers on top of
+it.
 .TP
 .I ~/.config/circuitry/.env
 Private environment variables, loaded before config resolution (written by cof
@@ -164,16 +170,29 @@ Project configs trusted by cof trust; config resolution consults it before
 applying a discovered project config.
 .TP
 .I ./circuitry.config.json, ./config.json
-A project config in the working directory, applied only once trusted.
+A project config in the working directory, layered on top of the global config
+once trusted.
+.TP
+.I ~/.config/circuitry/last-run.json
+This run's arguments, for a later cof run --last.
 .SH EXIT STATUS
 .TP
 .B 0
-Success.
+The run finished without error.
 .TP
 .B 1
-The command failed, or the input was invalid.
+The fetch or the run failed.
 .TP
 .B 2
 A usage error -- an unrecognized option or missing argument.
+.TP
+.B 129
+The run was interrupted by SIGHUP.
+.TP
+.B 130
+The run was interrupted by SIGINT (Ctrl-C).
+.TP
+.B 143
+The run was interrupted by SIGTERM.
 .SH SEE ALSO
 \fBcof(1)\fR, \fBcof-fetch(1)\fR, \fBcof-run(1)\fR, \fBcof-library(1)\fR

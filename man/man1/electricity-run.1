@@ -1,6 +1,6 @@
 .TH ELECTRICITY-RUN 1 "2026-11-13" "electricity 0.1.0" "User Commands"
 .SH NAME
-electricity-run \- run a Circuitry orchestration, cof run's own way (preview)
+electricity-run \- run a Circuitry orchestration the way cof run does (preview)
 .SH SYNOPSIS
 .nf
 electricity run <orchestration.yml> [-e key=value]... [--config config.json]
@@ -11,23 +11,24 @@ electricity run <orchestration.yml> [-e key=value]... [--config config.json]
 .SH DESCRIPTION
 electricity is a preview: it runs
 tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents only
-(persistence and runtime plugins are refused with a preview marker; use `cof
-run` for those). A prompt effect's model is reached for real through a
-document's own `adapter:` or a prompt's own `provider:`, including `ollama`,
-the OpenAI-compatible family, `openai`, `anthropic`, `replicate`, `watsonx`,
-`cyberdiner`, `claude_code`, `pi`, and the `scripted` adapter; `litellm` has
-no electricity builder and is refused permanently.
+(persistence and runtime plugins are refused with a preview marker; use \fBcof
+run\fR for those). A prompt effect's model is reached for real through a
+document's \fBadapter:\fR or a prompt's \fBprovider:\fR, including
+\fBollama\fR, the OpenAI-compatible family, \fBopenai\fR, \fBanthropic\fR,
+\fBreplicate\fR, \fBwatsonx\fR, \fBcyberdiner\fR, \fBclaude_code\fR, \fBpi\fR,
+and the \fBscripted\fR adapter; \fBlitellm\fR has no electricity builder and
+is refused permanently.
 .PP
-`electricity run <doc>` accepts the same options `cof run` does, with the same
-config discovery (`--config` optional: CIRCUITRY_CONFIG, then a trusted
-project config in the working directory, then the global config) and the same
-meaning for --allow-capabilities/--adapter/--quiet. The legacy `electricity
-<config.json> <doc>` form (config always explicit, never discovered) keeps
-working as an alias; --profile/--pretty/--dump-ir are electricity-only
-additions, available under either form.
+\fBelectricity run <doc>\fR accepts the same options \fBcof run\fR does, with
+the same config discovery (\fB--config\fR optional: CIRCUITRY_CONFIG, then a
+trusted project config in the working directory, then the global config) and
+the same meaning for --allow-capabilities/--adapter/--quiet. The legacy
+\fBelectricity <config.json> <doc>\fR form (config always explicit, never
+discovered) keeps working as an alias; --profile/--pretty/--dump-ir are
+electricity-only additions, available under either form.
 .PP
-`electricity man [run]` shows the electricity(1) or electricity-run(1) man
-page through `man` on a terminal, or prints its roff when piped or given
+\fBelectricity man [run]\fR shows the electricity(1) or electricity-run(1) man
+page through \fBman\fR on a terminal, or prints its roff when piped or given
 --roff.
 .SH OPTIONS
 .TP
@@ -65,8 +66,10 @@ stdout or written to --out.
 orchestration and the config.
 .TP
 .B --label
-\fItext\fR Literal text for this run's label, beating the document's own
-top-level label: template. Never rendered.
+\fItext\fR Literal text for this run's label, beating the document's top-level
+label: template. Never rendered. Cleaned the same way either way: whitespace
+collapsed to one space, control characters and escape sequences dropped,
+trimmed, cut at 64 characters; empty after cleaning means no label.
 .TP
 .B --quiet
 Suppress non-essential output (accepted for parity).
@@ -82,8 +85,9 @@ without error is skipped and reused only when --resume is also given.
 .TP
 .B --resume
 \fImode\fR Combined with --state <file>: skip a named effect whose saved node
-already finished without error. Refuses a document that changed since the
-saved run unless --force.
+already finished without error. cof run's 'last'/a run-id mode is not
+supported -- --resume always needs --state <file> naming the saved state
+directly. Refuses a document that changed since the saved run unless --force.
 .TP
 .B --force
 With --resume, continue even though the orchestration's content changed since
@@ -104,25 +108,61 @@ already finished without error.
 .SH ENVIRONMENT
 .TP
 .B CIRCUITRY_CONFIG
-A config JSON path, for electricity run's own discovery (--config takes
-priority over it; a trusted project config and then the global config are
-tried after it). The legacy form's first positional is always explicit and
-never consults this variable.
+An explicit config JSON path, for electricity run's discovery (same as
+--config; when set, replaces the global config and any project config
+entirely, rather than layering on top of them). The legacy form's first
+positional is always explicit and never consults this variable.
+.TP
+.B CIRCUITRY_MODEL
+Overrides the resolved config's default_model.
+.TP
+.B CIRCUITRY_ADAPTER
+Overrides the resolved config's default_adapter.
+.TP
+.B CIRCUITRY_ADAPTER_URL
+Overrides the resolved default adapter's base_url.
+.TP
+.B CIRCUITRY_COMFYUI_URL
+Overrides the comfyui plugin's base_url.
+.TP
+.B CIRCUITRY_SYSTEMONE_URL
+Overrides the systemone plugin's base_url.
+.TP
+.B CIRCUITRY_ENABLED_ADAPTERS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_adapters.
+.TP
+.B CIRCUITRY_ENABLED_PLUGINS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_plugins.
+.TP
+.B CIRCUITRY_ENABLED_TOOLS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_tools.
+.TP
+.B CIRCUITRY_ENVIRONMENT
+Overrides the resolved config's environment (dev, prod, or test).
+.TP
+.B CIRCUITRY_TRUST_PROJECT_CONFIG
+Trusts a project config in the current directory without running cof trust
+first.
 .SH FILES
 .TP
 .I ~/.config/circuitry/config.json
-The global config, the last layer electricity run's own discovery tries.
+The global config, applied first; a trusted project config layers on top of
+it.
 .TP
 .I ~/.config/circuitry/.env
 Private environment variables, loaded before config resolution (the same file
 cof setup writes).
 .TP
 .I ~/.config/circuitry/trusted.json
-Project configs trusted by cof trust; electricity run's own discovery consults
-it the same way cof run does.
+Project configs trusted by cof trust; electricity run's discovery consults it
+the same way cof run does.
 .TP
 .I ./circuitry.config.json, ./config.json
-A project config in the working directory, used only once trusted.
+A project config in the working directory, layered on top of the global config
+once trusted.
 .SH EXIT STATUS
 .TP
 .B 0

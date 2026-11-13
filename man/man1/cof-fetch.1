@@ -6,33 +6,32 @@ cof-fetch \- Fetch a shared library orchestration
 cof fetch [OPTIONS] {asset_id}
 .fi
 .SH DESCRIPTION
-Fetches a shared library orchestration from a configured
-runtime.library.sources entry, without running it.
+Fetches a shared library asset from the configured filesystem backend
+(runtime.library.local_root), writing it to --out, without running it.
 .SH OPTIONS
 .TP
-.B asset_id
-ASSET_ID Shared library asset identifier.
+.B ASSET_ID
+Shared library asset identifier.
 .TP
 .B --version, -V
-VERSION Specific asset version. Defaults to latest.
+\fIVERSION\fR Specific asset version. Defaults to latest.
 .TP
 .B --out, -o
-OUT Output path for fetched orchestration.
+\fIOUT\fR Output path for fetched orchestration.
 .TP
 .B --config, -c
-CONFIG Path to config JSON (or use CIRCUITRY_CONFIG).
+\fICONFIG\fR Path to config JSON (or use CIRCUITRY_CONFIG).
 .TP
 .B --auth-token
-AUTH_TOKEN Shared library auth token (or set CIRCUITRY_LIBRARY_TOKEN).
+\fIAUTH_TOKEN\fR Shared library auth token (or set CIRCUITRY_LIBRARY_TOKEN).
 .TP
 .B --json
 Machine-readable output only (minimal logs).
 .SH ENVIRONMENT
 .TP
 .B CIRCUITRY_CONFIG
-An explicit config JSON path. Checked before a trusted project config in the
-current directory and the global config; replaces both rather than layering on
-top of them.
+An explicit config JSON path (same as --config). When set, replaces the global
+config and any project config entirely, rather than layering on top of them.
 .TP
 .B CIRCUITRY_MODEL
 Overrides the resolved config's default_model.
@@ -41,13 +40,13 @@ Overrides the resolved config's default_model.
 Overrides the resolved config's default_adapter.
 .TP
 .B CIRCUITRY_ADAPTER_URL
-Overrides the resolved default adapter's own base_url.
+Overrides the resolved default adapter's base_url.
 .TP
 .B CIRCUITRY_COMFYUI_URL
-Overrides the comfyui plugin's own base_url.
+Overrides the comfyui plugin's base_url.
 .TP
 .B CIRCUITRY_SYSTEMONE_URL
-Overrides the systemone plugin's own base_url.
+Overrides the systemone plugin's base_url.
 .TP
 .B CIRCUITRY_ENABLED_ADAPTERS
 Comma-separated allowlist, narrowing (never widening) the resolved config's
@@ -67,10 +66,15 @@ Overrides the resolved config's environment (dev, prod, or test).
 .B CIRCUITRY_TRUST_PROJECT_CONFIG
 Trusts a project config in the current directory without running cof trust
 first.
+.TP
+.B CIRCUITRY_LIBRARY_TOKEN
+Shared library auth token, when the configured backend requires one;
+overridden by --auth-token.
 .SH FILES
 .TP
 .I ~/.config/circuitry/config.json
-The global config, the last layer config resolution tries.
+The global config, applied first; a trusted project config layers on top of
+it.
 .TP
 .I ~/.config/circuitry/.env
 Private environment variables, loaded before config resolution (written by cof
@@ -81,7 +85,8 @@ Project configs trusted by cof trust; config resolution consults it before
 applying a discovered project config.
 .TP
 .I ./circuitry.config.json, ./config.json
-A project config in the working directory, applied only once trusted.
+A project config in the working directory, layered on top of the global config
+once trusted.
 .SH EXIT STATUS
 .TP
 .B 0

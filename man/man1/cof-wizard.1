@@ -1,7 +1,7 @@
 .TH COF-WIZARD 1 "2026-11-13" "cof 0.1.0" "User Commands"
 .SH NAME
-cof-wizard \- Build an orchestration by talking to the wizard, headlessly.
-(Not `cof gen`
+cof-wizard \- Build an orchestration by talking to the wizard, headlessly;
+unlike \fBcof gen\fR, it asks clarifying questions
 .SH SYNOPSIS
 .nf
 cof wizard [OPTIONS]
@@ -14,43 +14,42 @@ single-shot orchestration.
 .SH OPTIONS
 .TP
 .B --goal, -g
-GOAL One-line description of what the orchestration should do.
+\fIGOAL\fR One-line description of what the orchestration should do.
 .TP
 .B --name, -n
-NAME Name for the result (used for the filename / library slug). Derived from
---goal if omitted.
+\fINAME\fR Name for the result (used for the filename / library slug). Derived
+from --goal if omitted.
 .TP
 .B --category
-CATEGORY One of: recipes, patterns, utilities, agents, learn. [default:
+\fICATEGORY\fR One of: recipes, patterns, utilities, agents, learn. [default:
 recipes]
 .TP
 .B --reply, -r
-REPLY File of scripted replies, one per line, used instead of stdin.
+\fIREPLY\fR File of scripted replies, one per line, used instead of stdin.
 .TP
 .B --out, -o
-OUT Write the final YAML here (default: stdout).
+\fIOUT\fR Write the final YAML here (default: stdout).
 .TP
 .B --library
 Also save into the local library, indexed like a bundled entry.
 .TP
 .B --max-turns
-MAX_TURNS Stop after this many turns. [default: 10]
+\fIMAX_TURNS\fR Stop after this many turns. [default: 10]
 .TP
 .B --config, -c
-CONFIG Path to config JSON.
+\fICONFIG\fR Path to config JSON.
 .TP
 .B --verbose, -v
 Show orchestration execution logs.
 .SH EXAMPLES
 .TP
 .B cof wizard --goal 'summarize a URL and post it to slack'
-Builds an orchestration through the wizard's own questions.
+Builds an orchestration through the wizard's questions.
 .SH ENVIRONMENT
 .TP
 .B CIRCUITRY_CONFIG
-An explicit config JSON path. Checked before a trusted project config in the
-current directory and the global config; replaces both rather than layering on
-top of them.
+An explicit config JSON path (same as --config). When set, replaces the global
+config and any project config entirely, rather than layering on top of them.
 .TP
 .B CIRCUITRY_MODEL
 Overrides the resolved config's default_model.
@@ -59,13 +58,13 @@ Overrides the resolved config's default_model.
 Overrides the resolved config's default_adapter.
 .TP
 .B CIRCUITRY_ADAPTER_URL
-Overrides the resolved default adapter's own base_url.
+Overrides the resolved default adapter's base_url.
 .TP
 .B CIRCUITRY_COMFYUI_URL
-Overrides the comfyui plugin's own base_url.
+Overrides the comfyui plugin's base_url.
 .TP
 .B CIRCUITRY_SYSTEMONE_URL
-Overrides the systemone plugin's own base_url.
+Overrides the systemone plugin's base_url.
 .TP
 .B CIRCUITRY_ENABLED_ADAPTERS
 Comma-separated allowlist, narrowing (never widening) the resolved config's
@@ -88,7 +87,8 @@ first.
 .SH FILES
 .TP
 .I ~/.config/circuitry/config.json
-The global config, the last layer config resolution tries.
+The global config, applied first; a trusted project config layers on top of
+it.
 .TP
 .I ~/.config/circuitry/.env
 Private environment variables, loaded before config resolution (written by cof
@@ -99,7 +99,8 @@ Project configs trusted by cof trust; config resolution consults it before
 applying a discovered project config.
 .TP
 .I ./circuitry.config.json, ./config.json
-A project config in the working directory, applied only once trusted.
+A project config in the working directory, layered on top of the global config
+once trusted.
 .SH EXIT STATUS
 .TP
 .B 0

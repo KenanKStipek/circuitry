@@ -7,48 +7,62 @@
 `cof`'s own pages come straight from `circuitry.cli.man_pages.render_page`,
 the same code `cof man` itself calls -- there is nothing else to build.
 `electricity`/`osi`'s own pages come from running their own binaries
-(`electricity man [run] --roff`, `osi man [watch] --roff`), building each
-with `cargo build` first if its binary isn't already there; `--check`
-never builds a binary it can't find, and treats that page as unchecked
-with a warning instead of failing the whole run on a worktree that has
-never built that tool.
+(`electricity man [run] --roff`, `osi man [watch] --roff`); `cargo build`
+runs first, every time, unless `--no-build` is given -- reusing whatever
+already happened to sit at `target/debug/<bin>` could silently check a
+stale binary against an option it was never rebuilt to carry. When cargo
+isn't on PATH at all (or `--no-build` is given and nothing is built yet),
+that tool's pages are skipped with a warning instead of failing the
+whole run.
 """
 
 from __future__ import annotations
 
 import argparse
+import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MAN1 = REPO_ROOT / "man" / "man1"
-BUNDLED_MAN1 = REPO_ROOT / "src" / "circuitry" / "bundled" / "man" / "man1"
 
 sys.path.insert(0, str(REPO_ROOT / "src"))
+
+
+def _pyproject_version() -> str:
+    """`pyproject.toml`'s own `[project] version` -- never the installed
+    package's: a stale editable install (bumped pyproject.toml, not yet
+    reinstalled) would otherwise write every cof page with the wrong,
+    pre-bump version."""
+    text = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    match = re.search(r'(?m)^version\s*=\s*"([^"]+)"', text)
+    if match is None:
+        raise RuntimeError("pyproject.toml has no top-level version = \"...\"")
+    return match.group(1)
 
 
 def _cof_pages() -> dict[str, str]:
     from circuitry.cli.man_pages import all_page_names, render_page
 
+    version = _pyproject_version()
     pages: dict[str, str] = {}
     for name in all_page_names():
         filename = "cof.1" if name == "cof" else f"cof-{name}.1"
-        pages[filename] = render_page(name)
+        pages[filename] = render_page(name, version=version)
     return pages
 
 
 def _cargo_binary(workspace: Path, bin_name: str, *, build: bool) -> Path | None:
     path = workspace / "target" / "debug" / bin_name
-    if path.exists():
-        return path
     if not build:
-        return None
+        return path if path.exists() else None
     try:
         result = subprocess.run(
             ["cargo", "build", "--bin", bin_name],
             cwd=workspace,
-            env={**__import__("os").environ, "CARGO_BUILD_JOBS": "4"},
+            env={**os.environ, "CARGO_BUILD_JOBS": "4"},
             check=False,
         )
     except FileNotFoundError:
@@ -78,22 +92,29 @@ def _rust_tool_pages(
     return out
 
 
+#: Every filename each Rust tool can produce, independent of whether its
+#: binary happens to be built -- `main`'s own orphan check in `--check`
+#: needs this regardless of a skipped/failed build, so a missing cargo
+#: toolchain can't make it misreport electricity's/osi's own pages as
+#: orphaned just because they weren't rebuilt this run.
+ELECTRICITY_PAGE_ARGS: dict[str, tuple[str, ...]] = {
+    "electricity.1": (),
+    "electricity-run.1": ("run",),
+}
+OSI_PAGE_ARGS: dict[str, tuple[str, ...]] = {
+    "osi.1": (),
+    "osi-watch.1": ("watch",),
+}
+
+
 def _electricity_pages(*, build: bool) -> dict[str, str] | None:
     return _rust_tool_pages(
-        REPO_ROOT / "electricity",
-        "electricity",
-        {"electricity.1": (), "electricity-run.1": ("run",)},
-        build=build,
+        REPO_ROOT / "electricity", "electricity", ELECTRICITY_PAGE_ARGS, build=build
     )
 
 
 def _osi_pages(*, build: bool) -> dict[str, str] | None:
-    return _rust_tool_pages(
-        REPO_ROOT / "oscilloscope",
-        "osi",
-        {"osi.1": (), "osi-watch.1": ("watch",)},
-        build=build,
-    )
+    return _rust_tool_pages(REPO_ROOT / "oscilloscope", "osi", OSI_PAGE_ARGS, build=build)
 
 
 def main() -> int:
@@ -137,12 +158,16 @@ def main() -> int:
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        if filename.startswith("cof"):
-            bundled_path = BUNDLED_MAN1 / filename
-            bundled_path.parent.mkdir(parents=True, exist_ok=True)
-            bundled_path.write_text(content, encoding="utf-8")
 
     if args.check:
+        from circuitry.cli.man_pages import all_page_names
+
+        known = {
+            "cof.1" if n == "cof" else f"cof-{n}.1" for n in all_page_names()
+        } | set(ELECTRICITY_PAGE_ARGS) | set(OSI_PAGE_ARGS)
+        if MAN1.is_dir():
+            orphaned = sorted(p.name for p in MAN1.glob("*.1") if p.name not in known)
+            stale.extend(f"{name} (orphaned -- no longer generated)" for name in orphaned)
         if stale:
             print(
                 "stale man page(s) -- run scripts/generate-man-pages.py:\n  "

@@ -56,6 +56,37 @@ const MAN_DATE: &str = "2026-11-13";
 /// values list -- `mandoc -Tlint`'s only two complaints about
 /// clap_mangen's own output, neither under this binary's control
 /// otherwise.
+/// Turns a markdown code span (`` `foo` ``) into roff bold (`\fBfoo\fR`)
+/// (issue #764) -- `RunArgs`'/`WatchArgs`' own doc comments use
+/// backticks for an option/path/env-var name, which `clap_mangen`
+/// passes straight through as a literal character.
+fn code_spans_to_bold(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_code = false;
+    for part in text.split('`') {
+        if in_code {
+            out.push_str("\\fB");
+            out.push_str(part);
+            out.push_str("\\fR");
+        } else {
+            out.push_str(part);
+        }
+        in_code = !in_code;
+    }
+    out
+}
+
+/// A roff request mid-paragraph, even right after wrapping put it at
+/// the start of a line -- `\&` is a zero-width roff escape that
+/// neutralizes a leading `.`/`'` without changing how the line prints.
+fn guard_leading_control_char(line: &str) -> std::borrow::Cow<'_, str> {
+    if line.starts_with('.') || line.starts_with('\'') {
+        std::borrow::Cow::Owned(format!("\\&{line}"))
+    } else {
+        std::borrow::Cow::Borrowed(line)
+    }
+}
+
 fn postprocess_roff(text: &str) -> String {
     let text = text.replace(".br\n\n.br\n", "\n");
     let mut out = String::new();
@@ -70,11 +101,50 @@ fn postprocess_roff(text: &str) -> String {
         if in_no_fill || line.is_empty() || line.starts_with('.') || line.starts_with('\'') {
             out.push_str(line);
         } else {
-            out.push_str(&wrap_width(line, MAN_WIDTH));
+            let bold = code_spans_to_bold(line);
+            for (i, wrapped_line) in wrap_width(&bold, MAN_WIDTH).lines().enumerate() {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str(&guard_leading_control_char(wrapped_line));
+            }
         }
         out.push('\n');
     }
     out
+}
+
+/// Creates *name*'s own temp roff file with an unpredictable name,
+/// atomically (`create_new`) so a symlink planted ahead of time at a
+/// guessed path can't be written through -- unlike a plain
+/// `{name}.{pid}.1` path, a process id is not a secret.
+pub fn create_temp_man_file(name: &str, text: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    let dir = std::env::temp_dir();
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let unique = nanos ^ u128::from(std::process::id()) ^ u128::from(attempt);
+        let path = dir.join(format!("{name}.{unique:x}.1"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(text.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a temp man file",
+    ))
 }
 
 /// Renders a `.TP` section from (heading, body) rows: *bold_heading*
@@ -143,28 +213,28 @@ const ENVIRONMENT: &[(&str, &str)] = &[
     ),
     (
         "OSI_HISTORY_DIR",
-        "Overrides osi's own history directory (see FILES below).",
+        "Overrides osi's history directory (see FILES below).",
     ),
     (
         "OSI_RUNS_DIR",
-        "Overrides osi's own run registry directory (see FILES below).",
+        "Overrides osi's run registry directory (see FILES below).",
     ),
     (
         "OSI_PROCESS_SCAN",
-        "OSI_PROCESS_SCAN=0 limits bare osi's own discovery (no \
+        "OSI_PROCESS_SCAN=0 limits bare osi's discovery (no \
          orchestration, no TTY, or --log) to the run registry, skipping \
          the process scan and any state.live.json in the current \
          directory.",
     ),
     (
         "XDG_STATE_HOME",
-        "The base osi's own history and run registry directories are \
+        "The base osi's history and run registry directories are \
          rooted under, when OSI_HISTORY_DIR/OSI_RUNS_DIR aren't set.",
     ),
     (
         "XDG_RUNTIME_DIR",
         "Preferred over XDG_STATE_HOME for the run registry alone (a \
-         live run's own pid file), when it's set.",
+         live run's pid file), when it's set.",
     ),
     ("CI", "Forces the plain-text stream, the same as --log."),
 ];
@@ -172,15 +242,15 @@ const ENVIRONMENT: &[(&str, &str)] = &[
 const FILES: &[(&str, &str)] = &[
     (
         "~/.local/state/circuitry/osi/history/",
-        "Per-document run history (issue #649): one record per finished \
-         run, read back for the Recent Runs table and ETA estimates. \
+        "Per-document run history: one record per finished run, read \
+         back for the Recent Runs table and ETA estimates. \
          OSI_HISTORY_DIR overrides this directory; OSI_HISTORY=off or \
          --no-history disables it entirely.",
     ),
     (
         "~/.local/state/circuitry/osi/runs/",
         "The run registry: one file per run osi launched or is watching, \
-         used by bare osi's own discovery and pruned once a run's pid is \
+         used by bare osi's discovery and pruned once a run's pid is \
          no longer alive. OSI_RUNS_DIR overrides this directory; \
          $XDG_RUNTIME_DIR/circuitry/osi/runs is tried first when set.",
     ),
@@ -189,18 +259,22 @@ const FILES: &[(&str, &str)] = &[
 const EXIT_STATUS: &[(&str, &str)] = &[
     ("0", "The watched or launched run finished without error."),
     (
-        "1",
-        "The run finished with an error, or osi could not start or attach \
-         to it at all.",
+        "1 and other",
+        "osi exits with the engine's own exit code, passed through \
+         unchanged -- a child process's own code if it had one, or \
+         128 plus the signal number that killed it. 1 covers an \
+         ordinary failure, or osi being unable to start or attach to \
+         the run at all.",
     ),
     (
         "2",
         "A usage error -- an unrecognized option, a missing required \
-         argument, or an unknown osi man page.",
+         argument, or an unknown osi man page. Never from the watched \
+         or launched engine itself.",
     ),
-    ("129", "The run ended on SIGHUP."),
-    ("130", "The run ended on SIGINT (Ctrl-C)."),
-    ("143", "The run ended on SIGTERM."),
+    ("129", "The run ended on SIGHUP (128 + 1)."),
+    ("130", "The run ended on SIGINT, Ctrl-C (128 + 2)."),
+    ("143", "The run ended on SIGTERM (128 + 15)."),
 ];
 
 const SEE_ALSO: &str =
@@ -210,12 +284,14 @@ const SEE_ALSO: &str =
 /// rendering of `RunArgs`/`WatchArgs` for NAME/SYNOPSIS/OPTIONS/
 /// DESCRIPTION, with the hand-written sections above appended.
 pub fn build_man_page(page: Page) -> String {
+    let source = format!("osi {}", env!("CARGO_PKG_VERSION"));
     let mut base = Vec::new();
     let (examples, see_also) = match page {
         Page::Run => {
             clap_mangen::Man::new(RunArgs::command())
                 .title("OSI")
                 .date(MAN_DATE)
+                .source(&source)
                 .render(&mut base)
                 .expect("rendering to a Vec<u8> never fails");
             (RUN_EXAMPLES, SEE_ALSO)
@@ -224,12 +300,20 @@ pub fn build_man_page(page: Page) -> String {
             clap_mangen::Man::new(WatchArgs::command())
                 .title("OSI-WATCH")
                 .date(MAN_DATE)
+                .source(&source)
                 .render(&mut base)
                 .expect("rendering to a Vec<u8> never fails");
             (WATCH_EXAMPLES, SEE_ALSO)
         }
     };
-    let base = String::from_utf8(base).expect("clap_mangen renders valid UTF-8");
+    let mut base = String::from_utf8(base).expect("clap_mangen renders valid UTF-8");
+    if page == Page::Watch {
+        // clap_mangen's own NAME line uses the Command's name verbatim
+        // ("osi watch", with a space -- `WatchArgs`'s own program name
+        // for its SYNOPSIS/USAGE), not the hyphenated `osi-watch(1)`
+        // man-page convention `osi-watch.1`'s filename already follows.
+        base = base.replacen("osi watch \\-", "osi-watch \\-", 1);
+    }
     let full = format!(
         "{base}.SH EXAMPLES\n{examples}.SH ENVIRONMENT\n{environment}.SH FILES\n{files}\
          .SH EXIT STATUS\n{exit_status}.SH SEE ALSO\n{see_also}",

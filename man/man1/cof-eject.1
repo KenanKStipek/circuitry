@@ -6,18 +6,18 @@ cof-eject \- Copy a bundled orchestration to the current directory for editing
 cof eject [OPTIONS] {name}
 .fi
 .SH DESCRIPTION
-Copies a bundled orchestration's own file into the current directory, for
-local editing -- the bundled copy itself is never writable.
+Copies a bundled orchestration's file into the current directory, for local
+editing -- the bundled copy itself is never writable.
 .SH OPTIONS
 .TP
-.B name
-NAME Name of the orchestration to eject.
+.B NAME
+Name of the orchestration to eject.
 .TP
 .B --out, -o
-OUT Output path. Defaults to ./<filename>.
+\fIOUT\fR Output path. Defaults to ./<filename>.
 .TP
 .B --config, -c
-CONFIG Path to config JSON (or use CIRCUITRY_CONFIG).
+\fICONFIG\fR Path to config JSON (or use CIRCUITRY_CONFIG).
 .SH EXAMPLES
 .TP
 .B cof eject hello-world

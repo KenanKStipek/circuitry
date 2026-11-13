@@ -6,38 +6,38 @@ cof-info \- Show details for a bundled orchestration
 cof info [OPTIONS] {name}
 .fi
 .SH DESCRIPTION
-Shows a bundled orchestration's own details from the curated index:
-description, category, complexity, and required extensions.
+Shows a bundled orchestration's details from the curated index: description,
+category, complexity, and required extensions.
 .SH OPTIONS
 .TP
-.B name
-NAME Name of the orchestration.
+.B NAME
+Name of the orchestration.
 .TP
 .B --json
 Output machine-readable JSON only.
 .TP
 .B --config, -c
-CONFIG Path to config JSON (or use CIRCUITRY_CONFIG).
+\fICONFIG\fR Path to config JSON (or use CIRCUITRY_CONFIG).
 .TP
 .B --profile
-PROFILE Named profile to layer in when resolving the complexity block, as `cof
-run --profile` would (see `cof run --help`).
+\fIPROFILE\fR Named profile to layer in when resolving the complexity block,
+as \fBcof run --profile\fR would (see \fBcof run --help\fR).
 .TP
 .B --scoring, --no-scoring
-Preview runtime.complexity.scoring forced on/off, as `cof run --scoring` would
-resolve it.
+Preview runtime.complexity.scoring forced on/off, as \fBcof run --scoring\fR
+would resolve it.
 .TP
 .B --routing, --no-routing
-Preview runtime.complexity.routing forced on/off, as `cof run --routing` would
-resolve it.
+Preview runtime.complexity.routing forced on/off, as \fBcof run --routing\fR
+would resolve it.
 .TP
 .B --decompose, --no-decompose
-Preview runtime.complexity.decomposition forced on/off, as `cof run
---decompose` would resolve it.
+Preview runtime.complexity.decomposition forced on/off, as \fBcof run
+--decompose\fR would resolve it.
 .TP
 .B --split, --no-split
-Preview runtime.complexity.splitting forced on/off, as `cof run --split` would
-resolve it.
+Preview runtime.complexity.splitting forced on/off, as \fBcof run --split\fR
+would resolve it.
 .SH EXAMPLES
 .TP
 .B cof info hello-world

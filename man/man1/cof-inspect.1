@@ -6,16 +6,16 @@ cof-inspect \- Show orchestration metadata
 cof inspect [OPTIONS] {orchestration}
 .fi
 .SH DESCRIPTION
-Prints an orchestration document's own metadata (name, description, inputs,
-outputs) without running or validating it.
+Prints an orchestration document's path, format, size, model, adapter, and
+effect names and count, without running or validating it.
 .SH OPTIONS
 .TP
-.B orchestration
-ORCHESTRATION Path to orchestration file.
+.B ORCHESTRATION
+Path to orchestration file.
 .SH EXAMPLES
 .TP
 .B cof inspect my-flow.yml
-Shows a document's declared interface.
+Shows a document's summary fields.
 .SH EXIT STATUS
 .TP
 .B 0

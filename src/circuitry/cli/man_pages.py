@@ -15,6 +15,7 @@ disagree, and `cof man` keeps working in a source checkout with no
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 import sys
@@ -121,19 +122,40 @@ def _wrap_paragraphs(text: str, width: int = MAN_WIDTH) -> str:
     rejoining them with `.PP` -- `-man`'s own paragraph break, since a
     blank input line alone is not one."""
     paragraphs = [p.strip() for p in text.strip().split("\n\n") if p.strip()]
-    return "\n.PP\n".join(_wrap(" ".join(p.split()), width) for p in paragraphs)
+    return "\n.PP\n".join(_wrap(_format_text(" ".join(p.split())), width) for p in paragraphs)
 
 
 def _roff_escape(text: str) -> str:
-    """Escapes a literal backslash -- the one character hand-written
-    prose could plausibly contain that roff would otherwise treat
-    specially."""
-    return text.replace("\\", "\\e")
+    """Escapes a literal backslash, then every non-ASCII character --
+    plain `groff -man -Tutf8` (no `-k`/preconv) reads raw UTF-8 bytes as
+    invalid input, so an em dash or similar needs roff's own escape
+    (`\\(em`, or `\\[uXXXX]` for anything without a named glyph) instead
+    of the literal character."""
+    text = text.replace("\\", "\\e")
+    text = text.replace("—", "\\(em")
+    return "".join(c if ord(c) < 128 else f"\\[u{ord(c):04X}]" for c in text)
 
 
-def _tp(heading: str, body: str, *, bold: bool = True) -> str:
+def _code_spans_to_bold(text: str) -> str:
+    """Turns a markdown code span (`` `foo` ``) into roff bold (``\\fBfoo\\fR``)
+    -- hand-written help text uses backticks for an option or path name, and
+    a plain backtick would otherwise render literally on the page."""
+    return re.sub(r"`([^`]+)`", r"\\fB\1\\fR", text)
+
+
+def _format_text(text: str) -> str:
+    """Escapes roff-sensitive characters, then turns a markdown code span
+    into roff bold -- the one pass every hand-written or CLI-sourced
+    string takes before it reaches the page."""
+    return _code_spans_to_bold(_roff_escape(text))
+
+
+def _tp(heading: str, body: str, *, bold: bool = True, raw_prefix: str = "") -> str:
+    """*raw_prefix* -- a metavar's own `\\fI...\\fR` italics -- is inserted
+    after *body* is escaped, never before: it is already roff, not prose."""
     macro = ".B" if bold else ".I"
-    return f".TP\n{macro} {_roff_escape(heading)}\n{_wrap(_roff_escape(body))}\n"
+    text = raw_prefix + _format_text(body)
+    return f".TP\n{macro} {_format_text(heading)}\n{_wrap(text)}\n"
 
 
 def _tp_section(rows: tuple[tuple[str, str], ...], *, bold: bool = True) -> str:
@@ -162,18 +184,18 @@ class PageExtra:
 CONFIG_ENVIRONMENT: tuple[tuple[str, str], ...] = (
     (
         "CIRCUITRY_CONFIG",
-        ("An explicit config JSON path. Checked before a trusted project "
-        "config in the current directory and the global config; replaces "
-        "both rather than layering on top of them."),
+        ("An explicit config JSON path (same as --config). When set, replaces "
+        "the global config and any project config entirely, rather than "
+        "layering on top of them."),
     ),
     ("CIRCUITRY_MODEL", "Overrides the resolved config's default_model."),
     ("CIRCUITRY_ADAPTER", "Overrides the resolved config's default_adapter."),
     (
         "CIRCUITRY_ADAPTER_URL",
-        "Overrides the resolved default adapter's own base_url.",
+        "Overrides the resolved default adapter's base_url.",
     ),
-    ("CIRCUITRY_COMFYUI_URL", "Overrides the comfyui plugin's own base_url."),
-    ("CIRCUITRY_SYSTEMONE_URL", "Overrides the systemone plugin's own base_url."),
+    ("CIRCUITRY_COMFYUI_URL", "Overrides the comfyui plugin's base_url."),
+    ("CIRCUITRY_SYSTEMONE_URL", "Overrides the systemone plugin's base_url."),
     (
         "CIRCUITRY_ENABLED_ADAPTERS",
         ("Comma-separated allowlist, narrowing (never widening) the "
@@ -204,7 +226,7 @@ CONFIG_ENVIRONMENT: tuple[tuple[str, str], ...] = (
 CONFIG_FILES: tuple[tuple[str, str], ...] = (
     (
         "~/.config/circuitry/config.json",
-        "The global config, the last layer config resolution tries.",
+        "The global config, applied first; a trusted project config layers on top of it.",
     ),
     (
         "~/.config/circuitry/.env",
@@ -218,8 +240,18 @@ CONFIG_FILES: tuple[tuple[str, str], ...] = (
     ),
     (
         "./circuitry.config.json, ./config.json",
-        ("A project config in the working directory, applied only once "
-        "trusted."),
+        ("A project config in the working directory, layered on top of the "
+        "global config once trusted."),
+    ),
+)
+
+#: :data:`CONFIG_ENVIRONMENT` plus the one extra variable `fetch`/
+#: `run-library` consult for a shared library asset.
+LIBRARY_ENVIRONMENT: tuple[tuple[str, str], ...] = (
+    *CONFIG_ENVIRONMENT,
+    (
+        "CIRCUITRY_LIBRARY_TOKEN",
+        "Shared library auth token, when the configured backend requires one; overridden by --auth-token.",
     ),
 )
 
@@ -236,21 +268,22 @@ def _page(name: str) -> str:
 PAGE_EXTRAS: dict[str, PageExtra] = {
     "cof": PageExtra(
         description=(
-            "cof is Circuitry's own command-line interface: it runs, "
+            "cof is Circuitry's command-line interface: it runs, "
             "validates, inspects, generates, lists, and manages "
             "orchestration documents and their configuration."
         ),
         environment=CONFIG_ENVIRONMENT,
-        files=(*CONFIG_FILES, ("~/.config/circuitry/services/", "Background service state (cof's own service tooling).")),
+        files=(*CONFIG_FILES, ("~/.config/circuitry/services/", "Background service state (cof's service tooling).")),
         see_also=(*tuple(_page(n) for n in COMMAND_ORDER), "electricity(1)", "osi(1)"),
     ),
     "run": PageExtra(
         description=(
             "Executes an orchestration document: a bundled name (cof list), "
             "a local path, or (with --last) the most recently run "
-            "orchestration's own saved arguments. Config resolution runs "
-            "first (CIRCUITRY_CONFIG, then a trusted project config, then "
-            "the global config), then the document's effects run in order."
+            "orchestration's saved arguments. Config resolution runs first "
+            "(the global config, then a trusted project config layered on "
+            "top of it; CIRCUITRY_CONFIG or --config, if set, replaces both "
+            "instead), then the document's effects run in order."
         ),
         examples=(
             ("cof run hello-world", "Runs a bundled orchestration by name."),
@@ -271,7 +304,7 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
             ),
         ),
         environment=CONFIG_ENVIRONMENT,
-        files=(*CONFIG_FILES, ("~/.config/circuitry/last-run.json", "This run's own arguments, for a later --last or --resume last. Secret-looking values are redacted before being written, and --last refuses to replay a redacted run.")),
+        files=(*CONFIG_FILES, ("~/.config/circuitry/last-run.json", "This run's arguments, for a later --last or --resume last. Secret-looking values are redacted before being written, and --last refuses to replay a redacted run.")),
         exit_status=(
             ("0", "The run finished without error."),
             ("1", "The run failed, or the orchestration could not be found."),
@@ -285,7 +318,7 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
     "validate": PageExtra(
         description=(
             "Checks an orchestration file against Circuitry's schema and, "
-            "unless --skip-preflight is given, every effect's own "
+            "unless --skip-preflight is given, every effect's "
             "dependency-readiness check -- without running anything."
         ),
         examples=(
@@ -297,8 +330,8 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
         see_also=(*SEE_ALSO_CORE, "cof-inspect(1)", "cof-run(1)"),
     ),
     "inspect": PageExtra(
-        description="Prints an orchestration document's own metadata (name, description, inputs, outputs) without running or validating it.",
-        examples=(("cof inspect my-flow.yml", "Shows a document's declared interface."),),
+        description="Prints an orchestration document's path, format, size, model, adapter, and effect names and count, without running or validating it.",
+        examples=(("cof inspect my-flow.yml", "Shows a document's summary fields."),),
         see_also=(*SEE_ALSO_CORE, "cof-validate(1)"),
     ),
     "list": PageExtra(
@@ -306,7 +339,7 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
             "Lists bundled orchestrations from the curated index, "
             "optionally filtered by category. --extensions lists compiled-"
             "in tool/runtime/adapter extensions instead; --models <adapter> "
-            "lists that adapter's own available models."
+            "lists that adapter's available models."
         ),
         examples=(
             ("cof list", "Lists every bundled orchestration."),
@@ -318,35 +351,49 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
         see_also=(*SEE_ALSO_CORE, "cof-info(1)", "cof-run(1)"),
     ),
     "info": PageExtra(
-        description="Shows a bundled orchestration's own details from the curated index: description, category, complexity, and required extensions.",
+        description="Shows a bundled orchestration's details from the curated index: description, category, complexity, and required extensions.",
         examples=(("cof info hello-world", "Shows one bundled orchestration's details."),),
         see_also=(*SEE_ALSO_CORE, "cof-list(1)", "cof-eject(1)"),
     ),
     "eject": PageExtra(
-        description="Copies a bundled orchestration's own file into the current directory, for local editing -- the bundled copy itself is never writable.",
+        description="Copies a bundled orchestration's file into the current directory, for local editing -- the bundled copy itself is never writable.",
         examples=(("cof eject hello-world", "Copies the bundled hello-world.yml here."),),
         see_also=(*SEE_ALSO_CORE, "cof-info(1)", "cof-run(1)"),
     ),
     "fetch": PageExtra(
-        description="Fetches a shared library orchestration from a configured runtime.library.sources entry, without running it.",
-        environment=CONFIG_ENVIRONMENT,
+        description=(
+            "Fetches a shared library asset from the configured filesystem "
+            "backend (runtime.library.local_root), writing it to --out, "
+            "without running it."
+        ),
+        environment=LIBRARY_ENVIRONMENT,
         files=CONFIG_FILES,
         see_also=(*SEE_ALSO_CORE, "cof-library(1)", "cof-run-library(1)"),
     ),
     "run-library": PageExtra(
-        description="Fetches a shared library orchestration and runs it in one step -- the same fetch cof fetch does, followed by the same execution cof run does.",
-        environment=CONFIG_ENVIRONMENT,
-        files=CONFIG_FILES,
+        description="Fetches a shared library asset and runs it in one step -- the same fetch cof fetch does, followed by the same execution cof run does.",
+        environment=LIBRARY_ENVIRONMENT,
+        files=(*CONFIG_FILES, ("~/.config/circuitry/last-run.json", "This run's arguments, for a later cof run --last.")),
+        exit_status=(
+            ("0", "The run finished without error."),
+            ("1", "The fetch or the run failed."),
+            ("2", "A usage error -- an unrecognized option or missing argument."),
+            ("129", "The run was interrupted by SIGHUP."),
+            ("130", "The run was interrupted by SIGINT (Ctrl-C)."),
+            ("143", "The run was interrupted by SIGTERM."),
+        ),
         see_also=(*SEE_ALSO_CORE, "cof-fetch(1)", "cof-run(1)", "cof-library(1)"),
     ),
     "library": PageExtra(
         description=(
-            "Manages runtime.library.sources: remote sources an "
-            "orchestration's use: ref: or cof fetch/run-library can pull "
-            "from. The only subcommand, refresh, is the only thing that "
-            "touches the network for a library source -- it fetches every "
-            "configured source (or just the one named) into the local "
-            "cache."
+            "Manages runtime.library.sources: remote sources a bare-name "
+            "cof run argument or an orchestration's use: ref: resolves "
+            "against, in precedence order. cof fetch/run-library pull from "
+            "a separate filesystem backend (runtime.library.local_root) "
+            "instead, by asset id. The only subcommand, refresh, is the "
+            "only thing that touches the network for a library source -- "
+            "it fetches every configured source (or just the one named) "
+            "into the local cache."
         ),
         examples=(
             ("cof library refresh", "Refreshes every configured library source."),
@@ -383,7 +430,7 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
         examples=(
             (
                 "cof wizard --goal 'summarize a URL and post it to slack'",
-                "Builds an orchestration through the wizard's own questions.",
+                "Builds an orchestration through the wizard's questions.",
             ),
         ),
         environment=CONFIG_ENVIRONMENT,
@@ -398,8 +445,8 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
     "doctor": PageExtra(
         description=(
             "Runs system diagnostics: config resolution, the resolved "
-            "adapter's own connectivity (and, with --generate, a tiny "
-            "real generate call), and every enabled extension's own "
+            "adapter's connectivity (and, with --generate, a tiny "
+            "real generate call), and every enabled extension's "
             "dependency check."
         ),
         examples=(
@@ -438,17 +485,17 @@ PAGE_EXTRAS: dict[str, PageExtra] = {
     "trust": PageExtra(
         description=(
             "Trusts a project config file, or consents to an orchestration "
-            "document's own capabilities. A .yml/.yaml PATH is a document "
+            "document's capabilities. A .yml/.yaml PATH is a document "
             "(shows the capabilities it needs and asks); anything else is "
             "a project config file (shows what it sets and asks). Trust "
             "applies until the file's content changes."
         ),
         examples=(
             ("cof trust", "Trusts circuitry.config.json or config.json in the current directory."),
-            ("cof trust my-flow.yml", "Shows and consents to a document's own capabilities."),
+            ("cof trust my-flow.yml", "Shows and consents to a document's capabilities."),
             ("cof trust --list", "Lists every trusted file and whether it still matches."),
         ),
-        environment=(("CIRCUITRY_CONFIG", "Used to resolve a document's own use: ref: library sources, when trusting a document."),),
+        environment=(("CIRCUITRY_CONFIG", "Used to resolve a document's use: ref: library sources, when trusting a document."),),
         files=(("~/.config/circuitry/trusted.json", "Where every trust decision is recorded."),),
         see_also=(*SEE_ALSO_CORE, "cof-untrust(1)", "cof-run(1)"),
     ),
@@ -494,8 +541,6 @@ def _name_blurb(short: str) -> str:
     """The NAME line's own one-clause blurb: everything up to an em
     dash or ` - `, so a long help sentence (which may also carry a
     multi-byte em dash) doesn't push NAME past the line-length lint."""
-    import re
-
     return re.split(r"\s[—-]\s", short, maxsplit=1)[0].rstrip(".")
 
 
@@ -509,9 +554,25 @@ def _ctx_for(cmd: Command, info_name: str, parent: Context | None = None) -> Con
     return click.Context(cmd, info_name=info_name, parent=parent)
 
 
+def _is_argument(param: click.Parameter) -> bool:
+    """Whether *param* is a positional argument rather than an option.
+
+    Checked by Click's own ``param_type_name``, not ``isinstance``: Typer's
+    ``TyperArgument``/``TyperOption`` subclass a forked copy of
+    ``click.Parameter`` (``typer._click``), so ``isinstance(param,
+    click.Argument)`` is always ``False`` against the real click -- every
+    param on a Typer-built command would otherwise read as an option.
+    """
+    return getattr(param, "param_type_name", None) == "argument"
+
+
 def _metavar(param: click.Parameter, ctx: click.Context) -> str | None:
-    if isinstance(param, click.Argument):
-        return param.make_metavar(ctx)
+    # Typer's forked `Parameter` (`typer._click`/`typer.core`) has no
+    # `make_metavar` at all, under either form -- an argument's metavar
+    # falls back to its own uppercased name the same way click's own
+    # `make_metavar` would with nothing fancier (brackets, ellipsis) set.
+    if _is_argument(param):
+        return param.metavar or ((param.name or "").upper() or None)
     if getattr(param, "is_flag", False) or getattr(param, "count", False):
         return None
     return param.metavar or param.name.upper() if param.name else None
@@ -546,15 +607,14 @@ def render_options_section(cmd: Command) -> str:
     ctx = click.Context(cmd)
     out: list[str] = []
     for param in cmd.params:
-        if isinstance(param, click.Argument):
+        if _is_argument(param):
             heading = _metavar(param, ctx) or (param.name or "").upper()
         else:
             heading = _flag_text(param)
-        metavar = _metavar(param, ctx) if not isinstance(param, click.Argument) else None
+        metavar = _metavar(param, ctx) if not _is_argument(param) else None
         body = _option_help(param)
-        if metavar:
-            body = f"{metavar}  {body}"
-        out.append(_tp(heading, body))
+        raw_prefix = f"\\fI{metavar}\\fR " if metavar else ""
+        out.append(_tp(heading, body, raw_prefix=raw_prefix))
     return "".join(out)
 
 
@@ -574,20 +634,26 @@ def _version() -> str:
     return resolve_version()
 
 
-def render_page(name: str) -> str:
+def render_page(name: str, *, version: str | None = None) -> str:
     """Builds *name*'s own full roff man page (a key of
     :data:`PAGE_EXTRAS`, or an alias in :data:`ALIASES`). Both `cof man`
-    and `scripts/generate-man-pages.py` call this directly."""
+    and `scripts/generate-man-pages.py` call this directly.
+
+    *version* defaults to the installed package's own version -- correct
+    for `cof man`, which only ever runs where that install is this build.
+    The generator passes `pyproject.toml`'s version explicitly instead, so
+    a stale editable install can't write a page with the wrong one.
+    """
     if name in ALIASES:
         target = ALIASES[name]
         return f".so man1/cof-{target}.1\n"
 
-    version = _version()
+    version = version or _version()
     root = _get_root_command()
 
     if name == "cof":
         title = "COF"
-        name_line = "cof \\- Circuitry's own command-line interface"
+        name_line = "cof \\- run, check and manage Circuitry orchestrations"
         synopsis = render_synopsis("cof", root)
         options = render_options_section(root)
         commands_section = ".SH COMMANDS\n" + "".join(
@@ -597,7 +663,8 @@ def render_page(name: str) -> str:
     elif name == "library":
         sub = root.commands["library"]
         title = "COF-LIBRARY"
-        name_line = f"cof-library \\- {(sub.help or '').splitlines()[0].strip() or 'manage library sources'}"
+        blurb = _format_text((sub.help or '').splitlines()[0].strip() or 'manage library sources')
+        name_line = f"cof-library \\- {blurb}"
         refresh = sub.commands["refresh"]
         synopsis = render_synopsis("cof library", sub) + "\n.br\n" + render_synopsis("cof library refresh", refresh)
         options = render_options_section(refresh)
@@ -606,7 +673,8 @@ def render_page(name: str) -> str:
         cmd = root.commands[name]
         title = f"COF-{name.upper()}"
         short = (cmd.help or cmd.get_short_help_str() or name).splitlines()[0].strip()
-        name_line = f"cof-{name} \\- {_name_blurb(short)}"
+        blurb = _format_text(_name_blurb(short))
+        name_line = f"cof-{name} \\- {blurb}"
         synopsis = render_synopsis(f"cof {name}", cmd)
         options = render_options_section(cmd)
         commands_section = ""
@@ -667,15 +735,20 @@ def register_man(app: Any) -> None:
             console.print("Pages: " + ", ".join(all_page_names()))
             raise typer.Exit(code=2)
 
-        text = render_page(name)
+        # An alias (`check`) shows its target's own content directly --
+        # never the tiny `.so man1/cof-validate.1` stub, which only
+        # resolves relative to an installed MANPATH tree, not a temp
+        # file or a pipe. That stub form is for the committed file alone.
+        resolved = ALIASES.get(name, name)
+        text = render_page(resolved)
         if roff or not sys.stdout.isatty():
             sys.stdout.write(text)
             return
 
-        fd, path_str = tempfile.mkstemp(suffix=".1", prefix=f"{name if name == 'cof' else f'cof-{name}'}.")
+        fd, path_str = tempfile.mkstemp(suffix=".1", prefix=f"{resolved if resolved == 'cof' else f'cof-{resolved}'}.")
         path = Path(path_str)
         try:
-            with open(fd, "w") as fh:
+            with open(fd, "w", encoding="utf-8") as fh:
                 fh.write(text)
             man_bin = shutil.which("man")
             if man_bin is None:

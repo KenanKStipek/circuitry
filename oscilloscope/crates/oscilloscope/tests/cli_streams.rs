@@ -376,3 +376,22 @@ fn osi_theme_is_read_and_the_old_osp_theme_is_ignored() {
     );
     assert!(stderr.contains("electricity needs a config"), "{stderr}");
 }
+
+#[test]
+fn man_roff_prints_the_real_page_piped() {
+    let out = run(&["man", "--roff"]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains(".TH OSI 1"), "{stdout}");
+    assert!(stdout.contains(".SH OPTIONS"), "{stdout}");
+    assert!(stdout.contains(".SH EXIT STATUS"), "{stdout}");
+}
+
+#[test]
+fn man_watch_roff_prints_the_real_page_piped() {
+    let out = run(&["man", "watch", "--roff"]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains(".TH OSI-WATCH 1"), "{stdout}");
+    assert!(stdout.contains("osi-watch \\- "), "{stdout}");
+}

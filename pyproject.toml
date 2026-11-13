@@ -333,7 +333,6 @@ circuitry = [
     # file silently stays out of the wheel (#346).
     "bundled/examples/.env.example",
     "bundled/examples/config.example.json",
-    "bundled/man/man1/*.1",
 ]
 
 # `cof`'s own man pages (issue #764): installed into share/man/man1 so a
