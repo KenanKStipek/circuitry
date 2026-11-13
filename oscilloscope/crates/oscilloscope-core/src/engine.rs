@@ -76,8 +76,8 @@ pub struct EngineCaps {
     /// has neither.
     pub live_state: bool,
     /// `--label` (issue #752), detected the same way as `events` --
-    /// an older `cof`/`electricity` built before the engines' own
-    /// label lane has neither. `RunSpec::label` is always osi's own
+    /// an older `cof`/`electricity` built before the engines took
+    /// `--label` doesn't have it. `RunSpec::label` is always osi's own
     /// display fallback regardless (`names::display_name`'s own
     /// `label_hint`), so a run against an engine with no `--label`
     /// still shows its label in osi, it just never reaches the
