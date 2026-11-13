@@ -377,7 +377,7 @@ def test_adapter_api_key_env_errors_does_not_duplicate_an_alias_error() -> None:
 
 
 # ---------------------------------------------------------------------------
-# config only (#669's security ruling, R3): a document never chooses it
+# config only (#669): a document never chooses it
 # ---------------------------------------------------------------------------
 
 
