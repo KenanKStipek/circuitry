@@ -3997,13 +3997,18 @@ binary resolves this per slot (`AllRunSlot::history`, a
 `HistoryHandle` keyed the same way a single-run attach's own is,
 rebuilt whenever the slot's own document changes) and refreshes it
 every redraw, the same way a single-run attach already does. A tile
-reads `usually …` on its own ahead rows, the deviation beside a
-finished step, the Totals row's own Usual, and Run End's own usual
-total, duration and ETA, from the same source and the same rules its
-own single-run Tape already does; with fewer than three finished
-runs in history a tile reads exactly as before. The Signal tiles'
-own shared axis scale is unaffected, since it never reads history at
-all.
+reads `usually …` on its own ahead rows, the Totals row's own Usual,
+and Run End's own usual total, duration and ETA, from the same
+source and the same rules its own single-run Tape already does. A
+tile has no `t` key of its own to toggle the deviation view the
+single-run Tape's does, so a finished row's own token column reads
+the deviation in place of its bar whenever that row has a usual
+figure to read it against -- the same per-row gate the single-run
+view's own `t` toggle already checks before it shows anything there
+at all, just without a key to turn it off again. With fewer than
+three finished runs in history a tile reads exactly as before. The
+Signal tiles' own shared axis scale is unaffected, since it never
+reads history at all.
 
 ### 6.4 Tests
 
