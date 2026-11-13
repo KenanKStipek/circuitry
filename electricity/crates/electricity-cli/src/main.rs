@@ -1473,7 +1473,7 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
             Some(
                 "--resume <run-id> needs this orchestration's runtime.persistence backend, \
                  which stays refused on electricity -- pass --state <file> naming a saved \
-                 state directly instead."
+                 state directly, or --resume last, instead."
                     .to_string(),
             )
         };

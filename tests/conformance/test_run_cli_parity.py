@@ -1164,7 +1164,9 @@ def test_a_refused_resume_never_overwrites_the_stash_it_read(
     """`cli/app.py::_resolve_resume_state`'s own document-hash refusal
     raises entirely in the CLI layer, before `cof run`'s own `run()` --
     and so `_save_last_run` -- is ever reached, so a resume it refuses
-    must leave the stash exactly as the first run left it."""
+    must leave the stash exactly as the first run left it. A later
+    `--last` replaying that unmodified stash, rather than whatever a
+    buggy overwrite would have left, is this test's own proof."""
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     case_dir = tmp_path / "case"
