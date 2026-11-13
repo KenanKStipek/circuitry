@@ -498,7 +498,14 @@ impl Theme {
             icon_trace_ok: green,
             icon_trace_failed: red,
             icon_trace_cancelled: yellow,
-            bg_inset: darken(bg, 0.96),
+            // `darken(bg, 0.96)` read 4.16:1 against `text`, below
+            // this crate's own 4.5 floor (#730): darkening a light
+            // theme's own near-white background pulls it *toward*
+            // `text`'s own luminance, lowering the contrast between
+            // them rather than raising it. Lightening instead keeps
+            // `bg_inset` distinct from both `bg` and `bg_surface`
+            // while raising the ratio to 4.72:1.
+            bg_inset: lighten(bg, 1.02),
             bg_surface: highlight,
             fg_muted: lighten(text, 1.19),
             accent_primary: blue,
@@ -1458,21 +1465,10 @@ mod tests {
                 "{}: text on the leaf fill is {leaf_ratio:.2}, need 4.5",
                 name.as_str()
             );
-            // `solarized-light`'s own `bg_inset` (`darken(bg,
-            // 0.96)`, already shipped, untouched here) is 4.16:1
-            // against `text`, not the 4.5 every other theme clears
-            // -- short of this check's own floor; fixing it is
-            // tracked in #730, and it is no reason to loosen the
-            // check for the other nine.
-            let container_min = if name == ThemeName::SolarizedLight {
-                4.0
-            } else {
-                4.5
-            };
             let container_ratio = contrast_ratio(theme.text, theme.bg_inset);
             assert!(
-                container_ratio >= container_min,
-                "{}: text on the container fill is {container_ratio:.2}, need {container_min}",
+                container_ratio >= 4.5,
+                "{}: text on the container fill is {container_ratio:.2}, need 4.5",
                 name.as_str()
             );
         }
