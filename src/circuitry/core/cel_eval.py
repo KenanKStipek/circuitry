@@ -276,11 +276,13 @@ _CEL_TYPE_NAMES: dict[type, str] = {
     celtypes.BoolType: "bool",
     celtypes.BytesType: "bytes",
     celtypes.DoubleType: "double",
+    celtypes.DurationType: "duration",
     celtypes.IntType: "int",
     celtypes.ListType: "list",
     celtypes.MapType: "map",
     celtypes.NullType: "null",
     celtypes.StringType: "string",
+    celtypes.TimestampType: "timestamp",
     celtypes.UintType: "uint",
     type(None): "null",
 }
@@ -292,11 +294,13 @@ _CEL_TYPE_ARTICLES: dict[str, str] = {
     "bool": "a",
     "bytes": "a",
     "double": "a",
+    "duration": "a",
     "int": "an",
     "list": "a",
     "map": "a",
     "null": "a",
     "string": "a",
+    "timestamp": "a",
     "uint": "a",
 }
 
@@ -587,8 +591,14 @@ class _StateEvaluator(Evaluator):
                 return value
         result = celtypes.MapType()
         for key, value in zip(values[0::2], values[1::2], strict=True):
-            if key in result:
-                raise ValueError(f"Duplicate key {key!r}")
+            try:
+                duplicate = key in result
+            except TypeError as ex:
+                raise ValueError(
+                    f"cannot use {_cel_type_phrase(key)} as a key"
+                ) from ex
+            if duplicate:
+                raise ValueError(f"duplicate key: {_repr_key(key)}")
             result[cast(Any, key)] = cast(Any, value)
         return result
 
@@ -1166,6 +1176,8 @@ _CACHE: dict[str, _Compiled] = {}
 
 def _compile(expr: str) -> _Compiled:
     """Parse *expr* once and memoise the runner and its state paths."""
+    too_deeply_nested = False
+    compiled: _Compiled | None = None
     with _LOCK:
         cached = _CACHE.get(expr)
         if cached is not None:
@@ -1185,34 +1197,41 @@ def _compile(expr: str) -> _Compiled:
             # parsing itself does, so a pathologically nested expression
             # (deep parenthesisation, a long accessor chain) can exhaust
             # Python's recursion budget in any of the three walks above
-            # rather than in ``_ENV.compile`` itself. Caught here, not
-            # left to escape: by the time Python raises ``RecursionError``
-            # the call stack is already this deep, and the interpreter's
-            # own message for it varies by exactly which operation was
-            # mid-call when the limit hit (observed: "...while getting
-            # the str of an object") — never str()'d or otherwise
-            # touched, only its type, so nothing here risks a second
-            # recursion failure trying to format it.
-            raise CelValidationError(
-                "expression is nested too deeply",
-                expression=expr,
-                too_deeply_nested=True,
-            ) from None
+            # rather than in ``_ENV.compile`` itself. Only a flag is set
+            # here, never a raise: constructing and raising
+            # ``CelValidationError`` from inside this ``except`` clause,
+            # while ``with _LOCK`` is still on the stack, chains onto
+            # whatever's left of the ``RecursionError``'s own, already
+            # near-the-limit traceback -- close enough to cof's own floor
+            # for this shape that it could itself re-trigger a second
+            # ``RecursionError`` while unwinding. Raising below, after
+            # both the ``try``/``except`` and the ``with`` block have
+            # already exited and every one of their frames has unwound,
+            # costs this function nothing it wasn't going to pay anyway.
+            too_deeply_nested = True
         except Exception as exc:
             raise CelValidationError(str(exc).strip(), expression=expr) from exc
-        paths = tuple((path, guarded) for _node, path, guarded in found)
-        compiled = _Compiled(
-            runner=runner,
-            paths=paths,
-            occurrences=tuple(
-                (node, path) for node, path, guarded in found if not guarded
-            ),
-            reads_whole_state=reads_whole_state,
+        else:
+            paths = tuple((path, guarded) for _node, path, guarded in found)
+            compiled = _Compiled(
+                runner=runner,
+                paths=paths,
+                occurrences=tuple(
+                    (node, path) for node, path, guarded in found if not guarded
+                ),
+                reads_whole_state=reads_whole_state,
+            )
+            if len(_CACHE) >= _CACHE_MAX_ENTRIES:
+                _CACHE.clear()
+            _CACHE[expr] = compiled
+    if too_deeply_nested:
+        raise CelValidationError(
+            "expression is nested too deeply",
+            expression=expr,
+            too_deeply_nested=True,
         )
-        if len(_CACHE) >= _CACHE_MAX_ENTRIES:
-            _CACHE.clear()
-        _CACHE[expr] = compiled
-        return compiled
+    assert compiled is not None
+    return compiled
 
 
 def clear_expression_cache() -> None:

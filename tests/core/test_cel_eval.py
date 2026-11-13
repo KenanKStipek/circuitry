@@ -915,6 +915,105 @@ class TestOtherOverloadErrorsNeverEmbedAValue:
             assert "StringType(" not in text
             assert "IntType(" not in text
 
+    def test_in_element_type_mismatch_keeps_cel_pythons_own_bare_text(self):
+        # cel-python's own ``operator_in`` raises this one without going
+        # through the "found no matching overload for ..." shape
+        # ``_error_text`` otherwise rewords, so it stays exactly this --
+        # matching electricity's own ``in``-mismatch text for the same
+        # case (issue #629).
+        assert (
+            self._error_text("1 in [1.0]")
+            == "CEL evaluation failed for '1 in [1.0]': no such overload"
+        )
+
+
+class TestOverflowDuplicateKeyAndInvalidMapKeyType:
+    """Every other cel-python error that embeds a Python class repr or
+    value, worded Circuitry's own way instead (issue #629)."""
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, {})
+        return str(excinfo.value)
+
+    def test_int_addition_overflow(self):
+        text = self._error_text("9223372036854775807 + 1 == 1")
+        assert text.endswith("return error for overflow")
+
+    def test_int_multiplication_overflow(self):
+        text = self._error_text("9223372036854775807 * 2 == 1")
+        assert text.endswith("return error for overflow")
+
+    def test_uint_addition_overflow(self):
+        text = self._error_text("18446744073709551615u + 1u == 1u")
+        assert text.endswith("return error for overflow")
+
+    def test_uint_multiplication_overflow(self):
+        text = self._error_text("18446744073709551615u * 2u == 1u")
+        assert text.endswith("return error for overflow")
+
+    def test_duplicate_map_literal_key(self):
+        text = self._error_text("{'a': 1, 'a': 2}.a == 1")
+        assert text.endswith("duplicate key: 'a'")
+
+    def test_invalid_map_literal_key_type(self):
+        text = self._error_text("{[1]: 2} == {}")
+        assert text.endswith("cannot use a list as a key")
+
+    def test_no_error_text_contains_a_python_class_repr(self):
+        for expr in (
+            "9223372036854775807 + 1 == 1",
+            "9223372036854775807 * 2 == 1",
+            "18446744073709551615u + 1u == 1u",
+            "18446744073709551615u * 2u == 1u",
+            "{'a': 1, 'a': 2}.a == 1",
+            "{[1]: 2} == {}",
+        ):
+            text = self._error_text(expr)
+            assert "StringType(" not in text
+            assert "ListType(" not in text
+            assert "<class" not in text
+
+
+class TestMismatchedIntegerMapKeys:
+    CTX: ClassVar[dict] = {"input": {"m": {1: "a"}}}
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX, strict=True)
+        return str(excinfo.value)
+
+    def test_uint_probe_against_an_int_key_of_the_same_value(self):
+        assert self._error_text("state.input.m[1u] == 1").endswith(
+            "cannot index a map with a uint"
+        )
+
+    def test_bool_probe_against_an_int_key_of_the_same_value(self):
+        assert self._error_text("state.input.m[true] == 1").endswith(
+            "cannot index a map with a bool"
+        )
+
+    def test_uint_probe_with_no_value_collision_is_a_plain_miss(self):
+        assert self._error_text("state.input.m[5u] == 1").endswith("no such key: 5")
+
+
+class TestEvaluateCelValueErrorText:
+    """The ``cel`` tool's own entry point (#735) shares this evaluator,
+    so every row above applies to it too."""
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel_value(expr, {"input": {"l": [1, 2, 3]}}, strict=True)
+        return str(excinfo.value)
+
+    def test_list_index_out_of_range(self):
+        assert self._error_text("state.input.l[5]").endswith(
+            "list index out of range: 5"
+        )
+
+    def test_division_by_zero(self):
+        assert self._error_text("1 / 0").endswith("division by zero")
+
 
 # ---------------------------------------------------------------------------
 # Nested too deeply: a check error, named at its own location (#629)
@@ -944,6 +1043,27 @@ class TestNestedTooDeeplyIsACheckError:
         text = str(excinfo.value)
         assert "maximum recursion depth" not in text
         assert "getting the str of an object" not in text
+
+    def test_chain_length_sweep_is_always_clean(self):
+        """Every length from just under to just over cof's own floor for a
+        member-access chain (614 links on 3.11, after this fix) is either
+        a clean success or exactly the one-line check error -- never a raw
+        ``RecursionError`` escaping uncaught."""
+        from circuitry.core import cel_eval
+
+        expected = (
+            "CEL expression at 'prime.effects[0]' (effect 'g'): expression is "
+            "nested too deeply"
+        )
+        for depth in range(590, 701):
+            cel_eval.clear_expression_cache()
+            expr = "state.input" + ".a" * depth
+            try:
+                validate_cel_syntax(
+                    expr, effect_path="prime.effects[0]", effect_name="g"
+                )
+            except CelValidationError as exc:
+                assert str(exc) == expected, (depth, str(exc))
 
 
 # ---------------------------------------------------------------------------
