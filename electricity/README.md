@@ -16,8 +16,8 @@ working as an alias -- runs
 documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
 `prompt` and `reflector` effects and `finally:` blocks, with the `json`,
 `shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
-`clock`, `regex`, `http`, `validate_yaml`, `cel`, `gh`, `systemone` and `agent` tool providers,
-aiming at the same final state, `--live-state` and `--events` output as `cof run`.
+`clock`, `regex`, `http`, `validate_yaml`, `cel`, `gh`, `systemone`, `service` and `agent` tool
+providers, aiming at the same final state, `--live-state` and `--events` output as `cof run`.
 `runtime.secrets.<name>` (the Keychain, a command or an environment
 variable) and a document's own `{secret: <name>}` resolve at dispatch, in
 an `http` effect's `params.headers` or a subprocess tool's host `env`,
