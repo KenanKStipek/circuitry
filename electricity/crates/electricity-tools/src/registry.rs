@@ -148,6 +148,10 @@ fn builders() -> HashMap<&'static str, Builder> {
             crate::systemone::make_plugin(cfg)
         },
     );
+    map.insert(
+        "agent",
+        |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::agent::make_plugin(cfg) },
+    );
     #[cfg(feature = "test-tools")]
     {
         map.insert(
@@ -345,6 +349,7 @@ mod tests {
             "validate_yaml",
             "gh",
             "systemone",
+            "agent",
         ] {
             let plugin = build_plugin(name, &Value::None)
                 .unwrap_or_else(|err| panic!("{name}: expected a stub plugin, got {err:?}"));

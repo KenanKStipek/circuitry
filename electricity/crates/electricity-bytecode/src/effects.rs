@@ -220,7 +220,8 @@ pub struct ToolOp {
     /// `ToolDefinition.prompt_file`: an `agent` effect's `params.prompt` of
     /// `{file: {from: <state path>}, within: <dir>}` (issue #591), compiled
     /// for parity with `cof check`; `prompt` is then absent from `params`.
-    /// electricity refuses the cof-only `agent` plugin, so nothing reads it.
+    /// `electricity_tools::agent::AgentPlugin` reads it, once per dispatch,
+    /// strictly before `params_json` is rendered (issue #720).
     pub prompt_file: Option<DispatchFile>,
     /// `ToolDefinition.limited`: true for a tool effect compiled from a
     /// document not run by path (a `use`-nested child, a reflector or
