@@ -65,7 +65,13 @@ reruns. A document that changed since the saved run is refused unless
 (`~/.config/circuitry/last-run.json`): the prior run's own `--out`,
 with the same checks and messages on either engine (no previous run, an
 unreadable stash, a different orchestration, no `--out`, a gone `--out`
-file). `--resume <run-id>` (cof's own persistence-backed mode) is still
+file). A stash carrying a setting electricity's own CLI has no flag for
+(a run-library's own `service_profile`/`remote_library_source`, or any
+of `--dry-run`/`--skip-preflight`/`--model`/`--profile-from-state`/
+`--scoring`/`--routing`/`--decompose`/`--split`/`--decompose-out`)
+refuses plain `--last` outright, naming the setting, rather than
+replaying a run missing it; `cof run --last` still replays that stash in
+full. `--resume <run-id>` (cof's own persistence-backed mode) is still
 not supported -- only `--state <file>`/`--resume last`; a `--resume`
 with neither is refused the same way cof's own safety checks refuse it
 (before anything runs, writing no state, exit 1). [What

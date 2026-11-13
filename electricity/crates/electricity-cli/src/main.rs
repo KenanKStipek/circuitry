@@ -1253,6 +1253,24 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
             );
             return ExitCode::from(1);
         }
+        // A stash either engine wrote must read back the same -- except
+        // for a setting `cof run` has a flag for and electricity's own
+        // CLI doesn't (`--dry-run`, `--skip-preflight`, `--model`,
+        // `--profile-from-state`, `--scoring`/`--routing`/`--decompose`/
+        // `--split`, `--decompose-out`, a service profile), or a run
+        // `cof run`'s own library-name resolution produced (a bare
+        // library name, or `cof run-library`'s remote source) that
+        // electricity's own positional orchestration argument -- always a
+        // literal path -- has no equivalent for. Replaying any of those
+        // silently would drop the setting the original run actually used,
+        // so this refuses instead of guessing.
+        if let Some(setting) = stash.unreplayable_setting() {
+            write_stdout(&format!(
+                "Error: the last run used {setting}, which electricity's --last cannot \
+                 replay \u{2014} run `cof run --last` instead.\n",
+            ));
+            return ExitCode::from(1);
+        }
         // `cof run`'s own `if last:` block overwrites every one of these
         // unconditionally from the stash -- including `orchestration`,
         // silently ignoring whatever positional this invocation itself
@@ -1268,7 +1286,15 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
         run_args.events = stash.events_path().map(path_to_string);
         run_args.label = stash.label();
         run_args.quiet = stash.quiet();
-        run_args.allow_capabilities = stash.allow_capabilities();
+        // `cli/app.py::run_cmd`'s own `stashed.get("allow_capabilities")
+        // or allow_capabilities` -- the stash's own value wins when it has
+        // one, but a stash with none (`cof run`'s own `run-library`
+        // one-time grant is never persisted) leaves this invocation's own
+        // `--allow-capabilities` alone rather than overwriting it with
+        // nothing.
+        run_args.allow_capabilities = stash
+            .allow_capabilities()
+            .or_else(|| run_args.allow_capabilities.clone());
         run_args.profile = stash.profile();
         run_args.adapter = stash.adapter();
     }

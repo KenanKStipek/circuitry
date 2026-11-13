@@ -137,12 +137,136 @@ impl LastRun {
         )
     }
 
+    /// `Some(b)` only when the stash carries a real boolean for *key* --
+    /// `cli/last_run.py::LastRun.scoring`/`routing`/`decompose`/`split`'s
+    /// own `value if isinstance(value, bool) else None`. `None` for a
+    /// missing key or an explicit JSON `null` either way, matching
+    /// `cof run`'s own three-state `--scoring`/`--no-scoring`/unset flags.
+    fn optional_bool_field(&self, key: &str) -> Option<bool> {
+        match self.args.get(&Value::Str(key.to_string())) {
+            Some(Value::Bool(b)) => Some(*b),
+            _ => None,
+        }
+    }
+
     pub fn pretty(&self) -> bool {
         self.bool_field("pretty")
     }
 
     pub fn quiet(&self) -> bool {
         self.bool_field("quiet")
+    }
+
+    /// `LastRun.trust_document`.
+    pub fn trust_document(&self) -> bool {
+        self.bool_field("trust_document")
+    }
+
+    /// `LastRun.remote_library_source`.
+    pub fn remote_library_source(&self) -> bool {
+        self.bool_field("remote_library_source")
+    }
+
+    /// `LastRun.dry_run`.
+    pub fn dry_run(&self) -> bool {
+        self.bool_field("dry_run")
+    }
+
+    /// `cli/app.py::run_cmd`'s own `skip_preflight` stash field --
+    /// distinct from [`LastRun::has_redacted_secrets`], electricity's
+    /// own CLI has no `--skip-preflight` flag at all (settled ruling 1:
+    /// preflight always runs).
+    pub fn skip_preflight(&self) -> bool {
+        self.bool_field("skip_preflight")
+    }
+
+    /// `--service-profile <name>` (`cof run-library` only) -- electricity
+    /// has no equivalent of its own.
+    pub fn service_profile(&self) -> Option<String> {
+        self.str_field("service_profile")
+    }
+
+    /// `LastRun.model`.
+    pub fn model(&self) -> Option<String> {
+        self.str_field("model")
+    }
+
+    /// `LastRun.profile_from_state`.
+    pub fn profile_from_state(&self) -> Option<String> {
+        self.str_field("profile_from_state")
+    }
+
+    /// `LastRun.scoring`.
+    pub fn scoring(&self) -> Option<bool> {
+        self.optional_bool_field("scoring")
+    }
+
+    /// `LastRun.routing`.
+    pub fn routing(&self) -> Option<bool> {
+        self.optional_bool_field("routing")
+    }
+
+    /// `LastRun.decompose`.
+    pub fn decompose(&self) -> Option<bool> {
+        self.optional_bool_field("decompose")
+    }
+
+    /// `LastRun.split`.
+    pub fn split(&self) -> Option<bool> {
+        self.optional_bool_field("split")
+    }
+
+    /// `--decompose-out <path>` -- electricity has no `--decompose`/
+    /// `--decompose-out` flags of its own.
+    pub fn decompose_out(&self) -> Option<String> {
+        self.str_field("decompose_out")
+    }
+
+    /// The first setting in the stash electricity's own `--last` has no
+    /// way to replay faithfully, worded for a refusal message -- `None`
+    /// when every one of them is at the default a plain `electricity run`
+    /// (or `cof run`, naming a trusted local file with no extra flags)
+    /// would have stashed, the only shape `--last` replays in full.
+    /// Checked in a fixed order so the same stash always names the same
+    /// setting.
+    pub fn unreplayable_setting(&self) -> Option<&'static str> {
+        if self.remote_library_source() {
+            return Some("a remote library source");
+        }
+        if !self.trust_document() {
+            return Some("an orchestration resolved from a library name, not a trusted local file");
+        }
+        if self.service_profile().is_some() {
+            return Some("--service-profile");
+        }
+        if self.dry_run() {
+            return Some("--dry-run");
+        }
+        if self.skip_preflight() {
+            return Some("--skip-preflight");
+        }
+        if self.model().is_some() {
+            return Some("--model");
+        }
+        if self.profile_from_state().is_some() {
+            return Some("--profile-from-state");
+        }
+        if self.scoring().is_some() {
+            return Some("--scoring/--no-scoring");
+        }
+        if self.routing().is_some() {
+            return Some("--routing/--no-routing");
+        }
+        if self.decompose().is_some() {
+            return Some("--decompose/--no-decompose");
+        }
+        if self.split().is_some() {
+            return Some("--split/--no-split");
+        }
+        if self.decompose_out().is_some() {
+            return Some("--decompose-out");
+        }
+        None
     }
 }
 
@@ -314,5 +438,88 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn minimal_args() -> Dict {
+        let mut args = Dict::new();
+        args.insert(
+            Value::Str("orchestration".to_string()),
+            Value::Str("orchestration.yml".to_string()),
+        );
+        args.insert(Value::Str("trust_document".to_string()), Value::Bool(true));
+        args.insert(
+            Value::Str("remote_library_source".to_string()),
+            Value::Bool(false),
+        );
+        args
+    }
+
+    #[test]
+    fn unreplayable_setting_is_none_for_a_plain_run() {
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args: minimal_args(),
+            error: String::new(),
+        };
+        assert_eq!(stash.unreplayable_setting(), None);
+    }
+
+    #[test]
+    fn unreplayable_setting_names_a_remote_library_source() {
+        let mut args = minimal_args();
+        args.insert(
+            Value::Str("remote_library_source".to_string()),
+            Value::Bool(true),
+        );
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args,
+            error: String::new(),
+        };
+        assert_eq!(
+            stash.unreplayable_setting(),
+            Some("a remote library source")
+        );
+    }
+
+    #[test]
+    fn unreplayable_setting_names_an_untrusted_library_name() {
+        let mut args = minimal_args();
+        args.insert(Value::Str("trust_document".to_string()), Value::Bool(false));
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args,
+            error: String::new(),
+        };
+        assert!(
+            stash
+                .unreplayable_setting()
+                .unwrap()
+                .contains("library name")
+        );
+    }
+
+    #[test]
+    fn unreplayable_setting_names_dry_run() {
+        let mut args = minimal_args();
+        args.insert(Value::Str("dry_run".to_string()), Value::Bool(true));
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args,
+            error: String::new(),
+        };
+        assert_eq!(stash.unreplayable_setting(), Some("--dry-run"));
+    }
+
+    #[test]
+    fn unreplayable_setting_names_scoring_when_set_to_either_bool() {
+        let mut args = minimal_args();
+        args.insert(Value::Str("scoring".to_string()), Value::Bool(false));
+        let stash = LastRun {
+            path: PathBuf::from("x"),
+            args,
+            error: String::new(),
+        };
+        assert_eq!(stash.unreplayable_setting(), Some("--scoring/--no-scoring"));
     }
 }

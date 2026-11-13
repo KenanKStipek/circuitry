@@ -1249,3 +1249,66 @@ def test_last_stash_is_byte_identical_between_engines_for_the_same_run(
     raw = _stash_path(home_dir).read_bytes()
     assert raw.endswith(b"\n") and raw.count(b"\n") == 1
     assert b", " in raw and b": " in raw
+
+
+#: One stashed key per case, each a setting `cof run` has a flag for and
+#: electricity's own CLI doesn't (or a run-library shape electricity's
+#: own positional orchestration argument can't reproduce) -- paired with
+#: the setting name `unreplayable_setting` is expected to name in its
+#: refusal. Every other required stash key is filled in by
+#: `_minimal_stash` below with the default a plain run would have
+#: written, so each case isolates exactly one divergent field.
+UNREPLAYABLE_STASH_SETTINGS = (
+    ({"remote_library_source": True, "trust_document": False}, "a remote library source"),
+    ({"trust_document": False}, "library name"),
+    ({"service_profile": "prod"}, "--service-profile"),
+    ({"dry_run": True}, "--dry-run"),
+    ({"skip_preflight": True}, "--skip-preflight"),
+    ({"model": "claude-opus"}, "--model"),
+    ({"profile_from_state": "recorded.json"}, "--profile-from-state"),
+    ({"scoring": True}, "--scoring"),
+    ({"routing": False}, "--routing"),
+    ({"decompose": True}, "--decompose"),
+    ({"split": False}, "--split"),
+    ({"decompose_out": "parts.json"}, "--decompose-out"),
+)
+
+
+def _minimal_stash(**overrides: object) -> dict:
+    stash: dict[str, object] = {
+        "orchestration": "orchestration.yml",
+        "config": "config.json",
+        "env_vars": None,
+        "trust_document": True,
+        "remote_library_source": False,
+    }
+    stash.update(overrides)
+    return stash
+
+
+@pytest.mark.parametrize(("overrides", "expected_setting"), UNREPLAYABLE_STASH_SETTINGS)
+def test_last_refuses_a_stashed_setting_electricity_cannot_replay(
+    tmp_path: Path, electricity_binary: Path, overrides: dict, expected_setting: str,
+) -> None:
+    """issue #760: a stash either engine wrote must read back the same
+    in the other -- but `cof run` can stash settings (a run-library's
+    own `service_profile`/`remote_library_source`, or any flag
+    electricity's own CLI doesn't have) that electricity has no way to
+    apply. Dropping one silently would replay a materially different
+    run, so `--last` refuses up front instead, naming the setting, and
+    runs nothing at all."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    stash_dir = home_dir / ".config" / "circuitry"
+    stash_dir.mkdir(parents=True)
+    stash_dir.joinpath("last-run.json").write_text(
+        json.dumps(_minimal_stash(**overrides)), encoding="utf-8",
+    )
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    result = _run("electricity", electricity_binary, case_dir, home_dir, ["--last"])
+    assert result.returncode == 1, (result.stdout, result.stderr)
+    assert result.stdout.startswith("Error: the last run used ")
+    assert expected_setting in result.stdout, result.stdout
+    assert not (case_dir / "out.json").exists()
