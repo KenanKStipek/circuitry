@@ -1,0 +1,35 @@
+#!/usr/bin/env python3
+"""A fake `pi` for c720-agent-repair-turn-still-invalid (issue #720):
+always writes a result missing `tests_pass`, on the first turn and the
+repair turn alike -- the effect fails naming the schema errors."""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+
+attached = [arg[1:] for arg in sys.argv[1:] if arg.startswith("@")]
+with open(attached[0], encoding="utf-8") as handle:
+    handle.read()
+
+scratch_dir = os.path.join(os.getcwd(), "scratch")
+os.makedirs(scratch_dir, exist_ok=True)
+with open(os.path.join(scratch_dir, "result.json"), "w", encoding="utf-8") as handle:
+    json.dump({"summary": "still incomplete"}, handle)
+
+usage = {"input": 2, "output": 2}
+events = [
+    {"type": "session", "id": "sess-c720-still-invalid"},
+    {
+        "type": "message_end",
+        "message": {
+            "role": "assistant",
+            "usage": usage,
+            "content": [{"type": "text", "text": "ok"}],
+            "stopReason": "stop",
+        },
+    },
+]
+for event in events:
+    sys.stdout.write(json.dumps(event) + "\n")

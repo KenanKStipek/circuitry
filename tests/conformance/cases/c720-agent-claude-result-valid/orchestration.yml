@@ -1,0 +1,23 @@
+name: c720-agent-claude-result-valid
+effects:
+  - type: tool
+    name: implement
+    provider: agent
+    timeout_ms: 20000
+    params:
+      engine: claude_code
+      trust_project_settings: true
+      prompt: "Write the result file."
+      cwd: {from: input.work_dir}
+      result_file: scratch/result.json
+      result_schema:
+        type: object
+        properties:
+          summary: {type: string}
+          tests_pass: {type: boolean}
+        required: [summary, tests_pass]
+      transcript: scratch/transcript.log
+  - type: tool
+    name: remove_scratch
+    provider: fs
+    params: {mode: delete, path: scratch, recursive: true}

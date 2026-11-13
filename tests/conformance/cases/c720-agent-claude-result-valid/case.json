@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #720: the agent tool, claude_code engine, a valid result_file on the first turn",
+  "description": "`provider: agent` with `engine: claude_code` and `result_file` + `result_schema`: the fake writes a valid result file for real (a `Write` tool call) and reports a session id, usage and a final cost, on its first turn -- no repair turn should ever run. `trust_project_settings: true` so the case's own `cwd` (inside this checkout) never walks up to this repository's own CLAUDE.md.",
+  "engines": ["python", "electricity"],
+  "cli_args": ["-e", "work_dir=__CASE_DIR__"],
+  "expect": "success"
+}

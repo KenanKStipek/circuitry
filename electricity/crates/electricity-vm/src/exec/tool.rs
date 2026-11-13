@@ -1125,44 +1125,49 @@ pub async fn execute_tool<R: ParamsCtx>(
         // retried -- a retry would hit the same failure.
         let mut secret_unresolved = false;
         // Issue #720 (#591): a prompt file that could not be read is
-        // never retried either -- a retry reads the same file.
+        // never retried either -- a retry reads the same file; read
+        // strictly *before* `render_tool_call` so a failure here --
+        // like Python's own `core/tool.py:871-879`, outside its own
+        // params-render `try` entirely -- never reaches params
+        // rendering at all, and so never writes `meta.params_rendered`/
+        // `.template_files` for this attempt (`c591-agent-prompt-file`'s
+        // own `missing_file`/`outside_within`/`not_utf8` effects pin
+        // this: `meta` stops at `waiting_for`, with neither key).
         let mut prompt_file_unread = false;
+        if is_agent_provider && attempt_index == 0 {
+            if let Some(source) = &tool.prompt_file {
+                agent_prompt_file = Some(resolve_agent_prompt_file(source, ctx, name));
+            }
+        }
+        if let Some(Err(message)) = &agent_prompt_file {
+            prompt_file_unread = true;
+            failure = Some(electricity_tools::ToolError::message(message.clone()));
+        }
 
-        match render_tool_call(
-            name,
-            tool,
-            ctx,
-            run_ctx.declared_prompts,
-            run_ctx.effect_names,
-        ) {
-            Err(message) => {
+        let render_result = if failure.is_some() {
+            None
+        } else {
+            Some(render_tool_call(
+                name,
+                tool,
+                ctx,
+                run_ctx.declared_prompts,
+                run_ctx.effect_names,
+            ))
+        };
+        match render_result {
+            None => {}
+            Some(Err(message)) => {
                 failure = Some(electricity_tools::ToolError::message(message));
             }
-            Ok(mut rendered) => {
+            Some(Ok(mut rendered)) => {
                 let mut agent_prompt_record: Option<Dict> = None;
-                if is_agent_provider {
-                    if let Some(source) = &tool.prompt_file {
-                        if attempt_index == 0 {
-                            agent_prompt_file = Some(resolve_agent_prompt_file(source, ctx, name));
-                        }
-                        match agent_prompt_file
-                            .as_ref()
-                            .expect("filled on the first attempt")
-                        {
-                            Ok(resolved) => {
-                                rendered.insert(
-                                    Value::Str("prompt".to_string()),
-                                    Value::Dict(resolved.form.clone()),
-                                );
-                                agent_prompt_record = Some(resolved.record.clone());
-                            }
-                            Err(message) => {
-                                prompt_file_unread = true;
-                                failure =
-                                    Some(electricity_tools::ToolError::message(message.clone()));
-                            }
-                        }
-                    }
+                if let Some(Ok(resolved)) = &agent_prompt_file {
+                    rendered.insert(
+                        Value::Str("prompt".to_string()),
+                        Value::Dict(resolved.form.clone()),
+                    );
+                    agent_prompt_record = Some(resolved.record.clone());
                 }
                 let rendered_value = Value::Dict(rendered);
                 let is_http =
