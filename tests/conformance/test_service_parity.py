@@ -1,8 +1,11 @@
 """`cof run` and `electricity run` dispatch the `service` tool the same way
 (issue #721): start/status/stop of a local HTTP server, a ready timeout, a
 port another process holds (never signalled), a stale record naming a
-reused pid (never signalled), and a cross-engine stop (a service one
-engine starts, the other stops).
+reused pid or a different boot (never signalled), a dead leader whose group
+still has members (still ours), a start cancelled while waiting for ready
+(torn down gracefully), parallel start/stop branches in one run (no
+deadlock), and a cross-engine stop (a service one engine starts, the other
+stops).
 
 Not a `tests/conformance/cases/` case: a service's own record carries a
 pid, a start time and a log path, none of which a generated expected-state
@@ -27,6 +30,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -41,6 +45,35 @@ _CREDENTIAL_ENV_VARS = (
     "GITHUB_TOKEN",
     "NPM_TOKEN",
 )
+
+
+def _real_state_dir_snapshot() -> frozenset[str]:
+    """The real `~/.config/circuitry/services`, never the fake one
+    `tests/conftest.py`'s own autouse fixture points `GLOBAL_CONFIG_DIR`
+    at for this pytest process -- `Path.home()` itself is never
+    monkeypatched, only that already-computed module attribute is."""
+    real_dir = Path.home() / ".config" / "circuitry" / "services"
+    if not real_dir.is_dir():
+        return frozenset()
+    return frozenset(p.name for p in real_dir.iterdir())
+
+
+@pytest.fixture(autouse=True)
+def _guard_against_the_real_state_directory() -> Any:
+    """Every test below passes its own `state_dir` (`_write_config`) and
+    a sandboxed `$HOME` (`_sandboxed_env`) to every `cof`/`electricity`
+    subprocess it starts -- the real default state directory may hold
+    records for orchestrations actually running on this machine right
+    now, and must never be read, written or signalled from here. This
+    fails the test outright, rather than silently touching it, the
+    moment anything there changes while it runs."""
+    before = _real_state_dir_snapshot()
+    yield
+    after = _real_state_dir_snapshot()
+    assert after == before, (
+        "a test in this module touched the real state directory "
+        f"~/.config/circuitry/services: before={sorted(before)} after={sorted(after)}"
+    )
 
 
 def _free_port() -> int:
@@ -105,6 +138,40 @@ def _svc_value(result: subprocess.CompletedProcess[str]) -> dict:
     return json.loads(result.stdout)["prime"]["svc"]["value"]
 
 
+def _svc_node(result: subprocess.CompletedProcess[str]) -> dict:
+    return json.loads(result.stdout)["prime"]["svc"]
+
+
+#: Keys a service's own record (and so its tool result) carries that a
+#: pid, a start time or a temp path make inherently different between
+#: two separate runs -- scrubbed before comparing one engine's output
+#: against the other's, so what's left is everything that must match.
+_VOLATILE_KEYS = frozenset(
+    {"pgid", "pid", "log", "started_at", "log_tail", "created_at", "completed_at", "cwd"}
+)
+
+
+def _scrub(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {k: ("<scrubbed>" if k in _VOLATILE_KEYS else _scrub(v)) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_scrub(v) for v in node]
+    return node
+
+
+def _assert_parity(cof_node: dict, electricity_node: dict) -> None:
+    """Both engines' own `value` and `meta.raw`, scrubbed of whatever a
+    pid/timestamp/temp path makes inherently different between two
+    separate runs, must otherwise be identical."""
+    assert _scrub(cof_node["value"]) == _scrub(electricity_node["value"]), (
+        cof_node["value"],
+        electricity_node["value"],
+    )
+    cof_raw = cof_node["meta"].get("raw")
+    electricity_raw = electricity_node["meta"].get("raw")
+    assert _scrub(cof_raw) == _scrub(electricity_raw), (cof_raw, electricity_raw)
+
+
 @pytest.fixture(scope="module")
 def electricity_binary() -> Path:
     if shutil.which("cargo") is None:
@@ -165,6 +232,7 @@ def test_start_status_and_stop_of_a_local_http_server_match_on_both_engines(
         "ready_timeout_ms": 5000,
     }
 
+    nodes: dict[str, dict] = {}
     for engine, runner in (
         ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
         (
@@ -183,26 +251,34 @@ def test_start_status_and_stop_of_a_local_http_server_match_on_both_engines(
         start_result = runner(doc_path, config_path)
         assert start_result.returncode == 0, start_result.stderr
         start_value = _svc_value(start_result)
-        assert start_value["running"] is True
-        assert start_value["ready"] is True
-        assert start_value["already_running"] is False
         pgid = start_value["pgid"]
-        assert _pgid_exists(pgid), f"{engine}: pgid {pgid} is not running after start"
+        try:
+            assert start_value["running"] is True
+            assert start_value["ready"] is True
+            assert start_value["already_running"] is False
+            assert _pgid_exists(pgid), f"{engine}: pgid {pgid} is not running after start"
 
-        _write_orchestration(doc_path, {"action": "status", "name": "web"})
-        status_result = runner(doc_path, config_path)
-        assert status_result.returncode == 0, status_result.stderr
-        status_value = _svc_value(status_result)
-        assert status_value["running"] is True
-        assert status_value["ready"] is True
+            _write_orchestration(doc_path, {"action": "status", "name": "web"})
+            status_result = runner(doc_path, config_path)
+            assert status_result.returncode == 0, status_result.stderr
+            status_value = _svc_value(status_result)
+            assert status_value["running"] is True
+            assert status_value["ready"] is True
 
-        _write_orchestration(doc_path, {"action": "stop", "name": "web"})
-        stop_result = runner(doc_path, config_path)
-        assert stop_result.returncode == 0, stop_result.stderr
-        stop_value = _svc_value(stop_result)
-        assert stop_value["stopped"] is True
-        assert stop_value["ports_free"] is True
-        assert not _pgid_exists(pgid), f"{engine}: pgid {pgid} still running after stop"
+            _write_orchestration(doc_path, {"action": "stop", "name": "web"})
+            stop_result = runner(doc_path, config_path)
+            assert stop_result.returncode == 0, stop_result.stderr
+            stop_value = _svc_value(stop_result)
+            nodes[engine] = _svc_node(stop_result)
+            assert stop_value["stopped"] is True
+            assert stop_value["ports_free"] is True
+            assert not _pgid_exists(pgid), f"{engine}: pgid {pgid} still running after stop"
+        finally:
+            # So an assertion failure mid-loop never leaves the server
+            # running for the rest of the suite (#661).
+            _stop_and_wait_free(pgid)
+
+    _assert_parity(nodes["cof"], nodes["electricity"])
 
 
 def test_a_ready_timeout_matches_on_both_engines(tmp_path: Path, electricity_binary: Path) -> None:
@@ -217,6 +293,7 @@ def test_a_ready_timeout_matches_on_both_engines(tmp_path: Path, electricity_bin
         "ready_timeout_ms": 500,
     }
 
+    errors: dict[str, str] = {}
     for engine, runner in (
         ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
         (
@@ -237,6 +314,11 @@ def test_a_ready_timeout_matches_on_both_engines(tmp_path: Path, electricity_bin
         payload = json.loads(result.stdout)
         assert payload["ok"] is False, f"{engine}: {payload}"
         assert "not ready" in payload["error"], f"{engine}: {payload}"
+        errors[engine] = payload["error"]
+
+    # Deterministic (name, target, timeout) -- compared in full between
+    # the two engines, not just "contains 'not ready'" on each alone.
+    assert errors["cof"] == errors["electricity"]
 
 
 def test_a_port_held_by_an_unrelated_process_is_never_signalled_on_either_engine(
@@ -399,3 +481,302 @@ def test_a_service_started_under_one_engine_is_stopped_under_the_other(
         assert not _pgid_exists(pgid), (
             f"{starter_name}-started pgid {pgid} still running after {stopper_name} stop"
         )
+
+
+def test_a_dead_leader_whose_group_still_has_members_is_still_ours_on_either_engine(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """The leader (the `/bin/sh -c` process) exits almost at once; only
+    its backgrounded `sleep` -- still a member of the same process
+    group, since a plain, non-interactive `&` never starts a job in a
+    group of its own -- keeps the group alive. Ownership survives that:
+    a dead leader whose group still has members is still ours."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-dead-leader"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_orchestration(
+            doc_path,
+            {
+                # No `ready`: the leader is still alive when `start`
+                # checks, so it succeeds at once, before the leader
+                # itself exits a little over a second later.
+                "action": "start",
+                "name": "leaderdies",
+                "command": "sleep 20 & sleep 1",
+                "shell": True,
+            },
+        )
+        start_result = runner(doc_path, config_path)
+        assert start_result.returncode == 0, start_result.stderr
+        pgid = _svc_value(start_result)["pgid"]
+        try:
+            time.sleep(2)  # the shell leader exits on its own by now
+            assert _pgid_exists(pgid), f"{engine}: the group disappeared entirely"
+
+            _write_orchestration(doc_path, {"action": "status", "name": "leaderdies"})
+            status_result = runner(doc_path, config_path)
+            assert status_result.returncode == 0, status_result.stderr
+            status_value = _svc_value(status_result)
+            assert status_value["running"] is True, f"{engine}: {status_value}"
+
+            _write_orchestration(doc_path, {"action": "stop", "name": "leaderdies"})
+            stop_result = runner(doc_path, config_path)
+            assert stop_result.returncode == 0, stop_result.stderr
+            stop_value = _svc_value(stop_result)
+            assert stop_value["stopped"] is True, f"{engine}: {stop_value}"
+            assert not _pgid_exists(pgid), f"{engine}: pgid {pgid} still running after stop"
+        finally:
+            _stop_and_wait_free(pgid)
+
+
+def test_a_record_naming_a_different_boot_time_is_never_signalled_on_either_engine(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """A record whose `boot_time` no longer matches the machine's real
+    one is stale (another boot) -- dropped, never signalled -- on both
+    engines, exactly like a mismatched `start_time` (a reused pid)."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    port = _free_port()
+
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-other-boot"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_orchestration(
+            doc_path,
+            {
+                "action": "start",
+                "name": "web",
+                "command": _http_server_command(port),
+                "ports": [port],
+            },
+        )
+        start_result = runner(doc_path, config_path)
+        assert start_result.returncode == 0, start_result.stderr
+        pgid = _svc_value(start_result)["pgid"]
+        assert _pgid_exists(pgid)
+        try:
+            record_path = state_dir / "web.json"
+            record = json.loads(record_path.read_text(encoding="utf-8"))
+            record["boot_time"] = 1  # the Unix epoch -- never the real boot time
+            record_path.write_text(json.dumps(record), encoding="utf-8")
+
+            _write_orchestration(doc_path, {"action": "status", "name": "web"})
+            status_result = runner(doc_path, config_path)
+            assert status_result.returncode == 0, status_result.stderr
+            status_value = _svc_value(status_result)
+            assert status_value["running"] is False, f"{engine}: {status_value}"
+            assert status_value["stale_record"], f"{engine}: {status_value}"
+            # Never signalled: the real process is still running.
+            assert _pgid_exists(pgid), f"{engine}: pgid {pgid} was signalled"
+        finally:
+            _stop_and_wait_free(pgid)
+
+
+def test_a_start_cancelled_while_waiting_for_ready_tears_the_group_down_gracefully(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """A SIGTERM to the `cof run`/`electricity run` process itself while
+    a `start` is still waiting for `ready` cancels the run; both engines
+    then stop exactly the group they started -- `SIGTERM` reaching the
+    child first (observed through a trap it installs itself), not an
+    unconditional `SIGKILL` -- and drop its record."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    for engine, build_cmd in (
+        (
+            "cof",
+            lambda doc, cfg: [
+                sys.executable, "-m", "circuitry.cli.app", "run", str(doc), "--config", str(cfg),
+            ],
+        ),
+        (
+            "electricity",
+            lambda doc, cfg: [str(electricity_binary), "run", str(doc), "--config", str(cfg)],
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-cancel"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        marker = case_dir / "sigterm-seen"
+        script = f"trap 'touch {marker} ; exit 0' TERM; sleep 20"
+        _write_orchestration(
+            doc_path,
+            {
+                "action": "start",
+                "name": "cancelme",
+                "command": script,
+                "shell": True,
+                # Nothing ever listens here, so the run is still waiting
+                # for `ready` when the signal below arrives.
+                "ready": 1,
+                "ready_timeout_ms": 30_000,
+                "grace_ms": 2_000,
+            },
+        )
+
+        proc = subprocess.Popen(
+            build_cmd(doc_path, config_path), cwd=doc_path.parent,
+            env=_sandboxed_env(home_dir), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        pgid: int | None = None
+        try:
+            record_path = state_dir / "cancelme.json"
+            deadline = time.monotonic() + 10
+            while pgid is None and time.monotonic() < deadline:
+                if record_path.exists():
+                    try:
+                        pgid = json.loads(record_path.read_text(encoding="utf-8"))["pgid"]
+                    except (json.JSONDecodeError, KeyError):
+                        pass
+                if pgid is None:
+                    time.sleep(0.05)
+            assert pgid is not None, f"{engine}: the record never appeared"
+
+            proc.send_signal(signal.SIGTERM)
+            proc.communicate(timeout=15)
+
+            deadline = time.monotonic() + 10
+            while _pgid_exists(pgid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            assert not _pgid_exists(pgid), f"{engine}: pgid {pgid} still running after cancellation"
+            assert marker.exists(), f"{engine}: SIGTERM should have reached the child before it died"
+            assert not record_path.exists(), f"{engine}: the record should be dropped once torn down"
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait(timeout=5)
+            if pgid is not None:
+                _stop_and_wait_free(pgid)
+
+
+def test_parallel_start_and_stop_branches_in_one_run_do_not_deadlock(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """Two `start`s, then two `stop`s, run in parallel (a tree-flow
+    `dynamic`) in one single run. electricity's own dispatch runs every
+    branch of a run as futures polled from one `FuturesUnordered` on a
+    single thread -- a blocking `flock` acquire deadlocked this
+    outright: branch A takes the lock and yields; branch B's own
+    blocking acquire attempt then parks the only thread, so A can never
+    resume to release it. Bounded (`subprocess.run`'s own `timeout`): a
+    regression here fails loudly rather than hanging the suite."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+
+    for engine, run in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir, timeout=30)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir, timeout=30),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-parallel"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        port_a = _free_port()
+        port_b = _free_port()
+        doc_path.write_text(
+            json.dumps(
+                {
+                    "effects": [
+                        {
+                            "type": "dynamic",
+                            "name": "starts",
+                            "flow": "tree",
+                            "effects": [
+                                {
+                                    "type": "tool",
+                                    "name": "a",
+                                    "provider": "service",
+                                    "params": {
+                                        "action": "start",
+                                        "name": "par_a",
+                                        "command": _http_server_command(port_a),
+                                        "ports": [port_a],
+                                        "ready": f"http://127.0.0.1:{port_a}/",
+                                        "ready_timeout_ms": 5000,
+                                    },
+                                },
+                                {
+                                    "type": "tool",
+                                    "name": "b",
+                                    "provider": "service",
+                                    "params": {
+                                        "action": "start",
+                                        "name": "par_b",
+                                        "command": _http_server_command(port_b),
+                                        "ports": [port_b],
+                                        "ready": f"http://127.0.0.1:{port_b}/",
+                                        "ready_timeout_ms": 5000,
+                                    },
+                                },
+                            ],
+                        },
+                        {
+                            "type": "dynamic",
+                            "name": "stops",
+                            "flow": "tree",
+                            "effects": [
+                                {
+                                    "type": "tool",
+                                    "name": "a",
+                                    "provider": "service",
+                                    "params": {"action": "stop", "name": "par_a"},
+                                },
+                                {
+                                    "type": "tool",
+                                    "name": "b",
+                                    "provider": "service",
+                                    "params": {"action": "stop", "name": "par_b"},
+                                },
+                            ],
+                        },
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        try:
+            result = run(doc_path, config_path)
+        except subprocess.TimeoutExpired:
+            pytest.fail(f"{engine}: the run deadlocked instead of finishing")
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        starts = payload["prime"]["starts"]
+        stops = payload["prime"]["stops"]
+        assert starts["a"]["value"]["running"] is True, payload
+        assert starts["b"]["value"]["running"] is True, payload
+        assert stops["a"]["value"]["stopped"] is True, payload
+        assert stops["b"]["value"]["stopped"] is True, payload

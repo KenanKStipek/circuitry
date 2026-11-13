@@ -1392,19 +1392,24 @@ mod imp {
             if !self.armed {
                 return;
             }
-            let dir = self.dir.clone();
-            let name = self.name.clone();
-            let pgid = self.pgid;
-            let grace = self.grace;
-            // `Drop` cannot `.await`, so the actual teardown runs on a
-            // dedicated OS thread, never the async runtime -- the same
-            // lock, the same ownership re-check (a restart of this
-            // exact name, racing this very call's own `wait_ready`,
-            // must never have *its* group torn down just because this
-            // call's group shared the old name), and the same graceful
-            // `SIGTERM`-then-`grace_ms`-then-`SIGKILL` cof's own
-            // cancellation path gives a `start` it is tearing down.
-            std::thread::spawn(move || cancel_teardown(&dir, &name, pgid, grace));
+            // Synchronous, blocking the thread that drops this --
+            // `Drop` cannot `.await`, and a *detached* thread (one this
+            // call doesn't join before returning) is not good enough
+            // either: the whole point of a cancelled run is that the
+            // process is about to exit, and nothing then waits for a
+            // detached thread to finish before it does, so the signal
+            // it was meant to send might simply never go out. Blocking
+            // here is the same trade the reference makes: cof's own
+            // cancellation path runs this exact cleanup synchronously
+            // too, under the lock, before the exception that triggered
+            // it finishes propagating. Same lock, same ownership
+            // re-check (a restart of this exact name, racing this very
+            // call's own `wait_ready`, must never have *its* group torn
+            // down just because this call's group shared the old name),
+            // and the same graceful `SIGTERM`-then-`grace_ms`-then-
+            // `SIGKILL` cof's own cancellation path gives a `start` it
+            // is tearing down.
+            cancel_teardown(&self.dir, &self.name, self.pgid, self.grace);
         }
     }
 
