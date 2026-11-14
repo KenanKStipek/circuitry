@@ -2630,11 +2630,12 @@ and messages: no previous run, an unreadable stash, a different
 orchestration, no `--out`, a gone `--out` file, or a redacted `-e` value
 refusing `--last`. The stash also records the absolute working directory
 the run itself used; a bare `--last` replayed from a *different* directory
-resolves the stashed `orchestration`/`--config` paths against that
-directory (not the replaying invocation's own cwd) when they're relative,
-and prints one line naming what it resolved — the same on both engines. A
-stash written before this (with no recorded working directory) still
-replays, resolved against the current directory exactly as before. A bare
+resolves the stashed `orchestration`/`--config`/`--state` paths against
+that directory (not the replaying invocation's own cwd) when they're
+relative, and prints one line naming what it resolved — the same on both
+engines. A stash written before this (with no recorded working
+directory), or one replayed from the same directory it was written in,
+needs no such resolution and prints nothing. A bare
 run-id (the one remaining row of the table below) still isn't supported:
 `runtime.persistence` stays refused on electricity, so `--resume <run-id>`
 refuses the same way cof's own safety checks do (before anything runs,
