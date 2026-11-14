@@ -401,8 +401,15 @@ The global config and `.env` `cof setup` writes carry the same credential risk
 on a shared machine: both are created mode `0600` in a `0700`
 `~/.config/circuitry/` (tightening either file's mode if it already existed
 looser from before this), and `cof doctor` warns if either is still group- or
-world-readable. Implementation:
-[`src/circuitry/cli/setup.py`](../src/circuitry/cli/setup.py).
+world-readable. Every other file either engine creates in that directory is
+`0600` the same way, whatever the umask — including the `--last`/`--resume
+last` stash (`last-run.json`), which holds every `-e` value of the most
+recent run and is rewritten on every run: a sibling temp file, `0600` from
+creation, renamed over the old one, so a reader never sees a half-written
+file. An existing file or directory keeps its own mode; only the stash is
+rewritten (and so tightened) every run. Implementation:
+[`src/circuitry/cli/setup.py`](../src/circuitry/cli/setup.py),
+[`src/circuitry/cli/app.py`](../src/circuitry/cli/app.py) (`_save_last_run`).
 
 Every host entry point (the `cof` CLI, the TUI, the MCP server, the REST
 trigger service) loads that one `.env` at startup — never a `.env` from the

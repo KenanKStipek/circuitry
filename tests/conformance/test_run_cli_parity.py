@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import time
@@ -889,6 +890,106 @@ def test_last_with_no_previous_run_fails_the_same_way_on_both_engines(
 
 
 @pytest.mark.parametrize("engine", ENGINES)
+def test_last_with_a_corrupted_stash_fails_the_same_way_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """issue #776: a bare ``--last`` with a stash that can't be parsed gives
+    a one-line error naming the file, never a traceback, at the same exit
+    code (2) ``--last`` already uses for "no previous run". Compared for
+    substance only, not exact text: `console.print`'s soft-wrap can fold a
+    long stash path at an arbitrary character, same reasoning as
+    `test_resume_last_with_an_unreadable_stash_fails_the_same_way_on_both_
+    engines`'s own comment, which this otherwise mirrors for plain
+    ``--last`` rather than ``--resume last``.
+    """
+    home_dir = tmp_path / "home"
+    stash_dir = home_dir / ".config" / "circuitry"
+    stash_dir.mkdir(parents=True)
+    stash_path = stash_dir / "last-run.json"
+    stash_path.write_text("not json", encoding="utf-8")
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+
+    result = _run(engine, electricity_binary, case_dir, home_dir, ["--last"])
+    assert result.returncode == 2, (engine, result.stdout, result.stderr)
+    collapsed = " ".join(result.stderr.split())
+    assert "is not valid JSON" in collapsed and "Expecting value." in collapsed, (
+        engine, collapsed,
+    )
+
+
+@pytest.mark.parametrize("replay_engine", ENGINES)
+@pytest.mark.parametrize("write_engine", ENGINES)
+def test_last_from_another_directory_resolves_against_the_stashed_cwd_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, write_engine: str, replay_engine: str,
+) -> None:
+    """issue #776: the stash records the absolute working directory it was
+    written from, and a bare ``--last`` replayed from a *different*
+    directory resolves the stashed relative ``orchestration``/``config``
+    against it rather than against the replaying invocation's own cwd --
+    printing one line, the same text on both engines, naming what it
+    resolved.
+    """
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    written = _run(
+        write_engine, electricity_binary, case_dir, home_dir,
+        ["orchestration.yml", "--config", "config.json", "-e", "topic=widgets", "--out", "out.json"],
+    )
+    assert written.returncode == 0, (write_engine, written.stdout, written.stderr)
+
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    replayed = _run(replay_engine, electricity_binary, elsewhere, home_dir, ["--last"])
+    assert replayed.returncode == 0, (replay_engine, replayed.stdout, replayed.stderr)
+    # Checked for the fixed phrases only, never the embedded path itself
+    # (`test_last_with_a_corrupted_stash_fails_the_same_way_on_both_engines`'s
+    # own comment: `console.print`'s soft-wrap can fold a long path at an
+    # arbitrary character).
+    collapsed = " ".join(replayed.stderr.split())
+    assert collapsed.startswith("Resolved orchestration and config against"), (
+        replay_engine, collapsed,
+    )
+    assert collapsed.endswith("(the last run's working directory)."), (replay_engine, collapsed)
+
+    state = json.loads((elsewhere / "out.json").read_text(encoding="utf-8"))
+    assert state["input"]["topic"] == "widgets"
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX-only")
+@pytest.mark.parametrize("engine", ENGINES)
+def test_run_creates_the_config_dir_0700_and_the_stash_0600_on_both_engines(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """issue #776: whatever the umask, a run that creates ``~/.config/
+    circuitry`` for the first time creates it ``0700``, and the ``--last``
+    stash it writes there is ``0600`` -- on both engines.
+    """
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    case_dir = tmp_path / "case"
+    _write_last_stash_case(case_dir, LAST_STASH_ORCHESTRATION)
+
+    old_umask = os.umask(0o022)
+    try:
+        result = _run(
+            engine, electricity_binary, case_dir, home_dir,
+            ["orchestration.yml", "--config", "config.json", "--out", "out.json"],
+        )
+    finally:
+        os.umask(old_umask)
+    assert result.returncode == 0, (engine, result.stdout, result.stderr)
+
+    config_dir = home_dir / ".config" / "circuitry"
+    stash_path = config_dir / "last-run.json"
+    assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700, (engine, config_dir)
+    assert stat.S_IMODE(stash_path.stat().st_mode) == 0o600, (engine, stash_path)
+
+
+@pytest.mark.parametrize("engine", ENGINES)
 def test_resume_last_with_no_previous_run_fails_the_same_way_on_both_engines(
     tmp_path: Path, electricity_binary: Path, engine: str,
 ) -> None:
@@ -1261,6 +1362,7 @@ def test_last_stash_is_byte_identical_between_engines_for_the_same_run(
 
     expected = {
         "orchestration": "orchestration.yml",
+        "cwd": str(case_dir),
         "config": "config.json",
         "state": None,
         "out": "out.json",

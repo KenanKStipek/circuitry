@@ -363,10 +363,13 @@ result.
 `--resume last`, `--force` and `--last` flags, applying the same
 skip/rerun rule — a state file either engine wrote resumes on the other,
 with the same result, and `--last`/`--resume last` read the same stash
-either engine wrote. A bare run-id (this section's own persistence
-lookup) still isn't supported on electricity, and `--resume` given
-without `--state <file>` or `--resume last` refuses the same way cof's
-own safety checks do — before anything runs, writing no state, exit 1.
+either engine wrote. The stash also records the working directory the run
+used, so a bare `--last` replayed from elsewhere still finds a relative
+orchestration/`--config` path. A bare run-id (this section's own
+persistence lookup) still isn't supported on electricity, and `--resume`
+given without `--state <file>` or `--resume last` refuses the same way
+cof's own safety checks do — before anything runs, writing no state,
+exit 1.
 
 Continuing where a run stopped is wrong for a scope whose first effects start
 something its `finally:` stops — a server, a lock, a migration. The stopped

@@ -12,6 +12,8 @@
 use crate::config::global_config_path;
 use electricity_redaction::redact_env_pairs;
 use electricity_value::{Dict, Value};
+use std::io::{self, Write};
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 
 /// `cli/last_run.py::LAST_RUN_PATH`: `<home>/.config/circuitry/last-run.json`,
@@ -67,6 +69,14 @@ impl LastRun {
     /// `LastRun.config_path`.
     pub fn config_path(&self) -> Option<PathBuf> {
         self.str_field("config").map(PathBuf::from)
+    }
+
+    /// The absolute working directory the stashed run itself ran from
+    /// (issue #776) -- `None` for a stash written before this field
+    /// existed, which `--last` then leaves resolved against the replaying
+    /// invocation's own cwd, exactly as it always has.
+    pub fn cwd(&self) -> Option<String> {
+        self.str_field("cwd")
     }
 
     /// `LastRun.state_path` -- the plain `--state <path>` flag's own raw
@@ -330,11 +340,21 @@ pub fn read_last_run(path: &Path) -> Option<LastRun> {
 /// order is preserved as given (`Dict`'s own insertion order), so a
 /// caller builds it in the exact order `cli/app.py`'s own dict literal
 /// does to match the reference's own file byte for byte.
+///
+/// Written atomically -- a sibling temp file, `0600` from creation,
+/// renamed over any previous stash -- in a directory created `0700`
+/// whatever the umask, the same `Path.mkdir(mode=0o700, ...)`/`mkstemp`
+/// pair `cli/app.py::_save_last_run` now uses (issue #776): an existing
+/// directory's mode is left alone (`create_0700`'s own `AlreadyExists` is
+/// not an error), but any missing *parent* (`<home>/.config`) is created
+/// with the process's own default mode, never `0700`, matching
+/// `Path.mkdir(parents=True)`'s own documented behaviour for parents it
+/// has to create along the way.
 pub fn write_last_run(path: &Path, args: Dict) {
     let Some(parent) = path.parent() else {
         return;
     };
-    if std::fs::create_dir_all(parent).is_err() {
+    if create_0700(parent).is_err() {
         return;
     }
     let Ok(text) =
@@ -342,7 +362,45 @@ pub fn write_last_run(path: &Path, args: Dict) {
     else {
         return;
     };
-    let _ = std::fs::write(path, format!("{text}\n"));
+    let _ = write_atomic(path, &format!("{text}\n"));
+}
+
+fn create_0700(dir: &Path) -> io::Result<()> {
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            if let Some(grandparent) = dir.parent() {
+                std::fs::create_dir_all(grandparent)?;
+            }
+            match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+                Ok(()) => Ok(()),
+                Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
+                Err(e) => Err(e),
+            }
+        }
+        Err(e) => Err(e),
+    }
+}
+
+fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let tmp_path = parent.join(format!(".last-run.{}.tmp", std::process::id()));
+    let result = (|| -> io::Result<()> {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&tmp_path)?;
+        file.write_all(content.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&tmp_path, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp_path);
+    }
+    result
 }
 
 /// Redacts every credential-shaped `KEY=VALUE` entry in *pairs* the same

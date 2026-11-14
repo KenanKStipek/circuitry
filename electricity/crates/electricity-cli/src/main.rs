@@ -1017,6 +1017,7 @@ fn last_run_stash_args(
     run_args: &RunArgs,
     resume_default_out_path: Option<&Path>,
     piped: bool,
+    cwd: &Path,
 ) -> electricity_value::Dict {
     use electricity_value::{Dict, Value};
 
@@ -1038,6 +1039,10 @@ fn last_run_stash_args(
     args.insert(
         Value::Str("orchestration".to_string()),
         Value::Str(normalize_path_str(&run_args.orchestration)),
+    );
+    args.insert(
+        Value::Str("cwd".to_string()),
+        Value::Str(path_to_string(cwd.to_path_buf())),
     );
     args.insert(
         Value::Str("config".to_string()),
@@ -1907,15 +1912,14 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
             }
         };
         if !stash.ok() {
-            // `cof run --last`'s own `_load_last_run` has no graceful
-            // handling at all for a present-but-unreadable/malformed
-            // stash (an uncaught `JSONDecodeError`/`KeyError`, a Python
-            // traceback on stderr, exit 1) -- not one of issue #760's
-            // own listed refusals (that list is `--resume last`'s,
-            // which *does* read the stash gracefully), so this reports
-            // it cleanly instead of reproducing a traceback.
-            write_stdout(&format!("Error: {}\n", stash.error));
-            return ExitCode::from(1);
+            // `cof run --last`'s own `_load_last_run` now reads the stash
+            // through the same total `read_last_run` this does (issue
+            // #776), so a present-but-unreadable/malformed stash raises
+            // `typer.BadParameter(stash.error)` -- Click's usage-error exit
+            // 2, the same one "no previous run" above uses, rendered as
+            // "Invalid value: <message>" -- never a traceback.
+            print_run_usage_error(&format!("Invalid value: {}", stash.error));
+            return ExitCode::from(2);
         }
         if stash.has_redacted_secrets() {
             write_stdout("Error: previous run included redacted secrets in -e values.\n");
@@ -1950,6 +1954,33 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
         // the stash, never refusing on `bogus.yml` not existing).
         run_args.orchestration = stash.orchestration();
         run_args.config = stash.config_path().map(path_to_string);
+        // Resolve a relative stashed `orchestration`/`config` against the
+        // working directory *that run* ran from, not this invocation's own
+        // cwd (issue #776) -- a stash with no `cwd` key (written before
+        // this field existed) is left exactly as given, same as before.
+        if let Some(cwd) = stash.cwd() {
+            let base = PathBuf::from(&cwd);
+            let mut resolved_names: Vec<&str> = Vec::new();
+            if !run_args.orchestration.is_empty()
+                && !Path::new(&run_args.orchestration).is_absolute()
+            {
+                run_args.orchestration = path_to_string(base.join(&run_args.orchestration));
+                resolved_names.push("orchestration");
+            }
+            if let Some(cfg) = run_args.config.clone() {
+                if !Path::new(&cfg).is_absolute() {
+                    run_args.config = Some(path_to_string(base.join(&cfg)));
+                    resolved_names.push("config");
+                }
+            }
+            if !resolved_names.is_empty() {
+                write_stderr(&format!(
+                    "Resolved {} against {} (the last run's working directory).\n",
+                    resolved_names.join(" and "),
+                    base.display(),
+                ));
+            }
+        }
         run_args.state = stash.state_path().map(path_to_string);
         run_args.inputs = stash.env_pairs();
         run_args.out = stash.out_path().map(path_to_string);
@@ -2250,6 +2281,7 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
                     &run_args,
                     resume_default_out_path.as_deref(),
                     !std::io::stdout().is_terminal(),
+                    &cwd,
                 ),
             );
         }
