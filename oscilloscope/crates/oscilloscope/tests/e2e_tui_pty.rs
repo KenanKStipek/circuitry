@@ -43,6 +43,18 @@ fn find_glyph(grid: &[String], line_needle: &str, glyph: char) -> Option<(usize,
     None
 }
 
+/// The `(row, col)` of the first occurrence of `needle` anywhere in
+/// `grid` -- used to compare two stations' own rail positions left
+/// to right, since the rail draws every station on the same row.
+fn find_text(grid: &[String], needle: &str) -> Option<(usize, usize)> {
+    for (row, line) in grid.iter().enumerate() {
+        if let Some(col) = line.find(needle) {
+            return Some((row, col));
+        }
+    }
+    None
+}
+
 /// Waits until `pattern` has appeared anywhere in `buf` so far, or
 /// `timeout` runs out either way.
 fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration) {
@@ -1394,6 +1406,89 @@ fn selecting_either_of_two_unnamed_ifs_on_one_host_shows_its_own_decision() {
     assert!(
         screen.contains("\u{2192} then") && screen.contains("(inferred)"),
         "expected a's own then branch, inferred, never b's; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #779: an unnamed `if` (`a`) whose taken branch is an empty
+/// `else` -- so neither of its own branches ever gets a real step --
+/// drawn on the rail *before* a later unnamed `if` (`b`) that takes
+/// a real step, in plan order, never after it. `a`'s own headline
+/// reads `→ none` (settled, but nothing ran either side) and `b`'s
+/// reads `→ then`; the rail draws every station left to right in
+/// plan order, so `→ none`'s own column must come before `→ then`'s.
+#[test]
+fn an_unnamed_ifs_decision_without_evidence_draws_before_a_later_resolved_one() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: if\n    if:\n      mode: cel\n      expr: \"false\"\n    then:\n      - name: a_then\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n  - type: if\n    if:\n      mode: cel\n      expr: \"true\"\n    then:\n      - name: b_then\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    assert!(
+        screen.contains("Ended"),
+        "expected the run to have ended; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"2");
+    let screen = wait_for_screen_text(&captured_buf, "Flow \u{b7}", Duration::from_secs(10));
+    assert!(
+        screen.contains("Flow \u{b7}"),
+        "expected the Flow screen after pressing 2; screen:\n{screen}"
+    );
+    let screen = wait_for_screen_text(&captured_buf, "\u{2192} none", Duration::from_secs(10));
+    assert!(
+        screen.contains("\u{2192} none"),
+        "expected a's own vacuous decision to read \"\u{2192} none\"; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{2192} then"),
+        "expected b's own decision to read \"\u{2192} then\"; screen:\n{screen}"
+    );
+
+    let whole = captured_buf.lock().unwrap().clone();
+    let grid = support::screen_grid(&whole, 200, 60);
+    let screen = grid.join("\n");
+    let (none_row, none_col) = find_text(&grid, "\u{2192} none")
+        .unwrap_or_else(|| panic!("expected \u{2192} none on the rail; screen:\n{screen}"));
+    let (then_row, then_col) = find_text(&grid, "\u{2192} then")
+        .unwrap_or_else(|| panic!("expected \u{2192} then on the rail; screen:\n{screen}"));
+    assert_eq!(
+        none_row, then_row,
+        "expected both decisions' own headlines on the same rail row; screen:\n{screen}"
+    );
+    assert!(
+        none_col < then_col,
+        "expected a's decision (\u{2192} none) to draw before b's (\u{2192} then), in plan order; screen:\n{screen}"
     );
 
     send_bytes(&mut master, b"q");

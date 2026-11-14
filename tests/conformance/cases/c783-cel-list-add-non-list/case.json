@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #783",
+  "description": "`list + <non-list>` (a map, a string, an int) fails with the same text in both engines, each under `on_error: continue`; `list + list` is unaffected and still appends.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}
