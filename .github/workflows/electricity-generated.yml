@@ -69,9 +69,12 @@ jobs:
 
       # Tests next to the generators (scripts/test_*.py) cover the helpers they
       # share, such as the run-corpus event normalizer. pytest's own testpaths
-      # only collect tests/, so they run here.
+      # only collect tests/, so they run here. Installed with the repo's own
+      # requirements-dev.txt pin, same as every other job's pytest (#775) --
+      # not a floating range that could turn this job red with no change in
+      # the repository.
       - name: test the generators' shared helpers
         working-directory: electricity
         run: |
-          python3 -m pip install "pytest>=8.0"
+          python3 -m pip install -c ../requirements-dev.txt pytest
           python3 -m pytest -q scripts/

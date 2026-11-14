@@ -22,13 +22,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # v2.9.3
-      - uses: Swatinem/rust-cache@2201cc584a476d1b508be977bbe4b7d1c7a52e9c
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           workspaces: electricity
 
       - name: Build electricity binary
         working-directory: electricity
-        run: cargo build -p electricity-cli --bin electricity --features test-tools
+        run: cargo build -p electricity-cli --bin electricity
 
       - name: Upload electricity binary
         uses: actions/upload-artifact@v4
@@ -36,6 +36,7 @@ jobs:
           name: electricity-binary
           path: electricity/target/debug/electricity
           if-no-files-found: error
+          retention-days: 1
 
   test:
     needs: build-electricity

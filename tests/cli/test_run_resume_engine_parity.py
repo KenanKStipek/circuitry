@@ -63,7 +63,6 @@ baseline`) before it could ever hide behind the other.
 from __future__ import annotations
 
 import json
-import shutil
 import signal
 import subprocess
 import sys
@@ -79,8 +78,6 @@ from conformance.normalize import (
     assert_states_equal,
     prepare_for_comparison,
 )
-
-ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 
 ENGINES = ("cof", "electricity")
 
@@ -98,19 +95,12 @@ _EXPECT_IDENTICAL_EVENTS = frozenset({"chain_loop", "tree_loop", "named_if", "us
 
 @pytest.fixture(scope="module")
 def electricity_binary() -> Path:
-    """Builds the `electricity` binary once for this module -- same
-    pattern as `conformance/test_run_cli_parity.py`'s own fixture."""
-    if shutil.which("cargo") is None:
+    """The shared `electricity` binary -- see `harness.resolve_electricity_binary`."""
+    binary, failure = harness.resolve_electricity_binary()
+    if failure is not None:
+        pytest.fail(failure)
+    if binary is None:
         pytest.skip("cargo not available; electricity binary cannot be built")
-    proc = subprocess.run(
-        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
-        cwd=ELECTRICITY_DIR, env=harness.cargo_env(), capture_output=True, text=True,
-        timeout=600, check=False,
-    )
-    if proc.returncode != 0:
-        pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
-    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
-    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
     return binary
 
 
