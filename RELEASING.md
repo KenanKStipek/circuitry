@@ -215,9 +215,8 @@ with the `pypi` environment name) naming whichever workflow file
 actually performs the TestPyPI upload — a separate workflow, or a
 repository-variable-gated branch added to this one, publishing to
 `https://test.pypi.org/legacy/` instead. Setting up a TestPyPI trusted
-publisher is a one-time, owner-only step — it isn't something a
-contributor's PR can add, since it requires access to the TestPyPI
-project settings.
+publisher is a one-time step for a maintainer with access to the TestPyPI
+project settings; a contributor's PR can't add it.
 
 ## Pre-releases
 
