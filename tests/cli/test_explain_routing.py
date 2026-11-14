@@ -260,7 +260,6 @@ def test_last_replays_the_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
     fake_dir = tmp_path / "config-home"
     fake_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_dir / "last-run.json")
 
     orch = _write_orch(tmp_path, complexity=SCORING_AND_ROUTING)

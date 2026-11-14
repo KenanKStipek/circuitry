@@ -20,7 +20,6 @@ def _redirect_global_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> 
     fake_dir = tmp_path / "config-home"
     fake_dir.mkdir(parents=True, exist_ok=True)
     fake_last_run = fake_dir / "last-run.json"
-    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_dir)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_last_run)
     return fake_last_run
 

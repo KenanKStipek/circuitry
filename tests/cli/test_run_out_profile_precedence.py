@@ -162,7 +162,6 @@ def test_last_replay_respects_profile_out_not_a_stale_resolved_path(
     explicit flag — replaying should re-resolve through the same profile."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_home)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_home / "last-run.json")
     monkeypatch.chdir(tmp_path)
     orch = _write_orch(tmp_path / "recipe.yml")

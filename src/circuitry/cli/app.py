@@ -42,7 +42,6 @@ from ..tui.wizard_host import (
 )
 from .complexity_config import ComplexitySettings
 from .config import (
-    GLOBAL_CONFIG_DIR,
     CircuitryConfig,
     ConfigError,
     describe_config_sources,
@@ -565,6 +564,18 @@ def _extract_generated_orchestration(yaml_text: str) -> dict[str, Any] | None:
     return None
 
 
+def _current_cwd_or_none() -> str | None:
+    """``str(Path.cwd())``, or ``None`` when the working directory no
+    longer exists (removed during the run) -- never raises, so a run
+    whose cwd vanished mid-run still leaves a stash instead of crashing
+    after ``--out`` is already on disk.
+    """
+    try:
+        return str(Path.cwd())
+    except OSError:
+        return None
+
+
 def _save_last_run(args: dict[str, Any]) -> None:
     """Stash the current run args for --last replay.
 
@@ -576,8 +587,9 @@ def _save_last_run(args: dict[str, Any]) -> None:
     neither the directory nor the file may end up looser than that.
     """
     try:
-        GLOBAL_CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=GLOBAL_CONFIG_DIR, prefix=".last-run.", suffix=".tmp")
+        stash_dir = _LAST_RUN_PATH.parent
+        stash_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=stash_dir, prefix=".last-run.", suffix=".tmp")
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as handle:
                 handle.write(json.dumps(args) + "\n")
@@ -602,22 +614,52 @@ def _load_last_run() -> dict[str, Any]:
         raise typer.BadParameter("No previous run found. Run an orchestration first.")
     if not stash.ok:
         raise typer.BadParameter(stash.error)
+    if not stash.orchestration:
+        raise typer.BadParameter(f"{stash.path} does not name an orchestration.")
     return stash.args
 
 
+def _join_resolved_names(names: list[str]) -> str:
+    """English list join for the "Resolved ..." line: one name alone,
+    two as ``"a and b"``, three or more as ``"a, b and c"`` (no Oxford
+    comma) -- electricity's own ``join_resolved_names`` matches this.
+    """
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 def _resolve_last_run_cwd(
-    stashed: dict[str, Any], orchestration: str, config: Path | None
-) -> tuple[str, Path | None]:
-    """Resolve a ``--last`` stash's relative ``orchestration``/``config``
-    against the working directory the stashed run itself ran from (#776),
-    printing one line naming what it resolved. A stash with no ``cwd`` key
-    (written before this change) is left exactly as given, resolved against
-    *this* invocation's own cwd the same way as before.
+    stashed: dict[str, Any],
+    orchestration: str,
+    config: Path | None,
+    state: Path | None,
+    profile_from_state: Path | None,
+) -> tuple[str, Path | None, Path | None, Path | None]:
+    """Resolve a ``--last`` stash's relative ``orchestration``/``config``/
+    ``state``/``profile_from_state`` against the working directory the
+    stashed run itself ran from (#776), printing one line naming what it
+    resolved when that directory differs from this invocation's own. A
+    stash with no ``cwd`` key (written before this change), or one
+    replayed from the same directory it was written in, is left exactly
+    as given, resolved against *this* invocation's own cwd the same way
+    as before.
     """
     cwd = stashed.get("cwd")
     if not cwd:
-        return orchestration, config
+        return orchestration, config, state, profile_from_state
     base = Path(cwd)
+    try:
+        same_cwd = base == Path.cwd()
+    except OSError:
+        same_cwd = False
+    if same_cwd:
+        # Replaying from the same directory needs no explicit resolution:
+        # a relative path already resolves against today's cwd on its
+        # own, the same as a stash with no ``cwd`` key at all.
+        return orchestration, config, state, profile_from_state
     resolved: list[str] = []
     if orchestration and not Path(orchestration).is_absolute():
         orchestration = str(base / orchestration)
@@ -625,13 +667,19 @@ def _resolve_last_run_cwd(
     if config is not None and not config.is_absolute():
         config = base / config
         resolved.append("config")
+    if state is not None and not state.is_absolute():
+        state = base / state
+        resolved.append("state")
+    if profile_from_state is not None and not profile_from_state.is_absolute():
+        profile_from_state = base / profile_from_state
+        resolved.append("profile_from_state")
     if resolved:
         err_console.print(
-            f"Resolved {' and '.join(resolved)} against {base} "
+            f"Resolved {_join_resolved_names(resolved)} against {base} "
             "(the last run's working directory).",
-            highlight=False, soft_wrap=True,
+            highlight=False, soft_wrap=True, markup=False,
         )
-    return orchestration, config
+    return orchestration, config, state, profile_from_state
 
 
 def _resolve_resume_state(
@@ -1247,8 +1295,13 @@ def run_cmd(
         # every one of them (#265 part 2 follow-up).
         stashed_service_profile = stashed.get("service_profile")
         config = Path(stashed["config"]) if stashed.get("config") else None
-        orchestration, config = _resolve_last_run_cwd(stashed, orchestration, config)
         state = Path(stashed["state"]) if stashed.get("state") else None
+        profile_from_state = (
+            Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
+        )
+        orchestration, config, state, profile_from_state = _resolve_last_run_cwd(
+            stashed, orchestration, config, state, profile_from_state
+        )
         out = Path(stashed["out"]) if stashed.get("out") else None
         pretty = stashed.get("pretty", False)
         print_state = stashed.get("print_state", False)
@@ -1269,9 +1322,6 @@ def run_cmd(
         # same scripted/CI escape hatch the refusal message advertises (#337).
         allow_capabilities = stashed.get("allow_capabilities") or allow_capabilities
         profile = stashed.get("profile")
-        profile_from_state = (
-            Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
-        )
         adapter = stashed.get("adapter")
         model = stashed.get("model")
         explain_routing = stashed.get("explain_routing", False)
@@ -1561,7 +1611,7 @@ def run_cmd(
     if not last:
         _save_last_run({
             "orchestration": str(orch_path),
-            "cwd": str(Path.cwd()),
+            "cwd": _current_cwd_or_none(),
             "config": str(config) if config else None,
             "state": str(state) if state else None,
             # The raw --out flag, not the resolved path — a profile's own
@@ -2026,7 +2076,7 @@ def run_library_cmd(
     # gate was on `main` before #335 (#337).
     _save_last_run({
         "orchestration": str(asset.file_path),
-        "cwd": str(Path.cwd()),
+        "cwd": _current_cwd_or_none(),
         "remote_library_source": True,
         "config": str(config) if config else None,
         "state": str(state) if state else None,
