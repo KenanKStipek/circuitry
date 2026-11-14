@@ -1,0 +1,14 @@
+{"v":1,"seq":0,"ts":"2026-11-14T15:53:37.867Z","ev":"run_start","run_id":"58215475-395d-4a89-88b2-5b3ce01ca14b","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":4705}
+{"v":1,"seq":1,"ts":"2026-11-14T15:53:37.869Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-14T15:53:37.869Z","ev":"start","id":1,"path":"prime.list_plus_map"}
+{"v":1,"seq":3,"ts":"2026-11-14T15:53:37.870Z","ev":"end","id":1,"path":"prime.list_plus_map","ok":false,"ms":1,"error":"CEL evaluation failed for \"[1] + {'a': 2} == [1]\": cannot apply '+' to a list and a map"}
+{"v":1,"seq":4,"ts":"2026-11-14T15:53:37.870Z","ev":"start","id":2,"path":"prime.list_plus_string"}
+{"v":1,"seq":5,"ts":"2026-11-14T15:53:37.870Z","ev":"end","id":2,"path":"prime.list_plus_string","ok":false,"ms":0,"error":"CEL evaluation failed for \"[1] + 'x' == [1]\": cannot apply '+' to a list and a string"}
+{"v":1,"seq":6,"ts":"2026-11-14T15:53:37.870Z","ev":"start","id":3,"path":"prime.list_plus_int"}
+{"v":1,"seq":7,"ts":"2026-11-14T15:53:37.870Z","ev":"end","id":3,"path":"prime.list_plus_int","ok":false,"ms":0,"error":"CEL evaluation failed for '[1] + 1 == [1]': cannot apply '+' to a list and an int"}
+{"v":1,"seq":8,"ts":"2026-11-14T15:53:37.870Z","ev":"start","id":4,"path":"prime.list_plus_list"}
+{"v":1,"seq":9,"ts":"2026-11-14T15:53:37.870Z","ev":"end","id":4,"path":"prime.list_plus_list","ok":true,"ms":0}
+{"v":1,"seq":10,"ts":"2026-11-14T15:53:37.870Z","ev":"start","id":5,"path":"prime.marker"}
+{"v":1,"seq":11,"ts":"2026-11-14T15:53:37.871Z","ev":"end","id":5,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":12,"ts":"2026-11-14T15:53:37.871Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":13,"ts":"2026-11-14T15:53:37.871Z","ev":"run_end","ok":true}

@@ -1176,6 +1176,15 @@ def build_corpus() -> list[dict]:
         condition("state.m[5u] == 1", {"m": {1: "a"}}, exact_error=True),
     ]
 
+    # --- issue #783: `list + <non-list>` fails instead of appending the
+    # right-hand operand's iterated items -- `list + list` (already
+    # covered elsewhere) is unaffected.
+    cases += [
+        condition("state.l + state.m == state.l", {"l": [1], "m": {"a": 2}}, exact_error=True),
+        condition("state.l + state.s == state.l", {"l": [1], "s": "x"}, exact_error=True),
+        condition("state.l + state.n == state.l", {"l": [1], "n": 1}, exact_error=True),
+    ]
+
     # --- issue #400: ordering's remaining gaps -- string/string
     # (bytes/bytes is already pinned above), a computed duration
     # against another (celpy's own `DurationType` has no state-side
