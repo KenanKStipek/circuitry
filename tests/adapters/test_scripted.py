@@ -88,6 +88,47 @@ def test_tree_dynamic_matches_by_path_not_call_order(tmp_path: Path) -> None:
     assert adapter.leftover_replies() == {}
 
 
+def test_reply_cache_fields_feed_meta_and_run_totals(tmp_path: Path) -> None:
+    """#627: a scripted reply's ``tokens_cached_in``/``tokens_cache_write``
+    land on the effect's own ``meta`` and on ``last_run.totals``, each
+    present only when the reply set it."""
+    orch = {
+        "adapter": "scripted",
+        "model": "test",
+        "effects": [_prompt("cached"), _prompt("uncached")],
+    }
+    orch_path = _write_orch(tmp_path, orch)
+    replies_path = _write_replies(
+        tmp_path,
+        {
+            "prime.cached": [
+                {
+                    "text": "a",
+                    "tokens_sent": 100,
+                    "tokens_received": 1,
+                    "tokens_cached_in": 80,
+                    "tokens_cache_write": 20,
+                }
+            ],
+            "prime.uncached": [{"text": "b", "tokens_sent": 5, "tokens_received": 1}],
+        },
+    )
+    adapter = ScriptedAdapter(replies_file=str(replies_path))
+
+    result = _run(orch_path, adapter)
+
+    assert result.ok, result.error
+    cached_meta = result.state["prime"]["cached"]["meta"]
+    assert cached_meta["tokens_cached_in"] == 80
+    assert cached_meta["tokens_cache_write"] == 20
+    uncached_meta = result.state["prime"]["uncached"]["meta"]
+    assert "tokens_cached_in" not in uncached_meta
+    assert "tokens_cache_write" not in uncached_meta
+    totals = result.state["runtime"]["last_run"]["totals"]
+    assert totals["tokens_cached_in"] == 80
+    assert totals["tokens_cache_write"] == 20
+
+
 def test_retries_consume_replies_in_order(tmp_path: Path) -> None:
     orch = {
         "adapter": "scripted",

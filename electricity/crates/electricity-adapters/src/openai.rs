@@ -124,6 +124,16 @@ fn coerce_token_count(value: Option<&Value>) -> Result<Option<i64>, AdapterError
     }
 }
 
+/// `usage_tokens`'s own `cached_tokens` coercion: an actual int or bool
+/// only, never a float or numeric string, unlike [`coerce_token_count`]
+/// above.
+fn int_if_pyint(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(v @ (Value::Int(_) | Value::Bool(_))) => electricity_value::pycompat::py_int(v).ok(),
+        _ => None,
+    }
+}
+
 /// Shared by the streamed and non-streamed failure paths -- on the
 /// streaming path, a non-22 failure leaves whatever OpenAI had
 /// already answered in *outcome*'s own stdout -- only a complete HTTP
@@ -197,12 +207,18 @@ pub fn interpret_outcome(
     let tokens_received = coerce_token_count(
         usage_dict.and_then(|d| d.get(&Value::Str("completion_tokens".to_string()))),
     )?;
+    let tokens_cached_in = usage_dict
+        .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
+        .and_then(Value::as_dict)
+        .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
 
     Ok(GenerateResult {
         text,
         raw,
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write: None,
         finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
@@ -245,11 +261,17 @@ pub fn interpret_streaming_outcome(
         let tokens_received = coerce_token_count(
             usage_dict.and_then(|d| d.get(&Value::Str("completion_tokens".to_string()))),
         )?;
+        let tokens_cached_in = usage_dict
+            .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
+            .and_then(Value::as_dict)
+            .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
         return Ok(GenerateResult {
             text,
             raw,
             tokens_sent,
             tokens_received,
+            tokens_cached_in,
+            tokens_cache_write: None,
             finish_reason,
             warnings: Vec::new(),
             cost_usd: None,
@@ -298,7 +320,7 @@ pub fn interpret_streaming_outcome(
         });
     }
 
-    let (tokens_sent, tokens_received) = usage_tokens(parsed.usage.as_ref());
+    let (tokens_sent, tokens_received, tokens_cached_in) = usage_tokens(parsed.usage.as_ref());
     let mut message_dict = Dict::new();
     message_dict.insert(
         Value::Str("content".to_string()),
@@ -328,6 +350,8 @@ pub fn interpret_streaming_outcome(
         raw: Value::Dict(raw),
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write: None,
         finish_reason: parsed.finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
@@ -661,6 +685,65 @@ mod tests {
         assert_eq!(result.tokens_received, Some(2));
         assert_eq!(result.finish_reason, Some("stop".to_string()));
         assert_eq!(*seen.borrow(), vec![3, 5]);
+    }
+
+    #[test]
+    fn interpret_outcome_reads_cached_tokens_from_prompt_tokens_details() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                r#"{"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"#,
+                r#""usage":{"prompt_tokens":100,"completion_tokens":2,"#,
+                r#""prompt_tokens_details":{"cached_tokens":96}}}"#,
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let result = interpret_outcome(&outcome, "m", "http://x", "sk-test").unwrap();
+        assert_eq!(result.tokens_sent, Some(100));
+        assert_eq!(result.tokens_cached_in, Some(96));
+        assert_eq!(result.tokens_cache_write, None);
+    }
+
+    #[test]
+    fn interpret_outcome_with_no_prompt_tokens_details_leaves_cached_in_absent() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                r#"{"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"#,
+                r#""usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let result = interpret_outcome(&outcome, "m", "http://x", "sk-test").unwrap();
+        assert_eq!(result.tokens_cached_in, None);
+    }
+
+    #[test]
+    fn interpret_streaming_outcome_reads_cached_tokens_from_prompt_tokens_details() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},",
+                "\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,",
+                "\"completion_tokens\":2,\"prompt_tokens_details\":",
+                "{\"cached_tokens\":96}}}\n",
+                "data: [DONE]\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let result = interpret_streaming_outcome(&outcome, "m", "http://x", "sk-test").unwrap();
+        assert_eq!(result.tokens_sent, Some(100));
+        assert_eq!(result.tokens_cached_in, Some(96));
+        assert_eq!(result.tokens_cache_write, None);
     }
 
     #[test]

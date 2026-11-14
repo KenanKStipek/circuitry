@@ -113,6 +113,12 @@ pub struct GenerateResult {
     pub raw: Value,
     pub tokens_sent: Option<i64>,
     pub tokens_received: Option<i64>,
+    /// Input tokens the provider read from its own cache / wrote to it,
+    /// each set only when the provider's reply carries that count (even
+    /// when it is 0) -- `None` otherwise, never a placeholder zero.
+    /// `tokens_sent` already counts both either way (#627).
+    pub tokens_cached_in: Option<i64>,
+    pub tokens_cache_write: Option<i64>,
     pub finish_reason: Option<String>,
     pub warnings: Vec<String>,
     pub cost_usd: Option<f64>,

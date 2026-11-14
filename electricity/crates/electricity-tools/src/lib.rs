@@ -95,6 +95,12 @@ pub struct ToolResult {
     /// way a prompt's adapter reply does.
     pub tokens_sent: Option<i64>,
     pub tokens_received: Option<i64>,
+    /// `plugins/base.py::ToolResult.tokens_cached_in`/`.tokens_cache_write`
+    /// (#627): cache reads/writes behind `tokens_sent` (which already
+    /// includes them), each `None` unless the plugin's own call reported
+    /// one. Only `agent` sets these today.
+    pub tokens_cached_in: Option<i64>,
+    pub tokens_cache_write: Option<i64>,
     /// `plugins/base.py::ToolResult.cost_usd` -- `None` for every
     /// provider but `agent` (issue #720), which reports the CLI's own
     /// running cost figure on every `ToolResult` it returns, `ok: false`
@@ -123,6 +129,8 @@ impl ToolResult {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             cost_usd: None,
         }
     }

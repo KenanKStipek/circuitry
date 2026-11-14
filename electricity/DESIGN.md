@@ -1316,7 +1316,10 @@ these before it ever reaches the orchestration's own state:
   cost** — the reference's own accumulator starts at `None` and only becomes a number once
   something adds to it (an earlier draft of this design said it "sums to 0"; it does not,
   it stays absent-as-`null` the whole run if nothing uses an adapter that reports a cost — the
-  only two that do are `claude_code`/`pi`, §9.8, §10.5's own note).
+  only two that do are `claude_code`/`pi`, §9.8, §10.5's own note). `tokens_cached_in`/
+  `tokens_cache_write` (#627) gain the same keys as a prompt or `agent` tool effect's own
+  `meta` — absent from `totals` entirely, not `null`, unless at least one effect in the run
+  reported one.
 - **`runtime.effective_settings`**: `{model, adapter, out, plugins, runtime, sources}` plus an
   optional `profile` key, written exactly when `--profile` resolved a file for this run
   (§6.11 has the record's exact shape). `model`/`adapter` are the run's resolved defaults;
@@ -2610,7 +2613,8 @@ of M0-H's run wiring. **Loop progress** (the second bullet) landed with M1's own
   `--live-state` consumes — never by walking the finished state tree after the fact, since a
   `use` child in declared-outputs mode never leaves its effects in the final tree, and an unnamed
   loop overwrites the same node every pass; only the live event stream sees every leaf that
-  actually ran. `cost_usd` sums each prompt effect's own `meta.cost_usd` — a field none of the
+  actually ran. `tokens_cached_in`/`tokens_cache_write` (#627) sum the same way, present only
+  when at least one effect's own `meta` reported one. `cost_usd` sums each prompt effect's own `meta.cost_usd` — a field none of the
   OpenAI-compatible family, `anthropic`, `ollama` or `cyberdiner` populates (no documented
   per-call cost figure in any of their response shapes, and no price table in electricity
   either); `claude_code`/`pi` (§9.8) are the only two adapters that do, reporting the coding-agent

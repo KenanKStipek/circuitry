@@ -1086,6 +1086,11 @@ pub async fn execute_tool<R: ParamsCtx>(
     // the only provider that ever does.
     let mut total_tokens_sent: Option<i64> = None;
     let mut total_tokens_received: Option<i64> = None;
+    // #627: same accumulation, but absent from `meta` entirely until at
+    // least one attempt reports one -- unlike the two above, which
+    // `meta` always carries, `null` or not.
+    let mut total_tokens_cached_in: Option<i64> = None;
+    let mut total_tokens_cache_write: Option<i64> = None;
     // Issue #720: an `agent` effect's `params.prompt` of `{file: {from:
     // <state path>}, within: <dir>}` (issue #591) is read once, before
     // the first attempt -- a retry and the session's own repair turn use
@@ -1133,6 +1138,10 @@ pub async fn execute_tool<R: ParamsCtx>(
         pop_leaf(&meta_node, "tokens_received");
         pop_leaf(&meta_node, "tokens_sent_total");
         pop_leaf(&meta_node, "tokens_received_total");
+        pop_leaf(&meta_node, "tokens_cached_in");
+        pop_leaf(&meta_node, "tokens_cache_write");
+        pop_leaf(&meta_node, "tokens_cached_in_total");
+        pop_leaf(&meta_node, "tokens_cache_write_total");
         pop_leaf(&meta_node, "cost_usd");
         pop_leaf(&meta_node, "stdout_chars");
         pop_leaf(&meta_node, "stdout_sha256");
@@ -1169,6 +1178,8 @@ pub async fn execute_tool<R: ParamsCtx>(
         // outcome (the tail end below, success only).
         let mut attempt_tokens_sent: Option<i64> = None;
         let mut attempt_tokens_received: Option<i64> = None;
+        let mut attempt_tokens_cached_in: Option<i64> = None;
+        let mut attempt_tokens_cache_write: Option<i64> = None;
         // Issue #720: `agent`'s own `cost_usd`, written to `meta.cost_usd`
         // only once this attempt is the one that decided the pass's
         // outcome -- the same "attempt, not total" rule `tokens_sent`/
@@ -1787,6 +1798,8 @@ pub async fn execute_tool<R: ParamsCtx>(
                                         // pass's total.
                                         attempt_tokens_sent = result.tokens_sent;
                                         attempt_tokens_received = result.tokens_received;
+                                        attempt_tokens_cached_in = result.tokens_cached_in;
+                                        attempt_tokens_cache_write = result.tokens_cache_write;
                                         attempt_cost_usd = result.cost_usd;
                                         if let Some(sent) = result.tokens_sent {
                                             total_tokens_sent =
@@ -1807,6 +1820,32 @@ pub async fn execute_tool<R: ParamsCtx>(
                                                 "tokens_received_total",
                                                 Value::from(
                                                     total_tokens_received.expect("just set"),
+                                                ),
+                                            );
+                                        }
+                                        if let Some(cached_in) = result.tokens_cached_in {
+                                            total_tokens_cached_in = Some(
+                                                total_tokens_cached_in.unwrap_or(0) + cached_in,
+                                            );
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_cached_in_total",
+                                                Value::from(
+                                                    total_tokens_cached_in.expect("just set"),
+                                                ),
+                                            );
+                                        }
+                                        if let Some(cache_write) = result.tokens_cache_write {
+                                            total_tokens_cache_write = Some(
+                                                total_tokens_cache_write.unwrap_or(0) + cache_write,
+                                            );
+                                            set_leaf(
+                                                store,
+                                                &meta_node,
+                                                "tokens_cache_write_total",
+                                                Value::from(
+                                                    total_tokens_cache_write.expect("just set"),
                                                 ),
                                             );
                                         }
@@ -2090,6 +2129,22 @@ pub async fn execute_tool<R: ParamsCtx>(
                     Value::from(received),
                 );
             }
+            if let Some(cached_in) = total_tokens_cached_in {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "tokens_cached_in_total",
+                    Value::from(cached_in),
+                );
+            }
+            if let Some(cache_write) = total_tokens_cache_write {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "tokens_cache_write_total",
+                    Value::from(cache_write),
+                );
+            }
             if total_tokens_sent.is_some() || total_tokens_received.is_some() {
                 observer.record_totals(&store.snapshot(&meta_node));
             }
@@ -2151,12 +2206,30 @@ pub async fn execute_tool<R: ParamsCtx>(
         // call counts for a loop/if's own model-mode condition.
         let reported_tokens = attempt_tokens_sent.is_some()
             || attempt_tokens_received.is_some()
+            || attempt_tokens_cached_in.is_some()
+            || attempt_tokens_cache_write.is_some()
             || attempt_cost_usd.is_some();
         if let Some(sent) = attempt_tokens_sent {
             set_leaf(store, &meta_node, "tokens_sent", Value::from(sent));
         }
         if let Some(received) = attempt_tokens_received {
             set_leaf(store, &meta_node, "tokens_received", Value::from(received));
+        }
+        if let Some(cached_in) = attempt_tokens_cached_in {
+            set_leaf(
+                store,
+                &meta_node,
+                "tokens_cached_in",
+                Value::from(cached_in),
+            );
+        }
+        if let Some(cache_write) = attempt_tokens_cache_write {
+            set_leaf(
+                store,
+                &meta_node,
+                "tokens_cache_write",
+                Value::from(cache_write),
+            );
         }
         if let Some(cost) = attempt_cost_usd {
             set_leaf(store, &meta_node, "cost_usd", Value::Float(cost));
@@ -3297,6 +3370,8 @@ mod tests {
                 raw: Value::None,
                 tokens_sent: None,
                 tokens_received: None,
+                tokens_cached_in: None,
+                tokens_cache_write: None,
                 finish_reason: None,
                 warnings: Vec::new(),
                 cost_usd: None,
@@ -3488,6 +3563,8 @@ mod tests {
                 raw: Value::None,
                 tokens_sent: Some(1),
                 tokens_received: Some(1),
+                tokens_cached_in: None,
+                tokens_cache_write: None,
                 finish_reason: None,
                 warnings: Vec::new(),
                 cost_usd: None,

@@ -47,6 +47,8 @@ impl FakeAdapter {
             raw: Value::None,
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             finish_reason: None,
             warnings: Vec::new(),
             cost_usd: None,

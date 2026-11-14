@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #627 (cache tokens sum across a fallback chain's attempts)",
+  "description": "A json prompt with schema: and provider_fallbacks: [scripted:m2]: a decode-failed attempt then a succeeding one, both reporting cache reads/writes -- each fallback_attempts[] entry carries its own tokens_cached_in/tokens_cache_write, and the pass's own tokens_cached_in_total/tokens_cache_write_total sum both attempts.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
