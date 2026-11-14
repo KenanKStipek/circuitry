@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import io
 import shutil
 import subprocess
 import sys
+import tarfile
+import zipfile
 from pathlib import Path
 from types import ModuleType
 
@@ -61,6 +64,50 @@ def test_direct_references_flags_no_space_after_at():
     # PEP 508 allows no whitespace around `@` at all.
     lines = ['somepkg@https://example.com/somepkg-1.0.tar.gz']
     assert check_direct_references.direct_references(lines) == lines
+
+
+# ---------------------------------------------------------------------------
+# Minimal hand-built distributions (standard library only, no uv, no network)
+# ---------------------------------------------------------------------------
+
+
+def _write_minimal_wheel(path: Path, name: str, version: str, metadata: str) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{name}-{version}.dist-info/METADATA", metadata)
+
+
+def _write_minimal_sdist(path: Path, name: str, version: str, metadata: str) -> None:
+    with tarfile.open(path, "w:gz") as archive:
+        data = metadata.encode("utf-8")
+        info = tarfile.TarInfo(name=f"{name}-{version}/PKG-INFO")
+        info.size = len(data)
+        archive.addfile(info, io.BytesIO(data))
+
+
+def test_check_fails_on_minimal_built_dists_with_direct_reference(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    name, version = "tinypkg", "0.0.1"
+    requirement = "somepkg @ https://example.com/somepkg.tar.gz"
+    metadata = (
+        "Metadata-Version: 2.1\n"
+        f"Name: {name}\n"
+        f"Version: {version}\n"
+        f"Requires-Dist: {requirement}\n"
+    )
+
+    wheel_path = tmp_path / f"{name}-{version}-py3-none-any.whl"
+    _write_minimal_wheel(wheel_path, name, version, metadata)
+    sdist_path = tmp_path / f"{name}-{version}.tar.gz"
+    _write_minimal_sdist(sdist_path, name, version, metadata)
+
+    exit_code = check_direct_references.main([str(wheel_path), str(sdist_path)])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    error_lines = [line for line in captured.err.splitlines() if line.startswith("error: ")]
+    assert len(error_lines) == 2
+    assert all(requirement in line for line in error_lines)
 
 
 # ---------------------------------------------------------------------------
