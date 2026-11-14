@@ -1,0 +1,25 @@
+name: c772-root-shell-allowlist-reflects-profile-override
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: tool
+            name: x
+            provider: shell
+            params: {command: printf, args: ["hi"], allowed_commands: [printf]}
+effects:
+  - type: tool
+    name: t
+    provider: shell
+    on_error: continue
+    params:
+      command: printf
+      args: []
+      allowed_commands: [printf]
+      mode: parse
+      input: '"ignored"'
+  - type: use
+    name: child
+    inline: "{{{input.plan}}}"

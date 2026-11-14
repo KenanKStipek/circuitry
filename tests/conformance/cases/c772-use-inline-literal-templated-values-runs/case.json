@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #772",
+  "description": "An author-written inline: whose structure is literal, with only a scalar value templated in ({{input.msg}}, resolved against the parent's own ctx per Quirk Q3), is not generated and keeps working exactly as before -- including a shell effect with no allowed_commands of its own, running against the default allowlist, even though this document uses no tool provider anywhere else.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

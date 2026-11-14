@@ -293,7 +293,13 @@ fn golden_corpus_validate_plan() {
             result_path: case.result_path.clone(),
         };
         let runtime_config = Value::from(case.runtime_config);
-        let got = decompose::validate_plan(&plan, case.max_chunks, &runtime_config);
+        let got = decompose::validate_plan(
+            &plan,
+            case.max_chunks,
+            &runtime_config,
+            &electricity_vm::Frame::root(),
+            "",
+        );
         if let Some(message) = &case.raises {
             assert_eq!(got, Err(message.clone()), "case {}", case.name);
             continue;

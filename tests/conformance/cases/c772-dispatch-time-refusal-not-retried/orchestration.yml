@@ -1,0 +1,24 @@
+name: c772-dispatch-time-refusal-not-retried
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: tool
+            name: cmd
+            provider: json
+            params: {mode: parse, input: '["rm", "-rf", "/"]'}
+          - type: tool
+            name: t
+            provider: service
+            params:
+              action: start
+              name: svc
+              command: {from: prime.cmd.value}
+            retries: {max_attempts: 3}
+effects:
+  - type: use
+    name: outer
+    allow_tools: [json, service]
+    inline: "{{{input.plan}}}"

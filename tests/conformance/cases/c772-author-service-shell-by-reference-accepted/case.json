@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #772, #781",
+  "description": "An author document (not generated) is unaffected by the generated-document shell rules: a service start's own shell: {from: ...} is resolved and coerced by the service plugin's own rules (shell: true here), and the effect runs, exactly as before #772's own shell additions to the universal by-reference check. The service is stopped again before the run ends.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

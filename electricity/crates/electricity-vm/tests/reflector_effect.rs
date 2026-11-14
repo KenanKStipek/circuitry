@@ -163,6 +163,20 @@ fn reflector_leaf(
     )
 }
 
+/// A reflector leaf's own literal `allow_tools:` (#772), set after the
+/// fact rather than threading one more parameter through every
+/// [`reflector_leaf`] call site -- only the handful of tests whose
+/// generated plan uses a tool its enclosing document (here, the bare
+/// reflector leaf itself) doesn't use need one at all.
+fn with_allow_tools(mut op: Op, names: &[&str]) -> Op {
+    if let NodeKind::Leaf(leaf) = &mut op.kind {
+        if let LeafKind::Reflector(reflector) = leaf.as_mut() {
+            reflector.allow_tools = names.iter().map(|n| n.to_string()).collect();
+        }
+    }
+    op
+}
+
 /// [`reflector_leaf`], with *inner_prompt* (normally [`plan_prompt`])
 /// given by the caller instead -- lets a test build a plan step with
 /// non-default fields (e.g. `provider:`) without duplicating every
@@ -189,6 +203,7 @@ fn reflector_leaf_with_inner(
         stop_on_done,
         prime_template: TemplateText::new(prime_template, false, Escape::None),
         max_effects,
+        allow_tools: std::collections::BTreeSet::new(),
     };
     Op {
         path: root_path().push_name(name),
@@ -241,14 +256,17 @@ async fn a_basic_plan_runs_through_the_generated_use_child() {
              params:\n      \
                mode: parse\n      \
                input: '{\"ok\": true}'\n";
-    let leaf = reflector_leaf(
-        "plan_it",
-        "propose_steps",
-        1,
-        "generated",
-        true,
-        "plan it",
-        8,
+    let leaf = with_allow_tools(
+        reflector_leaf(
+            "plan_it",
+            "propose_steps",
+            1,
+            "generated",
+            true,
+            "plan it",
+            8,
+        ),
+        &["json"],
     );
     let (store, observer, result) = run_reflector(leaf, vec![plan_reply]).await;
     result.unwrap();
@@ -519,14 +537,17 @@ async fn a_generated_model_mode_if_now_runs() {
                 mode: parse\n          \
                 input: '{\"ok\": true}'\n    \
           else: []\n";
-    let leaf = reflector_leaf(
-        "plan_it",
-        "propose_steps",
-        1,
-        "generated",
-        true,
-        "plan it",
-        8,
+    let leaf = with_allow_tools(
+        reflector_leaf(
+            "plan_it",
+            "propose_steps",
+            1,
+            "generated",
+            true,
+            "plan it",
+            8,
+        ),
+        &["json"],
     );
     let (store, _observer, result) = run_reflector(leaf, vec![plan_reply, "yes"]).await;
     result.expect("a model-mode if inside a generated plan must now run, not refuse");

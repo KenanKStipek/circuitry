@@ -1,0 +1,14 @@
+name: c772-path-child-of-generated-document-inherits-limits
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: use
+            name: go
+            path: child.yml
+effects:
+  - type: use
+    name: outer
+    inline: "{{{input.plan}}}"

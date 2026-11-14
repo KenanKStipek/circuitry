@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #772",
+  "description": "The root document's own static shell allowlist is computed from the effective document, after a profile's per-effect provider override already applied, on both engines: the document literally names 'shell' on 't' with allowed_commands: [printf], but the profile overrides 't' to 'json', so 'printf' is no longer granted to a generated child's own shell step -- without the profile, it would run the same way c772-reflector-plan-runs-a-command-the-document-allows does.",
+  "engines": ["python", "electricity"],
+  "profile": "profiles/p.yml",
+  "expect": "failure",
+  "error_compare": "exact"
+}

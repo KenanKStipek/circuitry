@@ -68,6 +68,12 @@ _FIELD_RULES: dict[str, str] = {
     "wall_time_s": "duration",
     "eta_s": "duration",
     "elapsed_s": "duration",
+    # The `service` plugin's own `value.pgid`/`value.log` (start/stop) --
+    # a process id and an absolute log path, neither stable across runs;
+    # `log`'s own directory is state_dir-dependent (the test's own sandboxed
+    # HOME), so only its basename is checked.
+    "pgid": "pid",
+    "log": "path_basename",
 }
 
 # Full dotted key-path from the state root -> normalization kind, for the
@@ -87,6 +93,7 @@ _PATH_FIELD_RULES: dict[str, str] = {
 UUID_PLACEHOLDER = "<UUID>"
 TIMESTAMP_PLACEHOLDER = "<TIMESTAMP>"
 DURATION_PLACEHOLDER = "<DURATION>"
+PID_PLACEHOLDER = "<PID>"
 
 #: Stable, named placeholders for the two absolute-path fields — not a
 #: generic `<PATH>` — so a reader of `expected.json` can tell *which* path
@@ -146,6 +153,15 @@ def _normalize_leaf(key: str, value: Any, *, field_path: str | None) -> Any:
         if not isinstance(value, str) or not value:
             raise NormalizationError(f"{key!r}: expected a non-empty path string, got {value!r}")
         return value.rsplit("/", 1)[-1]
+    if kind == "pid":
+        # `value.pgid` is `None` on a `service` stop that found nothing
+        # running (`_stop`'s own no-record branch) -- a real absence, not
+        # a missing field to reject.
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise NormalizationError(f"{key!r}: expected a positive pid, got {value!r}")
+        return PID_PLACEHOLDER
     if kind in _PATH_PLACEHOLDERS:
         if not isinstance(value, str) or not value:
             raise NormalizationError(f"{key!r}: expected a non-empty path string, got {value!r}")
@@ -174,9 +190,24 @@ def normalize(value: Any, *, key: str | None = None, field_path: str | None = No
     return _normalize_leaf(key, value, field_path=field_path)
 
 
+#: Key names whose value is an absolute, generating-machine-specific path
+#: that `normalize()` only truncates to a basename (`_FIELD_RULES`'s
+#: `"path_basename"` kind) -- unlike `run_id`/timestamp fields, keeping
+#: that basename on disk loses nothing a committed fixture needs, so
+#: `redact_leaked_paths` truncates it before writing too, the same way
+#: `_PATH_FIELD_RULES` entries get their placeholder before writing. The
+#: `service` plugin's own `value.log` (a start's log file, under whatever
+#: `runtime.plugins.service.state_dir` the generating machine resolved) is
+#: the only field here today; `runtime.last_run.orchestration_path` is the
+#: same kind but already relative at run time, so it needs no write-time
+#: truncation and stays out of this set.
+_LEAKY_BASENAME_KEYS: frozenset[str] = frozenset({"log"})
+
+
 def redact_leaked_paths(value: Any, *, field_path: str | None = None) -> Any:
-    """Replace only the absolute-path fields `_PATH_FIELD_RULES` names in
-    `_PATH_PLACEHOLDERS` (`<out>`, `<case>`) with that stable token, leaving
+    """Replace the absolute-path fields `_PATH_FIELD_RULES` names in
+    `_PATH_PLACEHOLDERS` (`<out>`, `<case>`) with that stable token, and
+    truncate every `_LEAKY_BASENAME_KEYS` field to its basename, leaving
     everything else (including run id/timestamp/duration fields, which must
     stay real data on disk — `normalize()` validates their *shape* at
     comparison time, and a placeholder string wouldn't have it) untouched.
@@ -195,6 +226,8 @@ def redact_leaked_paths(value: Any, *, field_path: str | None = None) -> Any:
             placeholder = _PATH_PLACEHOLDERS.get(_PATH_FIELD_RULES.get(child_path, ""))
             if placeholder is not None:
                 result[k] = placeholder
+            elif k in _LEAKY_BASENAME_KEYS and isinstance(v, str) and v:
+                result[k] = v.rsplit("/", 1)[-1]
             else:
                 result[k] = redact_leaked_paths(v, field_path=child_path)
         return result

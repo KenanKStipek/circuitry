@@ -566,19 +566,14 @@ def test_use_inline_with_mustache_rendering() -> None:
     assert store.state["run_plan"]["step"]["value"] == "Rendered!"
 
 
-def test_use_inline_shell_tool_literal_allowed_commands_runs() -> None:
+def test_use_inline_shell_tool_literal_allowed_commands_is_refused() -> None:
     """A generated-plan-shaped inline document whose tool effect carries a
-    literal ``allowed_commands`` (the way a reflector's model writes one
-    into the plan YAML it produces) still runs — the restriction added for
-    #264 only rejects params_json and templated values, not this.
-
-    ``uname`` is outside the shell plugin's default allowlist
-    (``ls cat head tail wc echo pwd date``), so this only passes if the
-    plan's literal ``allowed_commands`` is actually honoured — unlike
-    ``echo``, which the default list would run anyway. The plan is
-    rendered from ``prime.plan.value`` via Mustache
-    (``inline: "{{{prime.plan.value}}}"``), the usual shape for a
-    generated plan, not passed as a fixed string."""
+    literal-looking ``allowed_commands`` (the way a reflector's model writes
+    one into the plan YAML it produces) is refused: the whole document only
+    exists because ``inline: "{{{prime.plan.value}}}"`` rendered it from
+    state, so it counts as generated and can never widen the shell
+    allowlist, regardless of how literal its own text looks (#772). This
+    inverts the pre-#772 behaviour, which honoured it."""
     plan_yaml = yaml.dump({
         "effects": [
             {
@@ -596,9 +591,9 @@ def test_use_inline_shell_tool_literal_allowed_commands_runs() -> None:
 
     defn = UseDefinition(name="run_plan", inline="{{{prime.plan.value}}}")
     store = Store(state={"prime": {"plan": {"value": plan_yaml}}})
-    UseRuntime(defn, adapter=None, model=None).execute(store=store, ctx=store.state)
 
-    assert store.state["run_plan"]["generated_step"]["value"].strip()
+    with pytest.raises(RuntimeError, match="allowed_commands"):
+        UseRuntime(defn, adapter=None, model=None).execute(store=store, ctx=store.state)
 
 
 def test_use_inline_with_output_mapping() -> None:

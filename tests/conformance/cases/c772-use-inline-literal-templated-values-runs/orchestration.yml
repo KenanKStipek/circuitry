@@ -1,0 +1,17 @@
+name: c772-use-inline-literal-templated-values-runs
+interface:
+  inputs:
+    msg:
+      type: string
+      default: hello
+effects:
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: tool
+          name: step1
+          provider: shell
+          params:
+            command: echo
+            args: ["{{input.msg}}"]

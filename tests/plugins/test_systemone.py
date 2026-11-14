@@ -1730,6 +1730,10 @@ def test_a_reflector_plan_cannot_use_state_file(tmp_path: Path) -> None:
                 "type": "reflector",
                 "name": "planner",
                 "max_effects": 5,
+                # Clears the generated-document tool-provider ceiling
+                # (#772) so this test's own check -- a generated document
+                # cannot name a state_file at all -- gets to run.
+                "allow_tools": ["systemone"],
                 "effects": [{"type": "prompt", "name": "propose_steps", "template": "Plan."}],
             }
         ]

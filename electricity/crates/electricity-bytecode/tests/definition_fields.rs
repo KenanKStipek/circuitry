@@ -213,6 +213,21 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "parent_trusted",
         "effects::UseOp::parent_trusted",
     );
+    add(
+        "UseDefinition",
+        "allow_tools",
+        "effects::UseOp::allow_tools",
+    );
+    add(
+        "UseDefinition",
+        "force_generated",
+        "effects::UseOp::force_generated",
+    );
+    add(
+        "UseDefinition",
+        "generating_effect_path_override",
+        "effects::UseOp::generating_effect_path_override",
+    );
 
     // YieldDefinition -> effects::YieldOp
     add("YieldDefinition", "name", "op::Op::name");
@@ -274,6 +289,11 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "ReflectorDefinition",
         "max_effects",
         "effects::ReflectorOp::max_effects",
+    );
+    add(
+        "ReflectorDefinition",
+        "allow_tools",
+        "effects::ReflectorOp::allow_tools",
     );
     // ReflectorDefinition has no on_error field of its own in Python.
     add("ReflectorDefinition", "enabled", "op::Op::enabled");

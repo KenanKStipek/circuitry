@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-11-14T01:24:45.219Z","ev":"run_start","run_id":"e01dc5fc-bfcb-4b7d-8851-45626ad6240a","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":57427}
+{"v":1,"seq":1,"ts":"2026-11-14T01:24:45.221Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-14T01:24:45.221Z","ev":"start","id":1,"path":"prime.t"}
+{"v":1,"seq":3,"ts":"2026-11-14T01:24:45.221Z","ev":"end","id":1,"path":"prime.t","ok":false,"ms":0,"error":"JsonPlugin: parse mode requires params['input'] as a string."}
+{"v":1,"seq":4,"ts":"2026-11-14T01:24:45.221Z","ev":"start","id":2,"path":"prime.child"}
+{"v":1,"seq":5,"ts":"2026-11-14T01:24:45.223Z","ev":"start","id":3,"path":"prime.child.x"}
+{"v":1,"seq":6,"ts":"2026-11-14T01:24:45.223Z","ev":"end","id":3,"path":"prime.child.x","ok":true,"ms":0}
+{"v":1,"seq":7,"ts":"2026-11-14T01:24:45.223Z","ev":"end","id":2,"path":"prime.child","ok":true,"ms":2}
+{"v":1,"seq":8,"ts":"2026-11-14T01:24:45.223Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":9,"ts":"2026-11-14T01:24:45.223Z","ev":"run_end","ok":true}

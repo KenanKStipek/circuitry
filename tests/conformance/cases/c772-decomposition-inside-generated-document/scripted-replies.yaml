@@ -1,0 +1,2 @@
+prime.outer.proc.plan:
+  - text: '{"say": "two chunks plus a json merge", "chunks": [{"name": "a", "job": "do a"}, {"name": "merge", "job": "merge with json"}], "yaml": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"\\\"chunk-a\\\"\"}\n  - type: tool\n    name: merge\n    provider: json\n    params: {mode: parse, input: \"\\\"merged\\\"\"}\n"}'

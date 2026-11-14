@@ -72,6 +72,25 @@ def test_normalize_path_basename_field() -> None:
     }
 
 
+def test_normalize_service_log_field_keeps_only_the_basename() -> None:
+    assert normalize({"log": "/tmp/anything/services/svc.log"}) == {"log": "svc.log"}
+
+
+def test_normalize_service_pgid_field() -> None:
+    assert normalize({"pgid": 12345}) == {"pgid": "<PID>"}
+
+
+def test_normalize_service_pgid_field_allows_none() -> None:
+    assert normalize({"pgid": None}) == {"pgid": None}
+
+
+def test_normalize_rejects_non_positive_pgid() -> None:
+    with pytest.raises(NormalizationError):
+        normalize({"pgid": 0})
+    with pytest.raises(NormalizationError):
+        normalize({"pgid": True})
+
+
 def test_normalize_path_ignore_fields() -> None:
     value = {
         "runtime": {

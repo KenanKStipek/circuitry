@@ -1,0 +1,18 @@
+name: c772-use-inline-rendered-shell-widening-refused
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: tool
+            name: t
+            provider: shell
+            params:
+              command: touch
+              args: ["pwned"]
+              allowed_commands: [touch]
+effects:
+  - type: use
+    name: child
+    inline: "{{{input.plan}}}"
