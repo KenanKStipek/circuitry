@@ -1,0 +1,11 @@
+prime.ask:
+  - text: "nonsense"
+    tokens_sent: 5
+    tokens_received: 2
+    tokens_cached_in: 4
+    tokens_cache_write: 1
+  - text: "{\"a\": 1}"
+    tokens_sent: 6
+    tokens_received: 3
+    tokens_cached_in: 5
+    tokens_cache_write: 2
