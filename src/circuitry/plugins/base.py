@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 #: concern on `meta.raw`).
 _ERROR_EXCERPT_MAX_CHARS = 500
 
+#: Appended to a trusted-only-param refusal (#604): names the fix for a
+#: limited document. A bundled or library entry can be ejected (`cof eject
+#: <name>`) and the copy run by path; anything else can be run by path
+#: directly.
+LIMITED_WRITE_FIX = (
+    " — a bundled or library entry can be ejected (`cof eject <name>`) and "
+    "run by path instead"
+)
+
 
 def http_error_excerpt(
     body: str,
@@ -55,9 +64,8 @@ def http_error_excerpt(
         parsed: Any = json.loads(text)
     except json.JSONDecodeError:
         redacted_text = redact(text)
-        return _finish(
-            redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
-        )
+        finished = _finish(redacted_text if isinstance(redacted_text, str) else text)
+        return finished[:max_chars]
     if isinstance(parsed, dict):
         redacted = redact(parsed)
         if isinstance(redacted, dict):
@@ -65,13 +73,13 @@ def http_error_excerpt(
             if isinstance(error, dict):
                 message = error.get("message")
                 if isinstance(message, str) and message:
-                    return _finish(message[:max_chars])
+                    return _finish(message)[:max_chars]
             if isinstance(error, str) and error:
-                return _finish(error[:max_chars])
+                return _finish(error)[:max_chars]
             for key in ("message", "detail"):
                 value = redacted.get(key)
                 if isinstance(value, str) and value:
-                    return _finish(value[:max_chars])
+                    return _finish(value)[:max_chars]
         # No recognized reason field (e.g. GraphQL-style `errors: [...]` or a
         # validation body with its own shape): fall back to the whole body,
         # but the *redacted* copy, never the raw `text` — a sibling
@@ -79,14 +87,16 @@ def http_error_excerpt(
         # the failure message just because it wasn't under `error`/`message`/
         # `detail`. `redact(text)` on the raw string only matches when the
         # whole string is itself a JWT/key/URL, so it would let this through.
-        return _finish(json.dumps(redacted, ensure_ascii=False)[:max_chars])
+        # `_finish` runs before the `[:max_chars]` cut (#600): a secret JSON
+        # decoding exposed (an escaped slash, a `\uXXXX` character) can start
+        # anywhere in the serialized text, including just before the cut.
+        return _finish(json.dumps(redacted, ensure_ascii=False))[:max_chars]
     if isinstance(parsed, list):
         redacted_list = redact(parsed)
-        return _finish(json.dumps(redacted_list, ensure_ascii=False)[:max_chars])
+        return _finish(json.dumps(redacted_list, ensure_ascii=False))[:max_chars]
     redacted_text = redact(text)
-    return _finish(
-        redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
-    )
+    finished = _finish(redacted_text if isinstance(redacted_text, str) else text)
+    return finished[:max_chars]
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #600 item 2 (a JSON-escaped secret in an http error body)",
+  "description": "A server echoes a `{secret: api}` value inside its JSON error body with a backslash before a literal slash, which a raw-text-only scrub never matches; the parsed `error` field this engine reads it from, and the raw body under `meta.raw.body`, both still have it replaced with `[secret:api]`. The value is a fake-credential marker, so the harness's own blanket check proves it reaches no --out, --events, --live-state, stdout or stderr.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "config": "config.json",
+  "env": {"CONFORMANCE_VALUE_600": "circuitry-test-fake-slash/secret-600"},
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"]
+}

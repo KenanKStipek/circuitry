@@ -135,6 +135,16 @@ def _assert_no_token(text: str) -> None:
     assert TOKEN_SHA256 not in text
 
 
+def _assert_no_window(text: str, secret: str, window: int = 6) -> None:
+    """No substring of *secret* at least *window* characters long survives
+    in *text* -- stronger than a whole-value check, since a scrub that
+    only matches the exact resolved value can still leave a fragment of
+    it (e.g. straddling a cut) still long enough to recognize."""
+    for start in range(max(len(secret) - window + 1, 0)):
+        fragment = secret[start : start + window]
+        assert fragment not in text, f"{fragment!r} (secret[{start}:{start + window}]) found in text"
+
+
 # ---------------------------------------------------------------------------
 # Resolution.
 # ---------------------------------------------------------------------------
@@ -495,6 +505,7 @@ def test_a_json_escaped_secret_in_an_error_body_is_still_scrubbed(
     ):
         assert slash_token not in text
         assert "sec\\/ret-600-tok3n" not in text
+        _assert_no_window(text, slash_token)
 
 
 def test_a_failing_command_secret_fails_the_effect_naming_it(
@@ -1165,3 +1176,70 @@ effects:
     assert "[secret:ap" in meta["error"]
     for text in (events.read_text(), json.dumps(result.state), result.error or ""):
         assert TOKEN[:10] not in text
+        _assert_no_window(text, TOKEN)
+
+
+def test_e2e_cof_run_subprocess_never_leaks_an_escaped_secret_into_any_artifact(
+    tmp_path: Path, servers: ServerPair
+) -> None:
+    """#600 item 2, end to end: a real `cof run` subprocess, a fake secret
+    resolved from a temp HOME's own environment (never the real Keychain),
+    and every artifact `cof run` can produce -- --out, --events,
+    --live-state, stdout and stderr -- checked for the secret and every
+    six-character window of it."""
+    slash_token = "sec/ret-600-e2e-tok3n"
+    body = '{"error": "bad token: sec\\/ret-600-e2e-tok3n"}'
+    servers.routes["/fail"] = Route(400, {"Content-Type": "application/json"}, body)
+
+    doc = _write(
+        tmp_path,
+        "doc.yml",
+        f"""
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "{servers.http}/fail"
+      headers:
+        Authorization: {{secret: api, prefix: "Bearer "}}
+""",
+    )
+    config = _write(
+        tmp_path,
+        "config.json",
+        json.dumps({"runtime": {"secrets": {"api": {"env": "FAKE_SLASH_TOKEN_600"}}}}),
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    out = tmp_path / "out.json"
+    events = tmp_path / "events.jsonl"
+    live = tmp_path / "live.json"
+
+    env = {key: value for key, value in os.environ.items() if key not in _CREDENTIAL_ENV_VARS}
+    env.update(HOME=str(home), FAKE_SLASH_TOKEN_600=slash_token, COLUMNS="200")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "circuitry.cli.app", "run", str(doc),
+            "--config", str(config),
+            "--out", str(out),
+            "--events", str(events),
+            "--live-state", str(live),
+            "--skip-preflight",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+
+    artifacts = [proc.stdout, proc.stderr]
+    artifacts.extend(path.read_text() for path in (out, events, live) if path.exists())
+    assert any("[secret:api]" in text for text in artifacts)
+    for text in artifacts:
+        assert slash_token not in text
+        assert "sec\\/ret-600-e2e-tok3n" not in text
+        _assert_no_window(text, slash_token)

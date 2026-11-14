@@ -29,7 +29,9 @@ Image generation, illustration, visual content creation, style transfer, image-t
 `image_output: path` (the default) saves the image locally, under `network`
 capability consent alone — only a document run by path may use it, or leave
 `image_output` unset, or name `image_dir`. A limited document must pass
-`image_output: base64` or `image_output: url` explicitly.
+`image_output: base64` or `image_output: url` explicitly; a bundled or
+library entry that needs a local image can be ejected (`cof eject <name>`)
+and run by path instead.
 
 ## Examples
 

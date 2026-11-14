@@ -423,6 +423,38 @@ mod tests {
         );
     }
 
+    #[test]
+    fn json_escaped_variants_covers_slash_and_non_ascii() {
+        let variants = json_escaped_variants("a/béc");
+        assert!(variants.contains(&"a\\/b\\u00e9c".to_string()));
+        assert!(variants.contains(&"a/b\\u00e9c".to_string()));
+    }
+
+    #[test]
+    fn scrub_str_matches_a_secrets_escaped_slash_form() {
+        let mut secrets = SecretValues::new();
+        secrets
+            .values
+            .insert("api".to_string(), "sec/ret-600".to_string());
+        secrets.add("sec/ret-600".to_string(), "[secret:api]".to_string());
+        assert_eq!(
+            secrets.scrub_str("bare: sec/ret-600, escaped: sec\\/ret-600"),
+            "bare: [secret:api], escaped: [secret:api]"
+        );
+    }
+
+    #[test]
+    fn scrub_str_matches_a_secrets_escaped_non_ascii_form() {
+        let mut secrets = SecretValues::new();
+        let value = "töken-600".to_string();
+        secrets.values.insert("api".to_string(), value.clone());
+        secrets.add(value.clone(), "[secret:api]".to_string());
+        assert_eq!(
+            secrets.scrub_str(&format!("bare: {value}, escaped: t\\u00f6ken-600")),
+            "bare: [secret:api], escaped: [secret:api]"
+        );
+    }
+
     fn runtime_with_secret(name: &str, entry: Value) -> Value {
         let mut secrets = Dict::new();
         secrets.insert(Value::Str(name.to_string()), entry);

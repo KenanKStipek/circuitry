@@ -42,6 +42,8 @@ _CREDENTIAL_ENV_VARS = ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_U
         {"image_output": "PATH"},
         {"image_dir": "./out"},
         {"image_output": {"from": "input.mode"}},
+        {"image_output": "BASE64"},
+        {"image_output": " base64"},
     ],
 )
 def test_comfyui_static_param_errors_rejects_local_output_when_limited(
@@ -50,7 +52,7 @@ def test_comfyui_static_param_errors_rejects_local_output_when_limited(
     assert comfyui_param_errors(params, trusted=False)
 
 
-@pytest.mark.parametrize("image_output", ["base64", "url", "BASE64"])
+@pytest.mark.parametrize("image_output", ["base64", "url"])
 def test_comfyui_static_param_errors_allows_non_writing_output_when_limited(
     image_output: str,
 ) -> None:
@@ -75,6 +77,13 @@ def test_comfyui_reject_limited_image_output_raises_for_image_dir_alone() -> Non
 def test_comfyui_reject_limited_image_output_allows_base64_or_url() -> None:
     reject_limited_image_output({"image_output": "base64"})
     reject_limited_image_output({"image_output": "url"})
+
+
+def test_comfyui_reject_limited_image_output_rejects_case_variants() -> None:
+    with pytest.raises(ValueError, match="only a document run by path"):
+        reject_limited_image_output({"image_output": "BASE64"})
+    with pytest.raises(ValueError, match="only a document run by path"):
+        reject_limited_image_output({"image_output": " base64"})
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +206,66 @@ effects:
       bucket: my-bucket
       key: my-key
       path: ./downloaded.bin
+""",
+        encoding="utf-8",
+    )
+    config = _library_config(tmp_path, folder)
+    proc = _cof(tmp_path, "run", "shared_doc", "--config", str(config), "--skip-preflight")
+    assert proc.returncode != 0
+    assert "only a document run by path" in proc.stdout + proc.stderr
+    assert not (tmp_path / "downloaded.bin").exists()
+
+
+def test_a_limited_documents_comfyui_params_json_override_is_refused_at_dispatch(
+    tmp_path: Path,
+) -> None:
+    """A literal ``image_output: base64`` passes `cof check`; `params_json`
+    overriding it to ``path`` only comes to light once the runtime merges
+    `params_json` over `params`, so this is caught by the dispatch-time
+    gate, not the static one."""
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    (folder / "shared_doc.yml").write_text(
+        """
+effects:
+  - type: tool
+    name: generate
+    provider: comfyui
+    prompt: "a red apple"
+    model: flux
+    params:
+      image_output: base64
+    params_json: '{"image_output": "path"}'
+""",
+        encoding="utf-8",
+    )
+    config = _library_config(tmp_path, folder)
+    proc = _cof(tmp_path, "run", "shared_doc", "--config", str(config), "--skip-preflight")
+    assert proc.returncode != 0
+    assert "only a document run by path" in proc.stdout + proc.stderr
+    assert not (tmp_path / "output").exists()
+
+
+def test_a_limited_documents_s3_params_json_override_is_refused_at_dispatch(
+    tmp_path: Path,
+) -> None:
+    """A literal ``mode: get`` without ``path`` passes `cof check`;
+    `params_json` adding ``path`` only comes to light once the runtime
+    merges `params_json` over `params`, so this is caught by the
+    dispatch-time gate, not the static one."""
+    folder = tmp_path / "lib"
+    folder.mkdir()
+    (folder / "shared_doc.yml").write_text(
+        """
+effects:
+  - type: tool
+    name: fetch
+    provider: s3
+    params:
+      mode: get
+      bucket: my-bucket
+      key: my-key
+    params_json: '{"path": "./downloaded.bin"}'
 """,
         encoding="utf-8",
     )

@@ -497,14 +497,19 @@ pub fn http_error_excerpt(
     if text.is_empty() {
         return String::new();
     }
+    // Issue #600: *scrub* runs on the whole field before the cut, not
+    // after -- a secret JSON decoding exposed (an escaped slash, a
+    // `\uXXXX` character) can start anywhere in the text, including
+    // just before `max_chars`, and a scrub of the already-sliced tail
+    // would never see the rest of it.
     let slice_chars = |s: &str| -> String {
-        let sliced = match s.char_indices().nth(max_chars) {
-            Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        let scrubbed = match scrub {
+            Some(f) => f(s),
             None => s.to_string(),
         };
-        match scrub {
-            Some(f) => f(&sliced),
-            None => sliced,
+        match scrubbed.char_indices().nth(max_chars) {
+            Some((byte_idx, _)) => scrubbed[..byte_idx].to_string(),
+            None => scrubbed,
         }
     };
     let parsed = match electricity_json::loads(text) {

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #600 item 3 (cof and electricity agree: an unresolvable host-env secret reached through a use: path child is an ordinary, absorbable dispatch-time failure)",
+  "description": "`runtime.plugins.awk.env.TOKEN: {secret: api}` and `runtime.secrets.api: {env: <unset>}` live in the root document, which compiles cleanly -- the reference is syntactically well-formed, so there is nothing for compile time to catch. The child's own `awk` effect inherits that config (it declares no runtime block of its own) and only discovers the variable is unset when it actually dispatches. On both engines that is an ordinary tool failure, absorbed by the use effect's own on_error: continue exactly like any other child failure.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

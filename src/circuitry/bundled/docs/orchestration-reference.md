@@ -945,14 +945,19 @@ Two `network`-only providers also save a file as a side effect, under
 params none of the four capabilities names on its own (#604) — only a
 document run by path may use them that way, the same rule `http`'s
 `save_to` follows (#602): `comfyui`'s `image_output` (default `path`; see
-[its params reference](#tool)) and `s3`'s `mode: get` with `path` (the
-LLM-callable tool, `plugins/s3_tool.py`, not the
+[its params reference](#comfyui-params-reference)) and `s3`'s `mode: get`
+with `path` (the LLM-callable tool, `plugins/s3_tool.py`, not the
 [runtime `s3` plugin](./runtime-plugins.md) that persists run state). A
-limited document's effect fails `cof check` when the literal params
-already show it, and fails at dispatch otherwise (a rendered template,
-`params_json`, or a profile that switches the provider to one of them);
-electricity doesn't implement either provider yet, so it refuses both
-with the preview marker regardless.
+limited document's effect fails `cof check` when `params` alone already
+show it writing — the default, any literal other than `base64`/`url`, or
+`image_dir`/a `path` named there — and fails only at dispatch when a
+profile switches the provider to one of them after that check, or when
+`params_json` overrides an otherwise-safe literal; `cof check` cannot see
+`params_json` itself, so an effect that relies on it alone for a safe
+value fails at `cof check` too, as if unset. A bundled or library entry
+can still write locally by running trusted: eject it first (`cof eject
+<name>`) and run the copy by path. electricity doesn't implement either
+provider yet, so it refuses both with the preview marker regardless.
 
 A provider absent from every row needs no consent: it only reads its own
 parameters and returns a value (`cel`, `math`, `regex`, `json`, `clock`, `hash`,
@@ -1064,7 +1069,7 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
     steps: 4
 ```
 
-**comfyui params reference:**
+##### comfyui params reference
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -1085,10 +1090,15 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 - **Trust (#604).** `image_output` defaults to `path`, which saves the
   image to `image_dir` — only a document run by path may use `image_output:
   path` (or leave it unset) or name `image_dir` at all; a limited document
-  must pass `image_output: base64` or `image_output: url`. A literal value
-  fails `cof check`; a templated one, or one `params_json` sets, fails at
-  dispatch instead. electricity doesn't implement `comfyui` yet, so it
-  refuses it with the preview marker regardless of this rule.
+  must pass `image_output: base64` or `image_output: url`, written exactly
+  that way in `params`. `cof check` refuses anything else it can see there
+  — the default, a template, or `image_dir` alone; only a `params_json`
+  override of an otherwise-safe literal, or a profile that switches the
+  provider to `comfyui` after the check, is caught later, at dispatch. A
+  bundled or library entry that needs a local image can be ejected (`cof
+  eject <name>`) and run by path instead. electricity doesn't implement
+  `comfyui` yet, so it refuses it with the preview marker regardless of
+  this rule.
 
 #### `cel`: a value computed with CEL
 

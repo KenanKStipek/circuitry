@@ -16,7 +16,7 @@ from typing import Any
 from ..core.cancellation import run_tracked
 from ..curl_support import curl_failure_message, redact_host_url, run_curl
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import LIMITED_WRITE_FIX, ToolResult
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -96,7 +96,7 @@ def _validate_image_dir(
 _LIMITED_IMAGE_OUTPUT = (
     "only a document run by path may save ComfyUI's output to a local file "
     "(a limited document, a library entry or a generated plan cannot); set "
-    "params.image_output to base64 or url instead"
+    "params.image_output to base64 or url instead" + LIMITED_WRITE_FIX
 )
 
 #: `image_output` values that never write a local file.
@@ -108,10 +108,10 @@ def _image_output_writes_locally(image_output: Any) -> bool:
     absent, a literal, or a dynamic reference) could write a file: every
     value but a literal ``base64``/``url`` does, including the unset
     default (``path``) and anything not statically known (a ``{from:
-    ...}`` reference or a template)."""
-    return not (
-        isinstance(image_output, str) and image_output.strip().lower() in _NON_WRITING_IMAGE_OUTPUTS
-    )
+    ...}`` reference or a template). The match is exact, not
+    case-folded: the executor below also compares ``image_output``
+    exactly, so ``BASE64`` writes a file there too."""
+    return not (isinstance(image_output, str) and image_output in _NON_WRITING_IMAGE_OUTPUTS)
 
 
 def static_param_errors(params: dict[str, Any], *, trusted: bool) -> list[str]:

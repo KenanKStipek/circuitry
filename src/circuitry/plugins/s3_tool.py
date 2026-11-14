@@ -25,14 +25,14 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import LIMITED_WRITE_FIX, ToolResult
 
 #: Why a limited document may never use ``s3``'s ``get`` mode with a
 #: ``path`` to write locally (#604): the same gap `http`'s `save_to`
 #: closed (#602), under `s3`'s `network` capability tag alone.
 _LIMITED_GET_PATH = (
     "only a document run by path may download an s3 object to a local file "
-    "(a limited document, a library entry or a generated plan cannot)"
+    "(a limited document, a library entry or a generated plan cannot)" + LIMITED_WRITE_FIX
 )
 
 

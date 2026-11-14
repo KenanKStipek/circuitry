@@ -502,12 +502,14 @@ class ToolDefinition:
 
     #: ``True`` when the effect's document is not trusted (not run by path,
     #: see ``compile_orchestration``'s *trusted*), whatever its provider, so
-    #: a profile that switches the provider to ``http`` keeps it. Two
-    #: providers read it: a limited ``systemone`` effect reads a
-    #: ``state_file`` only inside :attr:`confine_to`, and none at all when
-    #: that is ``None`` (the document has no project); a limited ``http``
-    #: effect never saves a file (``save_to``, ``within``). ``False`` means
-    #: unconfined: a trusted document.
+    #: a profile that switches the provider to ``http``/``comfyui``/``s3``
+    #: keeps it. A limited ``systemone`` effect reads a ``state_file`` only
+    #: inside :attr:`confine_to`, and none at all when that is ``None`` (the
+    #: document has no project); a limited ``http`` effect never saves a
+    #: file (``save_to``, ``within``); a limited ``comfyui`` effect never
+    #: saves its image locally (``image_output``, ``image_dir``); a limited
+    #: ``s3`` effect never saves a fetched object locally (``mode: get``
+    #: with ``path``). ``False`` means unconfined: a trusted document.
     limited: bool = False
 
     #: The project a limited ``systemone`` effect's ``within`` must stay inside

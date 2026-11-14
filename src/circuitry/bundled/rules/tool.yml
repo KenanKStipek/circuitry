@@ -64,4 +64,4 @@ example: |
       width: 768
       height: 768
       steps: 20
-      image_dir: "./output/images"
+      image_output: url
