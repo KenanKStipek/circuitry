@@ -184,4 +184,6 @@ jobs:
         run: python scripts/generate-man-pages.py --check
 
       - name: Check no --help output cites an issue number
+        env:
+          OSI_BINARY: ${{ github.workspace }}/oscilloscope/target/debug/osi
         run: python -m pytest -q tests/cli/test_help_no_issue_numbers.py
