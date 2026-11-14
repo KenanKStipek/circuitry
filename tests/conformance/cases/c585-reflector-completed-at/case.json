@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #585",
+  "description": "A successful reflector records meta.completed_at like any other effect (previously it recorded neither created_at nor completed_at, so a finished reflector was never skipped on --resume). Two iterations, the second stopping on `done: true`; pins meta.completed_at on the reflector node and runtime.last_run.totals.effects_run counting it.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

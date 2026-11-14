@@ -1,0 +1,12 @@
+name: c585-reflector-completed-at
+adapter: scripted
+model: test
+effects:
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    max_iterations: 2
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"
