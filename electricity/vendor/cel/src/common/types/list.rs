@@ -9,11 +9,11 @@ use std::ops::Deref;
 /// A CEL list whose elements may borrow data for `'v`.
 ///
 /// Of type [`LIST_TYPE`](super::LIST_TYPE), `list(dyn)`, whatever its
-/// elements, which can be values of any type. It supports `+` with any
-/// [`Iterable`] on the right, `in` (an element [equals](Val::equals) the
-/// value), `[i]` with an `int`, `uint` or whole `double` index, `size()`, and
-/// the comprehensions, which iterate over its elements in order. Two lists
-/// are equal when their elements are, pairwise.
+/// elements, which can be values of any type. It supports `+` with another
+/// `list` only, `in` (an element [equals](Val::equals) the value), `[i]`
+/// with an `int`, `uint` or whole `double` index, `size()`, and the
+/// comprehensions, which iterate over its elements in order. Two lists are
+/// equal when their elements are, pairwise.
 #[derive(Debug, Default)]
 pub struct DefaultList<'v>(Vec<Box<dyn Val + 'v>>);
 
@@ -130,14 +130,11 @@ impl<'v> Adder for DefaultList<'v> {
     where
         Self: 'w,
     {
-        let mut rhs = rhs
-            .as_iterable()
-            .ok_or_else(|| ExecutionError::unsupported_binary_operator("add", self, rhs))?
-            .iter();
+        let Some(rhs) = rhs.downcast_ref::<DefaultList>() else {
+            return Err(ExecutionError::unsupported_binary_operator("add", self, rhs));
+        };
         let mut list: Vec<Box<dyn Val + 'w>> = self.0.iter().map(|i| i.clone_as_boxed()).collect();
-        while let Some(other) = rhs.next() {
-            list.push(other.clone_as_boxed());
-        }
+        list.extend(rhs.0.iter().map(|i| i.clone_as_boxed()));
         Ok(CowVal::owned(DefaultList(list)))
     }
 }

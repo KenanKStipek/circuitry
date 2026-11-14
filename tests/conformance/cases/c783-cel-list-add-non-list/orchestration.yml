@@ -1,0 +1,33 @@
+name: c783-cel-list-add-non-list
+effects:
+  - type: if
+    name: list_plus_map
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[1] + {'a': 2} == [1]"
+    then: []
+  - type: if
+    name: list_plus_string
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[1] + 'x' == [1]"
+    then: []
+  - type: if
+    name: list_plus_int
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[1] + 1 == [1]"
+    then: []
+  - type: if
+    name: list_plus_list
+    if:
+      mode: cel
+      expr: "[1] + [2] == [1, 2]"
+    then: []
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}
