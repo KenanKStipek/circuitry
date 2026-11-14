@@ -379,44 +379,39 @@ def _deep_merge_params(base: dict[str, Any], overlay: dict[str, Any]) -> dict[st
 #: plugin's allowlist). Honoured only from a document's literal, unrendered
 #: ``params`` block — never ``params_json`` (runtime-built, can carry
 #: model-generated content) and never a templated value within the literal
-#: block, so neither can widen what a document is allowed to run.
-_SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands", "shell"})
+#: block, so neither can widen what a document is allowed to run. A
+#: generated document's own ``service`` ``shell`` boundary is enforced
+#: separately, by ``generated_doc`` against the *resolved* value, the same
+#: string-aware way the plugin itself coerces it -- not by this check, which
+#: would otherwise also refuse an author's own ``{from: ...}`` reference to
+#: a value the author controls themselves (#772, #781).
+_SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands"})
 
-#: What each security-sensitive key's own literal value must be, named in
-#: every refusal below and in ``core.compiler``'s compile-time mirror --
-#: keyed by the top-level key itself, since it differs by key (a list of
-#: strings for ``allowed_commands``, a bare bool for ``shell``).
-_SECURITY_SENSITIVE_PARAM_HINTS: dict[str, str] = {
-    "allowed_commands": "a literal list of strings",
-    "shell": "a literal true or false",
-}
+#: Keys ``params_json`` can never set, in any document, generated or not
+#: (#772) -- wider than :data:`_SECURITY_SENSITIVE_PARAM_KEYS` because
+#: ``params_json`` is runtime-built and can carry model-generated content
+#: regardless of which document it's in.
+_PARAMS_JSON_FORBIDDEN_KEYS: frozenset[str] = frozenset({"allowed_commands", "shell"})
 
 
 def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
-    """Raise if a security-sensitive param's literal value is by-reference, or
-    (for the keys that must be a plain list of strings, e.g. ``allowed_commands``)
-    isn't one.
+    """Raise if a security-sensitive param's literal value isn't a plain list of strings.
 
-    Covers: a ``{from: <path>}`` reference as the whole value (#234 made this
-    reachable -- a by-reference value can carry runtime or model-generated
-    content, e.g. REST/MCP caller input or an LLM step's output, same as a
-    templated string), for every key in :data:`_SECURITY_SENSITIVE_PARAM_KEYS`;
-    a templated string element (``{{`` -- its real content isn't known until
-    render time, which defeats the point of a boundary the document author
-    is meant to write down plainly), a ``{from: <path>}`` reference as a list
-    item, and any other non-string list item, for a key whose literal value
-    is itself a list (``allowed_commands``) -- a scalar key (``shell``) is
-    the document author's own choice to make however they like, once it
-    isn't by-reference.
+    Covers: a templated string element (``{{`` — its real content isn't known
+    until render time, which defeats the point of a boundary the document
+    author is meant to write down plainly); a ``{from: <path>}`` reference as
+    the whole value or as a list item (#234 made this reachable — a
+    by-reference value can carry runtime or model-generated content, e.g.
+    REST/MCP caller input or an LLM step's output, same as a templated
+    string); and any other non-string list item.
     """
     for key in _SECURITY_SENSITIVE_PARAM_KEYS:
         if key not in raw_params:
             continue
         value = raw_params[key]
-        hint = _SECURITY_SENSITIVE_PARAM_HINTS[key]
         if param_reference(value) is not None:
             raise ValueError(
-                f"params.{key} must be {hint}; a by-reference "
+                f"params.{key} must be a literal list of strings; a by-reference "
                 "'{from: ...}' value is not honoured for this security-sensitive setting."
             )
         if not isinstance(value, list):
@@ -424,13 +419,13 @@ def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
         for item in value:
             if not isinstance(item, str):
                 raise ValueError(
-                    f"params.{key} must be {hint}; a "
+                    f"params.{key} must be a literal list of strings; a "
                     "by-reference '{from: ...}' value is not honoured for this "
                     "security-sensitive setting."
                 )
             if "{{" in item:
                 raise ValueError(
-                    f"params.{key} must be {hint}; a templated "
+                    f"params.{key} must be a literal list of strings; a templated "
                     "value is not honoured for this security-sensitive setting."
                 )
 
@@ -442,7 +437,7 @@ def _reject_params_json_security_overrides(overlay: dict[str, Any]) -> None:
     model-generated content (#203) — so it must never be the source of a
     plugin's own allowlist; only a document's literal ``params`` block is.
     """
-    overridden = _SECURITY_SENSITIVE_PARAM_KEYS & overlay.keys()
+    overridden = _PARAMS_JSON_FORBIDDEN_KEYS & overlay.keys()
     if overridden:
         raise ValueError(
             f"params_json must not set {sorted(overridden)}: security-sensitive "

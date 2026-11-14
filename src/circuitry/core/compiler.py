@@ -56,12 +56,7 @@ from .state_ns import (
 )
 from .templates import template_syntax_error
 from .timeout_ref import compile_timeout_ms
-from .tool import (
-    _SECURITY_SENSITIVE_PARAM_HINTS,
-    _SECURITY_SENSITIVE_PARAM_KEYS,
-    ToolDefinition,
-    param_reference,
-)
+from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
 from .use import UseDefinition, reference_as, reference_path, validate_reference_as
 from .yield_effect import YieldDefinition
 
@@ -1468,35 +1463,28 @@ def _check_report_data_leaves(
             )
 
 
-def _check_security_sensitive_param_leaf(
-    value: Any, *, name: str, field: str, hint: str
-) -> None:
+def _check_security_sensitive_param_leaf(value: Any, *, name: str, field: str) -> None:
     """Reject a ``{from: <path>}`` leaf anywhere inside a security-sensitive
-    param (``allowed_commands``, ``shell``) at compile time.
+    param (today: ``allowed_commands``) at compile time.
 
     Mirrors the runtime guard in ``core.tool._reject_templated_security_params``:
-    only a document's literal, unrendered value is ever honoured for a
-    plugin's own security boundary, so a by-reference value -- which can
-    carry runtime or model-generated content -- is caught here too, before
-    the orchestration ever runs. *hint* names what the literal value must
-    be (:data:`_SECURITY_SENSITIVE_PARAM_HINTS`), since that differs by key.
+    only a document's literal, unrendered list of strings is ever honoured for
+    a plugin's own allowlist, so a by-reference value — which can carry
+    runtime or model-generated content — is caught here too, before the
+    orchestration ever runs.
     """
     if param_reference(value) is not None:
         raise ValueError(
             f"Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' "
-            f"value is not honoured for this security-sensitive setting; it must "
-            f"be {hint}."
+            "value is not honoured for this security-sensitive setting; it must "
+            "be a literal list of strings."
         )
     if isinstance(value, dict):
         for key, item in value.items():
-            _check_security_sensitive_param_leaf(
-                item, name=name, field=f"{field}.{key}", hint=hint
-            )
+            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}.{key}")
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            _check_security_sensitive_param_leaf(
-                item, name=name, field=f"{field}[{index}]", hint=hint
-            )
+            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
 
 
 def _untrusted_secret_error(where: str, name: str) -> str:
@@ -1661,10 +1649,7 @@ def _compile_tool(
         )
     for sensitive_key in _SECURITY_SENSITIVE_PARAM_KEYS & params.keys():
         _check_security_sensitive_param_leaf(
-            params[sensitive_key],
-            name=str(name),
-            field=f"params.{sensitive_key}",
-            hint=_SECURITY_SENSITIVE_PARAM_HINTS[sensitive_key],
+            params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"
         )
     _check_templates(
         params_json, effect_path=effect_path, field="params_json", allow_partials=True
