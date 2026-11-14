@@ -638,6 +638,8 @@ def _openai_compat_outcome_cases() -> list[dict[str, Any]]:
         (0, '{"choices": [{"message": {"content": " hi "}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 3, "completion_tokens": 5}}', ""),
         (0, '{"choices": []}', ""),
         (0, "not json", ""),
+        # Issue #627: a truthy non-dict `usage` raises, same as `usage_tokens`'s own callers.
+        (0, '{"choices": [{"message": {"content": "hi"}}], "usage": "x"}', ""),
         (
             22,
             '{"error": {"message": "Invalid API Key"}}',

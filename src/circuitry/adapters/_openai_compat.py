@@ -402,13 +402,17 @@ def chat_completion(
     text, finish_reason = parse_chat_response(raw)
 
     usage = raw.get("usage") or {}
-    tokens_sent, tokens_received, tokens_cached_in = usage_tokens(usage)
+    tokens_sent = usage.get("prompt_tokens")
+    tokens_received = usage.get("completion_tokens")
+    _, _, tokens_cached_in = usage_tokens(usage)
 
     return GenerateResult(
         text=text,
         raw=raw,
-        tokens_sent=tokens_sent,
-        tokens_received=tokens_received,
+        tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
+        tokens_received=int(tokens_received)
+        if isinstance(tokens_received, int)
+        else None,
         tokens_cached_in=tokens_cached_in,
         finish_reason=finish_reason,
     )

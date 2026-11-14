@@ -953,6 +953,23 @@
       }
     },
     {
+      "returncode": 0,
+      "stdout": "{\"choices\": [{\"message\": {\"content\": \"hi\"}}], \"usage\": \"x\"}",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AttributeError",
+        "message": "'str' object has no attribute 'get'",
+        "retry": {
+          "retryable": false,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
       "returncode": 22,
       "stdout": "{\"error\": {\"message\": \"Invalid API Key\"}}",
       "stderr": "curl: (22) The requested URL returned error: 401",
