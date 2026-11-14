@@ -131,3 +131,30 @@ jobs:
 
       - name: Smoke-test bundled orchestrations (offline)
         run: bash scripts/smoke-curation.sh
+
+  man-pages:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package (CLI only)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[tools]"
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            electricity
+            oscilloscope
+
+      - name: Check man/man1/*.1 are current
+        run: python scripts/generate-man-pages.py --check

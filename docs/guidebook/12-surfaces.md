@@ -25,6 +25,7 @@ Everything the world reaches Circuitry through. One runtime sits under all of th
 | `cof mcp` | Run the MCP server on stdio (also `circuitry-mcp`). |
 | `cof tui` | Launch the terminal UI (needs the `tui` extra). |
 | `cof version` | Also `cof --version`, at the root command. |
+| `cof man [command]` | Show a command's own manual page through `man`, or print its roff when piped or given `--roff`. `cof`'s pages also install into `share/man/man1` on `pip install`, so plain `man cof` finds them too. |
 
 ### `cof run`
 
