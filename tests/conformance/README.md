@@ -6,6 +6,16 @@ final state for the same document, config, and inputs — the parity contract
 implementation: a case's expected state is always *captured* by running
 `cof run` itself, never hand-written.
 
+CPython 3.11 is the reference interpreter for anything Unicode- or
+exception-dependent in that captured state (`python_runner_versions` below
+is the documented exception, where a case's expected output genuinely
+varies by interpreter). `electricity/scripts/generator-constraints.txt`
+pins the exact version of every library this suite's comparisons depend on
+(jsonschema, PyYAML, chevron, cel-python, and the libraries underneath
+them) to what that interpreter resolves them to; CI's pytest matrix still
+runs the full suite on 3.10–3.13 to catch a behaviour change in cof's own
+code, not to re-pin the reference.
+
 ## Layout
 
 One directory per case under `cases/<name>/`:

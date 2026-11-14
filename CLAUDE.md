@@ -11,7 +11,7 @@ and `oscilloscope/DESIGN.md`).
 
 ## Minimum verification for any change
 ```
-pip install -e ".[tools]" && pip install -r requirements-dev.txt
+pip install -e ".[tools]" -c electricity/scripts/generator-constraints.txt && pip install -r requirements-dev.txt
 pytest -q -m 'not integration'
 ruff check .
 mypy src
@@ -44,9 +44,19 @@ To bump one of `requirements-dev.txt`'s own pins: change the version there,
 reinstall (`pip install -e ".[tools]" && pip install -r requirements-dev.txt`),
 and run the gate above. `requirements-dev.txt` pins the dev *tools*
 (pytest, mypy, ruff, textual, mongomock, opentelemetry-*) — never the
-reference libraries electricity's generated-files job compares `cof`'s
-behaviour against (jsonschema, PyYAML, chevron, cel-python, ...), which are
-`electricity/scripts/generator-constraints.txt`'s own job.
+reference libraries the conformance suite and electricity's generated-files
+job compare `cof`'s behaviour against (jsonschema, PyYAML, chevron,
+cel-python, and the libraries underneath them), which are
+`electricity/scripts/generator-constraints.txt`'s own job: every job that
+installs Circuitry itself (`quality.yml`, `electricity-generated.yml`)
+installs with `-c electricity/scripts/generator-constraints.txt`, and
+`pyproject.toml`'s own dependency ranges are narrowed to the same pins'
+minor versions (`tests/test_reference_library_pins.py`), so a plain `pip
+install circuitry-cof` can't resolve a library version CI's suite never ran
+against. CPython 3.11 is the reference interpreter for anything Unicode- or
+exception-dependent (`tests/conformance/README.md`); the pytest matrix
+keeps 3.10–3.13 to catch a behaviour change in cof's own code, not to
+re-pin the reference.
 
 The suite is hermetic to your machine's `~/.config/circuitry/config.json` —
 an autouse fixture in `tests/conftest.py` redirects global-config discovery
