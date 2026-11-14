@@ -2426,11 +2426,15 @@ own keys, since the Tape's no longer does.
 
 **Sizes.** 100 columns and up: the list beside its detail pane,
 preview rows on by default (off at 24–29 rows, to leave more height
-for the Now band and what's ahead of it); §5 also asks for a
-shortened title at 100–119, which this build does not yet give it
--- the full title still draws there, ratatui's own border truncating
-it if it runs long, a cosmetic gap from the design rather than a
-broken layout. 80–99: the list alone, full width, previews always
+for the Now band and what's ahead of it); §5's own 100–119 shortened
+title (issue #684) is `tui::tape_list_title_fit`: the previews
+clause (` · Previews On`/`Off`, the one clause that width range
+actually overflows on) is dropped whole, with a trailing ellipsis
+marking the cut -- the same rule the key bar already follows for a
+left item that would not fit -- before the border ever has to clip
+the rest of the title mid-word; only once even the title's own
+counts and unit don't fit either does the remainder get a plain
+character cut. 80–99: the list alone, full width, previews always
 off. 60–79: the list without its
 clock column, with the name column absorbing the freed width and a
 fixed 16-cell token field, a shortened `Tape · done/planned · ▰ =
@@ -2919,7 +2923,20 @@ line/colour Key, §4's own keyboard shortcuts) sizes its own popup to
 its content, capped at the screen, and splits onto as many pages as
 a small terminal needs (issue #738, also settling #684's own
 frame-locked blank rows), so the close row -- the only hint a second
-page exists -- shows on every page down to 60x24. `?` always opens on the Keys page
+page exists -- shows on every page down to 60x24. Every dialog --
+Help, the quit and cancel confirms, the filter prompt -- dims the
+whole screen behind it the same way (`tui::dim_backdrop_for_dialog`):
+every row's own style falls to a flat `fg.dim` sweep, the detail
+pane included, except the status line, which dims its own spans
+directly instead (`draw_tape_status_line`'s own `dialog_open`) so
+its own trailing blank stays at the frame's own full brightness, not
+this sweep's. The detail pane's own content stops drawing at all
+while a dialog is open, leaving only its border and title at the
+dimmed style -- nothing on screen actually blanks, only dims. Issue
+#684's own open question is settled this way: no dialog leaves the
+pane behind it untouched.
+
+`?` always opens on the Keys page
 (page `0`, `App::help_page`'s own default), the same order the merged
 page reads in; `←→` moves a free-running
 counter the draw side wraps into whatever range the current page
@@ -2991,6 +3008,16 @@ band's own `● n run · m wait` reading only makes sense that way; and
 below 100 columns, the design's own prose naming only the Story
 pane's own drop there.
 
+**The follow notice (issue #684).** With `follow` off and the Now
+band's own row scrolled outside the list's own window
+(`App::tape_now_out_of_view`, set by `tui::draw_tape_list` right
+after it computes the window, the same lifecycle `tape_list_start`
+already has), the status line says so and names `f`: "follow is off
+· Now is out of view · f follows it again", in place of the newest-
+finished-step text it otherwise reads -- `f` isn't in the Tape's own
+key bar at all, so nothing else on screen below 100 columns would
+ever tell the user it's the way back.
+
 **From the frames, not from the design text: the Key's own contents
 (issue #738).** §3.7 and §4 name the glyphs and keys; which of them
 each screen's own Key page actually lists is read off the frames and
@@ -3031,19 +3058,67 @@ name -- plus, on Select, Recent Runs' own `✓`/`✗` and `❯` cursor, and
 on the Combined Signal, its own stacked bars, legend swatch and Run
 End mark.
 
-**Not yet shipped.** §2.2's own "the step rows and the Now pane
-follow the cursor's column" (the scrubbed-cursor half of §6.3e's
-own "Keys" above): ←/→ move the cursor, draw it, and drive
-Readings' own Peak, Largest and Quiet, but the step rows and the
-Now pane keep showing the run's current state regardless, not the
-state as of that past column. The Totals row's cost figure reads `—` on every
+**Scrubbing reconstructs the past (issue #690).** §2.2's own "the
+step rows and the Now pane follow the cursor's column" now does:
+`screens::signal_reconstruct_at` truncates a clone of the run's own
+raw state down to what the real engine would actually have
+persisted by the cursor's own column -- a node not yet reached by
+then has no entry at all (the root itself included: unreached, the
+whole tree is dropped, not kept as if the run were already under
+way), a container not yet finished as a whole has no
+`value`/`completed_at` of its own, every field only ever written at
+completion (`error`, `exit_code`, `branch`, the `tokens_*_total`
+pair) stripped back off it too, and its own `progress.done`
+recomputed from whichever of its own passes had actually finished by
+then (`model::truncate_state_to`, the same rule the design's own
+fixture frames are themselves built with, ported out of the test-only
+helper that already did this into a production one). The truncated
+document is observed into a brand new `RunModel` of its own -- never
+the real, live one, which only ever runs forward -- and its own rows
+fold with the same `fold_enabled`/`expanded_quick_steps` the live
+ones already do, so scrubbing never changes a row's own shape, only
+what it says. A loop's own real concurrency is the one figure the
+reconstructed model can't answer on its own: `running_or_queued_
+bound` reads a `dispatch` event's own `concurrency`, which only ever
+arrives over `--events`, never through `state` -- so the Now pane's
+own slots figure falls back to the always-live model's own bound for
+the same path once the reconstructed one has none, a loop's own
+concurrency being fixed for its whole run, not something scrubbing
+ever needs to rebuild. Last Burst, and the ahead suffix's own
+`■ End` marker, both read as of the cutoff too -- the one measuring
+its own age from it rather than the live clock, the other asking
+whether the run had ended by then, not whether it has since. This
+only ever runs while `←→` is actually scrubbed away from Now
+(`cursor_col` itself `Some` and not equal to it); `n` clears it and
+the step rows and the Now pane revert to the live state on the very
+next redraw. Readings' own Sent, Received and Ratio stay the run's
+own live totals regardless, same as before; Peak, Largest and Quiet
+already read only up to the cursor's own column, unchanged. A new
+golden (`tui::signal_scrubbed_to_a_past_column_reconstructs_the_
+run2_fixture`, an `insta` snapshot, not a design frame, its own
+scrub cursor drawn the same way `←→` leaves it) pins this against
+the `run2` fixture scrubbed to a column before `tests` has even
+finished.
+
+**The Ahead label and a short-run's own Now pane title (issue
+#690).** The seconds row's own usable width now keeps one trailing
+blank column before the pane's own right border
+(`tui::draw_signal_seconds_row`'s own `content_width`), the same gap
+every tick and label already clears from each other everywhere else
+on the row -- without it, a short `Ahead` (no history, so no `· plan
+order · usually ends ...` tail to carry) could run flush up against
+the border with nothing between them. The Now pane's own title
+(`tui::draw_signal_now_pane`) now names what runs (`Now · 1 Running`)
+whenever no loop is actually busy, rather than falling back to a
+bare `Now`; `screens::build_signal`'s own `running_loops` also no
+longer counts a loop still `Pending` (not yet dispatched at all) as
+"running" for the slots count's own sake, the bug that let `0 of 0
+Slots Busy` show before any loop had even started.
+
+The Totals row's cost figure reads `—` on every
 screen until a run reports one (`meta.cost_usd`,
 `runtime.last_run.totals.cost_usd`); the frames' scripted adapter
-never does, so every frame reads `—` too. §3.5's own "100–119 columns
-shorten long titles and labels" is not yet given its own
-title-shortening rule at that width specifically -- the detail pane
-does show there, same as 120 +, just with whichever title ratatui's
-own border truncation gives a long one. Below three finished runs,
+never does, so every frame reads `—` too. Below three finished runs,
 the Run End row reads `ETA — · no history yet` (§3.5); the Key
 page's own `usual` line states the run's own actual unit and, once
 there have been enough runs to pool, the real count pooled, not
@@ -3965,6 +4040,50 @@ own name is never the part a hard clip eats into. `■ Run Started` and
 equivalent, `tui::draw_all_tape_tile`) now pad their own name field to
 the same `name_width` every other row on screen already widens to,
 rather than the old fixed 19-cell floor.
+
+**Flow rail follow-ups** (issue #693, items 1, 2 and 4; item 3
+shipped in #707). An ahead pass's own preview of an unnamed `if`
+(`rail::ahead_template_item`) now carries the decision's own
+already-computed name over verbatim rather than recomputing one
+from its synthetic `__if` path's own last segment, so a pending
+decision inside a loop's own ahead lane reads `if <condition…>` the
+same way the live one does, never `· __if`. A lane that ends in a
+nested fork's own join no longer reports a width three cells wider
+than what actually paints (`tui::flow_lane_width` now adds its own
+`── ` connector's width only between two adjacent plain stations,
+matching `flow_paint_sequence`'s own rule that a fork's `─┬─ `/
+`─┴── ` already bridges the gap on either side of it) -- the outer
+join follows the inner one directly, with no blank station between
+them. Two unnamed `if`s sharing one host (`rail::build_level`) now
+take their own `.__if`/`.__if_1` suffix from their own position in
+`PlanTree::unnamed_if_decisions` (plan order) rather than a counter
+advanced in whichever order each one happens to get evidence first,
+so a selected `.__if` always shows its own decision, never the
+other's.
+
+**The All screen's tiles read run history** (issue #712).
+`multi::build_tile` takes an optional already-resolved
+`(history::EtaOutput, history::DocumentStats)` pair and applies it
+onto its own internal `Header` (`history::apply_eta_to_header`, a
+shared pure function `history_io::apply_history_eta` now calls for
+a single-run attach too) before building whichever screen the tile
+is on -- `oscilloscope-core` itself still never touches a file. The
+binary resolves this per slot (`AllRunSlot::history`, a
+`HistoryHandle` keyed the same way a single-run attach's own is,
+rebuilt whenever the slot's own document changes) and refreshes it
+every redraw, the same way a single-run attach already does. A tile
+reads `usually …` on its own ahead rows, the Totals row's own Usual,
+and Run End's own usual total, duration and ETA, from the same
+source and the same rules its own single-run Tape already does. A
+tile has no `t` key of its own to toggle the deviation view the
+single-run Tape's does, so a finished row's own token column reads
+the deviation in place of its bar whenever that row has a usual
+figure to read it against -- the same per-row gate the single-run
+view's own `t` toggle already checks before it shows anything there
+at all, just without a key to turn it off again. With fewer than
+three finished runs in history a tile reads exactly as before. The
+Signal tiles' own shared axis scale is unaffected, since it never
+reads history at all.
 
 ### 6.4 Tests
 
