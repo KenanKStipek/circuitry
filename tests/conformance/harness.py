@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -38,6 +39,17 @@ from .normalize import (
 )
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
+
+#: The `electricity/` Cargo workspace, two levels up from this file
+#: (`tests/conformance/harness.py`) in every module that resolves the
+#: binary through [`resolve_electricity_binary`].
+ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
+
+#: Set by `quality.yml`'s shared `build-electricity` job, which builds the
+#: binary once and uploads it so every Python matrix job's conformance run
+#: downloads the same binary instead of each building its own copy from a
+#: cold cache (issue #775).
+ELECTRICITY_BINARY_ENV_VAR = "ELECTRICITY_BINARY"
 
 #: Substituted, verbatim, for the mock HTTP server's real ephemeral port
 #: wherever a case's own `config` file content or `cli_args` need to name
@@ -501,6 +513,59 @@ def cargo_env() -> dict[str, str]:
         if not env.get(var) and (account_home / subdir).is_dir():
             env[var] = str(account_home / subdir)
     return env
+
+
+def resolve_electricity_binary() -> tuple[Path | None, str | None]:
+    """The `electricity` binary to run against, for every pytest module
+    that needs one: `ELECTRICITY_BINARY` when set (the shared binary
+    `quality.yml`'s matrix jobs download), else a `cargo build` from this
+    checkout. The one place this resolution happens, so every conformance
+    module shares the uploaded binary instead of each building its own
+    copy from a cold cache (issue #775).
+
+    Returns `(binary, failure_message)`. `failure_message` is `None` on
+    success; otherwise it is always a hard failure when `ELECTRICITY_BINARY`
+    was set (a deliberate override that didn't produce a usable binary is
+    always a bug, never a reason to quietly skip), when `cargo` itself
+    fails to build it, and when `cargo` is missing while the `CI`
+    environment variable is set -- a CI run is expected to provide one or
+    the other, so a gate that would otherwise skip silently fails loudly
+    instead. Outside CI, with no override and no `cargo`, this degrades to
+    a skip: callers that want that behaviour check for `binary is None` and
+    `failure is None` together.
+    """
+    prebuilt = os.environ.get(ELECTRICITY_BINARY_ENV_VAR)
+    if prebuilt:
+        binary = Path(prebuilt)
+        if binary.is_file() and os.access(binary, os.X_OK):
+            return binary, None
+        return None, (
+            f"{ELECTRICITY_BINARY_ENV_VAR}={binary} does not point to an executable file"
+        )
+    if shutil.which("cargo") is None:
+        if os.environ.get("CI"):
+            return None, (
+                "CI is set but no electricity binary was provided "
+                f"({ELECTRICITY_BINARY_ENV_VAR}) and cargo is not available to build one"
+            )
+        return None, None
+    proc = subprocess.run(
+        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
+        cwd=ELECTRICITY_DIR,
+        env=cargo_env(),
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None, (
+            "cargo build -p electricity-cli failed (if rustup reports no toolchain, set "
+            f"RUSTUP_HOME/CARGO_HOME):\n{proc.stdout}\n{proc.stderr}"
+        )
+    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
+    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
+    return binary, None
 
 
 def _sandboxed_env(
