@@ -514,8 +514,11 @@ pub(crate) fn parse_json_stdout(
 
 /// `plugins/base.py::_as_bool` -- string-aware boolean coercion for a
 /// tool param (Mustache renders a templated `false` as the literal
-/// string `"False"`, and Python's `bool("False")` is `True`).
-pub(crate) fn as_bool_param(value: Option<&Value>) -> bool {
+/// string `"False"`, and Python's `bool("False")` is `True`). `pub`,
+/// not `pub(crate)`: `electricity_vm::generated_doc`'s dispatch-time
+/// check (#772) decides a `service` effect's `shell` the same way this
+/// plugin itself does, rather than a separate coercion that could drift.
+pub fn as_bool_param(value: Option<&Value>) -> bool {
     match value {
         None | Some(Value::None) => false,
         Some(Value::Bool(b)) => *b,

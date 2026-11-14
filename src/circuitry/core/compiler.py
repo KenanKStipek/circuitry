@@ -1479,7 +1479,7 @@ def _check_security_sensitive_param_leaf(
         raise ValueError(
             f"Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' "
             "value is not honoured for this security-sensitive setting; it must "
-            "be a literal list of strings."
+            "be a literal value."
         )
     if isinstance(value, dict):
         for key, item in value.items():

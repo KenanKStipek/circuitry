@@ -128,6 +128,25 @@ pub struct Frame {
     /// way `core.use.UseRuntime._check_generated_document` reads
     /// `runtime_config[GENERATED_DOCUMENT_IS_GENERATED_KEY]`.
     document_is_generated: bool,
+    /// `circuitry.generated_doc.GENERATED_DOCUMENT_GENERATING_PATH_KEY`
+    /// (#772): the dotted path of the `use`/`reflector` effect that
+    /// generated the document currently executing, or "" for a
+    /// decomposition plan (which has no single generating effect of its
+    /// own) -- named in a dispatch-time refusal
+    /// ([`crate::generated_doc::dispatch_errors`]) the same way the
+    /// compile-time check already names it. Set alongside
+    /// [`Frame::document_tool_providers`] by the same
+    /// [`Frame::with_document_tool_providers`] call, never on its own.
+    generating_effect_path: Rc<String>,
+    /// `circuitry.generated_doc.GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY`
+    /// (#772): whether a provider-ceiling refusal in the current
+    /// document should name `allow_tools` as the fix (`true`, a
+    /// `use`/`reflector` child) or the fixed decomposition safe set
+    /// (`false`, a decomposition plan, which has no `allow_tools` field
+    /// of its own to name). Set alongside [`Frame::document_tool_providers`]
+    /// by the same [`Frame::with_document_tool_providers`] call, never on
+    /// its own.
+    allow_tools_available: bool,
     /// `core/prompt.py`'s own container-nesting display depth
     /// (`structure.depth`, a.k.a. the `structural_position` signal) --
     /// issue #516's §4(c) table, superseding the one-value-per-run
@@ -156,6 +175,8 @@ impl Frame {
             document_tool_providers: Rc::new(std::collections::BTreeSet::new()),
             document_shell_commands: Rc::new(std::collections::BTreeSet::new()),
             document_is_generated: false,
+            generating_effect_path: Rc::new(String::new()),
+            allow_tools_available: true,
         }
     }
 
@@ -181,6 +202,8 @@ impl Frame {
             document_tool_providers: Rc::clone(&self.document_tool_providers),
             document_shell_commands: Rc::clone(&self.document_shell_commands),
             document_is_generated: self.document_is_generated,
+            generating_effect_path: Rc::clone(&self.generating_effect_path),
+            allow_tools_available: self.allow_tools_available,
         }
     }
 
@@ -198,6 +221,8 @@ impl Frame {
         providers: std::collections::BTreeSet<String>,
         shell_commands: std::collections::BTreeSet<String>,
         is_generated: bool,
+        generating_effect_path: String,
+        allow_tools_available: bool,
     ) -> Frame {
         Frame {
             prefix: Rc::clone(&self.prefix),
@@ -208,6 +233,8 @@ impl Frame {
             document_tool_providers: Rc::new(providers),
             document_shell_commands: Rc::new(shell_commands),
             document_is_generated: is_generated,
+            generating_effect_path: Rc::new(generating_effect_path),
+            allow_tools_available,
         }
     }
 
@@ -227,6 +254,20 @@ impl Frame {
     /// doc comment.
     pub fn document_is_generated(&self) -> bool {
         self.document_is_generated
+    }
+
+    /// The dotted path of the `use`/`reflector` effect that generated
+    /// the document currently executing (#772) -- see
+    /// [`Frame::generating_effect_path`]'s own field doc comment.
+    pub fn generating_effect_path(&self) -> &str {
+        &self.generating_effect_path
+    }
+
+    /// Whether a provider-ceiling refusal in the current document
+    /// should name `allow_tools` as the fix (#772) -- see
+    /// [`Frame::allow_tools_available`]'s own field doc comment.
+    pub fn allow_tools_available(&self) -> bool {
+        self.allow_tools_available
     }
 
     /// `core/effect_identity.py::call_path` -- *path*'s own pass
@@ -355,6 +396,8 @@ impl Frame {
             document_tool_providers: Rc::clone(&self.document_tool_providers),
             document_shell_commands: Rc::clone(&self.document_shell_commands),
             document_is_generated: self.document_is_generated,
+            generating_effect_path: Rc::clone(&self.generating_effect_path),
+            allow_tools_available: self.allow_tools_available,
         }
     }
 
@@ -386,6 +429,8 @@ impl Frame {
             document_tool_providers: Rc::clone(&self.document_tool_providers),
             document_shell_commands: Rc::clone(&self.document_shell_commands),
             document_is_generated: self.document_is_generated,
+            generating_effect_path: Rc::clone(&self.generating_effect_path),
+            allow_tools_available: self.allow_tools_available,
         }
     }
 
@@ -407,6 +452,8 @@ impl Frame {
             document_tool_providers: Rc::clone(&self.document_tool_providers),
             document_shell_commands: Rc::clone(&self.document_shell_commands),
             document_is_generated: self.document_is_generated,
+            generating_effect_path: Rc::clone(&self.generating_effect_path),
+            allow_tools_available: self.allow_tools_available,
         }
     }
 
@@ -429,6 +476,8 @@ impl Frame {
             document_tool_providers: Rc::clone(&self.document_tool_providers),
             document_shell_commands: Rc::clone(&self.document_shell_commands),
             document_is_generated: self.document_is_generated,
+            generating_effect_path: Rc::clone(&self.generating_effect_path),
+            allow_tools_available: self.allow_tools_available,
         }
     }
 

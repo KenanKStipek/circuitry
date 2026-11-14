@@ -61,6 +61,15 @@ _DEFAULT_ALLOWED: tuple[str, ...] = (
 _DANGEROUS_ARG_CHARS: tuple[str, ...] = ("\x00", "\n")
 
 
+def is_bare_command_name(command: str) -> bool:
+    """Whether *command* is a bare name a shell-allowlist entry can match:
+    no slashes, whitespace or shell metacharacters -- alphanumerics plus
+    ``-``/``_`` (covers binaries like ``yt-dlp``, ``mediainfo``). A path is
+    never a bare name, so it can never be "in the list" (#772).
+    """
+    return command.replace("-", "").replace("_", "").isalnum()
+
+
 @dataclass(frozen=True)
 class ShellPlugin:
     name: str = "shell"
@@ -84,9 +93,8 @@ class ShellPlugin:
         # The command MUST be a bare name — no slashes, whitespace, or
         # shell metacharacters. PATH lookup happens AFTER the allowlist
         # gate, so we don't have to worry about ``./malicious``-style
-        # escapes. Allow alphanumerics plus ``-``/``_`` (covers binaries
-        # like ``yt-dlp``, ``mediainfo``).
-        if not command.replace("-", "").replace("_", "").isalnum():
+        # escapes.
+        if not is_bare_command_name(command):
             raise ValueError(
                 f"shell: command {command!r} must be alphanumeric "
                 "(with optional -_); use args for everything else."

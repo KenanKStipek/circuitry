@@ -19,6 +19,7 @@ from ..adapters._retry import (
     status_is_retryable,
 )
 from ..cli.redaction import redact
+from ..generated_doc import dispatch_errors
 from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins._subprocess import GenericSubprocessTool
@@ -343,19 +344,25 @@ def _deep_merge_params(base: dict[str, Any], overlay: dict[str, Any]) -> dict[st
 #: ``params`` block — never ``params_json`` (runtime-built, can carry
 #: model-generated content) and never a templated value within the literal
 #: block, so neither can widen what a document is allowed to run.
-_SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands"})
+_SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands", "shell"})
 
 
 def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
-    """Raise if a security-sensitive param's literal value isn't a plain list of strings.
+    """Raise if a security-sensitive param's literal value is by-reference, or
+    (for the keys that must be a plain list of strings, e.g. ``allowed_commands``)
+    isn't one.
 
-    Covers: a templated string element (``{{`` — its real content isn't known
-    until render time, which defeats the point of a boundary the document
-    author is meant to write down plainly); a ``{from: <path>}`` reference as
-    the whole value or as a list item (#234 made this reachable — a
-    by-reference value can carry runtime or model-generated content, e.g.
-    REST/MCP caller input or an LLM step's output, same as a templated
-    string); and any other non-string list item.
+    Covers: a ``{from: <path>}`` reference as the whole value (#234 made this
+    reachable -- a by-reference value can carry runtime or model-generated
+    content, e.g. REST/MCP caller input or an LLM step's output, same as a
+    templated string), for every key in :data:`_SECURITY_SENSITIVE_PARAM_KEYS`;
+    a templated string element (``{{`` -- its real content isn't known until
+    render time, which defeats the point of a boundary the document author
+    is meant to write down plainly), a ``{from: <path>}`` reference as a list
+    item, and any other non-string list item, for a key whose literal value
+    is itself a list (``allowed_commands``) -- a scalar key (``shell``) is
+    the document author's own choice to make however they like, once it
+    isn't by-reference.
     """
     for key in _SECURITY_SENSITIVE_PARAM_KEYS:
         if key not in raw_params:
@@ -363,7 +370,7 @@ def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
         value = raw_params[key]
         if param_reference(value) is not None:
             raise ValueError(
-                f"params.{key} must be a literal list of strings; a by-reference "
+                f"params.{key} must be a literal value; a by-reference "
                 "'{from: ...}' value is not honoured for this security-sensitive setting."
             )
         if not isinstance(value, list):
@@ -862,6 +869,7 @@ class ToolRuntime:
             timeout_unresolved = False
             prompt_file_unread = False
             secret_unresolved = False
+            dispatch_refused = False
             # Set only on the ok=False path below, from the plugin's own
             # response headers — an exception never reached a response, so
             # it never has one to read.
@@ -965,6 +973,22 @@ class ToolRuntime:
                 if prompt_file_read is not None:
                     meta["template_files"] = [prompt_file_read.record]
                 mtag = _model_tag(rendered)
+
+                # The authoritative check (#772): right before this tool
+                # effect dispatches, on every attempt, against its final
+                # provider and params -- after Mustache rendering and the
+                # params_json merge above, which the compile-time check on
+                # the parsed child document (core.use.UseRuntime._check_generated_document)
+                # never sees. A no-op when this document carries no limits.
+                dispatch_violations = dispatch_errors(
+                    provider=self.defn.provider,
+                    params=plugin_params,
+                    runtime_config=self.runtime_config,
+                    effect_label=self.defn.name,
+                )
+                if dispatch_violations:
+                    dispatch_refused = True
+                    raise ValueError("; ".join(dispatch_violations))
 
                 # Per attempt, from the state this attempt sees (#564). A
                 # reference that can't resolve is not retried: a retry reads
@@ -1134,6 +1158,7 @@ class ToolRuntime:
                     not timeout_unresolved
                     and not prompt_file_unread
                     and not secret_unresolved
+                    and not dispatch_refused
                     and self._is_retryable_failure(status_code=None, failure=e)
                 )
                 if dispatch_secrets:

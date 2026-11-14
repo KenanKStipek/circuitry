@@ -429,6 +429,8 @@ pub async fn execute_root(
             host_pin.as_ref(),
         ),
         false,
+        String::new(),
+        true,
     );
     exec::dynamic::execute_dynamic(
         &program.root,

@@ -414,6 +414,9 @@ def test_static_tool_providers_from_definitions_reflects_a_profile_provider_over
 
 
 def test_decomposition_safe_providers_are_side_effect_free_data_tools() -> None:
+    # hash and csv are deliberately not here: both support from_path, which
+    # reads any file on disk -- a plan cannot be held to a data-only ceiling
+    # while one of its always-allowed tools can read ~/.ssh/id_rsa (#772).
     assert frozenset(
         {
             "json",
@@ -421,11 +424,9 @@ def test_decomposition_safe_providers_are_side_effect_free_data_tools() -> None:
             "math",
             "cel",
             "clock",
-            "hash",
             "base64",
             "hex",
             "uuid",
-            "csv",
             "validate_yaml",
         }
     ) == DECOMPOSITION_SAFE_PROVIDERS

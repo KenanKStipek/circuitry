@@ -728,22 +728,24 @@ def _check_generated_tool_ceiling(
     """A decomposition plan is always generated (#772): its own
     'allowed_commands' never widen past the host config and the enclosing
     document's own literal shell effects, a 'service' effect's 'shell:
-    true' is always refused, and it is held to the tool-provider ceiling
-    (rule 3) like a 'use'/'reflector' generated child -- except that it has
-    no generating effect of its own to carry a literal 'allow_tools:', so
-    it is additionally always allowed ``DECOMPOSITION_SAFE_PROVIDERS``: the
-    planner's own 'merge' step commonly needs a side-effect-free data tool
-    (json, say) the enclosing document never uses itself, and none of that
-    fixed set can reach anything outside the process.
+    true' is always refused, and it is held to a tool-provider ceiling like
+    a 'use'/'reflector' generated child -- except that it has no
+    generating effect of its own to carry a literal 'allow_tools:'.
+
+    The ceiling is the enclosing context's own limits when it already has
+    any (the plan runs inside an already-generated document): never
+    widened by ``DECOMPOSITION_SAFE_PROVIDERS`` there, since that would
+    grant a nested plan something its already-generated enclosing document
+    was not itself allowed. Otherwise (the enclosing document is a plain,
+    literal one) the ceiling is its own providers plus
+    ``DECOMPOSITION_SAFE_PROVIDERS``: the planner's own 'merge' step
+    commonly needs a side-effect-free data tool (json, say) the enclosing
+    document never uses itself, and none of that fixed set can reach
+    anything outside the process.
     """
     import yaml as _yaml
 
-    from ..generated_doc import (
-        DECOMPOSITION_SAFE_PROVIDERS,
-        GENERATED_DOCUMENT_PROVIDERS_KEY,
-        current_shell_allowlist,
-        generated_document_errors,
-    )
+    from ..generated_doc import current_shell_allowlist, generated_document_errors
 
     try:
         parsed = _yaml.safe_load(yaml_text or "")
@@ -751,29 +753,20 @@ def _check_generated_tool_ceiling(
         return []  # already reported by the schema check
     if not isinstance(parsed, dict):
         return []
-    enclosing = frozenset(runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ())
-    allowed_providers = enclosing | DECOMPOSITION_SAFE_PROVIDERS
     return generated_document_errors(
         parsed,
-        allowed_providers=allowed_providers,
+        allowed_providers=_decomposition_allowed_providers(runtime_config),
         generating_effect_path=generating_effect_path,
         allowed_shell_commands=current_shell_allowlist(runtime_config),
         allow_tools_available=False,
     )
 
 
-def _plan_tool_ceiling_overlay(runtime_config: Mapping[str, Any]) -> dict[str, Any]:
-    """The ``runtime_config`` keys a decomposition plan's own execution
-    needs for #772 rule 2's inheritance: the plan itself is generated, and
-    becomes the "enclosing document" for any ``use``/``reflector`` effect
-    of its own, allowed the tool providers it was just checked against in
-    :func:`_check_generated_tool_ceiling` -- the enclosing document's own
-    providers plus ``DECOMPOSITION_SAFE_PROVIDERS`` -- never recomputed
-    from its own, model-written text. A further-nested decomposition (one
-    level deeper, bounded by ``max_depth``) inherits this same ceiling
-    unchanged, the same inheritance rule 2 gives a nested ``use``/
-    ``reflector`` effect; the shell-allowlist key is left alone entirely,
-    inheriting through the ``**runtime_config`` spread at each call site.
+def _decomposition_allowed_providers(runtime_config: Mapping[str, Any]) -> frozenset[str]:
+    """The tool-provider ceiling a decomposition plan runs under (#772): the
+    enclosing context's own limits unchanged when it already has any,
+    otherwise its providers plus ``DECOMPOSITION_SAFE_PROVIDERS`` (see
+    :func:`_check_generated_tool_ceiling`'s doc comment).
     """
     from ..generated_doc import (
         DECOMPOSITION_SAFE_PROVIDERS,
@@ -781,13 +774,43 @@ def _plan_tool_ceiling_overlay(runtime_config: Mapping[str, Any]) -> dict[str, A
         GENERATED_DOCUMENT_PROVIDERS_KEY,
     )
 
-    allowed = (
-        frozenset(runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ())
-        | DECOMPOSITION_SAFE_PROVIDERS
+    enclosing = frozenset(runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ())
+    if runtime_config.get(GENERATED_DOCUMENT_IS_GENERATED_KEY):
+        return enclosing
+    return enclosing | DECOMPOSITION_SAFE_PROVIDERS
+
+
+def _plan_tool_ceiling_overlay(
+    runtime_config: Mapping[str, Any], *, generating_effect_path: str
+) -> dict[str, Any]:
+    """The ``runtime_config`` keys a decomposition plan's own execution
+    needs (#772): the plan itself is generated, and becomes the "enclosing
+    document" for any ``use``/``reflector`` effect of its own, and for any
+    tool effect of its own that a dispatch-time check
+    (:func:`circuitry.generated_doc.dispatch_errors`) reads limits for --
+    allowed the tool providers it was just checked against in
+    :func:`_check_generated_tool_ceiling` (:func:`_decomposition_allowed_providers`),
+    never recomputed from its own, model-written text. A further-nested
+    decomposition (one level deeper, bounded by ``max_depth``) inherits
+    this same ceiling unchanged, the same inheritance a nested ``use``/
+    ``reflector`` effect gets; the shell-allowlist key is left alone
+    entirely, inheriting through the ``**runtime_config`` spread at each
+    call site. ``allow_tools`` is never available to name as the fix for a
+    decomposition plan -- it has no such field of its own.
+    """
+    from ..generated_doc import (
+        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY,
+        GENERATED_DOCUMENT_GENERATING_PATH_KEY,
+        GENERATED_DOCUMENT_IS_GENERATED_KEY,
+        GENERATED_DOCUMENT_PROVIDERS_KEY,
     )
+
+    allowed = _decomposition_allowed_providers(runtime_config)
     return {
         GENERATED_DOCUMENT_IS_GENERATED_KEY: True,
         GENERATED_DOCUMENT_PROVIDERS_KEY: sorted(allowed),
+        GENERATED_DOCUMENT_GENERATING_PATH_KEY: generating_effect_path,
+        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY: False,
     }
 
 
@@ -879,7 +902,9 @@ def _execute_plan(
         **runtime_config,
         "_use_call_stack": [*parent_stack, identity],
         _DEPTH_KEY: depth + 1,
-        **_plan_tool_ceiling_overlay(runtime_config),
+        **_plan_tool_ceiling_overlay(
+            runtime_config, generating_effect_path=f"decomposition of '{node_path}'"
+        ),
     }
 
     # A *copy* of the effect's own render context — loop overlays and
@@ -1969,7 +1994,9 @@ def _execute_split_plan(
         **runtime_config,
         "_use_call_stack": [*parent_stack, identity],
         _DEPTH_KEY: depth + 1,
-        **_plan_tool_ceiling_overlay(runtime_config),
+        **_plan_tool_ceiling_overlay(
+            runtime_config, generating_effect_path=f"split of '{node_path}'"
+        ),
     }
 
     # A *copy* of the effect's own render context, exactly like the score

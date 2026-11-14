@@ -1136,6 +1136,11 @@ pub async fn execute_tool<R: ParamsCtx>(
         // own `missing_file`/`outside_within`/`not_utf8` effects pin
         // this: `meta` stops at `waiting_for`, with neither key).
         let mut prompt_file_unread = false;
+        // #772: a dispatch-time refusal (this document carries limits,
+        // and this attempt's final provider/params break one of them)
+        // is never retried either -- a retry would see the same
+        // provider and the same rendered params.
+        let mut dispatch_refused = false;
         if is_agent_provider && attempt_index == 0 {
             if let Some(source) = &tool.prompt_file {
                 agent_prompt_file = Some(resolve_agent_prompt_file(source, ctx, name));
@@ -1172,6 +1177,29 @@ pub async fn execute_tool<R: ParamsCtx>(
                     agent_prompt_record = Some(resolved.record.clone());
                 }
                 let rendered_value = Value::Dict(rendered);
+
+                // The authoritative check (#772): right before this tool
+                // effect dispatches, on every attempt, against its final
+                // provider and params -- after Mustache rendering and the
+                // params_json merge above, which the compile-time check on
+                // the parsed child document (`exec::use_`'s own
+                // generated-document check) never sees. A no-op when this
+                // document carries no limits.
+                if failure.is_none() {
+                    let dispatch_violations = crate::generated_doc::dispatch_errors(
+                        &tool.provider,
+                        rendered_value.as_dict(),
+                        frame,
+                        name,
+                    );
+                    if !dispatch_violations.is_empty() {
+                        dispatch_refused = true;
+                        failure = Some(electricity_tools::ToolError::message(
+                            dispatch_violations.join("; "),
+                        ));
+                    }
+                }
+
                 let is_http =
                     electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http";
 
@@ -1957,6 +1985,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             let retryable = !timeout_unresolved
                 && !secret_unresolved
                 && !prompt_file_unread
+                && !dispatch_refused
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
                     http_status_for_retry,

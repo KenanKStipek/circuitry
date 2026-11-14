@@ -386,13 +386,21 @@ fn validate_generated_yaml(
 /// decomposition plan is always generated -- its own `allowed_commands`
 /// never widen past the host config and the enclosing document's own
 /// literal shell effects, a `service` effect's `shell: true` is always
-/// refused, and it is held to the tool-provider ceiling like a `use`/
+/// refused, and it is held to a tool-provider ceiling like a `use`/
 /// `reflector` generated child -- except that it has no generating
-/// effect of its own to carry a literal `allow_tools:`, so it is
-/// additionally always allowed `generated_doc::decomposition_safe_providers`:
-/// the planner's own 'merge' step commonly needs a side-effect-free data
-/// tool (json, say) the enclosing document never uses itself, and none
-/// of that fixed set can reach anything outside the process.
+/// effect of its own to carry a literal `allow_tools:`.
+///
+/// The ceiling is *frame*'s own [`Frame::document_tool_providers`]
+/// unchanged when [`Frame::document_is_generated`] is already set (the
+/// plan runs inside an already-generated document: never widened by
+/// `generated_doc::decomposition_safe_providers` there, since that would
+/// grant a nested plan something its already-generated enclosing
+/// document was not itself allowed). Otherwise (the enclosing document
+/// is a plain, literal one) the ceiling is its own providers plus
+/// `generated_doc::decomposition_safe_providers`: the planner's own
+/// 'merge' step commonly needs a side-effect-free data tool (json, say)
+/// the enclosing document never uses itself, and none of that fixed set
+/// can reach anything outside the process.
 fn check_generated_tool_ceiling(
     yaml: &str,
     frame: &Frame,
@@ -404,15 +412,26 @@ fn check_generated_tool_ceiling(
     if parsed.as_dict().is_none() {
         return Vec::new();
     }
-    let mut allowed_providers = frame.document_tool_providers().clone();
-    allowed_providers.extend(crate::generated_doc::decomposition_safe_providers());
     crate::generated_doc::generated_document_errors_with_shell(
         &parsed,
-        Some(&allowed_providers),
+        Some(&decomposition_allowed_providers(frame)),
         generating_effect_path,
         Some(frame.document_shell_commands()),
         false,
     )
+}
+
+/// The tool-provider ceiling a decomposition plan runs under (#772) --
+/// see [`check_generated_tool_ceiling`]'s own doc comment.
+fn decomposition_allowed_providers(frame: &Frame) -> std::collections::BTreeSet<String> {
+    let enclosing = frame.document_tool_providers().clone();
+    if frame.document_is_generated() {
+        enclosing
+    } else {
+        let mut allowed = enclosing;
+        allowed.extend(crate::generated_doc::decomposition_safe_providers());
+        allowed
+    }
 }
 
 /// `core/decompose.py::_validate_plan`. `_check_capability_ceiling`
@@ -1165,7 +1184,21 @@ pub(crate) async fn maybe_decompose(
     let seed_ctx = live_ctx(render_chain, store);
     let seed_state = child_seed_state(&seed_ctx, &plan.result_path);
 
-    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    // The plan is itself generated (#772): it becomes the "enclosing
+    // document" for any use/reflector effect of its own, and for any
+    // tool effect of its own a dispatch-time check reads limits for,
+    // allowed the tool providers it was just checked against in
+    // `check_generated_tool_ceiling`, never recomputed from its own,
+    // model-written text.
+    let plan_frame = child_frame(frame, &op.path)
+        .push_use(identity)
+        .with_document_tool_providers(
+            decomposition_allowed_providers(frame),
+            frame.document_shell_commands().clone(),
+            true,
+            generating_effect_path.clone(),
+            false,
+        );
     let plan_run_ctx = child_run_ctx(
         run_ctx,
         run_ctx.complexity,
@@ -2480,7 +2513,17 @@ async fn maybe_split(
         }
     }
 
-    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    // The plan is itself generated (#772) -- see the score trigger's
+    // own `_execute_plan` for why.
+    let plan_frame = child_frame(frame, &op.path)
+        .push_use(identity)
+        .with_document_tool_providers(
+            decomposition_allowed_providers(frame),
+            frame.document_shell_commands().clone(),
+            true,
+            generating_effect_path.clone(),
+            false,
+        );
     let plan_run_ctx = child_run_ctx(
         run_ctx,
         run_ctx.complexity,

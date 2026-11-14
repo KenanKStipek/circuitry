@@ -42,11 +42,9 @@ pub fn decomposition_safe_providers() -> BTreeSet<String> {
         "math",
         "cel",
         "clock",
-        "hash",
         "base64",
         "hex",
         "uuid",
-        "csv",
         "validate_yaml",
     ]
     .into_iter()
@@ -63,7 +61,15 @@ pub fn decomposition_safe_providers() -> BTreeSet<String> {
 fn is_sensitive_shape_key(key: &str) -> bool {
     matches!(
         key,
-        "type" | "provider" | "allow_tools" | "allowed_commands" | "shell"
+        "type"
+            | "provider"
+            | "allow_tools"
+            | "allowed_commands"
+            | "shell"
+            | "inline"
+            | "path"
+            | "ref"
+            | "orchestration"
     )
 }
 
@@ -86,8 +92,38 @@ fn get<'a>(dict: &'a Dict, key: &str) -> Option<&'a Value> {
     dict.get(&Value::Str(key.to_string()))
 }
 
+/// Python truthiness, for the `effects or steps` fallback below --
+/// matches `electricity_compiler`'s own copy of this same check
+/// (`compile/mod.rs`'s `top_effects.is_some_and(is_truthy)`): a missing
+/// key, `None`, `False`, a numeric zero, and any empty `str`/`bytes`/
+/// `list`/`dict` are falsy; everything else is truthy.
+fn is_truthy(value: Option<&Value>) -> bool {
+    match value {
+        None | Some(Value::None) => false,
+        Some(Value::Bool(b)) => *b,
+        Some(Value::Int(i)) => !i.is_zero(),
+        Some(Value::Float(f)) => *f != 0.0,
+        Some(Value::Str(s)) => !s.is_empty(),
+        Some(Value::Bytes(b)) => !b.is_empty(),
+        Some(Value::List(items)) => !items.is_empty(),
+        Some(Value::Dict(d)) => !d.is_empty(),
+        Some(Value::Date(_)) | Some(Value::DateTime(..)) => true,
+    }
+}
+
+/// `effects: []` (or `null`) falls back to `steps`, exactly like the
+/// compiler's own `effects`/`steps` fallback (`compile/mod.rs`,
+/// `containers.rs`) -- an empty or null `effects` must count as missing
+/// here too, or a document with `effects: []` and its real steps under
+/// `steps:` compiles and runs those steps while this walk sees none of
+/// them (#772).
 fn effects_of(effect: &Dict) -> Option<&Value> {
-    get(effect, "effects").or_else(|| get(effect, "steps"))
+    let top = get(effect, "effects");
+    if is_truthy(top) {
+        top
+    } else {
+        get(effect, "steps")
+    }
 }
 
 /// Best-effort YAML parse, or `None` on any failure -- used only to look
@@ -409,23 +445,105 @@ pub fn static_shell_allowed_commands_from_op(op: &electricity_bytecode::Op) -> B
     commands
 }
 
+/// A `ParamNode::Template`'s own source text, only when it carries no
+/// Mustache tag at all -- a templated entry is never the author's own
+/// grant, the same rule the raw-YAML walk
+/// ([`walk_shell_allowed_commands`]) enforces by checking `"{{" in item`
+/// directly on unrendered YAML text (#772 rule 2).
+fn literal_template_str(text: &electricity_bytecode::TemplateText) -> Option<&str> {
+    if text.source.contains("{{") {
+        None
+    } else {
+        Some(text.source.as_str())
+    }
+}
+
+/// A single `allowed_commands` list entry's literal command name, in
+/// whichever of the two shapes [`electricity_compiler::compile::params::
+/// build_param_node`] produces for a list item: `ParamNode::Literal` (a
+/// non-string literal, or a string that reached this node some other
+/// way) or `ParamNode::Template` (every string list item goes through
+/// this path -- `build_param_node` wraps every `Value::Str` in a
+/// `Template` node regardless of whether its text holds a Mustache tag).
+fn param_node_literal_command(node: &electricity_bytecode::ParamNode) -> Option<&str> {
+    use electricity_bytecode::ParamNode;
+    match node {
+        ParamNode::Literal(Value::Str(s)) => Some(s.as_str()),
+        ParamNode::Template(text) => literal_template_str(text),
+        _ => None,
+    }
+}
+
+/// Every literal command name in an `allowed_commands` *value* node,
+/// whichever shape it compiled to: a `ParamNode::List` of per-item
+/// nodes (the common case -- every list item is its own `ParamNode`,
+/// [`param_node_literal_command`] decides each), or a
+/// `ParamNode::Literal(Value::List(..))` of raw [`Value`]s (defensive:
+/// no params-compilation path produces this for `allowed_commands`
+/// today, but nothing here should silently stop collecting if one
+/// ever does).
+fn collect_literal_command_list(node: &electricity_bytecode::ParamNode, commands: &mut BTreeSet<String>) {
+    use electricity_bytecode::ParamNode;
+    match node {
+        ParamNode::List(items) => {
+            for item in items {
+                if let Some(s) = param_node_literal_command(item) {
+                    commands.insert(s.to_string());
+                }
+            }
+        }
+        ParamNode::Literal(Value::List(items)) => {
+            for item in items {
+                if let Some(s) = item.as_str() {
+                    commands.insert(s.to_string());
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Every literal command a `shell` tool effect's own `params.
+/// allowed_commands` grants (#772, my-finding), whichever shape the
+/// compiler produced for the whole `params` block: a `ParamNode::Map`
+/// (the common case -- a document that also sets other params, or
+/// whose `allowed_commands` entries are templated), or a
+/// `ParamNode::Literal(Value::Dict(..))` (a fully literal params block
+/// with no template/reference leaf anywhere in it -- every value a
+/// plain scalar, list or nested dict of plain scalars; electricity's
+/// own `build_param_node` only folds a whole dict to `Literal` for a
+/// `cel` tool's params today, but a generated plan's own merge step or
+/// a future params-compilation path could produce the same shape for
+/// any provider, and this walk must read a grant from it either way).
+fn collect_literal_allowed_commands(params: &electricity_bytecode::ParamNode, commands: &mut BTreeSet<String>) {
+    use electricity_bytecode::ParamNode;
+    let key = Value::Str("allowed_commands".to_string());
+    match params {
+        ParamNode::Map(entries) => {
+            if let Some(node) = entries.get(&key) {
+                collect_literal_command_list(node, commands);
+            }
+        }
+        ParamNode::Literal(Value::Dict(dict)) => {
+            if let Some(Value::List(items)) = dict.get(&key) {
+                for item in items {
+                    if let Some(s) = item.as_str() {
+                        commands.insert(s.to_string());
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn walk_op_shell_allowed_commands(op: &electricity_bytecode::Op, commands: &mut BTreeSet<String>) {
-    use electricity_bytecode::{LeafKind, NodeKind, ParamNode, UseSource};
+    use electricity_bytecode::{LeafKind, NodeKind, UseSource};
     match &op.kind {
         NodeKind::Leaf(leaf) => match leaf.as_ref() {
             LeafKind::Tool(tool_op) => {
                 if py_strip(&tool_op.provider).to_lowercase() == "shell" {
-                    if let ParamNode::Map(entries) = &tool_op.params {
-                        if let Some(ParamNode::Literal(Value::List(items))) =
-                            entries.get(&Value::Str("allowed_commands".to_string()))
-                        {
-                            for item in items {
-                                if let Some(s) = item.as_str() {
-                                    commands.insert(s.to_string());
-                                }
-                            }
-                        }
-                    }
+                    collect_literal_allowed_commands(&tool_op.params, commands);
                 }
             }
             LeafKind::Use(use_op) => {
@@ -578,16 +696,118 @@ pub fn is_generated_inline(raw_template: &str, rendered: &Value) -> bool {
     }
 }
 
-fn as_bool(value: Option<&Value>) -> bool {
-    match value {
-        Some(Value::Bool(b)) => *b,
-        Some(Value::Str(s)) => matches!(
-            py_strip(s).to_lowercase().as_str(),
-            "1" | "true" | "yes" | "on"
-        ),
-        Some(Value::None) => false,
-        Some(_) => true,
-        None => false,
+#[allow(clippy::too_many_arguments)]
+/// Every violation a single tool effect's *final* provider and params
+/// commit (#772). Shared by the compile-time walk
+/// ([`walk_generated_errors`]) and the dispatch-time check
+/// ([`dispatch_errors`]), so the two can never disagree on what a rule
+/// means -- only on what they can see. The checks below are independent
+/// `if`s, not an `else if` chain: the provider-ceiling check runs for
+/// every tool effect regardless of whether the shell/service-specific
+/// checks also fire, so a 'shell' or 'service' effect outside the
+/// ceiling is still refused even when its own allowlist/shell value is
+/// in order.
+fn tool_effect_errors(
+    effect_label: &str,
+    provider_name: Option<&str>,
+    params: &Dict,
+    allowed_providers: Option<&BTreeSet<String>>,
+    known_providers: Option<&BTreeSet<String>>,
+    allowed_shell_commands: &BTreeSet<String>,
+    generating_effect_path: &str,
+    allow_tools_available: bool,
+    errors: &mut Vec<String>,
+) {
+    if provider_name == Some("shell")
+        && params.contains_key(&Value::Str("allowed_commands".to_string()))
+    {
+        let requested = get(params, "allowed_commands");
+        let mut bad: BTreeSet<String> = BTreeSet::new();
+        let is_list = matches!(requested, Some(Value::List(_)));
+        if let Some(Value::List(items)) = requested {
+            for item in items {
+                if let Some(s) = item.as_str() {
+                    if !allowed_shell_commands.contains(s) {
+                        bad.insert(s.to_string());
+                    }
+                }
+            }
+        }
+        if !is_list && bad.is_empty() {
+            bad.insert("<invalid>".to_string());
+        }
+        if !bad.is_empty() {
+            let bad_repr = py_repr_str_list(&bad);
+            errors.push(format!(
+                "generated effect '{effect_label}' sets params.allowed_commands to \
+                 include {bad_repr} on a 'shell' tool, generated by \
+                 {generating_effect_path}; the host config and this document's own \
+                 shell effects don't already allow {bad_repr} -- add it to a literal \
+                 shell effect's allowed_commands in the document, or to \
+                 runtime.plugins.shell.allowed_commands."
+            ));
+        }
+    }
+    if provider_name == Some("service") {
+        if electricity_tools::subprocess_tool::as_bool_param(get(params, "shell")) {
+            errors.push(format!(
+                "generated effect '{effect_label}' sets params.shell: true on a \
+                 'service' tool, generated by {generating_effect_path}; a document \
+                 generated at run time can never do that."
+            ));
+        } else if normalize_name(get(params, "action")).as_deref() == Some("start") {
+            if let Some(Value::List(command)) = get(params, "command") {
+                if let Some(executable) = command.first() {
+                    let executable_name = match executable {
+                        Value::Str(s) => s.clone(),
+                        other => other.py_str(),
+                    };
+                    if !electricity_tools::shell::is_bare_command(&executable_name)
+                        || !allowed_shell_commands.contains(executable_name.as_str())
+                    {
+                        errors.push(format!(
+                            "generated effect '{effect_label}' starts a 'service' tool \
+                             whose command begins with {}, generated by \
+                             {generating_effect_path}; the host config and this document's \
+                             own shell effects don't already allow {} -- add it to a \
+                             literal shell effect's allowed_commands in the document, or to \
+                             runtime.plugins.shell.allowed_commands.",
+                            Value::Str(executable_name.clone()).py_repr(),
+                            Value::Str(executable_name).py_repr(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    if let Some(provider_name) = provider_name {
+        // A provider that isn't even a known plugin fails the usual way (an
+        // "Unknown plugin" error at dispatch) instead of this one -- adding an
+        // unknown name to allow_tools would itself be a check error, so this
+        // refusal is only for a real plugin the document that generated it
+        // simply doesn't use.
+        let is_known = known_providers.is_none_or(|known| known.contains(provider_name));
+        if let Some(allowed) = allowed_providers {
+            if is_known && !allowed.contains(provider_name) {
+                if allow_tools_available {
+                    errors.push(format!(
+                        "generated effect '{effect_label}' uses tool provider \
+                         '{provider_name}', which the document that generated it \
+                         doesn't use; add '{provider_name}' to allow_tools on \
+                         {generating_effect_path} to allow it."
+                    ));
+                } else {
+                    errors.push(format!(
+                        "generated effect '{effect_label}' uses tool provider \
+                         '{provider_name}', generated by {generating_effect_path}; it \
+                         isn't among the tool providers the document it serves already \
+                         uses, plus the fixed set a generated plan is always allowed \
+                         (json, regex, math, cel, clock, base64, hex, uuid, \
+                         validate_yaml)."
+                    ));
+                }
+            }
+        }
     }
 }
 
@@ -625,71 +845,17 @@ fn walk_generated_errors(
             let params = get(effect, "params")
                 .and_then(Value::as_dict)
                 .unwrap_or(&empty_params);
-            if provider_name.as_deref() == Some("shell")
-                && params.contains_key(&Value::Str("allowed_commands".to_string()))
-            {
-                let requested = get(params, "allowed_commands");
-                let mut bad: BTreeSet<String> = BTreeSet::new();
-                let is_list = matches!(requested, Some(Value::List(_)));
-                if let Some(Value::List(items)) = requested {
-                    for item in items {
-                        if let Some(s) = item.as_str() {
-                            if !allowed_shell_commands.contains(s) {
-                                bad.insert(s.to_string());
-                            }
-                        }
-                    }
-                }
-                if !is_list && bad.is_empty() {
-                    bad.insert("<invalid>".to_string());
-                }
-                if !bad.is_empty() {
-                    let bad_repr = py_repr_str_list(&bad);
-                    errors.push(format!(
-                        "generated effect '{effect_label}' sets params.allowed_commands to \
-                         include {bad_repr} on a 'shell' tool, generated by \
-                         {generating_effect_path}; the host config and this document's own \
-                         shell effects don't already allow {bad_repr} -- add it to a literal \
-                         shell effect's allowed_commands in the document, or to \
-                         runtime.plugins.shell.allowed_commands."
-                    ));
-                }
-            } else if provider_name.as_deref() == Some("service") && as_bool(get(params, "shell")) {
-                errors.push(format!(
-                    "generated effect '{effect_label}' sets params.shell: true on a \
-                     'service' tool, generated by {generating_effect_path}; a document \
-                     generated at run time can never do that."
-                ));
-            } else if let Some(provider_name) = provider_name {
-                // A provider that isn't even a known plugin fails the usual way (an
-                // "Unknown plugin" error at dispatch) instead of this one -- adding an
-                // unknown name to allow_tools would itself be a check error, so this
-                // refusal is only for a real plugin the document that generated it
-                // simply doesn't use.
-                let is_known =
-                    known_providers.is_none_or(|known| known.contains(provider_name.as_str()));
-                if let Some(allowed) = allowed_providers {
-                    if is_known && !allowed.contains(provider_name.as_str()) {
-                        if allow_tools_available {
-                            errors.push(format!(
-                                "generated effect '{effect_label}' uses tool provider \
-                                 '{provider_name}', which the document that generated it \
-                                 doesn't use; add '{provider_name}' to allow_tools on \
-                                 {generating_effect_path} to allow it."
-                            ));
-                        } else {
-                            errors.push(format!(
-                                "generated effect '{effect_label}' uses tool provider \
-                                 '{provider_name}', generated by {generating_effect_path}; it \
-                                 isn't among the tool providers the document it serves already \
-                                 uses, plus the fixed set a generated plan is always allowed \
-                                 (json, regex, math, cel, clock, hash, base64, hex, uuid, csv, \
-                                 validate_yaml)."
-                            ));
-                        }
-                    }
-                }
-            }
+            tool_effect_errors(
+                &effect_label,
+                provider_name.as_deref(),
+                params,
+                allowed_providers,
+                known_providers,
+                allowed_shell_commands,
+                generating_effect_path,
+                allow_tools_available,
+                errors,
+            );
         } else if etype == "dynamic" {
             walk_generated_errors(
                 effects_of(effect),
@@ -867,6 +1033,54 @@ pub fn generated_document_errors_with_shell(
             &mut errors,
         );
     }
+    errors
+}
+
+/// `circuitry.generated_doc.dispatch_errors` -- the authoritative check,
+/// run right before a tool effect dispatches, on every attempt, against
+/// its *final* provider and params, after Mustache rendering and the
+/// `params_json` merge.
+///
+/// A no-op (returns an empty `Vec`) when the document currently
+/// executing carries no limits (`!frame.document_is_generated()`) -- a
+/// literal document's own tool effects are never checked here, only by
+/// the allowlist/capability gates that already cover every document.
+/// Otherwise calls the same [`tool_effect_errors`] the compile-time walk
+/// ([`generated_document_errors`]) calls, so the two can never disagree
+/// on what a rule means -- only on what each can see: this sees
+/// whatever `params_json` merged in and every retry's own rendered
+/// values; the walk only ever sees the parsed, pre-`params_json`
+/// document.
+pub fn dispatch_errors(
+    provider: &str,
+    params: Option<&Dict>,
+    frame: &crate::frame::Frame,
+    effect_label: &str,
+) -> Vec<String> {
+    if !frame.document_is_generated() {
+        return Vec::new();
+    }
+    let normalized_provider = {
+        let normalized = py_strip(provider).to_lowercase();
+        if normalized.is_empty() { None } else { Some(normalized) }
+    };
+    let allowed_providers = frame.document_tool_providers().clone();
+    let known_providers: BTreeSet<String> = electricity_tools::registry::supported_names()
+        .into_iter()
+        .collect();
+    let empty = Dict::new();
+    let mut errors = Vec::new();
+    tool_effect_errors(
+        effect_label,
+        normalized_provider.as_deref(),
+        params.unwrap_or(&empty),
+        Some(&allowed_providers),
+        Some(&known_providers),
+        frame.document_shell_commands(),
+        frame.generating_effect_path(),
+        frame.allow_tools_available(),
+        &mut errors,
+    );
     errors
 }
 

@@ -312,6 +312,7 @@ fn fresh_ceiling(
     bool,
     std::collections::BTreeSet<String>,
     std::collections::BTreeSet<String>,
+    String,
 ) {
     let host_pin = crate::generated_doc::host_shell_pin(runtime_config);
     (
@@ -321,6 +322,7 @@ fn fresh_ceiling(
             &crate::generated_doc::static_shell_allowed_commands(document),
             host_pin.as_ref(),
         ),
+        String::new(),
     )
 }
 
@@ -939,59 +941,67 @@ async fn attempt_once<R: ParamsCtx>(
     let own_doc_is_generated = frame.document_is_generated();
     let enclosing_providers = frame.document_tool_providers().clone();
     let enclosing_shell_commands = frame.document_shell_commands().clone();
-    let (child_is_generated, child_tool_providers, child_shell_commands) = match &use_op.source {
-        UseSource::Path(_) | UseSource::Orchestration(_) => {
-            // A path/ref child is its own, independently trusted document --
-            // never generated, whatever this one is.
-            fresh_ceiling(&loaded.document, run_ctx.runtime_config)
-        }
+    // A path/ref/orchestration child loads from disk; it is its own,
+    // independently trusted document unless the document that carries
+    // this use effect is itself generated, in which case it inherits
+    // that document's ceiling unchanged, same as a rendered inline
+    // child would (#772: closes the gap where such a child always got
+    // a fresh ceiling regardless of the enclosing document).
+    let generated = match &use_op.source {
+        UseSource::Path(_) | UseSource::Orchestration(_) => own_doc_is_generated,
         UseSource::Inline(text) => {
-            let generated = own_doc_is_generated
+            own_doc_is_generated
                 || use_op.force_generated
-                || crate::generated_doc::is_generated_inline(&text.source, &loaded.document);
-            if !generated {
-                fresh_ceiling(&loaded.document, run_ctx.runtime_config)
-            } else {
-                let generating_effect_path = use_op
-                    .generating_effect_path_override
-                    .clone()
-                    .unwrap_or_else(|| frame.local_effect_path(&op.path).to_string());
-                let mut errors = Vec::new();
-                let overreach: std::collections::BTreeSet<String> = use_op
-                    .allow_tools
-                    .difference(&enclosing_providers)
-                    .cloned()
-                    .collect();
-                if own_doc_is_generated && !overreach.is_empty() {
-                    errors.push(format!(
-                        "generated effect '{generating_effect_path}' sets allow_tools to \
-                         include {}, which the document that generated it was not itself \
-                         allowed to use; a document generated at run time can't grant its \
-                         own nested effects anything new this way.",
-                        py_repr_sorted(&overreach)
-                    ));
-                }
-                let allowed_providers = if own_doc_is_generated {
-                    enclosing_providers.clone()
-                } else {
-                    let mut p = enclosing_providers.clone();
-                    p.extend(use_op.allow_tools.iter().cloned());
-                    p
-                };
-                errors.extend(crate::generated_doc::generated_document_errors_with_shell(
-                    &loaded.document,
-                    Some(&allowed_providers),
-                    &generating_effect_path,
-                    Some(&enclosing_shell_commands),
-                    true,
-                ));
-                if !errors.is_empty() {
-                    return Err(not_retried(errors.join("; ")));
-                }
-                (true, allowed_providers, enclosing_shell_commands.clone())
-            }
+                || crate::generated_doc::is_generated_inline(&text.source, &loaded.document)
         }
     };
+    let (child_is_generated, child_tool_providers, child_shell_commands, child_generating_path) =
+        if !generated {
+            fresh_ceiling(&loaded.document, run_ctx.runtime_config)
+        } else {
+            let generating_effect_path = use_op
+                .generating_effect_path_override
+                .clone()
+                .unwrap_or_else(|| frame.local_effect_path(&op.path).to_string());
+            let mut errors = Vec::new();
+            let overreach: std::collections::BTreeSet<String> = use_op
+                .allow_tools
+                .difference(&enclosing_providers)
+                .cloned()
+                .collect();
+            if own_doc_is_generated && !overreach.is_empty() {
+                errors.push(format!(
+                    "generated effect '{generating_effect_path}' sets allow_tools to \
+                     include {}, which the document that generated it was not itself \
+                     allowed to use; a document generated at run time can't grant its \
+                     own nested effects anything new this way.",
+                    py_repr_sorted(&overreach)
+                ));
+            }
+            let allowed_providers = if own_doc_is_generated {
+                enclosing_providers.clone()
+            } else {
+                let mut p = enclosing_providers.clone();
+                p.extend(use_op.allow_tools.iter().cloned());
+                p
+            };
+            errors.extend(crate::generated_doc::generated_document_errors_with_shell(
+                &loaded.document,
+                Some(&allowed_providers),
+                &generating_effect_path,
+                Some(&enclosing_shell_commands),
+                true,
+            ));
+            if !errors.is_empty() {
+                return Err(not_retried(errors.join("; ")));
+            }
+            (
+                true,
+                allowed_providers,
+                enclosing_shell_commands.clone(),
+                generating_effect_path,
+            )
+        };
 
     // Cycle detection -- the stack is per call path (`Frame::
     // push_use`'s own fresh `Vec`), checked after the allowlist check,
@@ -1023,6 +1033,11 @@ async fn attempt_once<R: ParamsCtx>(
             child_tool_providers,
             child_shell_commands,
             child_is_generated,
+            child_generating_path,
+            // A use effect always has its own allow_tools field, so a
+            // refusal inside this child always names it as the fix,
+            // never the decomposition-plan fixed set.
+            true,
         );
 
     let child_program = electricity_compiler::compile_document(&loaded.document, &loaded.origin)
