@@ -1775,7 +1775,7 @@
               "expect": {
                 "mode": "cel",
                 "expr": "value.missing == 1",
-                "error": "CEL evaluation failed for 'value.missing == 1': (\"no such member in mapping: 'missing'\", <class 'KeyError'>, None)",
+                "error": "CEL evaluation failed for 'value.missing == 1': no such key: 'missing'",
                 "result": false
               }
             }
@@ -1950,7 +1950,7 @@
               "expect": {
                 "mode": "cel",
                 "expr": "value.missing == 1",
-                "error": "CEL evaluation failed for 'value.missing == 1': (\"no such member in mapping: 'missing'\", <class 'KeyError'>, None)",
+                "error": "CEL evaluation failed for 'value.missing == 1': no such key: 'missing'",
                 "result": false
               }
             }

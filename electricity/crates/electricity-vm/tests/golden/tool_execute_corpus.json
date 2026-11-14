@@ -3333,7 +3333,7 @@
                         },
                         {
                           "t": "str",
-                          "v": "CEL evaluation failed for 'value.missing == 1': (\"no such member in mapping: 'missing'\", <class 'KeyError'>, None)"
+                          "v": "CEL evaluation failed for 'value.missing == 1': no such key: 'missing'"
                         }
                       ],
                       [

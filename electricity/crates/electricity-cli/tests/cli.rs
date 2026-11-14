@@ -1178,11 +1178,13 @@ fn run_subcommand_with_no_orchestration_fails_with_cofs_own_text_and_exit_one() 
     );
 }
 
-/// `--resume last` with no `--state <file>` (issue #727): `cof run`'s
-/// own `_resolve_resume_state` fails this with a `typer.BadParameter`
-/// the caller re-raises as `typer.Exit(code=1)` -- a pre-run refusal,
-/// exit 1, writing no `--out` at all, never a raw CLI usage error
-/// (exit 2).
+/// `--resume last` with no `--state <file>` and no stash at all (issue
+/// #760): `cof run`'s own `_resolve_resume_state` fails this with a
+/// `typer.BadParameter` the caller re-raises as `typer.Exit(code=1)` --
+/// a pre-run refusal, exit 1, writing no `--out` at all, never a raw
+/// CLI usage error (exit 2). `command()`'s own sandboxed `HOME` has no
+/// `.config/circuitry/last-run.json` of its own, so this is "no
+/// previous run", not one of `--resume last`'s other refusals.
 #[test]
 fn run_subcommand_resume_last_with_no_state_is_refused_with_exit_one_and_writes_nothing() {
     let (mut cmd, home) = command("run-sub-resume-last-no-state");
@@ -1207,8 +1209,7 @@ fn run_subcommand_resume_last_with_no_state_is_refused_with_exit_one_and_writes_
     assert!(output.stderr.is_empty(), "{:?}", output.stderr);
     let payload: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
     let error = payload["error"].as_str().unwrap();
-    assert!(error.contains("--last stash"), "{error}");
-    assert!(error.contains("--state <file>"), "{error}");
+    assert!(error.contains("No previous run found"), "{error}");
     assert!(!out.exists());
 }
 
@@ -1560,6 +1561,148 @@ fn run_subcommand_resume_with_no_out_writes_back_to_the_state_file() {
     assert!(state["prime"]["a"]["meta"]["completed_at"].is_string());
 }
 
+/// `--last` stash path, beside the global config (issue #760).
+fn last_run_path(home: &std::path::Path) -> PathBuf {
+    home.join(".config").join("circuitry").join("last-run.json")
+}
+
+/// Every ordinary run writes the stash (issue #760) -- success or
+/// failure, and with the same shape `cof run`'s own `_save_last_run`
+/// writes: the orchestration path as given, the redacted `-e` list,
+/// and a flag this engine has no equivalent of (`tail`) still present
+/// as `false`, not simply absent.
+#[test]
+fn run_subcommand_writes_the_last_run_stash_with_cofs_own_shape() {
+    let (mut cmd, home) = command("run-sub-last-stash-write");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let out = home.path.join("out.json");
+    let output = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "-e",
+            "name=World",
+            "-e",
+            "OPENAI_API_KEY=sk-test-1234567890abcdef1234567890abcdef",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+
+    let stash_path = last_run_path(&home.path);
+    let stash: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&stash_path).unwrap()).unwrap();
+    assert_eq!(stash["orchestration"], doc.to_str().unwrap());
+    assert_eq!(stash["out"], out.to_str().unwrap());
+    assert_eq!(stash["trust_document"], true);
+    assert_eq!(stash["remote_library_source"], false);
+    assert_eq!(stash["tail"], false);
+    assert_eq!(stash["print_state"], false);
+    let env_vars = stash["env_vars"].as_array().unwrap();
+    assert_eq!(env_vars[0], "name=World");
+    // The secret-shaped value is redacted before the stash ever reaches
+    // disk -- the raw value never appears anywhere in the file.
+    assert_eq!(env_vars[1], "OPENAI_API_KEY=***REDACTED***");
+    let raw = fs::read_to_string(&stash_path).unwrap();
+    assert!(!raw.contains("sk-test-1234567890abcdef1234567890abcdef"));
+}
+
+/// `--last` replays the stashed run's own arguments, and never
+/// rewrites the stash it just read (issue #760) -- a replay is not
+/// itself a new "last run" to remember.
+#[test]
+fn run_subcommand_last_replays_without_rewriting_the_stash() {
+    let (mut cmd, home) = command("run-sub-last-replay");
+    let config = home.config("{}");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "interface:\n  inputs:\n    name: {type: string, default: 'none'}\n\
+         effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let out = home.path.join("out.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "-e",
+            "name=World",
+            "--out",
+            out.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+
+    let stash_path = last_run_path(&home.path);
+    let stash_before = fs::read_to_string(&stash_path).unwrap();
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let replayed = cmd2.args(["run", "--last"]).output().unwrap();
+    assert_eq!(replayed.status.code(), Some(0), "{:?}", replayed.stderr);
+
+    let state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
+    assert_eq!(state["input"]["name"], "World");
+    assert_eq!(fs::read_to_string(&stash_path).unwrap(), stash_before);
+}
+
+/// `--last` with no stash at all fails the same way a real `cof run
+/// --last` does: a usage error (exit 2), not the exit-1 plain-text
+/// shape every other `--resume`/`--last` refusal in this file uses
+/// (confirmed directly against a real `cof run --last`, issue #760).
+#[test]
+fn run_subcommand_last_with_no_stash_is_a_usage_error() {
+    let (mut cmd, _home) = command("run-sub-last-no-stash");
+    let output = cmd.args(["run", "--last"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(2), "{:?}", output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("No previous run found. Run an orchestration first."),
+        "{stderr}"
+    );
+}
+
+/// A stash whose `-e` values were redacted (a credential-shaped value
+/// from an earlier run) refuses to replay via `--last` rather than
+/// sending the literal redaction marker as a real value (issue #760).
+#[test]
+fn run_subcommand_last_refuses_a_stash_with_redacted_secrets() {
+    let (mut cmd, home) = command("run-sub-last-redacted");
+    let doc = home.path.join("doc.yml");
+    fs::write(&doc, FAILURE_DOC).unwrap();
+    let stash_dir = home.path.join(".config").join("circuitry");
+    fs::create_dir_all(&stash_dir).unwrap();
+    fs::write(
+        stash_dir.join("last-run.json"),
+        serde_json::json!({
+            "orchestration": doc.to_str().unwrap(),
+            "env_vars": ["OPENAI_API_KEY=***REDACTED***"],
+        })
+        .to_string(),
+    )
+    .unwrap();
+    let output = cmd.args(["run", "--last"]).output().unwrap();
+    assert_eq!(output.status.code(), Some(1), "{:?}", output.stderr);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.starts_with("Error: previous run included redacted secrets in -e values.\n"),
+        "{stdout}"
+    );
+}
+
 /// The legacy form's own first positional already is the config path
 /// -- `--config`/`-c` there is rejected as redundant rather than
 /// silently ignored (issue #728's own review).
@@ -1590,7 +1733,7 @@ fn help_text_names_every_run_subcommand_option() {
     let (mut cmd, _home) = command("help-run-options");
     let output = cmd.arg("--help").output().unwrap();
     let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(stdout.contains("electricity run <orchestration.yml>"));
+    assert!(stdout.contains("electricity run [orchestration.yml]"));
     for flag in [
         "--config",
         "--allow-capabilities",

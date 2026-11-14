@@ -351,15 +351,14 @@ doesn't lose the 249 frames it already rendered. `cof run frames.yml --state
 run.json --resume x` picks up at frame 250, and the adapter/tool calls for
 frames 0–249 never happen again.
 
-`electricity run` has the same `--state <file> --resume <anything>`
-(and `--force`) flags, applying the same skip/rerun rule — a state file
-either engine wrote resumes on the other, with the same result. Its own
-`--resume` always needs `--state <file>` naming the saved state directly:
-`--resume last`/a run-id (this section's own persistence lookup) aren't
-supported on electricity, and given without `--state <file>` either, it
-refuses the same way cof's own safety checks do — before anything runs,
-writing no state, exit 1. electricity's own `--last` stash is tracked
-separately (#760).
+`electricity run` has the same `--state <file> --resume <anything>`,
+`--resume last`, `--force` and `--last` flags, applying the same
+skip/rerun rule — a state file either engine wrote resumes on the other,
+with the same result, and `--last`/`--resume last` read the same stash
+either engine wrote. A bare run-id (this section's own persistence
+lookup) still isn't supported on electricity, and `--resume` given
+without `--state <file>` or `--resume last` refuses the same way cof's
+own safety checks do — before anything runs, writing no state, exit 1.
 
 Continuing where a run stopped is wrong for a scope whose first effects start
 something its `finally:` stops — a server, a lock, a migration. The stopped

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #629",
+  "description": "A tool's `expect: {mode: cel, expr: \"value[5] == 1\"}` against a list with no index 5: the `cel` tool shares this same evaluator (#735), so its `expect:` failure gets the same table text ('list index out of range: 5'), identical in both engines, never a container's contents.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

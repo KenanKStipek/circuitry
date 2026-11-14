@@ -1,0 +1,55 @@
+name: c629-cel-error-texts-continue
+effects:
+  - type: if
+    name: missing_string_key
+    on_error: continue
+    if:
+      mode: cel
+      expr: "{'a': 1, 'b': [1, 2]}['zz'] == 1"
+    then: []
+  - type: if
+    name: missing_int_key
+    on_error: continue
+    if:
+      mode: cel
+      expr: "{'a': 1, 'b': [1, 2]}[7] == 1"
+    then: []
+  - type: if
+    name: list_index_out_of_range
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[1, 2, 3][5] == 1"
+    then: []
+  - type: if
+    name: list_indexed_by_a_string
+    on_error: continue
+    if:
+      mode: cel
+      expr: "[1, 2, 3]['a'] == 1"
+    then: []
+  - type: if
+    name: int_indexed_by_an_int
+    on_error: continue
+    if:
+      mode: cel
+      expr: "5[0] == 1"
+    then: []
+  - type: if
+    name: division_by_zero
+    on_error: continue
+    if:
+      mode: cel
+      expr: "1 / 0 == 1"
+    then: []
+  - type: if
+    name: modulus_by_zero
+    on_error: continue
+    if:
+      mode: cel
+      expr: "1 % 0 == 1"
+    then: []
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}

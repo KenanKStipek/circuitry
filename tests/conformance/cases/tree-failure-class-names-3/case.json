@@ -7,19 +7,19 @@
   "third_party_text": [
     {
       "location": "prime.fan.meta.error",
-      "pattern": "3 effects failed in parallel:\n  \\[1\\] CelEvaluationError: fan\\.cel_gate: CEL evaluation failed for '1 / 0': .*\n  \\[2\\] CelEvaluationError: fan\\.cel_loop: CEL evaluation failed for '1 / 0': .*\n  \\[3\\] AnswerParseError: fan\\.model_gate: could not parse a yes/no answer from 'maybe'"
+      "pattern": "3 effects failed in parallel:\n  \\[1\\] CelEvaluationError: fan\\.cel_gate: CEL evaluation failed for '1 / 0': division by zero\n  \\[2\\] CelEvaluationError: fan\\.cel_loop: CEL evaluation failed for '1 / 0': division by zero\n  \\[3\\] AnswerParseError: fan\\.model_gate: could not parse a yes/no answer from 'maybe'"
     },
     {
       "location": "prime.fan.cel_gate.meta.error",
-      "pattern": "CEL evaluation failed for '1 / 0': .*"
+      "pattern": "CEL evaluation failed for '1 / 0': division by zero"
     },
     {
       "location": "prime.fan.cel_loop.meta.error",
-      "pattern": "CEL evaluation failed for '1 / 0': .*"
+      "pattern": "CEL evaluation failed for '1 / 0': division by zero"
     },
     {
       "location": "prime.fan.cel_loop.value.termination.detail",
-      "pattern": "CEL evaluation failed for '1 / 0': .*"
+      "pattern": "CEL evaluation failed for '1 / 0': division by zero"
     }
   ]
 }

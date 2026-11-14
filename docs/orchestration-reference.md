@@ -2299,6 +2299,54 @@ only fails here) is one line, never a dump of CEL's own internal state:
 CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'
 ```
 
+A missing map key, an out-of-range or wrong-type index, indexing a
+non-container, division by zero and modulus by zero are the same one line in
+both engines too — the key or index and the container's type, never the
+container's own contents:
+
+```
+CEL evaluation failed for "state.input.m['zz'] == 1": no such key: 'zz'
+CEL evaluation failed for 'state.input.l[5] == 1': list index out of range: 5
+CEL evaluation failed for 'state.input.n[0] == 1': cannot index an int with an int
+CEL evaluation failed for '1 / 0 == 1': division by zero
+CEL evaluation failed for '1 % 0 == 1': modulus by zero
+```
+
+The same holds for every other case where the underlying library would
+otherwise leak a Python/Rust implementation detail — an `int`/`uint`
+overflow, a map literal's duplicate or invalid key, selecting a field on
+something that has none, and `in` against a type it can't search:
+
+```
+CEL evaluation failed for '9223372036854775807 + 1 == 1': return error for overflow
+CEL evaluation failed for "{'a': 1, 'a': 2}.a == 1": duplicate key: 'a'
+CEL evaluation failed for '{[1]: 2} == {}': cannot use a list as a key
+CEL evaluation failed for '[1, 2].zz == 1': cannot select field 'zz' on a list
+CEL evaluation failed for '5 in 5': cannot apply 'in' to an int and an int
+```
+
+A map key of the wrong exact numeric type (an `int`-keyed map probed with a
+`uint` or a `bool` of the same value) is also one line naming the mismatch,
+not a silent miss — the two numeric types compare equal elsewhere in CEL,
+but a map's own key lookup does not cross between them:
+
+```
+CEL evaluation failed for 'state.input.m[1u] == 1': cannot index a map with a uint
+```
+
+An expression nested too deeply to parse — deep parenthesisation, a long
+accessor chain — is a compile-time rejection in both engines, named the same
+way as any other check error, never the parser's own dump or the whole
+expression quoted back:
+
+```
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply
+```
+
+The depth at which each engine gives up differs (Python's own recursion
+limit for cof, the `cel` crate's parser for electricity), but the text naming
+it does not.
+
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset read that decides the
 expression's result makes it `False` and logs a warning naming the path.
@@ -2538,16 +2586,18 @@ opt-in behavior from plain `--state`/persistence carryover (above and
 [Loop Iteration Paths](#loop-iteration-paths)), which only seeds a run's
 starting state and reruns every effect regardless of what already finished.
 
-`electricity run` has the same `--state <file> --resume <anything>` and
-`--force` flags, with this section's own skip-and-continue rules applied
-the same way (everything below, `resume: restart` included) — a state
-file either engine wrote resumes on the other. `--resume last`/a run-id
-(the other two rows of the table below) aren't supported: electricity has
-no `--last` stash and `runtime.persistence` stays refused on it, so
-`--resume` always needs `--state <file>` naming the saved state directly—
-given without it, electricity refuses the same way cof's own safety checks
-do (before anything runs, writing no state, exit 1). electricity's own
-`--last` stash is tracked separately (#760).
+`electricity run` has the same `--state <file> --resume <anything>`,
+`--resume last`, `--force` and `--last` flags, with this section's own
+skip-and-continue rules applied the same way (everything below,
+`resume: restart` included) — a state file either engine wrote resumes
+on the other, and `--last`/`--resume last` read the same stash either
+engine wrote (`~/.config/circuitry/last-run.json`), with the same checks
+and messages: no previous run, an unreadable stash, a different
+orchestration, no `--out`, a gone `--out` file, or a redacted `-e` value
+refusing `--last`. A bare run-id (the one remaining row of the table
+below) still isn't supported: `runtime.persistence` stays refused on
+electricity, so `--resume <run-id>` refuses the same way cof's own safety
+checks do (before anything runs, writing no state, exit 1).
 
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An
@@ -2674,7 +2724,7 @@ wrote:
 | `--resume` form | Source |
 |---|---|
 | `--state <file> --resume <anything>` | that file, read directly — the value after `--resume` is ignored |
-| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`); that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
+| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`), shared by cof and electricity; that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
 | `--resume <run-id>` | looked up in the orchestration's configured `runtime.persistence` backend, scoped to that same orchestration path — a run that *failed* is looked up and found here too, not only one that succeeded |
 
 A run interrupted by Ctrl-C/SIGINT, killed by SIGTERM (`kill <pid>`, a

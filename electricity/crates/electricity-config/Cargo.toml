@@ -10,6 +10,10 @@ description = "config.json -> effective settings for electricity orchestrations 
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-json = { path = "../electricity-json" }
+# `last_run`'s own `redact_env_pairs` (issue #760) -- the same credential
+# redaction `--out`/`--live-state`/`--events` already apply, reused for the
+# `--last` stash's own `env_vars` entries.
+electricity-redaction = { path = "../electricity-redaction" }
 # `runtime_env_secrets`'s own well-formedness check (issue #725) --
 # `electricity_bytecode::secrets` is the one shared, dependency-cycle-
 # free home for the `{secret: ...}` shape predicates both this crate

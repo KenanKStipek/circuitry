@@ -1183,6 +1183,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
             ),
             warnings: Vec::new(),
             signal: None,
+            resume_refused: false,
         };
     };
     match electricity_config::resolve_config(config_path, &env_vars) {
@@ -1194,6 +1195,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
             error: Some(err.0),
             warnings: Vec::new(),
             signal: None,
+            resume_refused: false,
         },
     }
 }
@@ -1239,6 +1241,7 @@ pub async fn run_orchestration_with_config(
                         error: Some(format!("state file not found: {}", state_path.display())),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 }
             };
@@ -1254,6 +1257,7 @@ pub async fn run_orchestration_with_config(
                         ),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 }
                 Err(err) => {
@@ -1264,6 +1268,7 @@ pub async fn run_orchestration_with_config(
                         error: Some(format!("{}: {err}", state_path.display())),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 }
             };
@@ -1317,6 +1322,7 @@ pub async fn run_orchestration_with_config(
                 error: Some(error),
                 warnings,
                 signal,
+                resume_refused: false,
             };
         }};
     }
@@ -1342,6 +1348,7 @@ pub async fn run_orchestration_with_config(
                 error: Some(error),
                 warnings,
                 signal,
+                resume_refused: true,
             };
         }};
     }
@@ -1754,6 +1761,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_config_refusal("runtime.persistence")),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
     if !effective.plugins.is_empty() {
@@ -1770,6 +1778,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_config_refusal(&format!("runtime plugins ({names})"))),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2129,6 +2138,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_refusal(&refusal)),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2153,6 +2163,7 @@ pub async fn run_orchestration_with_config(
             error: Some(refusal),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2187,6 +2198,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_permanent_adapter_refusal(&name)),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2208,6 +2220,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_config_refusal(&format!("tool provider '{name}'"))),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2232,6 +2245,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_permanent_adapter_refusal(&name)),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2355,6 +2369,7 @@ pub async fn run_orchestration_with_config(
                         error: Some(format_permanent_adapter_refusal(&normalized)),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 } else if known_but_unbuildable {
                     // Reachable only when a `use` effect alone
@@ -2567,6 +2582,7 @@ pub async fn run_orchestration_with_config(
         error,
         warnings,
         signal,
+        resume_refused: false,
     }
 }
 
