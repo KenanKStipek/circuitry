@@ -795,6 +795,11 @@ fn run_glance(
         has_failure_reason: failure_reason_fallback(&run_dir, &model).is_some(),
         exited_at: Some(now_rfc3339()),
     };
+    // Issue #780: this run never ran through the TUI's own redraw
+    // loop, the only caller that ever calls `RunModel::observe` with
+    // state, so every step's own tokens still need backfilling here,
+    // right before the record is written.
+    model.backfill_from_final_state(current_state.as_ref(), &plan);
     history.write(Some(engine_name), current_state.as_ref(), &model, &plan);
     write_glance_line(
         &mut out,
@@ -1014,6 +1019,9 @@ fn watch_glance(
             .run_start_pid()
             .is_some_and(oscilloscope_core::supervise::process_alive),
     );
+    // Issue #780: same backfill as above, `--glance`'s own other
+    // ending.
+    model.backfill_from_final_state(last_state.as_ref(), &plan);
     // Issue #649: "`osi watch` writes only when the watched run
     // really ended" -- `HistoryHandle::write` itself checks
     // `run_ended`, so a voluntary detach or a dead-pid abort (neither
@@ -1408,6 +1416,9 @@ fn finish_run(
     for line in lines {
         print_line(out, clock, line.ts.as_deref(), &line.text);
     }
+    // Issue #780: `--log` never runs the TUI's own redraw loop
+    // either, so every step's own tokens need backfilling here too.
+    model.backfill_from_final_state(final_state.as_ref(), plan);
     // Issue #649: every ending writes the record, once the final
     // state is in hand -- `HistoryHandle::write` itself is a no-op
     // for a run that never truly ended (an abort with no final
@@ -6035,6 +6046,9 @@ fn finish_watch(
     if let Some(state) = &final_state {
         *last_state = Some(state.clone());
     }
+    // Issue #780: plain `osi watch` never runs the TUI's own redraw
+    // loop either.
+    model.backfill_from_final_state(final_state.as_ref(), plan);
     // Issue #649: only ever reached once `detached_while_live` has
     // already returned above, so this is exactly "the watched run
     // really ended" -- `HistoryHandle::write` itself checks

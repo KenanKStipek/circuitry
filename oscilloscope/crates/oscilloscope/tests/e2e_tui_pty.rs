@@ -87,6 +87,33 @@ fn wait_for_pattern_since(
     }
 }
 
+/// Polls *events_path* until it carries a `run_end` line, bounded at
+/// *timeout* -- issue #780's history test needs each of its own
+/// history-building runs to have genuinely ended (not merely
+/// started) before quitting the TUI, since `HistoryHandle::write`
+/// itself is a no-op for a run that hasn't.
+fn wait_for_run_end(events_path: &Path, timeout: Duration) {
+    let start = Instant::now();
+    loop {
+        if let Ok(text) = std::fs::read_to_string(events_path) {
+            let ended = text.lines().any(|line| {
+                serde_json::from_str::<serde_json::Value>(line)
+                    .ok()
+                    .and_then(|v| v.get("ev").and_then(|e| e.as_str()).map(str::to_string))
+                    .as_deref()
+                    == Some("run_end")
+            });
+            if ended {
+                return;
+            }
+        }
+        if start.elapsed() > timeout {
+            panic!("{events_path:?} never carried a run_end event within {timeout:?}");
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
 /// [`wait_for_pattern`], read straight off `master` itself rather
 /// than a [`drain_continuously`] buffer -- the one test below that
 /// needs to close `master` itself afterward can't hand it to
@@ -3039,6 +3066,238 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
         Some(130),
         "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
     );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #780: a step's recorded interval carries its own tokens and
+/// cost from state even when it has id-paired `--events` coverage of
+/// its own, which `osi` always writes for an attached run -- without
+/// that fix, every history record's own steps had timing but never
+/// tokens, so neither figure below could ever appear. Three finished
+/// TUI runs of a three-step document (a prompt, a short sleep, a
+/// second prompt) build that history; the fourth run's own Tape then
+/// shows `usually N t` on the second prompt's row while it's still
+/// ahead (queued behind the sleep), and pressing `t` shows a real
+/// deviation (`+20%`) for the first prompt once it has finished, not
+/// `—`.
+#[test]
+fn history_across_four_runs_shows_usual_tokens_and_a_deviation() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n  - name: pause\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n  - name: again\n    type: prompt\n    template: \"hi again\"\n",
+    );
+    // The three history-building runs: `ask` always replies with the
+    // same 150 tokens total, `again` with the same 100 -- a fixed
+    // point `history::StepStats::tokens_p50` resolves to exactly
+    // once there are three of them (`P50_MIN_RUNS`). Run through the
+    // real TUI, not `--log`: only its own redraw loop ever calls
+    // `RunModel::observe` with state, the one path that records a
+    // step's own tokens at all (issue #780).
+    let replies_history = write_doc(
+        work.path(),
+        "replies_history.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 100\n    tokens_received: 50\nprime.again:\n  - text: \"hi again back\"\n    tokens_sent: 80\n    tokens_received: 20\n",
+    );
+    let config_history = write_doc(
+        work.path(),
+        "config_history.json",
+        &scripted_config(&replies_history),
+    );
+    for i in 0..3 {
+        let out_dir = tempfile::tempdir().unwrap();
+        let (master, slave_path) = open_pty();
+        let mut master = master;
+        let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+        let child = spawn_osi_on_pty(
+            &home,
+            &slave_path,
+            &[
+                doc.as_os_str(),
+                config_history.as_os_str(),
+                OsStr::new("--out-dir"),
+                out_dir.path().as_os_str(),
+            ],
+        );
+        wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+        wait_for_run_end(
+            &out_dir.path().join("events.jsonl"),
+            Duration::from_secs(30),
+        );
+        // A tick for the TUI's own redraw loop to observe the ended
+        // state and let `HistoryHandle::write` fire before `q` tears
+        // the whole process down.
+        std::thread::sleep(Duration::from_millis(500));
+        send_bytes(&mut master, b"q");
+        let status = wait_with_timeout(child, Duration::from_secs(30));
+        assert!(
+            status.success(),
+            "history run {i} should exit 0, got {status:?}"
+        );
+    }
+
+    // The fourth, live run: `ask` replies with 180 tokens this time
+    // (100 sent, 80 received) -- +20% over the 150-token usual the
+    // three runs above just recorded.
+    let replies_live = write_doc(
+        work.path(),
+        "replies_live.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 100\n    tokens_received: 80\nprime.again:\n  - text: \"hi again back\"\n    tokens_sent: 80\n    tokens_received: 20\n",
+    );
+    let config_live = write_doc(
+        work.path(),
+        "config_live.json",
+        &scripted_config(&replies_live),
+    );
+    let out_dir = tempfile::tempdir().unwrap();
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config_live.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    // `pause` has started, so `ask` has already finished and
+    // `again` is still ahead, queued behind it.
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.pause",
+        Duration::from_secs(20),
+    );
+
+    {
+        let screen = wait_for_screen_text(&captured_buf, "usually 100 t", Duration::from_secs(10));
+        assert!(
+            screen.contains("usually 100 t"),
+            "expected the still-ahead `again` row to show its own usual tokens from history; got:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"t");
+    {
+        // Checked on the `ask` row itself, not merely anywhere on
+        // screen: the Totals row already shows its own `+20%` (180
+        // actual against a 150-token usual-so-far) before `t` is
+        // even pressed, so a bare `screen.contains("+20%")` would
+        // pass whether or not the `t` view's own per-step deviation
+        // ever drew at all.
+        let screen = wait_for_screen_text(&captured_buf, "+20%", Duration::from_secs(10));
+        let ask_row_has_deviation = screen
+            .lines()
+            .any(|line| line.contains("ask") && line.contains("+20%"));
+        assert!(
+            ask_row_has_deviation,
+            "expected the finished `ask` row itself to show a real +20% deviation from its own usual, not —; got:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, \"pause\" was still sleeping); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #627/#780: once an adapter reports cached input (`meta.
+/// tokens_cached_in` on a finished effect), the Totals row shows it
+/// right after the sent figure, as a muted parenthetical. The test
+/// patches a real, finished run's own state file to carry the key, so
+/// it doesn't depend on which adapters record it (issue #627).
+#[test]
+fn totals_row_shows_cached_input_from_a_patched_state_file() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 100\n    tokens_received: 50\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let mut cof = Command::new("cof");
+    cof.arg("run")
+        .arg(&doc)
+        .arg("--config")
+        .arg(&config)
+        .arg("--quiet")
+        .arg("--live-state")
+        .arg(run_dir.path().join("state.live.json"))
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        cof.env_remove(key);
+    }
+    let cof_status = wait_with_timeout(cof.spawn().expect("spawn cof"), Duration::from_secs(30));
+    assert!(cof_status.success());
+
+    // Stands in for issue #627's own engine-side change: a real
+    // adapter would write this key itself, next to `tokens_sent`,
+    // on the finished node -- never in `runtime.last_run.totals`,
+    // which no real engine writes it to either yet, so the header's
+    // own fallback (summed from every node that reported one) is
+    // what's actually under test here.
+    let state_path = run_dir.path().join("state.json");
+    let mut state: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+    state["prime"]["ask"]["meta"]["tokens_cached_in"] = serde_json::json!(40);
+    std::fs::write(&state_path, serde_json::to_string(&state).unwrap()).unwrap();
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[OsStr::new("watch"), run_dir.path().as_os_str()],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "cached", Duration::from_secs(10));
+    assert!(
+        screen.contains("(40 t cached)"),
+        "expected the Totals row to show the patched node's own cached input; got:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi watch should exit 0, got {status:?}");
     assert_no_leftover_process(work.path());
 }
 
