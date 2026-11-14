@@ -526,8 +526,9 @@ async fn decide_and_run<'a>(
     Ok(())
 }
 
-/// `meta["answer"]` through `meta["tokens_received"]`, in that order
-/// -- the 5 keys a model-mode `if`'s own `_evaluate_model` writes,
+/// `meta["answer"]` through `meta["tokens_received"]`, plus
+/// `tokens_cached_in`/`tokens_cache_write` when the reply carries them
+/// -- the keys a model-mode `if`'s own `_evaluate_model` writes,
 /// whether the call succeeded (then appended after `condition_result`/
 /// `branch`) or failed (then written before them, issue #513 Scope
 /// §1). *generated* is `None` for a dry run, a render failure or an
@@ -568,6 +569,12 @@ fn write_model_condition_reply(
             .map(Value::from)
             .unwrap_or(Value::None),
     );
+    if let Some(cached_in) = generated.and_then(|g| g.tokens_cached_in) {
+        store.set_leaf(meta, key("tokens_cached_in"), Value::from(cached_in));
+    }
+    if let Some(cache_write) = generated.and_then(|g| g.tokens_cache_write) {
+        store.set_leaf(meta, key("tokens_cache_write"), Value::from(cache_write));
+    }
 }
 
 fn branch_value(result: bool, branch_label: &str, executed: Vec<Value>) -> Value {
