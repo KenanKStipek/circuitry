@@ -155,7 +155,9 @@ def _walk_tool_providers(effects: Any, providers: set[str]) -> None:
             if prov:
                 providers.add(prov)
         elif etype == "dynamic":
-            _walk_tool_providers(effect.get("effects") or effect.get("steps"), providers)
+            _walk_tool_providers(
+                effect.get("effects") or effect.get("steps"), providers
+            )
             _walk_tool_providers(effect.get("finally"), providers)
         elif etype in ("if", "conditional"):
             _walk_tool_providers(effect.get("then"), providers)
@@ -163,13 +165,17 @@ def _walk_tool_providers(effects: Any, providers: set[str]) -> None:
         elif etype == "loop":
             _walk_tool_providers(effect.get("body"), providers)
         elif etype == "reflector":
-            _walk_tool_providers(effect.get("effects") or effect.get("steps"), providers)
+            _walk_tool_providers(
+                effect.get("effects") or effect.get("steps"), providers
+            )
         elif etype == "use":
             inline = effect.get("inline")
             if isinstance(inline, str):
                 parsed = _best_effort_yaml(inline)
                 if isinstance(parsed, dict):
-                    _walk_tool_providers(parsed.get("effects") or parsed.get("steps"), providers)
+                    _walk_tool_providers(
+                        parsed.get("effects") or parsed.get("steps"), providers
+                    )
                     _walk_tool_providers(parsed.get("finally"), providers)
 
 
@@ -205,7 +211,9 @@ def _walk_shell_allowed_commands(effects: Any, commands: set[str]) -> None:
                 if isinstance(allowed, list):
                     commands.update(c for c in allowed if isinstance(c, str))
         elif etype == "dynamic":
-            _walk_shell_allowed_commands(effect.get("effects") or effect.get("steps"), commands)
+            _walk_shell_allowed_commands(
+                effect.get("effects") or effect.get("steps"), commands
+            )
             _walk_shell_allowed_commands(effect.get("finally"), commands)
         elif etype in ("if", "conditional"):
             _walk_shell_allowed_commands(effect.get("then"), commands)
@@ -213,7 +221,9 @@ def _walk_shell_allowed_commands(effects: Any, commands: set[str]) -> None:
         elif etype == "loop":
             _walk_shell_allowed_commands(effect.get("body"), commands)
         elif etype == "reflector":
-            _walk_shell_allowed_commands(effect.get("effects") or effect.get("steps"), commands)
+            _walk_shell_allowed_commands(
+                effect.get("effects") or effect.get("steps"), commands
+            )
         elif etype == "use":
             inline = effect.get("inline")
             if isinstance(inline, str):
@@ -267,7 +277,9 @@ def _walk_definition_tool_providers(effects: Any, providers: set[str]) -> None:
             if effect.inline is not None:
                 parsed = _best_effort_yaml(effect.inline)
                 if isinstance(parsed, dict):
-                    _walk_tool_providers(parsed.get("effects") or parsed.get("steps"), providers)
+                    _walk_tool_providers(
+                        parsed.get("effects") or parsed.get("steps"), providers
+                    )
                     _walk_tool_providers(parsed.get("finally"), providers)
 
 
@@ -338,7 +350,9 @@ def current_shell_allowlist(runtime_config: Mapping[str, Any] | None) -> frozens
         stored = runtime_config.get(GENERATED_DOCUMENT_SHELL_COMMANDS_KEY)
         if stored is not None:
             return frozenset(stored)
-    return resolved_shell_allowlist(frozenset(), host_pin=host_shell_pin(runtime_config))
+    return resolved_shell_allowlist(
+        frozenset(), host_pin=host_shell_pin(runtime_config)
+    )
 
 
 def _same_shape(a: Any, b: Any, *, sensitive: bool = False) -> bool:
@@ -361,7 +375,8 @@ def _same_shape(a: Any, b: Any, *, sensitive: bool = False) -> bool:
         if set(a) != set(b):
             return False
         return all(
-            _same_shape(a[key], b[key], sensitive=key in _SENSITIVE_SHAPE_KEYS) for key in a
+            _same_shape(a[key], b[key], sensitive=key in _SENSITIVE_SHAPE_KEYS)
+            for key in a
         )
     if isinstance(a, list) or isinstance(b, list):
         if not (isinstance(a, list) and isinstance(b, list)):
@@ -412,6 +427,7 @@ def _walk_generated_errors(
     known_providers: frozenset[str] | None,
     allowed_shell_commands: frozenset[str],
     generating_effect_path: str,
+    allow_tools_available: bool,
     errors: list[str],
 ) -> None:
     if not isinstance(effects, list):
@@ -429,7 +445,9 @@ def _walk_generated_errors(
             params = params if isinstance(params, dict) else {}
             if provider_name == "shell" and "allowed_commands" in params:
                 requested = params.get("allowed_commands")
-                requested_list = requested if isinstance(requested, list) else [requested]
+                requested_list = (
+                    requested if isinstance(requested, list) else [requested]
+                )
                 bad = sorted(
                     {
                         c
@@ -465,12 +483,22 @@ def _walk_generated_errors(
                 # that generated it simply doesn't use.
                 and (known_providers is None or provider_name in known_providers)
             ):
-                errors.append(
-                    f"generated effect '{effect_label}' uses tool provider "
-                    f"'{provider_name}', which the document that generated it "
-                    f"doesn't use; add '{provider_name}' to allow_tools on "
-                    f"{generating_effect_path} to allow it."
-                )
+                if allow_tools_available:
+                    errors.append(
+                        f"generated effect '{effect_label}' uses tool provider "
+                        f"'{provider_name}', which the document that generated it "
+                        f"doesn't use; add '{provider_name}' to allow_tools on "
+                        f"{generating_effect_path} to allow it."
+                    )
+                else:
+                    errors.append(
+                        f"generated effect '{effect_label}' uses tool provider "
+                        f"'{provider_name}', generated by {generating_effect_path}; "
+                        "it isn't among the tool providers the document it serves "
+                        "already uses, plus the fixed set a generated plan is always "
+                        "allowed (json, regex, math, cel, clock, hash, base64, hex, "
+                        "uuid, csv, validate_yaml)."
+                    )
         elif etype == "dynamic":
             _walk_generated_errors(
                 effect.get("effects") or effect.get("steps"),
@@ -479,6 +507,7 @@ def _walk_generated_errors(
                 known_providers=known_providers,
                 allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
+                allow_tools_available=allow_tools_available,
                 errors=errors,
             )
             _walk_generated_errors(
@@ -488,6 +517,7 @@ def _walk_generated_errors(
                 known_providers=known_providers,
                 allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
+                allow_tools_available=allow_tools_available,
                 errors=errors,
             )
         elif etype in ("if", "conditional"):
@@ -498,6 +528,7 @@ def _walk_generated_errors(
                 known_providers=known_providers,
                 allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
+                allow_tools_available=allow_tools_available,
                 errors=errors,
             )
             _walk_generated_errors(
@@ -507,6 +538,7 @@ def _walk_generated_errors(
                 known_providers=known_providers,
                 allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
+                allow_tools_available=allow_tools_available,
                 errors=errors,
             )
         elif etype == "loop":
@@ -517,6 +549,7 @@ def _walk_generated_errors(
                 known_providers=known_providers,
                 allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
+                allow_tools_available=allow_tools_available,
                 errors=errors,
             )
         elif etype == "reflector":
@@ -527,6 +560,7 @@ def _walk_generated_errors(
                 known_providers=known_providers,
                 allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
+                allow_tools_available=allow_tools_available,
                 errors=errors,
             )
         elif etype == "use":
@@ -541,6 +575,7 @@ def _walk_generated_errors(
                         known_providers=known_providers,
                         allowed_shell_commands=allowed_shell_commands,
                         generating_effect_path=generating_effect_path,
+                        allow_tools_available=allow_tools_available,
                         errors=errors,
                     )
                     _walk_generated_errors(
@@ -550,6 +585,7 @@ def _walk_generated_errors(
                         known_providers=known_providers,
                         allowed_shell_commands=allowed_shell_commands,
                         generating_effect_path=generating_effect_path,
+                        allow_tools_available=allow_tools_available,
                         errors=errors,
                     )
 
@@ -566,6 +602,7 @@ def generated_document_errors(
     allowed_providers: frozenset[str] | None,
     generating_effect_path: str = "",
     allowed_shell_commands: frozenset[str] | None = None,
+    allow_tools_available: bool = True,
 ) -> list[str]:
     """Every rule a generated document violates (#772); empty means clean.
 
@@ -583,7 +620,11 @@ def generated_document_errors(
     *generating_effect_path* is the dotted state path of the ``use``/
     ``reflector`` effect that produced this document, named in a refusal so
     the fix ("add it to allow_tools on ...") is actionable; ignored when
-    *allowed_providers* is ``None``.
+    *allowed_providers* is ``None``. *allow_tools_available* is ``False``
+    for a decomposition plan (:func:`circuitry.core.decompose._check_generated_tool_ceiling`):
+    it has no generating ``use``/``reflector`` effect of its own to carry a
+    literal ``allow_tools:``, so a provider-outside-the-ceiling refusal
+    there names the fixed safe set instead of a field that doesn't exist.
     """
     errors: list[str] = []
     known_providers = None if allowed_providers is None else _known_providers()
@@ -600,6 +641,7 @@ def generated_document_errors(
             known_providers=known_providers,
             allowed_shell_commands=shell_commands,
             generating_effect_path=generating_effect_path,
+            allow_tools_available=allow_tools_available,
             errors=errors,
         )
         _walk_generated_errors(
@@ -609,6 +651,7 @@ def generated_document_errors(
             known_providers=known_providers,
             allowed_shell_commands=shell_commands,
             generating_effect_path=generating_effect_path,
+            allow_tools_available=allow_tools_available,
             errors=errors,
         )
     return errors

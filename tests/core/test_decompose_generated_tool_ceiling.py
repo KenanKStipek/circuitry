@@ -1,27 +1,58 @@
 """A decomposition plan is always generated (#772): its own
-``allowed_commands`` never widen the shell allowlist, and a ``service``
-effect's ``shell: true`` is always refused. Unlike a ``use``/``reflector``
-generated child, it is not held to the tool-provider ceiling (rule 3) --
-it has no generating effect of its own to carry an ``allow_tools:``, and
-the planner's own merge step commonly needs a tool the enclosing document
-never uses itself.
+``allowed_commands`` never widen past the host config and the enclosing
+document's own literal shell effects, a ``service`` effect's ``shell:
+true`` is always refused, and it is held to the tool-provider ceiling like
+a ``use``/``reflector`` generated child -- except that it has no
+generating effect of its own to carry a literal ``allow_tools:``, so it is
+additionally always allowed the fixed, side-effect-free
+``DECOMPOSITION_SAFE_PROVIDERS`` set.
 """
 
 from __future__ import annotations
 
 from circuitry.core.decompose import _check_generated_tool_ceiling
+from circuitry.generated_doc import GENERATED_DOCUMENT_PROVIDERS_KEY
 
 
-def test_a_tool_the_document_never_uses_is_not_refused() -> None:
+def test_a_safe_data_tool_the_document_never_uses_is_not_refused() -> None:
     plan = """
 effects:
   - type: tool
     name: t
-    provider: shell
+    provider: json
     params:
-      command: echo
+      text: '{}'
 """
     assert _check_generated_tool_ceiling(plan, {}) == []
+
+
+def test_a_tool_outside_the_safe_set_and_the_document_is_refused() -> None:
+    plan = """
+effects:
+  - type: tool
+    name: t
+    provider: python_eval
+    params:
+      code: "1"
+"""
+    problems = _check_generated_tool_ceiling(plan, {})
+    assert len(problems) == 1
+    assert "python_eval" in problems[0]
+    assert "allow_tools" not in problems[0]
+    assert "json" in problems[0]  # names the fixed safe set
+
+
+def test_a_provider_the_enclosing_document_uses_itself_is_allowed() -> None:
+    plan = """
+effects:
+  - type: tool
+    name: t
+    provider: git
+    params:
+      args: [status]
+"""
+    runtime_config = {GENERATED_DOCUMENT_PROVIDERS_KEY: ["git"]}
+    assert _check_generated_tool_ceiling(plan, runtime_config) == []
 
 
 def test_a_generated_shell_effect_cannot_widen_the_allowlist() -> None:
@@ -34,7 +65,7 @@ effects:
       command: touch
       allowed_commands: [touch]
 """
-    problems = _check_generated_tool_ceiling(plan, {})
+    problems = _check_generated_tool_ceiling(plan, {"_document_tool_providers": ["shell"]})
     assert len(problems) == 1
     assert "allowed_commands" in problems[0]
 
@@ -49,7 +80,9 @@ effects:
       command: touch pwned
       shell: true
 """
-    problems = _check_generated_tool_ceiling(plan, {})
+    problems = _check_generated_tool_ceiling(
+        plan, {"_document_tool_providers": ["service"]}
+    )
     assert len(problems) == 1
     assert "shell: true" in problems[0]
 
