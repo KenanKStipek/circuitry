@@ -3218,11 +3218,9 @@ fn history_across_four_runs_shows_usual_tokens_and_a_deviation() {
 
 /// Issue #627/#780: once an adapter reports cached input (`meta.
 /// tokens_cached_in` on a finished effect), the Totals row shows it
-/// right after the sent figure, as a muted parenthetical -- no real
-/// adapter reports this yet, so this patches a real, finished run's
-/// own state file to carry it, standing in for the engine side of
-/// issue #627 (landing separately): the UI side is this lane's own
-/// contract to code to, not to wait on.
+/// right after the sent figure, as a muted parenthetical. The test
+/// patches a real, finished run's own state file to carry the key, so
+/// it doesn't depend on which adapters record it (issue #627).
 #[test]
 fn totals_row_shows_cached_input_from_a_patched_state_file() {
     if !e2e_enabled() {
