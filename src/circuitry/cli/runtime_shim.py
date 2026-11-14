@@ -857,14 +857,6 @@ def run(req: RunRequest) -> RunResult:
         )
         runtime_config[_PROMPTS_KEY] = root_def.prompts
         runtime_config[_EFFECT_NAMES_KEY] = root_def.effect_names
-        # The root document is the first "enclosing document" a nested
-        # use/reflector effect's generated child is judged against (#772).
-        from ..generated_doc import (
-            GENERATED_DOCUMENT_PROVIDERS_KEY as _DOC_PROVIDERS_KEY,
-        )
-        from ..generated_doc import static_tool_providers as _static_tool_providers
-
-        runtime_config[_DOC_PROVIDERS_KEY] = sorted(_static_tool_providers(orch))
 
         group_errors = unknown_concurrency_group_errors(
             root_def, concurrency_limiter.group_names
@@ -911,6 +903,39 @@ def run(req: RunRequest) -> RunResult:
                 root_def, _ = apply_effect_overrides(
                     root_def, effect_overrides, profile_name=profile.name
                 )
+
+        # The root document is the first "enclosing document" a nested
+        # use/reflector effect's generated child is judged against (#772).
+        # Walked off the compiled, profile-overridden `root_def` -- after
+        # any `provider:` override above already applied -- the same
+        # compiled-tree semantics electricity's own
+        # `static_tool_providers_from_op` uses (rule 9), not the raw,
+        # pre-override `orch` dict.
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_IS_GENERATED_KEY as _DOC_IS_GENERATED_KEY,
+        )
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_PROVIDERS_KEY as _DOC_PROVIDERS_KEY,
+        )
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_SHELL_COMMANDS_KEY as _DOC_SHELL_KEY,
+        )
+        from ..generated_doc import host_shell_pin as _shell_host_pin
+        from ..generated_doc import resolved_shell_allowlist as _resolved_shell_allowlist
+        from ..generated_doc import static_shell_allowed_commands as _static_shell_commands
+        from ..generated_doc import (
+            static_tool_providers_from_definitions as _static_tool_providers_from_definitions,
+        )
+
+        runtime_config[_DOC_IS_GENERATED_KEY] = False
+        runtime_config[_DOC_PROVIDERS_KEY] = sorted(
+            _static_tool_providers_from_definitions(root_def)
+        )
+        runtime_config[_DOC_SHELL_KEY] = sorted(
+            _resolved_shell_allowlist(
+                _static_shell_commands(orch), host_pin=_shell_host_pin(runtime_config)
+            )
+        )
 
         adapter: Adapter
         timeout_seconds = 120

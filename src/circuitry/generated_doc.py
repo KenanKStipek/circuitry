@@ -18,24 +18,42 @@ before: :func:`is_generated_inline` parses the *unrendered* template text as
 YAML and compares its shape (dict keys, list lengths, recursively) against
 the rendered-and-parsed document. Anywhere the two disagree — a Mustache
 tag that expanded into a whole effect, a block helper that produced a list
-the template never wrote down, or a template that fails to parse as YAML at
-all (the common case: the whole ``inline:`` is one ``{{{...}}}`` tag) —  the
-document counts as generated. A reflector's plan has no "author's own
-template" to compare against at all: it is always generated.
+the template never wrote down, a template that fails to parse as YAML at
+all (the common case: the whole ``inline:`` is one ``{{{...}}}`` tag), or a
+scalar at a security-sensitive field (``type``, ``provider``,
+``allow_tools``, ``params.allowed_commands``, ``params.shell``) that only
+matches *by value* rather than being the same literal text — the document
+counts as generated. A reflector's plan has no "author's own template" to
+compare against at all: it is always generated. **Generated-ness is also
+inherited**: every effect textually inside an already-generated document is
+itself generated too, whatever its own shape looks like, and a generated
+document's own ``use``/``reflector`` effect can never grant its nested
+documents a tool provider beyond what it itself was allowed (see
+``core.use.UseRuntime._check_generated_document``, the caller that threads
+that inheritance through ``runtime_config``).
 
 **The ceiling.** A generated document may use only the tool providers its
 enclosing document uses itself, statically (:func:`static_tool_providers`),
 plus whatever the generating ``use``/``reflector`` effect's own, literal
 ``allow_tools:`` lists. :func:`generated_document_errors` checks a parsed,
 generated document against that ceiling and against the shell-specific
-rules (``allowed_commands`` never honoured, ``service``'s ``shell: true``
-never honoured) and returns every violation found — before any of the
-generated document's effects run, so the caller can fail the generating
-effect the same way any other compile-time error does.
+rules — ``allowed_commands`` only ever as wide as the host config plus the
+enclosing document's own literal shell effects (:func:`current_shell_allowlist`),
+``service``'s ``shell: true`` never honoured — and returns every violation
+found, before any of the generated document's effects run, so the caller
+can fail the generating effect the same way any other compile-time error
+does.
+
+Effect *type* and tool *provider* names are matched case-insensitively
+everywhere in this module, the same way :func:`circuitry.plugins.factory.build_plugin`
+normalizes a provider name before dispatch (``provider: Shell`` and
+``provider: shell`` are the same tool), so a generated document cannot slip
+past a comparison that only checked the exact-case string.
 """
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 #: ``runtime_config`` key holding the *current* document's own, statically
@@ -45,6 +63,68 @@ from typing import Any
 #: decomposition child), so a nested ``use``/``reflector`` effect's generated
 #: child is judged against *its own* enclosing document, never an ancestor's.
 GENERATED_DOCUMENT_PROVIDERS_KEY = "_document_tool_providers"
+
+#: ``runtime_config`` key holding the *current* document's own, resolved
+#: shell allowlist (host config's default/pinned commands union the
+#: enclosing document's own literal ``shell`` effects' ``allowed_commands``,
+#: already intersected with any host pin) — the ceiling a generated ``shell``
+#: effect's own ``params.allowed_commands`` is checked against (#772 rule 2).
+GENERATED_DOCUMENT_SHELL_COMMANDS_KEY = "_document_shell_allowed_commands"
+
+#: ``runtime_config`` key holding whether the document currently executing
+#: (the one that holds whatever ``use``/``reflector`` effect is about to be
+#: checked) is itself generated — set by the same caller that sets the two
+#: keys above. ``True`` means every nested document inside it is generated
+#: too, whatever its own shape looks like, and its own ``allow_tools`` can
+#: never grant anything the enclosing ceiling didn't already.
+GENERATED_DOCUMENT_IS_GENERATED_KEY = "_document_is_generated"
+
+#: A decomposition plan has no generating ``use``/``reflector`` effect of its
+#: own to carry a literal ``allow_tools:`` (#772 rule 3) — its own merge step
+#: commonly needs a tool the document it serves doesn't otherwise use, so
+#: every decomposition plan is additionally allowed this fixed set of
+#: tool providers, none of which run a command or reach anything outside the
+#: process: pure data transforms, never a side effect.
+DECOMPOSITION_SAFE_PROVIDERS: frozenset[str] = frozenset(
+    {
+        "json",
+        "regex",
+        "math",
+        "cel",
+        "clock",
+        "hash",
+        "base64",
+        "hex",
+        "uuid",
+        "csv",
+        "validate_yaml",
+    }
+)
+
+#: Security-sensitive keys (#772 rule 6): a scalar at one of these, read
+#: anywhere in an effect's own dict (an exact-key match, any depth — never
+#: narrowed to e.g. only ``params.allowed_commands``, since that is strictly
+#: the safer direction), must be byte-identical between the unrendered
+#: template and the rendered document for :func:`is_generated_inline` to
+#: still call it the author's own; a templated value there (even one that
+#: renders to the same literal text the author could have written) counts
+#: as generated.
+_SENSITIVE_SHAPE_KEYS = frozenset(
+    {"type", "provider", "allow_tools", "allowed_commands", "shell"}
+)
+
+
+def _normalize_name(value: Any) -> str | None:
+    """*value* as a lowercase, stripped provider/effect-type name, or
+    ``None`` when it isn't a (non-blank) string — matching the exact
+    normalization :func:`circuitry.plugins.factory.build_plugin` applies to
+    a ``provider:`` field before dispatch, so a comparison here can never
+    disagree with what actually runs (#772).
+    """
+    if not isinstance(value, str):
+        return None
+    normalized = value.strip().lower()
+    return normalized or None
 
 
 def _best_effort_yaml(text: str) -> Any:
@@ -69,11 +149,11 @@ def _walk_tool_providers(effects: Any, providers: set[str]) -> None:
     for effect in effects:
         if not isinstance(effect, dict):
             continue
-        etype = effect.get("type")
+        etype = _normalize_name(effect.get("type"))
         if etype == "tool":
-            prov = effect.get("provider")
-            if isinstance(prov, str) and prov.strip():
-                providers.add(prov.strip())
+            prov = _normalize_name(effect.get("provider"))
+            if prov:
+                providers.add(prov)
         elif etype == "dynamic":
             _walk_tool_providers(effect.get("effects") or effect.get("steps"), providers)
             _walk_tool_providers(effect.get("finally"), providers)
@@ -110,28 +190,189 @@ def static_tool_providers(orch: Any) -> frozenset[str]:
     return frozenset(providers)
 
 
-def _same_shape(a: Any, b: Any) -> bool:
+def _walk_shell_allowed_commands(effects: Any, commands: set[str]) -> None:
+    if not isinstance(effects, list):
+        return
+    for effect in effects:
+        if not isinstance(effect, dict):
+            continue
+        etype = _normalize_name(effect.get("type"))
+        if etype == "tool":
+            prov = _normalize_name(effect.get("provider"))
+            params = effect.get("params")
+            if prov == "shell" and isinstance(params, dict):
+                allowed = params.get("allowed_commands")
+                if isinstance(allowed, list):
+                    commands.update(c for c in allowed if isinstance(c, str))
+        elif etype == "dynamic":
+            _walk_shell_allowed_commands(effect.get("effects") or effect.get("steps"), commands)
+            _walk_shell_allowed_commands(effect.get("finally"), commands)
+        elif etype in ("if", "conditional"):
+            _walk_shell_allowed_commands(effect.get("then"), commands)
+            _walk_shell_allowed_commands(effect.get("else"), commands)
+        elif etype == "loop":
+            _walk_shell_allowed_commands(effect.get("body"), commands)
+        elif etype == "reflector":
+            _walk_shell_allowed_commands(effect.get("effects") or effect.get("steps"), commands)
+        elif etype == "use":
+            inline = effect.get("inline")
+            if isinstance(inline, str):
+                parsed = _best_effort_yaml(inline)
+                if isinstance(parsed, dict):
+                    _walk_shell_allowed_commands(
+                        parsed.get("effects") or parsed.get("steps"), commands
+                    )
+                    _walk_shell_allowed_commands(parsed.get("finally"), commands)
+
+
+def static_shell_allowed_commands(orch: Any) -> frozenset[str]:
+    """Every command this document's own literal ``shell`` effects allow
+    (#772 rule 2) — every ``params.allowed_commands`` entry on a literal
+    ``type: tool, provider: shell`` effect anywhere in the document's own
+    text, recursing the same way :func:`static_tool_providers` does. A
+    generated ``shell`` effect's own ``allowed_commands`` is never collected
+    here — only an *enclosing*, non-generated document's own text counts.
+    """
+    commands: set[str] = set()
+    if isinstance(orch, dict):
+        _walk_shell_allowed_commands(orch.get("effects") or orch.get("steps"), commands)
+        _walk_shell_allowed_commands(orch.get("finally"), commands)
+    return frozenset(commands)
+
+
+def _walk_definition_tool_providers(effects: Any, providers: set[str]) -> None:
+    from .core.conditional import ConditionalDefinition
+    from .core.dynamic import DynamicDefinition
+    from .core.loop import LoopDefinition
+    from .core.reflector import ReflectorDefinition
+    from .core.tool import ToolDefinition
+    from .core.use import UseDefinition
+
+    for effect in effects or ():
+        if isinstance(effect, ToolDefinition):
+            prov = _normalize_name(effect.provider)
+            if prov:
+                providers.add(prov)
+        elif isinstance(effect, DynamicDefinition):
+            _walk_definition_tool_providers(effect.effects, providers)
+            _walk_definition_tool_providers(effect.finally_effects, providers)
+        elif isinstance(effect, ConditionalDefinition):
+            _walk_definition_tool_providers(effect.then_effects, providers)
+            _walk_definition_tool_providers(effect.else_effects, providers)
+        elif isinstance(effect, LoopDefinition):
+            _walk_definition_tool_providers(effect.body, providers)
+        elif isinstance(effect, ReflectorDefinition):
+            _walk_definition_tool_providers(effect.inner.effects, providers)
+        elif isinstance(effect, UseDefinition):
+            if effect.inline is not None:
+                parsed = _best_effort_yaml(effect.inline)
+                if isinstance(parsed, dict):
+                    _walk_tool_providers(parsed.get("effects") or parsed.get("steps"), providers)
+                    _walk_tool_providers(parsed.get("finally"), providers)
+
+
+def static_tool_providers_from_definitions(root: Any) -> frozenset[str]:
+    """Every ``type: tool`` provider the compiled root document references,
+    walked off the compiled ``DynamicDefinition`` tree rather than the raw
+    YAML dict (#772 rule 9) -- so a profile's own per-effect ``provider``
+    override (:func:`circuitry.core.compiler.apply_effect_overrides`,
+    applied before this runs) is reflected the same way electricity's own
+    :func:`static_tool_providers_from_op` already reflects it off the
+    compiled bytecode. Walks the same shape :func:`static_tool_providers`
+    walks over raw YAML, plus a literal ``use: inline:`` leaf's own text
+    (best-effort re-parsed, the same as :func:`static_tool_providers`)
+    rather than a ``path:``/``orchestration:`` leaf's compiled child, which
+    is a separate file judged on its own terms.
+    """
+    providers: set[str] = set()
+    _walk_definition_tool_providers(getattr(root, "effects", None), providers)
+    _walk_definition_tool_providers(getattr(root, "finally_effects", None), providers)
+    return frozenset(providers)
+
+
+def host_shell_pin(runtime_config: Mapping[str, Any] | None) -> frozenset[str] | None:
+    """``runtime.plugins.shell.allowed_commands`` — the host's own ceiling
+    (see ``plugins/shell.py``'s module doc comment), or ``None`` when the
+    host sets no pin at all.
+    """
+    if not isinstance(runtime_config, Mapping):
+        return None
+    plugins = runtime_config.get("plugins")
+    shell_cfg = plugins.get("shell") if isinstance(plugins, Mapping) else None
+    pin = shell_cfg.get("allowed_commands") if isinstance(shell_cfg, Mapping) else None
+    if isinstance(pin, list) and all(isinstance(p, str) for p in pin):
+        return frozenset(pin)
+    return None
+
+
+def resolved_shell_allowlist(
+    document_literal_commands: frozenset[str], *, host_pin: frozenset[str] | None
+) -> frozenset[str]:
+    """The host's default allowlist, plus *document_literal_commands*
+    (:func:`static_shell_allowed_commands` of some enclosing, non-generated
+    document), intersected with *host_pin* when the host sets one — the
+    ceiling a generated ``shell`` effect's own ``allowed_commands`` may never
+    exceed (#772 rule 2). Idempotent: re-resolving an already-resolved set
+    against the same *host_pin* returns it unchanged, which is what lets a
+    generated document's own ceiling simply carry this set forward
+    unexamined for its own nested generated children (#772 rule 2's
+    inheritance — see ``core.use.UseRuntime._check_generated_document``).
+    """
+    from .plugins.shell import _DEFAULT_ALLOWED as _SHELL_DEFAULT_ALLOWED
+
+    allowed = frozenset(_SHELL_DEFAULT_ALLOWED) | document_literal_commands
+    if host_pin is not None:
+        allowed &= host_pin
+    return allowed
+
+
+def current_shell_allowlist(runtime_config: Mapping[str, Any] | None) -> frozenset[str]:
+    """The resolved shell allowlist already stored under
+    :data:`GENERATED_DOCUMENT_SHELL_COMMANDS_KEY`, or the host's own
+    default/pinned allowlist with no document-literal commands when that key
+    isn't set yet (a caller that hasn't wired the key in at all — never
+    narrower than what every shell effect, generated or not, could already
+    reach before #772).
+    """
+    if isinstance(runtime_config, Mapping):
+        stored = runtime_config.get(GENERATED_DOCUMENT_SHELL_COMMANDS_KEY)
+        if stored is not None:
+            return frozenset(stored)
+    return resolved_shell_allowlist(frozenset(), host_pin=host_shell_pin(runtime_config))
+
+
+def _same_shape(a: Any, b: Any, *, sensitive: bool = False) -> bool:
     """Whether *a* (parsed from the unrendered template) and *b* (the
     rendered, final document) agree on structure at this node and below.
 
-    A scalar is always compatible with a scalar — rendering a value in is
-    exactly what "only values templated in" means. A dict/list is compatible
-    only with a dict/list of the same keys/length, recursively: anything a
-    rendered node added or removed relative to the unrendered template did
-    not come from the author's own text.
+    A scalar is compatible with a scalar — rendering a value in is exactly
+    what "only values templated in" means — unless *sensitive* says this
+    position is one of :data:`_SENSITIVE_SHAPE_KEYS` (#772 rule 6): there, a
+    rendered value that merely happens to equal what the author could have
+    written is still generated, because a Mustache tag that renders to
+    ``shell`` today can render to anything else tomorrow. A dict/list is
+    compatible only with a dict/list of the same keys/length, recursively:
+    anything a rendered node added or removed relative to the unrendered
+    template did not come from the author's own text.
     """
     if isinstance(a, dict) or isinstance(b, dict):
         if not (isinstance(a, dict) and isinstance(b, dict)):
             return False
         if set(a) != set(b):
             return False
-        return all(_same_shape(a[key], b[key]) for key in a)
+        return all(
+            _same_shape(a[key], b[key], sensitive=key in _SENSITIVE_SHAPE_KEYS) for key in a
+        )
     if isinstance(a, list) or isinstance(b, list):
         if not (isinstance(a, list) and isinstance(b, list)):
             return False
         if len(a) != len(b):
             return False
-        return all(_same_shape(x, y) for x, y in zip(a, b, strict=True))
+        return all(
+            _same_shape(x, y, sensitive=sensitive) for x, y in zip(a, b, strict=True)
+        )
+    if sensitive and a != b:
+        return False
     return True
 
 
@@ -141,12 +382,13 @@ def is_generated_inline(raw_template: str, rendered: Any) -> bool:
     ``raw_template`` is the effect's own ``inline:`` field text, *before*
     Mustache rendering; ``rendered`` is the same child after rendering and
     YAML-parsing — what will actually run. ``False`` means the unrendered
-    template already has the rendered document's exact shape (only scalar
-    values differ), so this is the author's own content, with values
-    templated in, same as always. ``True`` — including when the unrendered
-    text does not parse as YAML at all, the common case for a template that
-    is just one ``{{{...}}}`` tag — means some or all of this document's
-    structure only exists because it was rendered, so it is generated.
+    template already has the rendered document's exact shape, with only
+    non-sensitive scalar values templated in (see :func:`_same_shape`), so
+    this is the author's own content, same as always. ``True`` — including
+    when the unrendered text does not parse as YAML at all, the common case
+    for a template that is just one ``{{{...}}}`` tag — means some or all of
+    this document's structure (or a security-sensitive field's value) only
+    exists because it was rendered, so it is generated.
     """
     raw_parsed = _best_effort_yaml(raw_template)
     if not isinstance(raw_parsed, dict):
@@ -168,6 +410,7 @@ def _walk_generated_errors(
     path: str,
     allowed_providers: frozenset[str] | None,
     known_providers: frozenset[str] | None,
+    allowed_shell_commands: frozenset[str],
     generating_effect_path: str,
     errors: list[str],
 ) -> None:
@@ -176,22 +419,35 @@ def _walk_generated_errors(
     for effect in effects:
         if not isinstance(effect, dict):
             continue
-        etype = effect.get("type")
+        etype = _normalize_name(effect.get("type"))
         raw_name = effect.get("name")
         name = raw_name if isinstance(raw_name, str) and raw_name else "<unnamed>"
         effect_label = f"{path}.{name}" if path else name
         if etype == "tool":
-            provider = effect.get("provider")
-            provider_name = provider.strip() if isinstance(provider, str) else None
+            provider_name = _normalize_name(effect.get("provider"))
             params = effect.get("params")
             params = params if isinstance(params, dict) else {}
             if provider_name == "shell" and "allowed_commands" in params:
-                errors.append(
-                    f"generated effect '{effect_label}' sets params.allowed_commands "
-                    "on a 'shell' tool, generated by "
-                    f"{generating_effect_path}; a document generated at run time "
-                    "can never widen the shell allowlist this way."
+                requested = params.get("allowed_commands")
+                requested_list = requested if isinstance(requested, list) else [requested]
+                bad = sorted(
+                    {
+                        c
+                        for c in requested_list
+                        if isinstance(c, str) and c not in allowed_shell_commands
+                    }
                 )
+                if not isinstance(requested, list) and not bad:
+                    bad = ["<invalid>"]
+                if bad:
+                    errors.append(
+                        f"generated effect '{effect_label}' sets params.allowed_commands "
+                        f"to include {bad!r} on a 'shell' tool, generated by "
+                        f"{generating_effect_path}; the host config and this document's "
+                        f"own shell effects don't already allow {bad!r} -- add it to a "
+                        "literal shell effect's allowed_commands in the document, or to "
+                        "runtime.plugins.shell.allowed_commands."
+                    )
             elif provider_name == "service" and _as_bool(params.get("shell")):
                 errors.append(
                     f"generated effect '{effect_label}' sets params.shell: true on "
@@ -221,6 +477,7 @@ def _walk_generated_errors(
                 path=effect_label,
                 allowed_providers=allowed_providers,
                 known_providers=known_providers,
+                allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
                 errors=errors,
             )
@@ -229,6 +486,7 @@ def _walk_generated_errors(
                 path=effect_label,
                 allowed_providers=allowed_providers,
                 known_providers=known_providers,
+                allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
                 errors=errors,
             )
@@ -238,6 +496,7 @@ def _walk_generated_errors(
                 path=effect_label,
                 allowed_providers=allowed_providers,
                 known_providers=known_providers,
+                allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
                 errors=errors,
             )
@@ -246,6 +505,7 @@ def _walk_generated_errors(
                 path=effect_label,
                 allowed_providers=allowed_providers,
                 known_providers=known_providers,
+                allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
                 errors=errors,
             )
@@ -255,6 +515,7 @@ def _walk_generated_errors(
                 path=effect_label,
                 allowed_providers=allowed_providers,
                 known_providers=known_providers,
+                allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
                 errors=errors,
             )
@@ -264,6 +525,7 @@ def _walk_generated_errors(
                 path=effect_label,
                 allowed_providers=allowed_providers,
                 known_providers=known_providers,
+                allowed_shell_commands=allowed_shell_commands,
                 generating_effect_path=generating_effect_path,
                 errors=errors,
             )
@@ -277,6 +539,7 @@ def _walk_generated_errors(
                         path=effect_label,
                         allowed_providers=allowed_providers,
                         known_providers=known_providers,
+                        allowed_shell_commands=allowed_shell_commands,
                         generating_effect_path=generating_effect_path,
                         errors=errors,
                     )
@@ -285,6 +548,7 @@ def _walk_generated_errors(
                         path=effect_label,
                         allowed_providers=allowed_providers,
                         known_providers=known_providers,
+                        allowed_shell_commands=allowed_shell_commands,
                         generating_effect_path=generating_effect_path,
                         errors=errors,
                     )
@@ -301,6 +565,7 @@ def generated_document_errors(
     *,
     allowed_providers: frozenset[str] | None,
     generating_effect_path: str = "",
+    allowed_shell_commands: frozenset[str] | None = None,
 ) -> list[str]:
     """Every rule a generated document violates (#772); empty means clean.
 
@@ -309,26 +574,31 @@ def generated_document_errors(
     or allowlist violation already does. *allowed_providers* is the set of
     tool providers this generated document may use: the document that
     generated it uses itself, statically (:func:`static_tool_providers`),
-    plus the generating effect's own
-    literal ``allow_tools:``. ``None`` skips the provider check (rule 3)
-    entirely while still enforcing the shell-specific rules (rule 2) -- a
-    decomposition plan's case: it has no generating effect of its own to
-    carry an ``allow_tools:``, and is already held to the enclosing
-    document's consented capability classes by the pre-existing capability
-    ceiling (:mod:`circuitry.capability_gate`). *generating_effect_path* is
-    the dotted state path of the ``use``/``reflector`` effect that produced
-    this document, named in the provider-outside-the-allowed-set message so
+    plus the generating effect's own literal ``allow_tools:``. ``None``
+    skips the provider check (rule 3) entirely while still enforcing the
+    shell-specific rules (rule 2). *allowed_shell_commands* is the resolved
+    ceiling a generated ``shell`` effect's own ``params.allowed_commands``
+    may draw from (:func:`current_shell_allowlist`); ``None`` falls back to
+    the bare host default (no document-literal commands, no pin).
+    *generating_effect_path* is the dotted state path of the ``use``/
+    ``reflector`` effect that produced this document, named in a refusal so
     the fix ("add it to allow_tools on ...") is actionable; ignored when
     *allowed_providers* is ``None``.
     """
     errors: list[str] = []
     known_providers = None if allowed_providers is None else _known_providers()
+    shell_commands = (
+        allowed_shell_commands
+        if allowed_shell_commands is not None
+        else current_shell_allowlist(None)
+    )
     if isinstance(orch, dict):
         _walk_generated_errors(
             orch.get("effects") or orch.get("steps"),
             path="",
             allowed_providers=allowed_providers,
             known_providers=known_providers,
+            allowed_shell_commands=shell_commands,
             generating_effect_path=generating_effect_path,
             errors=errors,
         )
@@ -337,6 +607,7 @@ def generated_document_errors(
             path="",
             allowed_providers=allowed_providers,
             known_providers=known_providers,
+            allowed_shell_commands=shell_commands,
             generating_effect_path=generating_effect_path,
             errors=errors,
         )

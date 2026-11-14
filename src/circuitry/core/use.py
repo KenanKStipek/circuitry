@@ -932,7 +932,9 @@ class UseRuntime:
                 "enforcement: " + "; ".join(denials)
             )
 
-    def _check_generated_document(self, child_orch: dict[str, Any], node_path: str) -> None:
+    def _check_generated_document(
+        self, child_orch: dict[str, Any], node_path: str
+    ) -> tuple[bool, frozenset[str], frozenset[str]]:
         """Refuse a generated child that widens the shell allowlist, enables
         a service's shell, or uses a tool provider its enclosing document
         does not itself use (#772).
@@ -945,32 +947,86 @@ class UseRuntime:
         ``path:``/``ref:`` child loads from disk and is never "generated"
         in this sense -- it keeps its own, separate allowlist/capability
         checks.
+
+        Generated-ness is inherited (#772 rule 2): when the document that
+        carries *this* ``use`` effect is itself generated
+        (``GENERATED_DOCUMENT_IS_GENERATED_KEY``), every nested child is
+        generated too, whatever its own shape looks like, and this
+        effect's own ``allow_tools`` -- itself part of that generated
+        text -- can never grant anything beyond what the enclosing ceiling
+        already allows; naming something beyond it is refused the same way
+        any other rule-3 violation is, rather than silently ignored.
+
+        Returns ``(generated, allowed_providers, allowed_shell_commands)``
+        for the caller to install as *this child's own* enclosing-document
+        ceiling: a non-generated child gets its own, freshly computed
+        providers/shell-commands (it is a document in its own right);
+        a generated child inherits the ceiling it was just checked
+        against unchanged, never recomputed from its own (model-written)
+        text, so a further-nested document inside it can't be granted more
+        just because the generated text happens to declare more.
         """
         from ..generated_doc import (
+            GENERATED_DOCUMENT_IS_GENERATED_KEY,
             GENERATED_DOCUMENT_PROVIDERS_KEY,
+            current_shell_allowlist,
             generated_document_errors,
             is_generated_inline,
+            static_shell_allowed_commands,
+            static_tool_providers,
+        )
+
+        enclosing_providers = frozenset(
+            self.runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ()
+        )
+        own_doc_is_generated = bool(
+            self.runtime_config.get(GENERATED_DOCUMENT_IS_GENERATED_KEY)
         )
 
         if self.defn.inline is None:
-            return
-        generated = self.defn.force_generated or is_generated_inline(
-            self.defn.inline, child_orch
+            # A path/ref child is its own, independently trusted document --
+            # never generated, whatever this one is.
+            return False, static_tool_providers(child_orch), static_shell_allowed_commands(
+                child_orch
+            )
+
+        generated = (
+            own_doc_is_generated
+            or self.defn.force_generated
+            or is_generated_inline(self.defn.inline, child_orch)
         )
         if not generated:
-            return
-        enclosing = frozenset(
-            self.runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ()
-        )
-        allowed_providers = enclosing | self.defn.allow_tools
+            return False, static_tool_providers(child_orch), static_shell_allowed_commands(
+                child_orch
+            )
+
         generating_path = self.defn.generating_effect_path_override or node_path
-        errors = generated_document_errors(
-            child_orch,
-            allowed_providers=allowed_providers,
-            generating_effect_path=generating_path,
+        errors: list[str] = []
+        overreach = sorted(self.defn.allow_tools - enclosing_providers)
+        if own_doc_is_generated and overreach:
+            errors.append(
+                f"generated effect '{generating_path}' sets allow_tools to include "
+                f"{overreach!r}, which the document that generated it was not itself "
+                "allowed to use; a document generated at run time can't grant its "
+                "own nested effects anything new this way."
+            )
+        allowed_providers = (
+            enclosing_providers
+            if own_doc_is_generated
+            else enclosing_providers | self.defn.allow_tools
+        )
+        allowed_shell_commands = current_shell_allowlist(self.runtime_config)
+        errors.extend(
+            generated_document_errors(
+                child_orch,
+                allowed_providers=allowed_providers,
+                generating_effect_path=generating_path,
+                allowed_shell_commands=allowed_shell_commands,
+            )
         )
         if errors:
             raise ValueError("; ".join(errors))
+        return True, allowed_providers, allowed_shell_commands
 
     def _check_capability_consent(
         self, child_orch: dict[str, Any], label: str, digest: str
@@ -1234,7 +1290,11 @@ class UseRuntime:
                     if self._pin is not None:
                         meta["library_ref"] = self._pin
                     self._check_allowlists(child_orch, label)
-                    self._check_generated_document(child_orch, node_path)
+                    (
+                        child_is_generated,
+                        child_tool_providers,
+                        child_shell_commands,
+                    ) = self._check_generated_document(child_orch, node_path)
 
                     # Cycle detection — runtime call-stack tracking by resolved identity.
                     # The stack is derived per call-path rather than mutated in place:
@@ -1253,16 +1313,27 @@ class UseRuntime:
                     child_runtime_config = dict(self.runtime_config)
                     child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
                     # The child becomes the "enclosing document" for any
-                    # use/reflector effect of its own (#772) -- recomputed
-                    # fresh from the child's own text, never inherited from
-                    # this document.
+                    # use/reflector effect of its own (#772). A non-generated
+                    # child's own providers/shell-commands are recomputed
+                    # fresh from its own text, never inherited; a generated
+                    # child instead inherits the ceiling it was just checked
+                    # against unchanged -- rule 2's inheritance, carried
+                    # through runtime_config the same way `_use_call_stack`
+                    # is (`_check_generated_document`'s own doc comment).
                     from ..generated_doc import (
+                        GENERATED_DOCUMENT_IS_GENERATED_KEY,
                         GENERATED_DOCUMENT_PROVIDERS_KEY,
-                        static_tool_providers,
+                        GENERATED_DOCUMENT_SHELL_COMMANDS_KEY,
                     )
 
+                    child_runtime_config[GENERATED_DOCUMENT_IS_GENERATED_KEY] = (
+                        child_is_generated
+                    )
                     child_runtime_config[GENERATED_DOCUMENT_PROVIDERS_KEY] = sorted(
-                        static_tool_providers(child_orch)
+                        child_tool_providers
+                    )
+                    child_runtime_config[GENERATED_DOCUMENT_SHELL_COMMANDS_KEY] = sorted(
+                        child_shell_commands
                     )
                     if child_capability_ceiling is not None:
                         install_capability_ceiling(

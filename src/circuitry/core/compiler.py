@@ -248,6 +248,7 @@ def _compile_allow_tools(
             f"{label} effect at '{effect_path}': 'allow_tools' must be a literal "
             "list of plain strings."
         )
+    normalized: set[str] = set()
     for item in raw:
         if "{{" in item:
             raise ValueError(
@@ -255,13 +256,19 @@ def _compile_allow_tools(
                 f"literal list of plain strings; {item!r} is a Mustache template, "
                 "never honoured here."
             )
-        if item.strip() not in SUPPORTED_PLUGINS:
+        # Provider names are matched case-insensitively everywhere else
+        # (#772 rule 1: a tool effect's own 'provider:' dispatches the same
+        # way regardless of case -- plugins.factory.build_plugin), so
+        # 'allow_tools' accepts and stores the same normalized form.
+        name = item.strip().lower()
+        if name not in SUPPORTED_PLUGINS:
             raise ValueError(
                 f"{label} effect at '{effect_path}': 'allow_tools' names unknown "
                 f"tool provider {item!r}. Known providers: "
                 f"{', '.join(sorted(SUPPORTED_PLUGINS))}."
             )
-    return frozenset(item.strip() for item in raw)
+        normalized.add(name)
+    return frozenset(normalized)
 
 
 def _compile_retries(effect: dict[str, Any]) -> RetryPolicyDef | None:
