@@ -282,6 +282,28 @@ def _is_safe_case_env_key(key: str) -> bool:
     return key not in CREDENTIAL_ENV_VARS
 
 
+#: What a `fake_credentials` key must look like when it isn't one of
+#: `CREDENTIAL_ENV_VARS` -- a custom variable a case's `api_key_env`
+#: override names (issue #669), never seen anywhere else by this harness
+#: (the `env` key's `_is_safe_case_env_key` denylist is only exact names).
+_ENV_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _is_valid_fake_credential_key(key: str) -> bool:
+    """A `fake_credentials` key: one of `CREDENTIAL_ENV_VARS`, or any other
+    environment-variable-shaped name that is not a `CIRCUITRY_*` config
+    override -- a case giving a custom `api_key_env` target a fake value
+    (issue #669) is exactly as safe as giving a real provider's own
+    variable one; a `CIRCUITRY_*` name never is, since it changes
+    `effective_settings` rather than naming a credential.
+    """
+    if key in CREDENTIAL_ENV_VARS:
+        return True
+    if key.upper().startswith("CIRCUITRY_"):
+        return False
+    return bool(_ENV_VAR_NAME_RE.fullmatch(key))
+
+
 _VALID_EXPECT = frozenset({"success", "failure"})
 _VALID_ERROR_COMPARE = frozenset({"exact", "location"})
 _VALID_ENGINES = frozenset({"python", "electricity"})
@@ -377,11 +399,13 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"{case_dir.name}: case.json 'fake_credentials' must be a mapping of str to str"
         )
-    bad_names = sorted(k for k in fake_credentials if k not in CREDENTIAL_ENV_VARS)
+    bad_names = sorted(k for k in fake_credentials if not _is_valid_fake_credential_key(k))
     if bad_names:
         raise ValueError(
-            f"{case_dir.name}: case.json 'fake_credentials' key(s) {bad_names} are not in "
-            "CREDENTIAL_ENV_VARS -- only a real provider credential variable belongs here"
+            f"{case_dir.name}: case.json 'fake_credentials' key(s) {bad_names} must be a "
+            "real provider credential variable (CREDENTIAL_ENV_VARS) or a custom "
+            "environment-variable-shaped name (a per-adapter api_key_env override, "
+            "issue #669) -- never a CIRCUITRY_* name"
         )
     bad_values = sorted(
         k for k, v in fake_credentials.items() if not v.startswith(FAKE_CREDENTIAL_MARKER)
@@ -602,14 +626,18 @@ def _sandboxed_env(
     # by the time it gets here.
     if extra_env:
         env.update(extra_env)
-    # `case.json`'s own `fake_credentials` (issue #503): set after the
-    # credential filter above, same as `extra_env`, for both engines --
-    # `load_case` already rejected any name outside `CREDENTIAL_ENV_VARS`
-    # or any value not carrying `FAKE_CREDENTIAL_MARKER`, so this is
-    # already known-synthetic by the time it gets here. Without this, a
-    # case that needs `openai`/`anthropic`/... to actually see a key (a
-    # success case, or a 401) has no way to give it one at all, since the
-    # filter above drops every real `CREDENTIAL_ENV_VARS` name first.
+    # `case.json`'s own `fake_credentials` (issue #503; a custom
+    # `api_key_env` name too, issue #669): set after the credential
+    # filter above, same as `extra_env`, for both engines -- `load_case`
+    # already rejected any key that is neither a `CREDENTIAL_ENV_VARS`
+    # name nor an environment-variable-shaped name outside `CIRCUITRY_*`
+    # (`_is_valid_fake_credential_key`), and any value not carrying
+    # `FAKE_CREDENTIAL_MARKER`, so this is already known-synthetic by the
+    # time it gets here. Without this, a case that needs `openai`/
+    # `anthropic`/... (or a custom `api_key_env` target) to actually see
+    # a key (a success case, or a 401) has no way to give it one at all,
+    # since the filter above drops every real `CREDENTIAL_ENV_VARS` name
+    # first.
     if fake_credentials:
         env.update(fake_credentials)
     # Deliberately set *after* the CIRCUITRY_* filter above: a test-only

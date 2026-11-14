@@ -298,6 +298,28 @@ fn sets_adapter(entry: &electricity_value::Dict) -> bool {
     entry.contains_key(&Value::Str("adapter".to_string()))
 }
 
+/// `[A-Za-z_][A-Za-z0-9_]*`, the whole string (`re.fullmatch`) -- the
+/// same shape `electricity-adapters::config::resolve_api_key_env`
+/// checks at build time, duplicated here (not shared) because this
+/// crate must not depend on that one (DESIGN.md §2's dependency
+/// direction).
+fn is_env_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+/// `adapters/factory.py::_ALWAYS_KEYED_ADAPTERS` -- adapters that always
+/// send a credential, so `api_key_env: ""` is rejected for them like any
+/// other invalid name, unlike the OpenAI-compatible self-hosted family.
+const ALWAYS_KEYED_ADAPTERS: &[&str] = &[
+    "openai",
+    "anthropic",
+    "replicate",
+    "watsonx",
+    "azure-openai",
+];
+
 fn value_error(message: String) -> AdapterError {
     AdapterError {
         message,
@@ -347,6 +369,60 @@ impl AdapterRegistry {
             .filter_map(|name| match self.build(&name, runtime_config) {
                 Err(e) if e.py_class == PyExc::ValueError => Some(e.message),
                 _ => None,
+            })
+            .collect()
+    }
+
+    /// `adapters/factory.py::adapter_api_key_env_errors` -- why each
+    /// `runtime.adapters.<name>.api_key_env` is invalid, in name order;
+    /// `[]` when every one present is a valid environment-variable name
+    /// (or, for an adapter that doesn't always need one, `""`, an
+    /// explicit "no key"). Checked for every adapter entry -- built-in or
+    /// alias -- whether or not any effect selects it, the same way
+    /// [`AdapterRegistry::alias_config_errors`] checks every alias
+    /// target.
+    ///
+    /// An alias's own entry is checked against its *target*'s rule (an
+    /// alias of `openai` rejects `""` exactly as `openai` itself does),
+    /// not its own name's -- the same substitution actually building the
+    /// alias makes when it calls the target's builder with the alias's
+    /// settings.
+    pub fn adapter_api_key_env_errors(&self, runtime_config: &Value) -> Vec<String> {
+        let Some(adapters) = runtime_config
+            .as_dict()
+            .and_then(|d| d.get(&Value::Str("adapters".to_string())))
+            .and_then(Value::as_dict)
+        else {
+            return Vec::new();
+        };
+        let mut names: Vec<String> = adapters
+            .keys()
+            .filter_map(|k| k.as_str().map(str::to_string))
+            .collect();
+        names.sort();
+        names
+            .into_iter()
+            .filter_map(|name| {
+                let entry = adapters.get(&Value::Str(name.clone()))?.as_dict()?;
+                let raw = entry.get(&Value::Str("api_key_env".to_string()))?;
+                let target = entry
+                    .get(&Value::Str("adapter".to_string()))
+                    .and_then(Value::as_str)
+                    .map(str::to_lowercase)
+                    .unwrap_or_else(|| name.clone());
+                let allow_empty = !ALWAYS_KEYED_ADAPTERS.contains(&target.as_str());
+                match raw {
+                    Value::Str(s)
+                        if (!s.is_empty() || allow_empty) && (s.is_empty() || is_env_name(s)) =>
+                    {
+                        None
+                    }
+                    other => Some(format!(
+                        "runtime.adapters.{name}.api_key_env must be an environment \
+                         variable name, got {}",
+                        other.py_repr()
+                    )),
+                }
             })
             .collect()
     }
@@ -927,6 +1003,119 @@ mod tests {
         assert_eq!(
             build_err(&registry, "my_alias", &rt),
             "runtime.adapters.my_alias.env must be a mapping of variable names to strings, got str"
+        );
+    }
+
+    #[test]
+    fn adapter_api_key_env_errors_rejects_an_invalid_name() {
+        let rt = runtime(entry(&[(
+            "openai",
+            entry(&[("api_key_env", Value::Str("not a name!".to_string()))]),
+        )]));
+        let registry = AdapterRegistry::new();
+        assert_eq!(
+            registry.adapter_api_key_env_errors(&rt),
+            vec![
+                "runtime.adapters.openai.api_key_env must be an environment variable name, \
+                 got 'not a name!'"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn adapter_api_key_env_errors_rejects_a_non_string() {
+        let rt = runtime(entry(&[(
+            "openai",
+            entry(&[("api_key_env", Value::from(5i64))]),
+        )]));
+        let registry = AdapterRegistry::new();
+        assert_eq!(
+            registry.adapter_api_key_env_errors(&rt),
+            vec![
+                "runtime.adapters.openai.api_key_env must be an environment variable name, \
+                 got 5"
+                    .to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn adapter_api_key_env_errors_accepts_empty_string_and_valid_names_checked_in_name_order() {
+        let rt = runtime(entry(&[
+            (
+                "nvidia-nim",
+                entry(&[("api_key_env", Value::Str(String::new()))]),
+            ),
+            (
+                "openai",
+                entry(&[("api_key_env", Value::Str("OPENAI_TEAM_KEY".to_string()))]),
+            ),
+        ]));
+        let registry = AdapterRegistry::new();
+        assert_eq!(
+            registry.adapter_api_key_env_errors(&rt),
+            Vec::<String>::new()
+        );
+    }
+
+    #[test]
+    fn adapter_api_key_env_errors_rejects_empty_string_for_an_always_keyed_adapter() {
+        let rt = runtime(entry(&[
+            (
+                "anthropic",
+                entry(&[("api_key_env", Value::Str(String::new()))]),
+            ),
+            (
+                "claude_team",
+                entry(&[
+                    ("adapter", Value::Str("anthropic".to_string())),
+                    ("api_key_env", Value::Str(String::new())),
+                ]),
+            ),
+        ]));
+        let registry = AdapterRegistry::new();
+        assert_eq!(
+            registry.adapter_api_key_env_errors(&rt),
+            vec![
+                "runtime.adapters.anthropic.api_key_env must be an environment variable \
+                 name, got ''"
+                    .to_string(),
+                "runtime.adapters.claude_team.api_key_env must be an environment variable \
+                 name, got ''"
+                    .to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn adapter_api_key_env_errors_checks_every_adapter_entry_not_just_aliases() {
+        // Not just aliases: a built-in adapter's own block is checked, the
+        // same way an alias's target is (#656).
+        let rt = runtime(entry(&[
+            (
+                "groq",
+                entry(&[("api_key_env", Value::Str("bad-name".to_string()))]),
+            ),
+            (
+                "my_alias",
+                entry(&[
+                    ("adapter", Value::Str("groq".to_string())),
+                    ("api_key_env", Value::Str("also bad".to_string())),
+                ]),
+            ),
+        ]));
+        let registry = AdapterRegistry::new();
+        assert_eq!(
+            registry.adapter_api_key_env_errors(&rt),
+            vec![
+                "runtime.adapters.groq.api_key_env must be an environment variable name, \
+                 got 'bad-name'"
+                    .to_string(),
+                "runtime.adapters.my_alias.api_key_env must be an environment variable name, \
+                 got 'also bad'"
+                    .to_string(),
+            ]
         );
     }
 }

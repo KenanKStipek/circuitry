@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #669: a custom api_key_env, soft preflight, plus the missing-key message names it",
+  "description": "The same groq prompt with its credential redirected to GROQ_TEAM_KEY, which the sandboxed environment never sets, but on_error: skip: preflight downgrades to a soft warning naming the custom variable and the run proceeds, leaving meta.error holding the helper's own 'API key not found for GROQ_TEAM_KEY' text, with no request ever sent.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "compare_run_warnings": true
+}
