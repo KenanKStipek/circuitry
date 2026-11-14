@@ -175,7 +175,7 @@ impl ToolPlugin for ShellPlugin {
         )
         .await?;
         if parse_json {
-            return parse_json_stdout(result, &binary);
+            return parse_json_stdout(result, &binary, call.scrub);
         }
         Ok(result)
     }

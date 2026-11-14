@@ -79,7 +79,7 @@ impl ToolPlugin for GenericSubprocessTool {
         )
         .await?;
         if parse_json {
-            return parse_json_stdout(result, &binary);
+            return parse_json_stdout(result, &binary, call.scrub);
         }
         Ok(result)
     }
@@ -481,9 +481,16 @@ pub(crate) fn parse_mode(value: Option<&Value>, plugin_name: &str) -> Result<boo
 /// on `stdout`); empty or invalid stdout is a `ValueError` carrying the
 /// exit code and the beginning of stdout. `json.loads`' own message is
 /// reproduced byte for byte by `electricity_json::loads`.
+///
+/// *scrub*, when given (issue #600), runs on the *whole* stdout before
+/// the excerpt is cut: a host-`env` secret the process prints starting
+/// just before the cut would otherwise leave its first part in the
+/// error, since a whole-value scrub of the excerpt alone can no longer
+/// find the complete value to replace.
 pub(crate) fn parse_json_stdout(
     mut result: ToolResult,
     binary: &str,
+    scrub: Option<&dyn Fn(&str) -> String>,
 ) -> Result<ToolResult, ToolError> {
     let stdout = result.stdout.clone().unwrap_or_default();
     let exit_code = result.exit_code.unwrap_or(0);
@@ -499,8 +506,9 @@ pub(crate) fn parse_json_stdout(
             Ok(result)
         }
         Err(err) => {
-            let excerpt: String = stdout.chars().take(PARSE_EXCERPT_CHARS).collect();
-            let more = if stdout.chars().count() > PARSE_EXCERPT_CHARS {
+            let scrubbed = scrub.map(|f| f(&stdout)).unwrap_or_else(|| stdout.clone());
+            let excerpt: String = scrubbed.chars().take(PARSE_EXCERPT_CHARS).collect();
+            let more = if scrubbed.chars().count() > PARSE_EXCERPT_CHARS {
                 "..."
             } else {
                 ""
@@ -683,7 +691,8 @@ mod tests {
 
     #[test]
     fn parse_json_stdout_replaces_value_and_keeps_raw_stdout() {
-        let parsed = parse_json_stdout(result_with_stdout("{\"ok\": true}\n", 3), "/x").unwrap();
+        let parsed =
+            parse_json_stdout(result_with_stdout("{\"ok\": true}\n", 3), "/x", None).unwrap();
         let mut expected = DictType::new();
         expected.insert(Value::from("ok"), Value::Bool(true));
         assert_eq!(parsed.value, Value::Dict(expected));
@@ -695,7 +704,7 @@ mod tests {
     #[test]
     fn parse_json_stdout_rejects_empty_and_whitespace_only_stdout() {
         for stdout in ["", "  \n\t\n"] {
-            let err = parse_json_stdout(result_with_stdout(stdout, 0), "/x").unwrap_err();
+            let err = parse_json_stdout(result_with_stdout(stdout, 0), "/x", None).unwrap_err();
             assert_eq!(err.message, "/x parse: json: stdout is empty (exit 0).");
             assert_eq!(err.py_class, PyExc::ValueError);
         }
@@ -703,15 +712,33 @@ mod tests {
 
     #[test]
     fn parse_json_stdout_invalid_json_shows_the_exit_code_and_a_bounded_excerpt() {
-        let err = parse_json_stdout(result_with_stdout("not json\n", 3), "/x").unwrap_err();
+        let err = parse_json_stdout(result_with_stdout("not json\n", 3), "/x", None).unwrap_err();
         assert_eq!(
             err.message,
             "/x parse: json: stdout is not valid JSON (exit 3): Expecting value: line 1 \
              column 1 (char 0); stdout begins 'not json\\n'"
         );
         let long = "x".repeat(5000);
-        let err = parse_json_stdout(result_with_stdout(&long, 0), "/x").unwrap_err();
+        let err = parse_json_stdout(result_with_stdout(&long, 0), "/x", None).unwrap_err();
         assert!(err.message.contains(&format!("'{}'...", "x".repeat(200))));
+    }
+
+    #[test]
+    fn parse_json_stdout_scrubs_before_cutting_the_excerpt() {
+        // Issue #600: a secret straddling the 200-character cut leaves no
+        // fragment -- scrubbing the excerpt alone, after the cut, could
+        // never find the whole value to replace.
+        let secret = "sk-abcdefghijklmnopqrstuvwxyz0123456789";
+        let stdout = format!("{}{secret}more", "x".repeat(190));
+        let scrub = |s: &str| s.replace(secret, "[secret:x]");
+        let err =
+            parse_json_stdout(result_with_stdout(&stdout, 0), "/x", Some(&scrub)).unwrap_err();
+        assert!(
+            !err.message.contains(&secret[..10]),
+            "a fragment of the secret leaked: {}",
+            err.message
+        );
+        assert!(err.message.contains("[secret:x]"));
     }
 
     #[test]

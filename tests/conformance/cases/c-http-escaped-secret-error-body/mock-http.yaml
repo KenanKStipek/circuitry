@@ -1,0 +1,7 @@
+- request: {method: GET, path: /fail}
+  response:
+    status: 400
+    reason: Bad Request
+    headers:
+      Content-Type: application/json
+    body: '{"error": "bad token: circuitry-test-fake-slash\/secret-600"}'

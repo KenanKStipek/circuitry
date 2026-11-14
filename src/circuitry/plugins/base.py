@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -15,8 +16,22 @@ if TYPE_CHECKING:
 #: concern on `meta.raw`).
 _ERROR_EXCERPT_MAX_CHARS = 500
 
+#: Appended to a trusted-only-param refusal (#604): names the fix for a
+#: limited document. A bundled or library entry can be ejected (`cof eject
+#: <name>`) and the copy run by path; anything else can be run by path
+#: directly.
+LIMITED_WRITE_FIX = (
+    " — a bundled or library entry can be ejected (`cof eject <name>`) and "
+    "run by path instead"
+)
 
-def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) -> str:
+
+def http_error_excerpt(
+    body: str,
+    *,
+    max_chars: int = _ERROR_EXCERPT_MAX_CHARS,
+    scrub_secrets: Callable[[str], str] | None = None,
+) -> str:
     """A bounded, redacted explanation of an HTTP error response body, for
     the http-family tool plugins (`http`, `web_fetch`, `webhook`, `linear`).
 
@@ -28,7 +43,20 @@ def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) 
     error string is never redacted downstream, so this redacts the body
     itself, the same `cli/redaction.redact` deny-list `meta.raw` uses,
     before any of it reaches a failure message.
+
+    *scrub_secrets*, when given, also replaces a resolved secret with its
+    placeholder in whichever field this returns (#600): a raw-text scrub of
+    *body* before it ever reaches this function (as `http`'s caller already
+    does) still misses a secret the server wrote with JSON escapes (a
+    literal slash as a backslash-slash pair, or a non-ASCII character as a
+    six-character backslash-u escape) — decoding undoes the escaping, so
+    the parsed `error.message` this picks out can hold the literal value
+    even when the undecoded raw text never matched.
     """
+
+    def _finish(text: str) -> str:
+        return scrub_secrets(text) if scrub_secrets is not None else text
+
     text = (body or "").strip()
     if not text:
         return ""
@@ -36,7 +64,8 @@ def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) 
         parsed: Any = json.loads(text)
     except json.JSONDecodeError:
         redacted_text = redact(text)
-        return redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
+        finished = _finish(redacted_text if isinstance(redacted_text, str) else text)
+        return finished[:max_chars]
     if isinstance(parsed, dict):
         redacted = redact(parsed)
         if isinstance(redacted, dict):
@@ -44,13 +73,13 @@ def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) 
             if isinstance(error, dict):
                 message = error.get("message")
                 if isinstance(message, str) and message:
-                    return message[:max_chars]
+                    return _finish(message)[:max_chars]
             if isinstance(error, str) and error:
-                return error[:max_chars]
+                return _finish(error)[:max_chars]
             for key in ("message", "detail"):
                 value = redacted.get(key)
                 if isinstance(value, str) and value:
-                    return value[:max_chars]
+                    return _finish(value)[:max_chars]
         # No recognized reason field (e.g. GraphQL-style `errors: [...]` or a
         # validation body with its own shape): fall back to the whole body,
         # but the *redacted* copy, never the raw `text` — a sibling
@@ -58,12 +87,16 @@ def http_error_excerpt(body: str, *, max_chars: int = _ERROR_EXCERPT_MAX_CHARS) 
         # the failure message just because it wasn't under `error`/`message`/
         # `detail`. `redact(text)` on the raw string only matches when the
         # whole string is itself a JWT/key/URL, so it would let this through.
-        return json.dumps(redacted, ensure_ascii=False)[:max_chars]
+        # `_finish` runs before the `[:max_chars]` cut (#600): a secret JSON
+        # decoding exposed (an escaped slash, a `\uXXXX` character) can start
+        # anywhere in the serialized text, including just before the cut.
+        return _finish(json.dumps(redacted, ensure_ascii=False))[:max_chars]
     if isinstance(parsed, list):
         redacted_list = redact(parsed)
-        return json.dumps(redacted_list, ensure_ascii=False)[:max_chars]
+        return _finish(json.dumps(redacted_list, ensure_ascii=False))[:max_chars]
     redacted_text = redact(text)
-    return redacted_text[:max_chars] if isinstance(redacted_text, str) else text[:max_chars]
+    finished = _finish(redacted_text if isinstance(redacted_text, str) else text)
+    return finished[:max_chars]
 
 
 @dataclass(frozen=True)

@@ -1,0 +1,11 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: call
+          provider: awk
+          params:
+            args: ["{print}"]
+    tokens_sent: 10
+    tokens_received: 20

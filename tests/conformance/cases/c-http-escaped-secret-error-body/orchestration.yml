@@ -1,0 +1,12 @@
+name: c-http-escaped-secret-error-body
+interface:
+  inputs:
+    base_url: {type: string, required: true}
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "{{input.base_url}}/fail"
+      headers:
+        Authorization: {secret: api, prefix: "Bearer "}
