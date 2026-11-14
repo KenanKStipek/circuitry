@@ -1148,6 +1148,7 @@ async fn execute_body<'a>(
             observer,
             token,
             resume_active,
+            true,
         )
         .await
         {

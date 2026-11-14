@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -84,6 +85,17 @@ from .trust import register_trust
 #: never stop the --out write or the exit code that still have to follow.
 console = ResilientConsole()
 err_console = ResilientConsole(stderr=True)
+
+# A literal name, never ``__name__``: this module is also the one
+# `python -m circuitry.cli.app` executes directly (the installed `cof`
+# script's own entry point, and how every CLI test subprocess here runs
+# it), which sets ``__name__`` to ``"__main__"`` rather than
+# ``"circuitry.cli.app"`` -- a logger named ``"__main__"`` is no child of
+# the ``circuitry`` logger `configure_cli_logging` installs a handler on,
+# so a warning logged under it would fall through to Python's own
+# formatter-less ``logging.lastResort`` handler instead, silently losing
+# its ``WARNING: `` prefix.
+logger = logging.getLogger("circuitry.cli.app")
 
 
 # `.runtime_shim` pulls in `core.compiler` -> `core.cel_eval` (a full CEL
@@ -435,6 +447,49 @@ def _restore_raw_text_for_string_inputs(
     for key, spec in iface_inputs.items():
         if isinstance(spec, dict) and spec.get("type") == "string" and key in raw:
             inline[key] = raw[key]
+
+
+def _warn_resumed_input_changes(
+    *, orch_path: Path, saved_input: dict[str, Any], overrides: dict[str, Any]
+) -> None:
+    """WARNING, through the usual ``circuitry`` logger, when a `--resume`'s
+    own `-e` overrides change a value from the saved run's (#584) --
+    finished effects besides a `use` whose own inputs changed from this
+    keep their saved results (see `core.use.use_rerun_for_changed_inputs`).
+
+    Names each changed input as ``name: <old> -> <new>`` (Python ``repr``),
+    in the interface's declared order, then any undeclared ones sorted --
+    only *overrides*' own keys can ever differ from *saved_input* (nothing
+    else was touched), so that is this function's only candidate set.
+    """
+    changed = {
+        key: (saved_input.get(key), value)
+        for key, value in overrides.items()
+        if saved_input.get(key) != value
+    }
+    if not changed:
+        return
+    declared_order: list[str] = []
+    try:
+        doc = load_orchestration_file(orch_path)
+    except Exception:
+        doc = None
+    if isinstance(doc, dict):
+        iface = doc.get("interface")
+        if isinstance(iface, dict):
+            iface_inputs = iface.get("inputs")
+            if isinstance(iface_inputs, dict):
+                declared_order = [key for key in iface_inputs if key in changed]
+    remaining = sorted(key for key in changed if key not in declared_order)
+    parts = ", ".join(
+        f"{key}: {changed[key][0]!r} -> {changed[key][1]!r}"
+        for key in (*declared_order, *remaining)
+    )
+    logger.warning(
+        "Resuming with changed input(s): %s. Other finished effects keep "
+        "their saved results.",
+        parts,
+    )
 
 
 def _find_last_effect_value(state: dict[str, Any]) -> Any:
@@ -1344,7 +1399,12 @@ def run_cmd(
             _restore_raw_text_for_string_inputs(
                 inline, _raw_env_var_text(effective_env_vars), orch_path
             )
+            saved_input = resumed_state.get("input")
+            saved_input = dict(saved_input) if isinstance(saved_input, dict) else {}
             initial_state = apply_inline_overrides(resumed_state, inline)
+            _warn_resumed_input_changes(
+                orch_path=orch_path, saved_input=saved_input, overrides=inline
+            )
         else:
             initial_state = resumed_state
     else:
