@@ -11,7 +11,11 @@ use electricity_value::Value;
 use electricity_value::pycompat::py_strip;
 use std::collections::BTreeSet;
 
-const DEFAULT_ALLOWED: [&str; 8] = ["ls", "cat", "head", "tail", "wc", "echo", "pwd", "date"];
+/// The default allowlist with no host pin or effect-own `allowed_commands`
+/// at all -- also `electricity_vm::generated_doc`'s own base for #772
+/// rule 2's resolved shell allowlist, rather than a duplicate constant
+/// that could drift (`electricity-vm` already depends on this crate).
+pub const DEFAULT_ALLOWED: [&str; 8] = ["ls", "cat", "head", "tail", "wc", "echo", "pwd", "date"];
 
 /// `plugins/shell.py::ShellPlugin` -- the default/pinned allowlist
 /// intersection, the per-arg shell-metacharacter/null-byte/newline

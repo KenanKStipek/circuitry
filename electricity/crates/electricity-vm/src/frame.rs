@@ -101,12 +101,33 @@ pub struct Frame {
     /// the *current* document's own, statically referenced tool-plugin
     /// provider names -- the ceiling a nested `use`/`reflector` effect's
     /// own generated child is judged against (plus that effect's own
-    /// literal `allow_tools:`). Replaced, never extended, by
-    /// [`Frame::with_document_tool_providers`] -- unlike
+    /// literal `allow_tools:`, unless [`Frame::document_is_generated`] is
+    /// set -- see that field's own doc comment). Replaced, never
+    /// extended, by [`Frame::with_document_tool_providers`] -- unlike
     /// [`Frame::use_call_stack`], this is not a history, only the
     /// providers of whichever document is executing right now. Every
     /// other builder on this struct carries it forward unchanged.
     document_tool_providers: Rc<std::collections::BTreeSet<String>>,
+    /// `circuitry.generated_doc.GENERATED_DOCUMENT_SHELL_COMMANDS_KEY`
+    /// (#772 rule 2): the current document's own, resolved shell
+    /// allowlist (host config default/pin union the enclosing document's
+    /// own literal `shell` effects' `allowed_commands`) -- the ceiling a
+    /// generated `shell` effect's own `params.allowed_commands` is
+    /// checked against. Set alongside [`Frame::document_tool_providers`]
+    /// by the same [`Frame::with_document_tool_providers`] call, never on
+    /// its own.
+    document_shell_commands: Rc<std::collections::BTreeSet<String>>,
+    /// `circuitry.generated_doc.GENERATED_DOCUMENT_IS_GENERATED_KEY`
+    /// (#772 rule 2): whether the document currently executing (the one
+    /// that holds whatever `use`/`reflector` effect is about to be
+    /// checked) is itself generated. `true` means every nested document
+    /// inside it is generated too, whatever its own shape looks like,
+    /// and its own `allow_tools` can never grant anything the inherited
+    /// [`Frame::document_tool_providers`] ceiling didn't already --
+    /// `exec::use_`'s own generated-document check reads this the same
+    /// way `core.use.UseRuntime._check_generated_document` reads
+    /// `runtime_config[GENERATED_DOCUMENT_IS_GENERATED_KEY]`.
+    document_is_generated: bool,
     /// `core/prompt.py`'s own container-nesting display depth
     /// (`structure.depth`, a.k.a. the `structural_position` signal) --
     /// issue #516's §4(c) table, superseding the one-value-per-run
@@ -133,6 +154,8 @@ impl Frame {
             rebase: Rc::new(Vec::new()),
             display_depth: 0,
             document_tool_providers: Rc::new(std::collections::BTreeSet::new()),
+            document_shell_commands: Rc::new(std::collections::BTreeSet::new()),
+            document_is_generated: false,
         }
     }
 
@@ -156,18 +179,25 @@ impl Frame {
             rebase: self.rebase.clone(),
             display_depth,
             document_tool_providers: Rc::clone(&self.document_tool_providers),
+            document_shell_commands: Rc::clone(&self.document_shell_commands),
+            document_is_generated: self.document_is_generated,
         }
     }
 
-    /// This frame, with [`Frame::document_tool_providers`] replaced --
-    /// every other field unchanged. Called once, when a `use`/
-    /// decomposition child's own document starts executing, with that
-    /// child's own static providers (#772) -- never accumulated with
-    /// the parent's, since each document is judged against its own
-    /// text, not an ancestor's.
+    /// This frame, with [`Frame::document_tool_providers`],
+    /// [`Frame::document_shell_commands`] and
+    /// [`Frame::document_is_generated`] replaced together -- every other
+    /// field unchanged. Called once, when a `use`/decomposition child's
+    /// own document starts executing: a non-generated child gets its own
+    /// providers/shell-commands recomputed fresh from its own text
+    /// (*is_generated* `false`); a generated child instead inherits the
+    /// ceiling it was just checked against unchanged (#772 rule 2) --
+    /// `exec::use_`'s own call site picks which.
     pub fn with_document_tool_providers(
         &self,
         providers: std::collections::BTreeSet<String>,
+        shell_commands: std::collections::BTreeSet<String>,
+        is_generated: bool,
     ) -> Frame {
         Frame {
             prefix: Rc::clone(&self.prefix),
@@ -176,6 +206,8 @@ impl Frame {
             rebase: self.rebase.clone(),
             display_depth: self.display_depth,
             document_tool_providers: Rc::new(providers),
+            document_shell_commands: Rc::new(shell_commands),
+            document_is_generated: is_generated,
         }
     }
 
@@ -183,6 +215,18 @@ impl Frame {
     /// ceiling a nested generated child is judged against.
     pub fn document_tool_providers(&self) -> &std::collections::BTreeSet<String> {
         &self.document_tool_providers
+    }
+
+    /// The current document's own resolved shell allowlist (#772 rule 2).
+    pub fn document_shell_commands(&self) -> &std::collections::BTreeSet<String> {
+        &self.document_shell_commands
+    }
+
+    /// Whether the document currently executing is itself generated
+    /// (#772 rule 2) -- see [`Frame::document_is_generated`]'s own field
+    /// doc comment.
+    pub fn document_is_generated(&self) -> bool {
+        self.document_is_generated
     }
 
     /// `core/effect_identity.py::call_path` -- *path*'s own pass
@@ -295,6 +339,8 @@ impl Frame {
             rebase: Rc::new(stack),
             display_depth: self.display_depth,
             document_tool_providers: Rc::clone(&self.document_tool_providers),
+            document_shell_commands: Rc::clone(&self.document_shell_commands),
+            document_is_generated: self.document_is_generated,
         }
     }
 
@@ -324,6 +370,8 @@ impl Frame {
             rebase: Rc::new(Vec::new()),
             display_depth: self.display_depth,
             document_tool_providers: Rc::clone(&self.document_tool_providers),
+            document_shell_commands: Rc::clone(&self.document_shell_commands),
+            document_is_generated: self.document_is_generated,
         }
     }
 
@@ -343,6 +391,8 @@ impl Frame {
             rebase: self.rebase.clone(),
             display_depth: self.display_depth,
             document_tool_providers: Rc::clone(&self.document_tool_providers),
+            document_shell_commands: Rc::clone(&self.document_shell_commands),
+            document_is_generated: self.document_is_generated,
         }
     }
 
@@ -363,6 +413,8 @@ impl Frame {
             rebase: self.rebase.clone(),
             display_depth: self.display_depth,
             document_tool_providers: Rc::clone(&self.document_tool_providers),
+            document_shell_commands: Rc::clone(&self.document_shell_commands),
+            document_is_generated: self.document_is_generated,
         }
     }
 

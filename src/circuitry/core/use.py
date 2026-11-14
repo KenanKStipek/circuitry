@@ -971,7 +971,9 @@ class UseRuntime:
             GENERATED_DOCUMENT_PROVIDERS_KEY,
             current_shell_allowlist,
             generated_document_errors,
+            host_shell_pin,
             is_generated_inline,
+            resolved_shell_allowlist,
             static_shell_allowed_commands,
             static_tool_providers,
         )
@@ -983,12 +985,27 @@ class UseRuntime:
             self.runtime_config.get(GENERATED_DOCUMENT_IS_GENERATED_KEY)
         )
 
+        def _fresh_ceiling() -> tuple[bool, frozenset[str], frozenset[str]]:
+            # A non-generated child is a document in its own right: its own
+            # providers/shell-commands are recomputed fresh from its own
+            # text, fully resolved (host default/pin included) the same way
+            # the root document's own are (`runtime_shim.py`) -- never the
+            # bare, unresolved set, or a document two `use` levels down from
+            # here would judge its own generated children against a
+            # shell allowlist missing the host default and pin entirely.
+            return (
+                False,
+                static_tool_providers(child_orch),
+                resolved_shell_allowlist(
+                    static_shell_allowed_commands(child_orch),
+                    host_pin=host_shell_pin(self.runtime_config),
+                ),
+            )
+
         if self.defn.inline is None:
             # A path/ref child is its own, independently trusted document --
             # never generated, whatever this one is.
-            return False, static_tool_providers(child_orch), static_shell_allowed_commands(
-                child_orch
-            )
+            return _fresh_ceiling()
 
         generated = (
             own_doc_is_generated
@@ -996,9 +1013,7 @@ class UseRuntime:
             or is_generated_inline(self.defn.inline, child_orch)
         )
         if not generated:
-            return False, static_tool_providers(child_orch), static_shell_allowed_commands(
-                child_orch
-            )
+            return _fresh_ceiling()
 
         generating_path = self.defn.generating_effect_path_override or node_path
         errors: list[str] = []

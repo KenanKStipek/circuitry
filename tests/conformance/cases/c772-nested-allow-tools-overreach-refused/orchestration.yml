@@ -7,10 +7,10 @@ interface:
         effects:
           - type: yield
             name: seed
-            template: "effects:\n  - type: tool\n    name: t\n    provider: docker\n    params:\n      image: alpine\n      args: []\n"
+            template: "effects:\n  - type: tool\n    name: t\n    provider: awk\n    params:\n      program: '{print}'\n      args: []\n"
           - type: use
             name: inner
-            allow_tools: [docker]
+            allow_tools: [awk]
             inline: "{{{prime.seed.value}}}"
 effects:
   - type: use

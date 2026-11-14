@@ -1,5 +1,5 @@
 {
-  "enabled_tools": ["json", "python_eval", "validate_yaml"],
+  "enabled_tools": ["json", "awk", "validate_yaml"],
   "runtime": {
     "complexity": {
       "scoring": {"enabled": true},
