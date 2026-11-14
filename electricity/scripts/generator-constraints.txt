@@ -1,13 +1,28 @@
-# Versions of the libraries whose behaviour the generated files capture.
-# electricity/scripts/generate_*.py take their expected outputs from
-# Circuitry's own code and, through it, from these libraries, so an
-# unpinned upgrade could change a committed file with no change in this
-# repository. CI installs Circuitry with these as constraints
+# Versions of every library whose text or behaviour the conformance suite
+# (tests/conformance/) and electricity/scripts/generate_*.py compare against:
+# cof's own loaders, renderers and evaluators call into these, so an unpinned
+# upgrade could change a committed expected-output file, or a conformance
+# case's comparison, with no change in this repository. Includes the
+# libraries underneath the ones cof depends on directly (jsonschema's own
+# referencing/jsonschema-specifications; cel-python's own lark/google-re2/
+# pendulum), since those float on an open range too.
+#
+# CPython 3.11 is the reference interpreter for anything Unicode- or
+# exception-dependent (tests/conformance/README.md); these pins are what CI
+# resolves `pip install -e ".[tools]"` to on 3.11 today. quality.yml and
+# electricity-generated.yml install Circuitry with these as constraints
 # (`pip install -e . -c electricity/scripts/generator-constraints.txt`).
-# To upgrade one: change it here, rerun every generator without --check,
-# commit the regenerated files, and let electricity's Rust tests replay them.
+#
+# To bump one: change it here, then regenerate and review the diff --
+# `python scripts/generate-conformance-cases.py` (repository root) and every
+# `electricity/scripts/generate_*.py` (without --check) -- before committing.
 cel-python==0.5.0
 chevron==0.14.0
+google-re2==1.1.20251105
 jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+lark==1.3.1
+pendulum==3.3.0
 python-dotenv==1.2.4
 PyYAML==6.0.3
+referencing==0.37.0
