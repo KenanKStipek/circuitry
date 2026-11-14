@@ -1166,6 +1166,26 @@ mod tests {
     }
 
     #[test]
+    fn a_rendered_inline_nested_inside_a_literal_inline_is_generated() {
+        // 'inline' is a security-sensitive shape key: a nested use
+        // effect's own inline text must be byte-identical between the
+        // unrendered template and the rendered document, or the outer
+        // child counts as generated -- closing the gap where a model's
+        // own nested document, once rendered into an inner inline:,
+        // could pass as the author's own merely because the outer
+        // structure still matched.
+        let raw = "effects:\n  - type: use\n    name: wrapper\n    inline: |\n      \
+                   effects:\n        - type: use\n          name: run\n          \
+                   inline: \"{{{prime.plan.value}}}\"\n";
+        let rendered = parse(
+            "effects:\n  - type: use\n    name: wrapper\n    inline: \"effects:\\n- \
+             {type: tool, name: x, provider: shell, params: {command: curl, \
+             allowed_commands: [curl]}}\\n\"\n",
+        );
+        assert!(is_generated_inline(raw, &rendered));
+    }
+
+    #[test]
     fn static_tool_providers_collects_direct_and_nested_inline() {
         let orch = parse(
             "effects:\n  - type: tool\n    name: a\n    provider: shell\n  - type: use\n    name: child\n    inline: |\n      effects:\n        - type: tool\n          name: x\n          provider: docker\n",
