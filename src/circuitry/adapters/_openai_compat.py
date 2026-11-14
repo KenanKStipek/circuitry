@@ -131,10 +131,9 @@ def stream_error_retry_info(error: Any) -> RetryInfo:
 def usage_tokens(usage: Any) -> tuple[int | None, int | None, int | None]:
     """``(tokens_sent, tokens_received, tokens_cached_in)`` from a Chat
     Completions ``usage`` object. ``prompt_tokens`` already counts cache
-    reads (R2's OpenAI-compatible rule), so ``tokens_sent`` is unchanged;
-    ``tokens_cached_in`` is ``usage.prompt_tokens_details.cached_tokens``
-    when the provider reports one, else ``None`` -- there is no write
-    count in this wire format.
+    reads, so ``tokens_sent`` is unchanged; ``tokens_cached_in`` is
+    ``usage.prompt_tokens_details.cached_tokens`` when the provider reports
+    one, else ``None`` -- there is no write count in this wire format.
     """
     if not isinstance(usage, dict):
         return None, None, None

@@ -473,8 +473,8 @@ def test_anthropic_streamed_success_sums_cache_into_tokens_sent(
         assert result.tokens_received == 2
         assert result.tokens_cached_in == 100
         assert result.tokens_cache_write == 20
-        # The live progress's own tokens_sent agrees with the final figure
-        # (R2): both include the cache.
+        # The live progress's own tokens_sent agrees with the final
+        # figure: both include the cache.
         assert live_tokens_sent[0] == 3 + 100 + 20
 
 

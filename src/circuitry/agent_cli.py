@@ -427,8 +427,8 @@ class _UsageTotals:
     """Token and cost sums; each stays ``None`` until a number arrives.
 
     ``cache_read``/``cache_write`` are summed separately from ``sent``
-    (which already includes them, per R2) -- each set only when at least
-    one turn's own usage reported that field (R3).
+    (which already includes them) -- each set only when at least one
+    turn's own usage reported that field.
     """
 
     sent: int | None = None

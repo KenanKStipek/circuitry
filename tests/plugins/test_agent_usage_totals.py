@@ -129,8 +129,8 @@ def test_run_totals_include_agent_effects_in_a_chain_a_loop_and_a_use_child(
     assert totals["tokens_received"] == 5 * 2
     assert totals["cost_usd"] == pytest.approx(5 * 0.001)
     # Every one of these calls' usage explicitly reports 0 cache reads/
-    # writes (#627 R1: present, as 0, not absent, since the field itself
-    # was in the reply).
+    # writes: present, as 0, not absent, since the field itself was in
+    # the reply.
     assert totals["tokens_cached_in"] == 0
     assert totals["tokens_cache_write"] == 0
 
