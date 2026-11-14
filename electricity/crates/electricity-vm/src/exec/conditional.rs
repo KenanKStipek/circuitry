@@ -440,6 +440,7 @@ async fn decide_and_run<'a>(
             observer,
             token,
             resume_active,
+            true,
         )
         .await
         {

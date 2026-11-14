@@ -865,7 +865,13 @@ class DynamicRuntime:
             return
         get_token().check()
         try:
-            self._execute_effect(effect, store=store, ctx=ctx, tracker=tracker)
+            self._execute_effect(
+                effect,
+                store=store,
+                ctx=ctx,
+                tracker=tracker,
+                check_use_input_change=False,
+            )
         except Exception:
             if stop_event is not None:
                 stop_event.set()
@@ -885,6 +891,7 @@ class DynamicRuntime:
         cb_error: Callable[[str], None] | None = None,
         tracker: _TreeStatus | None = None,
         resume_active: bool | None = None,
+        check_use_input_change: bool = True,
     ) -> str:
         """Execute a single effect within the dynamic.
 
@@ -898,6 +905,14 @@ class DynamicRuntime:
         other effect actually dispatched this call, success or an absorbed
         failure). Chain flow uses this to know when to stop treating later
         nodes as resumable — see the call site in ``execute()``.
+
+        *check_use_input_change* (#584): a finished ``use``'s inputs,
+        resolved now, are checked against its recorded ``meta.inputs`` —
+        changed, it reruns (and so does everything after it in the chain)
+        instead of being skipped whole. ``False`` for a tree-flow branch
+        (the call from ``_execute_branch``): each branch is already
+        checked and skipped independently, with no "later in the chain"
+        to protect, and is out of scope for this check (#584).
         """
         effective_resume = self.resume if resume_active is None else resume_active
         # Local imports to avoid circular imports at module load time
@@ -944,11 +959,34 @@ class DynamicRuntime:
             )
             return "disabled"
 
+        existing_node = store.state.get(name) if isinstance(name, str) else None
+        use_inputs_changed = False
+        if (
+            is_use
+            and check_use_input_change
+            and effective_resume
+            and effect_completed_ok(existing_node)
+        ):
+            from .use import use_rerun_for_changed_inputs
+
+            use_inputs_changed = use_rerun_for_changed_inputs(
+                effect,
+                node=existing_node,
+                ctx=ctx,
+                adapter=self.adapter,
+                model=self.model,
+                model_locked=self.model_locked,
+                runtime_config=self.runtime_config,
+                dry_run=self.dry_run,
+                timeout_seconds=self.timeout_seconds,
+            )
+
         if (
             effective_resume
             and isinstance(name, str)
             and name != "?"
-            and effect_completed_ok(store.state.get(name))
+            and effect_completed_ok(existing_node)
+            and not use_inputs_changed
         ):
             if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                 line = (

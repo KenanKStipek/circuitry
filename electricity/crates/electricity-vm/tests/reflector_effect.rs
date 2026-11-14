@@ -327,9 +327,11 @@ async fn done_true_with_stop_on_done_never_runs_the_generated_plan() {
     );
 
     let meta = as_dict(get(refl, "meta").unwrap());
-    // Success never writes created_at/completed_at.
+    // Success writes completed_at, like any other effect (#585) --
+    // never created_at, which only the actual run of a generated plan
+    // writes.
     assert!(get(meta, "created_at").is_none());
-    assert!(get(meta, "completed_at").is_none());
+    assert!(get(meta, "completed_at").is_some());
 }
 
 #[tokio::test]
@@ -589,9 +591,10 @@ async fn cancellation_during_the_planner_leaves_no_record() {
     let snapshot = store.snapshot(&store.root);
     let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
     let refl = as_dict(get(prime, "plan_it").unwrap());
-    // No `value`/`meta.iterations` write at all for the reflector's own
-    // node -- only whatever `store.ensure_dict`'s own initial
-    // `setdefault`-shaped writes left behind at the very top of
+    // No real completed write at all for the reflector's own node --
+    // only whatever `store.ensure_dict`'s own initial `setdefault`-
+    // shaped writes (`value`, `meta.iterations`) and the unconditional
+    // `meta.error` clear (#585) left behind at the very top of
     // `execute_reflector`, before the loop ever starts.
     assert_eq!(get(refl, "value"), Some(&Value::None));
     let meta = as_dict(get(refl, "meta").unwrap());
@@ -600,7 +603,11 @@ async fn cancellation_during_the_planner_leaves_no_record() {
         Some(&Value::List(Vec::new())),
         "no iteration record for the cancelled pass"
     );
-    assert!(get(meta, "error").is_none());
+    assert_eq!(
+        get(meta, "error"),
+        Some(&Value::None),
+        "cleared at the top of the run, not merely absent"
+    );
     assert!(get(meta, "completed_at").is_none());
 
     assert!(

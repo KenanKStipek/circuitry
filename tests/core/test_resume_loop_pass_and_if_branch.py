@@ -582,11 +582,11 @@ def test_a_tree_flow_each_loop_reruns_whole(tmp_path: Path) -> None:
     assert sorted(calls) == ["a-0", "a-1", "b-0", "b-1", "c-0", "c-1"]
 
 
-def test_a_reflector_in_a_resumed_pass_reruns_from_its_start_though_it_finished(tmp_path: Path) -> None:
-    """Pins the rerun: a reflector records no ``meta.completed_at`` on success.
-
-    So `--resume` cannot tell a finished reflector from an unfinished one and
-    always runs it again from its start; #585 tracks changing that.
+def test_a_reflector_in_a_resumed_pass_is_skipped_once_it_finished(tmp_path: Path) -> None:
+    """issue #585: a reflector now records ``meta.completed_at`` on success,
+    so `--resume` skips a finished one whole, same as any other effect --
+    no second planning call, only the effect after it (which failed last
+    time) reruns.
     """
     reflector = {
         "type": "reflector",
@@ -604,7 +604,8 @@ def test_a_reflector_in_a_resumed_pass_reruns_from_its_start_though_it_finished(
 
     second, calls = _resume_calls(orch, adapter, first)
     assert second.ok is True, second.error
-    # `a` is reused; the reflector plans again from its start.
-    assert calls == ["plan-me", "b-0"]
+    # `a` and the reflector are both reused; only `b` (which failed last
+    # time) reruns.
+    assert calls == ["b-0"]
     planner = second.state["prime"]["frames"]["iter_0"]["planner"]
-    assert len(planner["meta"]["iterations"]) == 2
+    assert len(planner["meta"]["iterations"]) == 1
