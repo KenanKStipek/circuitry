@@ -138,6 +138,22 @@ def _retry_info_for(exc: Exception | None) -> RetryInfo:
     return classify_exception(exc)
 
 
+def _clear_unreported_cache_fields(meta: dict[str, Any]) -> None:
+    """Drops the four cache-count keys their shared seed sets to ``None``
+    placeholders, for an exit path that never dispatches an attempt at all
+    (a dry run, a successful decomposition) -- these are absent when not
+    reported, unlike ``tokens_sent``/``tokens_received``, which stay null.
+    """
+    for key in (
+        "tokens_cached_in",
+        "tokens_cache_write",
+        "tokens_cached_in_total",
+        "tokens_cache_write_total",
+    ):
+        if meta.get(key) is None:
+            meta.pop(key, None)
+
+
 def _attempt_entry(
     *,
     created_at: str,
@@ -157,7 +173,7 @@ def _attempt_entry(
 
     ``tokens_cached_in``/``tokens_cache_write`` are included only when not
     ``None`` -- unlike ``tokens_sent``/``tokens_received``, which are always
-    present (R1: absent, not null, when the provider never reported one).
+    present: absent, not null, when the provider never reported one.
     """
     entry: dict[str, Any] = {
         "created_at": created_at,
@@ -194,8 +210,7 @@ def _fallback_attempt_entry(
     """One ``meta.fallback_attempts`` entry for an attempt that reached a
     provider reply (as opposed to a failed adapter call, which has no
     ``res`` and so no tokens at all). ``tokens_cached_in``/
-    ``tokens_cache_write`` are included only when ``res`` carries them
-    (R1).
+    ``tokens_cache_write`` are included only when ``res`` carries them.
     """
     entry: dict[str, Any] = {
         "adapter": adapter,
@@ -751,8 +766,15 @@ class PromptRuntime:
         meta.update(prompt_sent_fields(prompt_sent, self._prompt_sent_setting))
         meta["tokens_sent"] = None
         meta["tokens_received"] = None
+        # Seeded here, right next to the field each belongs with, so a
+        # first-time assignment later keeps this position instead of
+        # appending after whatever else this pass has written by then.
+        meta["tokens_cached_in"] = None
+        meta["tokens_cache_write"] = None
         meta["tokens_sent_total"] = None
         meta["tokens_received_total"] = None
+        meta["tokens_cached_in_total"] = None
+        meta["tokens_cache_write_total"] = None
         meta["error"] = None
         meta["dry_run"] = self.dry_run
         meta["fallback_attempts"] = []
@@ -776,10 +798,6 @@ class PromptRuntime:
             "warnings",
             "assets",
             "cost_usd",
-            "tokens_cached_in",
-            "tokens_cache_write",
-            "tokens_cached_in_total",
-            "tokens_cache_write_total",
             "template_files",
             "error_code",
             "http_status",
@@ -830,6 +848,7 @@ class PromptRuntime:
         if self.dry_run:
             node["value"] = None
             meta["completed_at"] = _now_iso()
+            _clear_unreported_cache_fields(meta)
             if self.verbose:
                 elapsed = time.monotonic() - t0
                 if self.cb_done is not None:
@@ -892,6 +911,7 @@ class PromptRuntime:
                 if decomposition.succeeded:
                     node["value"] = decomposition.value
                     meta["completed_at"] = _now_iso()
+                    _clear_unreported_cache_fields(meta)
                     if self.verbose:
                         elapsed = time.monotonic() - t0
                         chunk_count = decomposition.meta.get("chunk_count")
@@ -1039,8 +1059,12 @@ class PromptRuntime:
                 meta["tokens_received_total"] = total_tokens_received
                 if total_tokens_cached_in is not None:
                     meta["tokens_cached_in_total"] = total_tokens_cached_in
+                else:
+                    meta.pop("tokens_cached_in_total", None)
                 if total_tokens_cache_write is not None:
                     meta["tokens_cache_write_total"] = total_tokens_cache_write
+                else:
+                    meta.pop("tokens_cache_write_total", None)
 
                 if generation_error is None and res is not None:
                     # Success
@@ -1049,8 +1073,12 @@ class PromptRuntime:
                     meta["tokens_received"] = res.tokens_received
                     if res.tokens_cached_in is not None:
                         meta["tokens_cached_in"] = res.tokens_cached_in
+                    else:
+                        meta.pop("tokens_cached_in", None)
                     if res.tokens_cache_write is not None:
                         meta["tokens_cache_write"] = res.tokens_cache_write
+                    else:
+                        meta.pop("tokens_cache_write", None)
                     cost_usd = getattr(res, "cost_usd", None)
                     if cost_usd is not None:
                         meta["cost_usd"] = cost_usd
@@ -1202,6 +1230,8 @@ class PromptRuntime:
             meta["fallback_attempts"] = attempts_meta if attempt_reached_chain else []
             meta["fallback_recovered"] = False
             meta["error"] = redact(str(e))
+            meta.pop("tokens_cached_in", None)
+            meta.pop("tokens_cache_write", None)
             meta.update(final_fields)
             meta["completed_at"] = _now_iso()
             # Same rule as the success path (#421): retries_used is set on
