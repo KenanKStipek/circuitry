@@ -53,7 +53,7 @@ def load_orchestration_file(path: Path) -> dict[str, Any]:
         if _toon_decode is None:
             raise ImportError(
                 "The 'toon-format' package is required to load .toon files. "
-                "Install it with: pip install circuitry-cof[toon]"
+                "Install it with: pip install 'circuitry-cof[toon]'"
             )
         data = _toon_decode(raw)
     else:
@@ -75,7 +75,7 @@ def serialize_orchestration(data: dict[str, Any], fmt: str) -> str:
         if _toon_encode is None:
             raise ImportError(
                 "The 'toon-format' package is required to serialize to TOON. "
-                "Install it with: pip install circuitry-cof[toon]"
+                "Install it with: pip install 'circuitry-cof[toon]'"
             )
         return _toon_encode(data)
     raise ValueError(f"Unsupported output format: {fmt!r}. Supported: yaml, json, toon")
