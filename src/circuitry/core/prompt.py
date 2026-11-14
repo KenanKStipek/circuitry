@@ -1230,8 +1230,7 @@ class PromptRuntime:
             meta["fallback_attempts"] = attempts_meta if attempt_reached_chain else []
             meta["fallback_recovered"] = False
             meta["error"] = redact(str(e))
-            meta.pop("tokens_cached_in", None)
-            meta.pop("tokens_cache_write", None)
+            _clear_unreported_cache_fields(meta)
             meta.update(final_fields)
             meta["completed_at"] = _now_iso()
             # Same rule as the success path (#421): retries_used is set on
