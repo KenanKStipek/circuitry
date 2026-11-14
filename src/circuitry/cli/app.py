@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.resources
 import json
+import logging
 import os
 import sys
 import tempfile
@@ -41,7 +42,6 @@ from ..tui.wizard_host import (
 )
 from .complexity_config import ComplexitySettings
 from .config import (
-    GLOBAL_CONFIG_DIR,
     CircuitryConfig,
     ConfigError,
     describe_config_sources,
@@ -84,6 +84,17 @@ from .trust import register_trust
 #: never stop the --out write or the exit code that still have to follow.
 console = ResilientConsole()
 err_console = ResilientConsole(stderr=True)
+
+# A literal name, never ``__name__``: this module is also the one
+# `python -m circuitry.cli.app` executes directly (the installed `cof`
+# script's own entry point, and how every CLI test subprocess here runs
+# it), which sets ``__name__`` to ``"__main__"`` rather than
+# ``"circuitry.cli.app"`` -- a logger named ``"__main__"`` is no child of
+# the ``circuitry`` logger `configure_cli_logging` installs a handler on,
+# so a warning logged under it would fall through to Python's own
+# formatter-less ``logging.lastResort`` handler instead, silently losing
+# its ``WARNING: `` prefix.
+logger = logging.getLogger("circuitry.cli.app")
 
 
 # `.runtime_shim` pulls in `core.compiler` -> `core.cel_eval` (a full CEL
@@ -437,6 +448,49 @@ def _restore_raw_text_for_string_inputs(
             inline[key] = raw[key]
 
 
+def _warn_resumed_input_changes(
+    *, orch_path: Path, saved_input: dict[str, Any], overrides: dict[str, Any]
+) -> None:
+    """WARNING, through the usual ``circuitry`` logger, when a `--resume`'s
+    own `-e` overrides change a value from the saved run's (#584) --
+    finished effects besides a `use` whose own inputs changed from this
+    keep their saved results (see `core.use.use_rerun_for_changed_inputs`).
+
+    Names each changed input as ``name: <old> -> <new>`` (Python ``repr``),
+    in the interface's declared order, then any undeclared ones sorted --
+    only *overrides*' own keys can ever differ from *saved_input* (nothing
+    else was touched), so that is this function's only candidate set.
+    """
+    changed = {
+        key: (saved_input.get(key), value)
+        for key, value in overrides.items()
+        if saved_input.get(key) != value
+    }
+    if not changed:
+        return
+    declared_order: list[str] = []
+    try:
+        doc = load_orchestration_file(orch_path)
+    except Exception:
+        doc = None
+    if isinstance(doc, dict):
+        iface = doc.get("interface")
+        if isinstance(iface, dict):
+            iface_inputs = iface.get("inputs")
+            if isinstance(iface_inputs, dict):
+                declared_order = [key for key in iface_inputs if key in changed]
+    remaining = sorted(key for key in changed if key not in declared_order)
+    parts = ", ".join(
+        f"{key}: {changed[key][0]!r} -> {changed[key][1]!r}"
+        for key in (*declared_order, *remaining)
+    )
+    logger.warning(
+        "Resuming with changed input(s): %s. Other finished effects keep "
+        "their saved results.",
+        parts,
+    )
+
+
 def _find_last_effect_value(state: dict[str, Any]) -> Any:
     """Walk prime to find the last completed effect's value, recursing into dynamics."""
     prime = state.get("prime")
@@ -510,20 +564,122 @@ def _extract_generated_orchestration(yaml_text: str) -> dict[str, Any] | None:
     return None
 
 
-def _save_last_run(args: dict[str, Any]) -> None:
-    """Stash the current run args for --last replay."""
+def _current_cwd_or_none() -> str | None:
+    """``str(Path.cwd())``, or ``None`` when the working directory no
+    longer exists (removed during the run) -- never raises, so a run
+    whose cwd vanished mid-run still leaves a stash instead of crashing
+    after ``--out`` is already on disk.
+    """
     try:
-        GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _LAST_RUN_PATH.write_text(json.dumps(args) + "\n", encoding="utf-8")
+        return str(Path.cwd())
+    except OSError:
+        return None
+
+
+def _save_last_run(args: dict[str, Any]) -> None:
+    """Stash the current run args for --last replay.
+
+    Written atomically — a sibling temp file, 0600 from creation
+    (``tempfile.mkstemp``'s own default, unaffected by umask: its bits add
+    nothing a umask could strip), renamed over any previous stash — in a
+    directory created 0700 whatever the umask. The stash holds every ``-e``
+    value of the run, so a reader must never see a half-written file, and
+    neither the directory nor the file may end up looser than that.
+    """
+    try:
+        stash_dir = _LAST_RUN_PATH.parent
+        stash_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=stash_dir, prefix=".last-run.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(args) + "\n")
+            os.replace(tmp_name, _LAST_RUN_PATH)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
     except Exception:
         pass  # Best-effort; don't fail the run
 
 
 def _load_last_run() -> dict[str, Any]:
-    """Load the stashed last-run args."""
-    if not _LAST_RUN_PATH.exists():
+    """Load the stashed last-run args.
+
+    A missing stash and an unparseable one both raise a one-line
+    :class:`typer.BadParameter` — never a bare traceback from a half-read
+    JSON file — at the same exit code ``--last`` already uses for "no
+    previous run", via :func:`read_last_run`'s own total read.
+    """
+    stash = read_last_run(_LAST_RUN_PATH)
+    if stash is None:
         raise typer.BadParameter("No previous run found. Run an orchestration first.")
-    return json.loads(_LAST_RUN_PATH.read_text(encoding="utf-8"))
+    if not stash.ok:
+        raise typer.BadParameter(stash.error)
+    if not stash.orchestration:
+        raise typer.BadParameter(f"{stash.path} does not name an orchestration.")
+    return stash.args
+
+
+def _join_resolved_names(names: list[str]) -> str:
+    """English list join for the "Resolved ..." line: one name alone,
+    two as ``"a and b"``, three or more as ``"a, b and c"`` (no Oxford
+    comma) -- electricity's own ``join_resolved_names`` matches this.
+    """
+    if not names:
+        return ""
+    if len(names) == 1:
+        return names[0]
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def _resolve_last_run_cwd(
+    stashed: dict[str, Any],
+    orchestration: str,
+    config: Path | None,
+    state: Path | None,
+    profile_from_state: Path | None,
+) -> tuple[str, Path | None, Path | None, Path | None]:
+    """Resolve a ``--last`` stash's relative ``orchestration``/``config``/
+    ``state``/``profile_from_state`` against the working directory the
+    stashed run itself ran from (#776), printing one line naming what it
+    resolved when that directory differs from this invocation's own. A
+    stash with no ``cwd`` key (written before this change), or one
+    replayed from the same directory it was written in, is left exactly
+    as given, resolved against *this* invocation's own cwd the same way
+    as before.
+    """
+    cwd = stashed.get("cwd")
+    if not cwd:
+        return orchestration, config, state, profile_from_state
+    base = Path(cwd)
+    try:
+        same_cwd = base == Path.cwd()
+    except OSError:
+        same_cwd = False
+    if same_cwd:
+        # Replaying from the same directory needs no explicit resolution:
+        # a relative path already resolves against today's cwd on its
+        # own, the same as a stash with no ``cwd`` key at all.
+        return orchestration, config, state, profile_from_state
+    resolved: list[str] = []
+    if orchestration and not Path(orchestration).is_absolute():
+        orchestration = str(base / orchestration)
+        resolved.append("orchestration")
+    if config is not None and not config.is_absolute():
+        config = base / config
+        resolved.append("config")
+    if state is not None and not state.is_absolute():
+        state = base / state
+        resolved.append("state")
+    if profile_from_state is not None and not profile_from_state.is_absolute():
+        profile_from_state = base / profile_from_state
+        resolved.append("profile_from_state")
+    if resolved:
+        err_console.print(
+            f"Resolved {_join_resolved_names(resolved)} against {base} "
+            "(the last run's working directory).",
+            highlight=False, soft_wrap=True, markup=False,
+        )
+    return orchestration, config, state, profile_from_state
 
 
 def _resolve_resume_state(
@@ -1140,6 +1296,12 @@ def run_cmd(
         stashed_service_profile = stashed.get("service_profile")
         config = Path(stashed["config"]) if stashed.get("config") else None
         state = Path(stashed["state"]) if stashed.get("state") else None
+        profile_from_state = (
+            Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
+        )
+        orchestration, config, state, profile_from_state = _resolve_last_run_cwd(
+            stashed, orchestration, config, state, profile_from_state
+        )
         out = Path(stashed["out"]) if stashed.get("out") else None
         pretty = stashed.get("pretty", False)
         print_state = stashed.get("print_state", False)
@@ -1160,9 +1322,6 @@ def run_cmd(
         # same scripted/CI escape hatch the refusal message advertises (#337).
         allow_capabilities = stashed.get("allow_capabilities") or allow_capabilities
         profile = stashed.get("profile")
-        profile_from_state = (
-            Path(stashed["profile_from_state"]) if stashed.get("profile_from_state") else None
-        )
         adapter = stashed.get("adapter")
         model = stashed.get("model")
         explain_routing = stashed.get("explain_routing", False)
@@ -1344,7 +1503,12 @@ def run_cmd(
             _restore_raw_text_for_string_inputs(
                 inline, _raw_env_var_text(effective_env_vars), orch_path
             )
+            saved_input = resumed_state.get("input")
+            saved_input = dict(saved_input) if isinstance(saved_input, dict) else {}
             initial_state = apply_inline_overrides(resumed_state, inline)
+            _warn_resumed_input_changes(
+                orch_path=orch_path, saved_input=saved_input, overrides=inline
+            )
         else:
             initial_state = resumed_state
     else:
@@ -1447,6 +1611,7 @@ def run_cmd(
     if not last:
         _save_last_run({
             "orchestration": str(orch_path),
+            "cwd": _current_cwd_or_none(),
             "config": str(config) if config else None,
             "state": str(state) if state else None,
             # The raw --out flag, not the resolved path — a profile's own
@@ -1911,6 +2076,7 @@ def run_library_cmd(
     # gate was on `main` before #335 (#337).
     _save_last_run({
         "orchestration": str(asset.file_path),
+        "cwd": _current_cwd_or_none(),
         "remote_library_source": True,
         "config": str(config) if config else None,
         "state": str(state) if state else None,

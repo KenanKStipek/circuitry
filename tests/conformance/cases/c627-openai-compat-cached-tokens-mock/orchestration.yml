@@ -1,0 +1,7 @@
+name: c627-openai-compat-cached-tokens-mock
+adapter: groq
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

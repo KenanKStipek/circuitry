@@ -480,15 +480,36 @@ fn python_bytes_ctor(value: &Value) -> Result<Vec<u8>, ToolError> {
 /// else the redacted body itself (object or scalar), sliced to
 /// *max_chars* Unicode scalar values (never split bytes), never the
 /// unredacted raw text.
-pub fn http_error_excerpt(body: &str, max_chars: usize) -> String {
+/// *scrub*, when given (issue #600), also replaces a resolved secret
+/// with its placeholder in whichever field this returns: a raw-text
+/// scrub of *body* before it ever reaches this function (as every
+/// caller already does) still misses a secret the server wrote with
+/// JSON escapes (`\/` for a literal `/`, `\uXXXX` for a non-ASCII
+/// character) -- decoding undoes the escaping, so the parsed
+/// `error.message` this picks out can hold the literal value even
+/// when the undecoded raw text never matched.
+pub fn http_error_excerpt(
+    body: &str,
+    max_chars: usize,
+    scrub: Option<&dyn Fn(&str) -> String>,
+) -> String {
     let text = py_strip(body);
     if text.is_empty() {
         return String::new();
     }
+    // Issue #600: *scrub* runs on the whole field before the cut, not
+    // after -- a secret JSON decoding exposed (an escaped slash, a
+    // `\uXXXX` character) can start anywhere in the text, including
+    // just before `max_chars`, and a scrub of the already-sliced tail
+    // would never see the rest of it.
     let slice_chars = |s: &str| -> String {
-        match s.char_indices().nth(max_chars) {
-            Some((byte_idx, _)) => s[..byte_idx].to_string(),
+        let scrubbed = match scrub {
+            Some(f) => f(s),
             None => s.to_string(),
+        };
+        match scrubbed.char_indices().nth(max_chars) {
+            Some((byte_idx, _)) => scrubbed[..byte_idx].to_string(),
+            None => scrubbed,
         }
     };
     let parsed = match electricity_json::loads(text) {
@@ -1794,6 +1815,8 @@ fn finalize_streamed_save(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }
@@ -1827,7 +1850,7 @@ fn finalize_response_save(
             // Issue #725: scrubbed *before* the cut, so no part of a
             // secret survives it (`plugins/http.py::HttpPlugin.execute`).
             let scrubbed = scrub.map(|f| f(&text)).unwrap_or(text);
-            let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
+            let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS, scrub);
             if excerpt.is_empty() {
                 base
             } else {
@@ -1887,6 +1910,8 @@ fn finalize_response_save(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }
@@ -1941,7 +1966,7 @@ fn finalize_response(
         // Issue #725: scrubbed *before* the cut, so no part of a secret
         // survives it (`plugins/http.py::HttpPlugin.execute`).
         let scrubbed = scrub.map(|f| f(&text)).unwrap_or_else(|| text.clone());
-        let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
+        let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS, scrub);
         if excerpt.is_empty() {
             base
         } else {
@@ -1977,6 +2002,8 @@ fn finalize_response(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }
@@ -2730,5 +2757,31 @@ mod headers_param_tests {
     fn a_truthy_non_mapping_headers_value_still_raises() {
         let value = Value::Str("ab".to_string());
         assert!(coerce_headers_param(Some(&value)).is_err());
+    }
+}
+
+#[cfg(test)]
+mod error_excerpt_scrub_tests {
+    use super::*;
+
+    #[test]
+    fn scrub_runs_before_the_character_cut_not_after() {
+        // Mirrors Python's test_http_error_excerpt_scrubs_a_message_crossing_the_character_cut
+        // (tests/plugins/test_base.py): a decoded `error` field long enough that the secret
+        // straddles `max_chars` must come out with no 6-character window of the secret left,
+        // which only holds if `scrub` runs on the whole field before the cut, not after.
+        let secret = "fake-tok3n-straddling-the-cut-xyz";
+        let message = format!("{}{}", "x".repeat(490), secret);
+        let body = format!(r#"{{"error": "{message}"}}"#);
+        let scrub: &dyn Fn(&str) -> String = &|s: &str| s.replace(secret, "[secret:api]");
+
+        let excerpt = http_error_excerpt(&body, ERROR_EXCERPT_MAX_CHARS, Some(scrub));
+
+        for start in 0..secret.len().saturating_sub(5) {
+            assert!(
+                !excerpt.contains(&secret[start..start + 6]),
+                "excerpt still contains a window of the secret: {excerpt:?}"
+            );
+        }
     }
 }

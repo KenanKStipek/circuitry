@@ -38,6 +38,21 @@ _STREAM_ERROR_STATUS: dict[str, int] = {
 }
 
 
+def _cache_fields(usage: Any) -> tuple[int | None, int | None]:
+    """``(cache_read_input_tokens, cache_creation_input_tokens)`` from an
+    Anthropic ``usage`` object, each ``None`` unless the reply's own field
+    is an int -- absent, not 0, when the provider didn't report one.
+    """
+    if not isinstance(usage, dict):
+        return None, None
+    read = usage.get("cache_read_input_tokens")
+    write = usage.get("cache_creation_input_tokens")
+    return (
+        int(read) if isinstance(read, int) else None,
+        int(write) if isinstance(write, int) else None,
+    )
+
+
 class _AnthropicStream:
     """Drives *on_progress* from each SSE delta as it arrives — never the
     source of the final result, which is parsed from the complete body
@@ -51,8 +66,9 @@ class _AnthropicStream:
     def __init__(self, on_progress: Any) -> None:
         self._on_progress = on_progress
         #: The most recently reported exact input-token count
-        #: (``message_start``), carried onto every later progress call so
-        #: ``meta.live.tokens_sent`` stays populated once known.
+        #: (``message_start``, cache reads/writes included), carried onto
+        #: every later progress call so ``meta.live.tokens_sent`` stays
+        #: populated once known.
         self._tokens_sent: int | None = None
         self.saw_event = False
 
@@ -76,14 +92,15 @@ class _AnthropicStream:
             usage = message.get("usage") if isinstance(message, dict) else None
             input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
             if isinstance(input_tokens, int):
-                self._tokens_sent = input_tokens
-                # Not "a delta" (R6/#674): this carries only the input
-                # token count, no reply text, so it never gates the
-                # per-second throttle or counts as the first token.
+                cache_read, cache_write = _cache_fields(usage)
+                self._tokens_sent = input_tokens + (cache_read or 0) + (cache_write or 0)
+                # Not "a delta" (#674): this carries only the input token
+                # count, no reply text, so it never gates the per-second
+                # throttle or counts as the first token.
                 if self._on_progress is not None:
                     self._on_progress(
                         GenerateProgress(
-                            delta_chars=0, delta_count=1, tokens_sent=input_tokens
+                            delta_chars=0, delta_count=1, tokens_sent=self._tokens_sent
                         )
                     )
         elif etype == "content_block_delta":
@@ -99,21 +116,34 @@ class _AnthropicStream:
 
 def parse_anthropic_stream(
     stdout: str,
-) -> tuple[str, int | None, int | None, str | None, bool, str | None, str | None]:
-    """``(text, tokens_sent, tokens_received, stop_reason,
-    saw_message_stop, error_message, error_type)`` from a completed
-    Anthropic Messages API SSE stream, parsed in full — the authoritative
-    result for a streamed call, built the same way the non-streamed path
-    builds its one JSON object's. ``message_start`` reports the exact
-    input token count; ``content_block_delta`` carries the text;
-    ``message_delta`` carries the stop reason and the exact output token
-    count; ``error`` carries the same explanation an HTTP error body
-    would; ``saw_message_stop`` is whether the stream's own terminal event
-    was seen.
+) -> tuple[
+    str,
+    int | None,
+    int | None,
+    int | None,
+    int | None,
+    str | None,
+    bool,
+    str | None,
+    str | None,
+]:
+    """``(text, tokens_sent, tokens_received, tokens_cached_in,
+    tokens_cache_write, stop_reason, saw_message_stop, error_message,
+    error_type)`` from a completed Anthropic Messages API SSE stream,
+    parsed in full — the authoritative result for a streamed call, built
+    the same way the non-streamed path builds its one JSON object's.
+    ``message_start`` reports the exact input token count, cache reads and
+    writes included (``tokens_sent`` is their sum); ``content_block_delta``
+    carries the text; ``message_delta`` carries the stop reason and the
+    exact output token count; ``error`` carries the same explanation an
+    HTTP error body would; ``saw_message_stop`` is whether the stream's own
+    terminal event was seen.
     """
     text_parts: list[str] = []
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     stop_reason: str | None = None
     saw_message_stop = False
     error_message: str | None = None
@@ -144,7 +174,8 @@ def parse_anthropic_stream(
             usage = message.get("usage") if isinstance(message, dict) else None
             input_tokens = usage.get("input_tokens") if isinstance(usage, dict) else None
             if isinstance(input_tokens, int):
-                tokens_sent = input_tokens
+                tokens_cached_in, tokens_cache_write = _cache_fields(usage)
+                tokens_sent = input_tokens + (tokens_cached_in or 0) + (tokens_cache_write or 0)
         elif etype == "content_block_delta":
             delta = event.get("delta") or {}
             text = delta.get("text") if isinstance(delta, dict) else None
@@ -165,6 +196,8 @@ def parse_anthropic_stream(
         "".join(text_parts),
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write,
         stop_reason,
         saw_message_stop,
         error_message,
@@ -354,6 +387,8 @@ class AnthropicAdapter:
                 text,
                 tokens_sent,
                 tokens_received,
+                tokens_cached_in,
+                tokens_cache_write,
                 stop_reason,
                 saw_message_stop,
                 error_message,
@@ -404,15 +439,27 @@ class AnthropicAdapter:
                     retry_info=classify_curl_exit(18, ""),
                 )
 
+            input_tokens = (
+                tokens_sent - (tokens_cached_in or 0) - (tokens_cache_write or 0)
+                if tokens_sent is not None
+                else None
+            )
             return GenerateResult(
                 text=text.strip(),
                 raw={
                     "content": [{"type": "text", "text": text}],
-                    "usage": {"input_tokens": tokens_sent, "output_tokens": tokens_received},
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": tokens_received,
+                        "cache_read_input_tokens": tokens_cached_in,
+                        "cache_creation_input_tokens": tokens_cache_write,
+                    },
                     "stop_reason": stop_reason,
                 },
                 tokens_sent=tokens_sent,
                 tokens_received=tokens_received,
+                tokens_cached_in=tokens_cached_in,
+                tokens_cache_write=tokens_cache_write,
                 finish_reason=stop_reason,
             )
 
@@ -434,19 +481,29 @@ class AnthropicAdapter:
             ]
             text = "".join(text_parts)
 
-        # Extract token usage
+        # Extract token usage. `tokens_sent` is every input token Anthropic
+        # counted, cache reads and writes included -- `input_tokens` alone
+        # excludes the cache.
         usage = raw.get("usage", {})
-        tokens_sent = usage.get("input_tokens")
+        input_tokens = usage.get("input_tokens")
         tokens_received = usage.get("output_tokens")
+        tokens_cached_in, tokens_cache_write = _cache_fields(usage)
+        tokens_sent = (
+            int(input_tokens) + (tokens_cached_in or 0) + (tokens_cache_write or 0)
+            if input_tokens is not None
+            else None
+        )
         stop_reason = raw.get("stop_reason")
 
         return GenerateResult(
             text=text.strip() if text else "",
             raw=raw,
-            tokens_sent=int(tokens_sent) if tokens_sent is not None else None,
+            tokens_sent=tokens_sent,
             tokens_received=int(tokens_received)
             if tokens_received is not None
             else None,
+            tokens_cached_in=tokens_cached_in,
+            tokens_cache_write=tokens_cache_write,
             finish_reason=stop_reason if isinstance(stop_reason, str) else None,
         )
 

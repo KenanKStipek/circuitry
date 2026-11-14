@@ -18,6 +18,7 @@ with ``[secret:<name>]``.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -227,6 +228,22 @@ def _checked(name: str, value: str) -> str:
     return value
 
 
+def _json_escaped_variants(text: str) -> tuple[str, ...]:
+    """How *text* can appear inside a JSON string literal a server wrote
+    (#600): :func:`json.dumps`'s own escaping (which also turns a non-ASCII
+    character into ``\\uXXXX``), and that same form with ``/`` additionally
+    escaped to ``\\/`` — a choice :func:`json.dumps` doesn't make but some
+    encoders do. A plain, unescaped match for *text* (what :meth:`SecretValues
+    .scrub` already looks for) never matches either form, so a secret a JSON
+    error body echoes this way would otherwise survive the scrub. Both forms
+    equal *text* itself, and each other, when it holds nothing that needs
+    escaping — :meth:`SecretValues._add`'s own de-duplication drops a variant
+    that adds nothing then.
+    """
+    escaped = json.dumps(text)[1:-1]
+    return (escaped, escaped.replace("/", "\\/"))
+
+
 @dataclass
 class SecretValues:
     """The secrets one tool effect dispatch resolved, by name, and the
@@ -250,9 +267,10 @@ class SecretValues:
         return ref.prefix + value
 
     def _add(self, text: str, placeholder: str) -> None:
-        if (text, placeholder) not in self._replacements:
-            self._replacements.append((text, placeholder))
-            self._replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
+        for variant in (text, *_json_escaped_variants(text)):
+            if (variant, placeholder) not in self._replacements:
+                self._replacements.append((variant, placeholder))
+        self._replacements.sort(key=lambda pair: len(pair[0]), reverse=True)
 
     def __bool__(self) -> bool:
         return bool(self.values)

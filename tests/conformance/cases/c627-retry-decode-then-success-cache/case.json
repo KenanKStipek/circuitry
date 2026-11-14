@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #627 (cache tokens sum across a prompt's own retries)",
+  "description": "A json prompt with schema: and retries: {max_attempts: 2}: a decode-failed attempt then a succeeding one, both reporting cache reads/writes -- meta.attempts[] holds both, each with its own tokens_cached_in/tokens_cache_write, and the pass's own tokens_cached_in_total/tokens_cache_write_total sum both attempts.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

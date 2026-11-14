@@ -519,12 +519,14 @@ class ToolDefinition:
 
     #: ``True`` when the effect's document is not trusted (not run by path,
     #: see ``compile_orchestration``'s *trusted*), whatever its provider, so
-    #: a profile that switches the provider to ``http`` keeps it. Two
-    #: providers read it: a limited ``systemone`` effect reads a
-    #: ``state_file`` only inside :attr:`confine_to`, and none at all when
-    #: that is ``None`` (the document has no project); a limited ``http``
-    #: effect never saves a file (``save_to``, ``within``). ``False`` means
-    #: unconfined: a trusted document.
+    #: a profile that switches the provider to ``http``/``comfyui``/``s3``
+    #: keeps it. A limited ``systemone`` effect reads a ``state_file`` only
+    #: inside :attr:`confine_to`, and none at all when that is ``None`` (the
+    #: document has no project); a limited ``http`` effect never saves a
+    #: file (``save_to``, ``within``); a limited ``comfyui`` effect never
+    #: saves its image locally (``image_output``, ``image_dir``); a limited
+    #: ``s3`` effect never saves a fetched object locally (``mode: get``
+    #: with ``path``). ``False`` means unconfined: a trusted document.
     limited: bool = False
 
     #: The project a limited ``systemone`` effect's ``within`` must stay inside
@@ -863,6 +865,8 @@ class ToolRuntime:
         # later attempt is the one that decides the outcome.
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        total_tokens_cached_in: int | None = None
+        total_tokens_cache_write: int | None = None
         # Every attempt this pass makes, oldest first (#668) -- written to
         # meta.attempts only once more than one attempt has run, exactly
         # when meta.retries_used is also set.
@@ -912,6 +916,10 @@ class ToolRuntime:
             meta.pop("tokens_received", None)
             meta.pop("tokens_sent_total", None)
             meta.pop("tokens_received_total", None)
+            meta.pop("tokens_cached_in", None)
+            meta.pop("tokens_cache_write", None)
+            meta.pop("tokens_cached_in_total", None)
+            meta.pop("tokens_cache_write_total", None)
             meta.pop("cost_usd", None)
             meta.pop("stdout_chars", None)
             meta.pop("stdout_sha256", None)
@@ -1002,6 +1010,14 @@ class ToolRuntime:
                     from ..plugins.http import reject_limited_save_to
 
                     reject_limited_save_to(params)
+                if self.defn.limited and self.defn.provider.strip().lower() == "comfyui":
+                    from ..plugins.comfyui import reject_limited_image_output
+
+                    reject_limited_image_output(params)
+                if self.defn.limited and self.defn.provider.strip().lower() == "s3":
+                    from ..plugins.s3_tool import reject_limited_get_path
+
+                    reject_limited_get_path(params)
 
                 rendered = {**top_level, **params}
                 plugin_params = rendered
@@ -1209,6 +1225,7 @@ class ToolRuntime:
                                 params=plugin_params,
                                 timeout_seconds=timeout_seconds,
                                 on_live=_on_live if store.on_write is not None else None,
+                                scrub_secrets=dispatch_secrets.scrub if dispatch_secrets else None,
                             )
                         else:
                             result = plugin.execute(
@@ -1245,6 +1262,10 @@ class ToolRuntime:
                     meta["tokens_sent_total"] = total_tokens_sent
                 if total_tokens_received is not None:
                     meta["tokens_received_total"] = total_tokens_received
+                if total_tokens_cached_in is not None:
+                    meta["tokens_cached_in_total"] = total_tokens_cached_in
+                if total_tokens_cache_write is not None:
+                    meta["tokens_cache_write_total"] = total_tokens_cache_write
                 is_last_attempt = attempt_index >= max_attempts - 1
                 if self.verbose:
                     elapsed = time.monotonic() - t0
@@ -1315,6 +1336,14 @@ class ToolRuntime:
             if result.tokens_received is not None:
                 total_tokens_received = (total_tokens_received or 0) + result.tokens_received
                 meta["tokens_received_total"] = total_tokens_received
+            if result.tokens_cached_in is not None:
+                total_tokens_cached_in = (total_tokens_cached_in or 0) + result.tokens_cached_in
+                meta["tokens_cached_in_total"] = total_tokens_cached_in
+            if result.tokens_cache_write is not None:
+                total_tokens_cache_write = (
+                    total_tokens_cache_write or 0
+                ) + result.tokens_cache_write
+                meta["tokens_cache_write_total"] = total_tokens_cache_write
 
             if not result.ok:
                 failure = RuntimeError(
@@ -1415,6 +1444,10 @@ class ToolRuntime:
                 meta["tokens_sent"] = result.tokens_sent
             if result.tokens_received is not None:
                 meta["tokens_received"] = result.tokens_received
+            if result.tokens_cached_in is not None:
+                meta["tokens_cached_in"] = result.tokens_cached_in
+            if result.tokens_cache_write is not None:
+                meta["tokens_cache_write"] = result.tokens_cache_write
             if result.cost_usd is not None:
                 meta["cost_usd"] = result.cost_usd
 

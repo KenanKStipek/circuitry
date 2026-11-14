@@ -432,6 +432,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "stop",
         "warnings": []
       }
@@ -453,6 +455,8 @@
         },
         "tokens_sent": null,
         "tokens_received": null,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": null,
         "warnings": []
       }
@@ -689,6 +693,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "stop",
         "warnings": []
       }
@@ -714,6 +720,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 2,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "length",
         "warnings": []
       }
@@ -902,6 +910,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "stop",
         "warnings": []
       }
@@ -919,6 +929,8 @@
         },
         "tokens_sent": null,
         "tokens_received": null,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": null,
         "warnings": []
       }
@@ -932,6 +944,23 @@
         "ok": false,
         "class": "RuntimeError",
         "message": "Provider returned non-JSON response: not json",
+        "retry": {
+          "retryable": false,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"choices\": [{\"message\": {\"content\": \"hi\"}}], \"usage\": \"x\"}",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": false,
+        "class": "AttributeError",
+        "message": "'str' object has no attribute 'get'",
         "retry": {
           "retryable": false,
           "status": null,
@@ -1034,6 +1063,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "stop",
         "warnings": []
       }
@@ -1062,6 +1093,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 2,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "length",
         "warnings": []
       }
@@ -1233,6 +1266,8 @@
         },
         "tokens_sent": 7,
         "tokens_received": 7,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "stop",
         "warnings": []
       }
@@ -1259,6 +1294,8 @@
         },
         "tokens_sent": 1,
         "tokens_received": null,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": null,
         "warnings": []
       }
@@ -1278,6 +1315,72 @@
           "retry_after": null,
           "error_code": null
         }
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"choices\": [{\"message\": {\"content\": \"hi\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 100, \"completion_tokens\": 2, \"prompt_tokens_details\": {\"cached_tokens\": 96.0}}}",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "choices": [
+            {
+              "message": {
+                "content": "hi"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 2,
+            "prompt_tokens_details": {
+              "cached_tokens": 96.0
+            }
+          }
+        },
+        "tokens_sent": 100,
+        "tokens_received": 2,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
+        "finish_reason": "stop",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"choices\": [{\"message\": {\"content\": \"hi\"}, \"finish_reason\": \"stop\"}], \"usage\": {\"prompt_tokens\": 100, \"completion_tokens\": 2, \"prompt_tokens_details\": {\"cached_tokens\": \"96\"}}}",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "choices": [
+            {
+              "message": {
+                "content": "hi"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 100,
+            "completion_tokens": 2,
+            "prompt_tokens_details": {
+              "cached_tokens": "96"
+            }
+          }
+        },
+        "tokens_sent": 100,
+        "tokens_received": 2,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
+        "finish_reason": "stop",
+        "warnings": []
       }
     },
     {
@@ -1340,6 +1443,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "stop",
         "warnings": []
       }
@@ -1368,6 +1473,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 2,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "length",
         "warnings": []
       }
@@ -1569,6 +1676,8 @@
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "end_turn",
         "warnings": []
       }
@@ -1596,7 +1705,71 @@
         },
         "tokens_sent": null,
         "tokens_received": null,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "max_tokens",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"content\": [{\"type\": \"text\", \"text\": \"hi\"}], \"usage\": {\"input_tokens\": 3.0, \"output_tokens\": 5, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 20}, \"stop_reason\": \"end_turn\"}",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ],
+          "usage": {
+            "input_tokens": 3.0,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 20
+          },
+          "stop_reason": "end_turn"
+        },
+        "tokens_sent": 123,
+        "tokens_received": 5,
+        "tokens_cached_in": 100,
+        "tokens_cache_write": 20,
+        "finish_reason": "end_turn",
+        "warnings": []
+      }
+    },
+    {
+      "returncode": 0,
+      "stdout": "{\"content\": [{\"type\": \"text\", \"text\": \"hi\"}], \"usage\": {\"input_tokens\": \"3\", \"output_tokens\": 5, \"cache_read_input_tokens\": 100, \"cache_creation_input_tokens\": 20}, \"stop_reason\": \"end_turn\"}",
+      "stderr": "",
+      "model": "m",
+      "result": {
+        "ok": true,
+        "text": "hi",
+        "raw": {
+          "content": [
+            {
+              "type": "text",
+              "text": "hi"
+            }
+          ],
+          "usage": {
+            "input_tokens": "3",
+            "output_tokens": 5,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 20
+          },
+          "stop_reason": "end_turn"
+        },
+        "tokens_sent": 123,
+        "tokens_received": 5,
+        "tokens_cached_in": 100,
+        "tokens_cache_write": 20,
+        "finish_reason": "end_turn",
         "warnings": []
       }
     },
@@ -1653,12 +1826,16 @@
           ],
           "usage": {
             "input_tokens": 3,
-            "output_tokens": 5
+            "output_tokens": 5,
+            "cache_read_input_tokens": null,
+            "cache_creation_input_tokens": null
           },
           "stop_reason": "end_turn"
         },
         "tokens_sent": 3,
         "tokens_received": 5,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "end_turn",
         "warnings": []
       }
@@ -1680,12 +1857,16 @@
           ],
           "usage": {
             "input_tokens": 3,
-            "output_tokens": 2
+            "output_tokens": 2,
+            "cache_read_input_tokens": null,
+            "cache_creation_input_tokens": null
           },
           "stop_reason": "max_tokens"
         },
         "tokens_sent": 3,
         "tokens_received": 2,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": "max_tokens",
         "warnings": []
       }
@@ -1792,6 +1973,8 @@
         },
         "tokens_sent": null,
         "tokens_received": null,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": null,
         "warnings": []
       }
@@ -1811,6 +1994,8 @@
         },
         "tokens_sent": null,
         "tokens_received": null,
+        "tokens_cached_in": null,
+        "tokens_cache_write": null,
         "finish_reason": null,
         "warnings": []
       }

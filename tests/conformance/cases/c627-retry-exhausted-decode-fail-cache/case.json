@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #627 (the failure-resync path, when a prompt's own retries are exhausted)",
+  "description": "A json prompt with schema: and retries: {max_attempts: 2}, on_error: continue: both attempts fail to decode and both report cache reads/writes. The last attempt resyncs to the node's own failure fields: tokens_sent is null and the cache keys are absent, not carrying either attempt's own usage.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

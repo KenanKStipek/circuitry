@@ -92,6 +92,10 @@ def evaluate_expect(
             "tokens_sent": res.tokens_sent,
             "tokens_received": res.tokens_received,
         }
+        if res.tokens_cached_in is not None:
+            result_meta["tokens_cached_in"] = res.tokens_cached_in
+        if res.tokens_cache_write is not None:
+            result_meta["tokens_cache_write"] = res.tokens_cache_write
         try:
             passed = parse_boolean_answer(res.text or "")
         except AnswerParseError as e:

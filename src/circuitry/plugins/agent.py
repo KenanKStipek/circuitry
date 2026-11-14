@@ -28,6 +28,10 @@ this module adds the session's contract on top:
   and ``meta.cost_usd`` hold the same totals as ``raw.tokens``/``raw.cost``
   (the session's usage over every turn, including a repair turn), so the
   run's totals and the ``dynamic`` tree's token sums count this effect.
+  ``meta.tokens_cached_in``/``meta.tokens_cache_write`` (input tokens the
+  session's model calls read from/wrote to the provider's cache, already
+  folded into ``tokens_sent`` above) are set the same way, only when the
+  session's usage reported one (#627).
 * ``meta.live``: a summary of the session published while it runs, through
   :mod:`circuitry.agent_live` (#636) — numbers, times, ids, the model name
   and tool names only, never prompt/reply/thinking text, tool arguments,
@@ -155,6 +159,8 @@ class AgentTurn:
     tool_calls: int
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     cost_usd: float | None = None
 
 
@@ -252,6 +258,8 @@ class PiEngine:
             tool_calls=tool_calls,
             tokens_sent=result.tokens_sent,
             tokens_received=result.tokens_received,
+            tokens_cached_in=result.tokens_cached_in,
+            tokens_cache_write=result.tokens_cache_write,
             cost_usd=result.cost_usd,
         )
 
@@ -337,6 +345,8 @@ class ClaudeCodeEngine:
             tool_calls=tool_calls,
             tokens_sent=result.tokens_sent,
             tokens_received=result.tokens_received,
+            tokens_cached_in=result.tokens_cached_in,
+            tokens_cache_write=result.tokens_cache_write,
             cost_usd=result.cost_usd,
         )
 
@@ -370,6 +380,8 @@ class _Session:
     tool_calls: int = 0
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     cost_usd: float | None = None
     repair_turn: bool = False
     texts: list[str] = field(default_factory=list)
@@ -390,6 +402,10 @@ class _Session:
             self.tokens_sent = (self.tokens_sent or 0) + turn.tokens_sent
         if turn.tokens_received is not None:
             self.tokens_received = (self.tokens_received or 0) + turn.tokens_received
+        if turn.tokens_cached_in is not None:
+            self.tokens_cached_in = (self.tokens_cached_in or 0) + turn.tokens_cached_in
+        if turn.tokens_cache_write is not None:
+            self.tokens_cache_write = (self.tokens_cache_write or 0) + turn.tokens_cache_write
         if turn.cost_usd is not None:
             self.cost_usd = (self.cost_usd or 0.0) + turn.cost_usd
         self.texts.append(turn.text)
@@ -436,6 +452,8 @@ class _Session:
             ok=ok,
             tokens_sent=self.tokens_sent,
             tokens_received=self.tokens_received,
+            tokens_cached_in=self.tokens_cached_in,
+            tokens_cache_write=self.tokens_cache_write,
             cost_usd=self.cost_usd,
         )
 

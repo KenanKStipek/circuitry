@@ -181,6 +181,8 @@ fn assert_matches_expected(
         assert_eq!(got.session_id, str_field(ok, "session_id"));
         assert_eq!(got.tokens_sent, int_field(ok, "tokens_sent"));
         assert_eq!(got.tokens_received, int_field(ok, "tokens_received"));
+        assert_eq!(got.tokens_cached_in, int_field(ok, "tokens_cached_in"));
+        assert_eq!(got.tokens_cache_write, int_field(ok, "tokens_cache_write"));
         assert_eq!(got.cost_usd, field(ok, "cost_usd").as_float());
         assert_eq!(got.finish_reason, str_field(ok, "finish_reason"));
         let expected_structured = field(ok, "structured_output");

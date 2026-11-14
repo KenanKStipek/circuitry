@@ -169,6 +169,8 @@ behaviour and failure semantics.
 | `messages` | `/api/chat` turns | `messages` turns | `system` field + turns |
 | image assets | base64 `images` (local files only) | `image_url` parts (`data:` URL for a local file) | `image` blocks (base64 or `url`) |
 | a failed response's `meta.error_code` | none for Ollama's flat `{"error": "..."}` body | the body's `error.code`, else `error.type`, each only when a non-empty string | `error.type` (no `code` field at all) |
+| `meta.tokens_sent` | `prompt_eval_count`, no cache field | `usage.prompt_tokens`, which already includes the cache | `usage.input_tokens` plus `cache_read_input_tokens`/`cache_creation_input_tokens` when the response carries them |
+| `meta.tokens_cached_in` / `tokens_cache_write` | not reported | `usage.prompt_tokens_details.cached_tokens` / not reported | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens`, each only when present |
 
 A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `pi`, `claude_code`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
 
@@ -181,6 +183,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.prompt_sent` / `meta.prompt_sent_sha256` / `meta.prompt_chars` — the text sent (as `runtime.state.prompt_sent` leaves it), and its SHA-256 and length in characters; always present. See [Recording the prompt text](#recording-the-prompt-text-runtimestateprompt_sent).
 - `meta.template_files` — one `{field, path, sha256, chars}` per `file: {from: ...}` source read at dispatch. See [Reading a prompt file at dispatch](#reading-a-prompt-file-at-dispatch-file-from-state-path).
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
+- `meta.tokens_cached_in` / `meta.tokens_cache_write` — input tokens the winning attempt's provider read from its own cache / wrote to it, right after `meta.tokens_received`. `meta.tokens_sent` already counts both either way — these are the separate breakdown. Each is set only when the provider's reply carried that count, even when it is 0; otherwise the key is absent, never `null`. Anthropic reports both when `cache_read_input_tokens`/`cache_creation_input_tokens` are in the response; OpenAI-compatible providers report only `tokens_cached_in` (`usage.prompt_tokens_details.cached_tokens`), never a write count; the agent CLIs (`pi`, `claude_code`) report both the same way the live tracker already does (`meta.live.tokens_cached_in`/`tokens_cache_write` on the `agent` tool, unchanged by this). `meta.tokens_cached_in_total` / `meta.tokens_cache_write_total` sum every attempt this dispatch made the same way `tokens_sent_total` does, present only when at least one attempt reported one; each failed/decoded `meta.fallback_attempts[]` entry carries its own copy of whichever of the two its own attempt reported.
 - `meta.http_status` / `meta.error_code` — on a failed prompt only, from the attempt whose error ended the effect (the last entry of the final pass's `meta.fallback_attempts`): the failed response's HTTP status, and the provider's own error code (the body's `error.code` when that is a non-empty string, else `error.type`; see the adapter table above). Absent, never `null`, on success (a recovered fallback included), a template/render/decode/schema failure, a missing key, a timeout or connection failure, and an allowlist denial. Each failed `meta.fallback_attempts[]` entry carries its own copy of the two fields, after `tokens_sent`/`tokens_received`.
 
 **Example — an image to a local vision model:**
@@ -273,6 +276,7 @@ Runtime plugins read the effect's `meta`, so what they store follows the setting
 | `model:` | pi's `provider/id`, e.g. `claude-bridge/claude-sonnet-4-5` | a Claude Code model, e.g. `claude-sonnet-4-5` |
 | `prompt_type: json` with a `schema` | the reply's text is decoded and validated as usual | `--json-schema`; the answer is Claude Code's `structured_output`, then validated as usual. Claude Code accepts only an object schema, so any other (`prompt_type: array`, say) is sent as `{"type": "object", "properties": {"value": <schema>}, "required": ["value"], "additionalProperties": false}` and the answer's `value` is taken |
 | `meta.tokens_sent` / `tokens_received` | input tokens including cache reads and writes / output tokens, summed over the call's model turns | the same, from the result's `usage` |
+| `meta.tokens_cached_in` / `tokens_cache_write` | `usage.cacheRead` / `usage.cacheWrite`, summed the same way, each present only when at least one turn's own usage reported it | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens`, summed the same way |
 | `meta.cost_usd` | `usage.cost`, summed | `total_cost_usd` |
 
 `--tools ""` turns off only Claude Code's built-in tools, so `claude_code` also passes `--strict-mcp-config`: no MCP server starts, neither one from your Claude Code config nor a project `.mcp.json`. Each call runs in a fresh temporary directory, so no project's `AGENTS.md`/`CLAUDE.md` is read, and in its own process group: a timeout or a cancelled run (Ctrl-C, SIGTERM) stops the CLI and everything it started. A timeout is retried like any other; a CLI error is not, and fails the attempt with the CLI's own message — an auth failure (`Failed to authenticate. API Error: 401 ...`) or a CLI too old for the requested model (`... version X or newer is required`). `params`, `messages` turns and images are not sent: the prompt arrives flattened, with one warning naming what was ignored.
@@ -448,7 +452,7 @@ Evaluates a condition against state and executes exactly one branch (`then` or `
 | `name` | string | no | — | Optional; enables state recording of the decision |
 | `if` | object | yes | — | Condition definition |
 | `if.mode` | string | no | `model` | `model` or `cel` |
-| `if.template` | string | model only | — | LLM evaluates and returns boolean. The runtime wraps it and appends `Answer (yes/no):`, so phrase the ask as yes/no. Reply parsed leniently — `Yes.`, `yes, because …`, `**TRUE**`, `Y` parse as true, `No.`/`false!`/`N` as false (wrapping quotes/markdown/punctuation stripped first); an answer that still doesn't parse raises rather than defaulting to false, so `on_error` applies. Raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`) |
+| `if.template` | string | model only | — | LLM evaluates and returns boolean. The runtime wraps it and appends `Answer (yes/no):`, so phrase the ask as yes/no. Reply parsed leniently — `Yes.`, `yes, because …`, `**TRUE**`, `Y` parse as true, `No.`/`false!`/`N` as false (wrapping quotes/markdown/punctuation stripped first); an answer that still doesn't parse raises rather than defaulting to false, so `on_error` applies. Raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`/`meta.tokens_sent`/`meta.tokens_received`, and `meta.tokens_cached_in`/`meta.tokens_cache_write` when the reply carries them) |
 | `if.expr` | string | cel only | — | CEL expression; must use `state.prime.<name>.value` prefix |
 | `if.strict` | bool | no | `false` | cel only. When true, an unset `state.` path whose read decides the result raises instead of making the expression `False` |
 | `then` | array | yes | — | Effects when condition is true |
@@ -522,7 +526,7 @@ Repeats a `body` of effects for each element of a collection (`each`) or while a
 | `each.truncate` | bool | no | `false` | `false`: a collection longer than `max_iterations` fails the loop at start (see [Loop termination](#loop-termination)). `true`: process only the first `max_iterations` elements and record `termination: max_iterations_reached` plus `unvisited` instead. |
 | `while` | object | one-of | — | Continuation condition; mutually exclusive with `each` |
 | `while.mode` | string | no | `model` | `model` or `cel` |
-| `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no. Parsed the same lenient way as `if.template`; raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`, `meta.tokens_sent`/`meta.tokens_received` for the last check and `meta.tokens_sent_total`/`meta.tokens_received_total` summed across every check this loop made) on each check |
+| `while.template` | string | model only | — | LLM returns boolean for continuation decision. The runtime wraps it and appends `Should the loop continue? Answer (yes/no):`, so phrase the ask as yes/no. Parsed the same lenient way as `if.template`; raw reply recorded on `meta.answer` (plus `meta.adapter`/`meta.model`, `meta.tokens_sent`/`meta.tokens_received` for the last check and `meta.tokens_sent_total`/`meta.tokens_received_total` summed across every check this loop made, each with its own `tokens_cached_in`/`tokens_cache_write` pair when a check's reply carries them) on each check |
 | `while.expr` | string | cel only | — | CEL expression against state |
 | `while.strict` | bool | no | `false` | cel only. When true, an unset `state.` path whose read decides the result raises instead of making the expression `False` |
 | `max_iterations` | integer | no | — (no cap) | Hard cap on iterations. Unset means the loop runs until its collection is exhausted (`each`) or its condition is false (`while`). For `each`, when set, the collection must not be longer than it unless `each.truncate: true` is set — see [Loop termination](#loop-termination). |
@@ -900,7 +904,7 @@ Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effe
 **Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts).
 
 <a id="tool-expect"></a>
-**`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?}`).
+**`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?, tokens_cached_in?, tokens_cache_write?}`, the last two present only when the reply carried them).
 
 **Timeout:** `timeout_ms` on the effect wins, rounded up to the next whole second — a sub-second budget (e.g. `250`) never floors to a 0-second timeout, which some plugins would treat as "fail instantly" and others (curl-based ones) as "no limit at all". Unset, the tool's own default comes from `runtime.tools.timeout_seconds` in config (300s if that's unset too) — independent of `runtime.adapters.<name>.timeout_seconds`, the LLM adapter's socket timeout; a tool-only run, or one on the no-op adapter, still gets a real budget. See [Timeouts](./guidebook/04-configuration.md#timeouts).
 
@@ -941,6 +945,27 @@ for the CLI walkthrough. Each provider's capability tag
 | `python_eval` | `python_eval` |
 | `fs-write` | `agent`, `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
 | `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `systemone`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
+
+Two `network`-only providers also save a file as a side effect, under
+params none of the four capabilities names on its own (#604) — only a
+document run by path may use them that way, the same rule `http`'s
+`save_to` follows (#602): `comfyui`'s `image_output` (default `path`; see
+[its params reference](#comfyui-params-reference)) and `s3`'s `mode: get`
+with `path` (the LLM-callable tool, `plugins/s3_tool.py`, not the
+[runtime `s3` plugin](./runtime-plugins.md) that persists run state). A
+limited document's effect fails `cof check` when `params` alone already
+show it writing — the default, any literal other than `base64`/`url`, or
+`image_dir`/a `path` named there — and fails only at dispatch when a
+profile switches the provider to one of them after that check, when
+`params_json` overrides an otherwise-safe literal, or, for `s3`, when
+`mode` isn't a literal at all (a template or `{from: ...}`) — `cof check`
+only catches a literal `mode: get`, so a dynamic one reaches dispatch
+unseen and is refused there instead; `cof check` cannot see
+`params_json` itself, so an effect that relies on it alone for a safe
+value fails at `cof check` too, as if unset. A bundled or library entry
+can still write locally by running trusted: eject it first (`cof eject
+<name>`) and run the copy by path. electricity doesn't implement either
+provider yet, so it refuses both with the preview marker regardless.
 
 A provider absent from every row needs no consent: it only reads its own
 parameters and returns a value (`cel`, `math`, `regex`, `json`, `clock`, `hash`,
@@ -1017,7 +1042,11 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   effect. A retried tool's `tokens_sent_total`/`tokens_received_total` sum
   every attempt the same way a retried prompt's do; the non-total fields are
   the attempt that decided the outcome, and usage an earlier, failed attempt
-  spent still counts toward the total.
+  spent still counts toward the total. `meta.tokens_cached_in`/
+  `meta.tokens_cache_write`, right after `meta.tokens_received`, follow the
+  same rule — set only when the session's own usage reported that count,
+  `tokens_cached_in_total`/`tokens_cache_write_total` summing every attempt
+  the same way, present only when at least one attempt reported one.
 
 **Supported providers:**
 
@@ -1052,7 +1081,7 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
     steps: 4
 ```
 
-**comfyui params reference:**
+##### comfyui params reference
 
 | Param | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -1069,6 +1098,19 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+- **Trust (#604).** `image_output` defaults to `path`, which saves the
+  image to `image_dir` — only a document run by path may use `image_output:
+  path` (or leave it unset) or name `image_dir` at all; a limited document
+  must pass `image_output: base64` or `image_output: url`, written exactly
+  that way in `params`. `cof check` refuses anything else it can see there
+  — the default, a template, or `image_dir` alone; only a `params_json`
+  override of an otherwise-safe literal, or a profile that switches the
+  provider to `comfyui` after the check, is caught later, at dispatch. A
+  bundled or library entry that needs a local image can be ejected (`cof
+  eject <name>`) and run by path instead. electricity doesn't implement
+  `comfyui` yet, so it refuses it with the preview marker regardless of
+  this rule.
 
 #### `cel`: a value computed with CEL
 
@@ -2664,10 +2706,18 @@ on the other, and `--last`/`--resume last` read the same stash either
 engine wrote (`~/.config/circuitry/last-run.json`), with the same checks
 and messages: no previous run, an unreadable stash, a different
 orchestration, no `--out`, a gone `--out` file, or a redacted `-e` value
-refusing `--last`. A bare run-id (the one remaining row of the table
-below) still isn't supported: `runtime.persistence` stays refused on
-electricity, so `--resume <run-id>` refuses the same way cof's own safety
-checks do (before anything runs, writing no state, exit 1).
+refusing `--last`. The stash also records the absolute working directory
+the run itself used; a bare `--last` replayed from a *different* directory
+resolves the stashed `orchestration`/`--config`/`--state` paths against
+that directory (not the replaying invocation's own cwd) when they're
+relative, and prints one line naming what it resolved — the same on both
+engines. A stash written before this (with no recorded working
+directory), or one replayed from the same directory it was written in,
+needs no such resolution and prints nothing. A bare
+run-id (the one remaining row of the table below) still isn't supported:
+`runtime.persistence` stays refused on electricity, so `--resume <run-id>`
+refuses the same way cof's own safety checks do (before anything runs,
+writing no state, exit 1).
 
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An
@@ -2727,9 +2777,10 @@ saved node took (`meta.branch`), that branch continues at its first
 unfinished effect, by the same positional rule; if it selects the other
 branch, that branch runs from its start. An **unnamed** `if` has no node
 to record its branch, so its branch always runs from its start. A
-`reflector` always reruns from its start on `--resume`: it records no
-`completed_at`, so a finished reflector is not skipped either (#585 tracks
-changing that).
+`reflector` whose node already finished without error is skipped whole
+too, keeping its saved value and the record of its generated plan; one
+that didn't finish reruns from its start, planning call and generated
+plan included.
 Inside a resumed pass or branch, the first effect that didn't finish
 resumes the same way it would at the top level: a nested loop at its own
 first unfinished pass, a nested `if` inside its branch, a `dynamic` at its
@@ -2737,8 +2788,27 @@ first unfinished effect, and a `use` inside its child (below), unless it
 says [`resume: restart`](#resume-restart).
 
 A `use` effect whose node already finished without error is skipped whole
-too. One that didn't finish reruns its child from the start, in a fresh
-state, unless the saved state holds the child's record
+too, *unless* its inputs, resolved now against the resumed run's own
+inputs and state, no longer match its recorded `meta.inputs`: a changed
+input reruns it, and so does everything after it in the same chain, by
+the usual positional rule, the same as a `use` that never finished. The
+comparison is exact: resolved the same way the child's own `meta.inputs`
+was recorded, then compared as JSON values — a declared default filled in
+or a declared type coerced counts as unchanged if the resolved value
+ends up the same either way. A finished `use` with no recorded
+`meta.inputs` at all — a dry-run record, or a state saved before this
+check existed — has nothing to compare against, so it always reruns this
+way, even with no `-e` given at all. Unaffected: a tree-flow branch
+(below), and a `use` whose own saved node didn't finish (continuing
+inside its child, above, follows #567's rules regardless of its inputs).
+A resume whose own run inputs differ from the saved run's — any `-e`
+value, not only one a changed `use` input came from — prints one
+`WARNING:` line naming each changed input as `name: <old> -> <new>`
+(Python `repr`), in the interface's declared order and then any
+undeclared ones sorted, and says that every other finished effect keeps
+its saved results; a resume whose run inputs are unchanged prints
+nothing new. A `use` that didn't finish reruns its child from the start,
+in a fresh state, unless the saved state holds the child's record
 ([`runtime.state.record_children: true`](#complete-record-opt-in)). With
 the record, `--resume` continues *inside* the child by the same rules as
 at the top level: the child's finished effects are reused, its first

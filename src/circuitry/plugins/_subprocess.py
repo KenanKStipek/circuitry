@@ -48,9 +48,22 @@ def parse_mode(params: dict[str, Any], *, plugin_name: str) -> bool:
     )
 
 
-def _parse_json_stdout(stdout: str, *, binary: str, returncode: int) -> Any:
+def _parse_json_stdout(
+    stdout: str,
+    *,
+    binary: str,
+    returncode: int,
+    scrub: Callable[[str], str] | None = None,
+) -> Any:
     """``json.loads`` of a process's stdout for ``parse: json``, failing with
-    the exit code and the beginning of stdout on empty or invalid output."""
+    the exit code and the beginning of stdout on empty or invalid output.
+
+    *scrub*, when given, runs on the *whole* stdout before the excerpt is cut
+    (#600): a host-``env`` secret the process prints starting just before
+    the cut would otherwise leave its first part in the error, since a
+    whole-value scrub of the excerpt alone can no longer find the complete
+    value to replace.
+    """
     if not stdout.strip():
         raise ValueError(
             f"{binary} parse: json: stdout is empty (exit {returncode})."
@@ -58,8 +71,9 @@ def _parse_json_stdout(stdout: str, *, binary: str, returncode: int) -> Any:
     try:
         return json.loads(stdout)
     except json.JSONDecodeError as exc:
-        excerpt = stdout[:_PARSE_EXCERPT_CHARS]
-        more = "..." if len(stdout) > _PARSE_EXCERPT_CHARS else ""
+        scrubbed = scrub(stdout) if scrub is not None else stdout
+        excerpt = scrubbed[:_PARSE_EXCERPT_CHARS]
+        more = "..." if len(scrubbed) > _PARSE_EXCERPT_CHARS else ""
         raise ValueError(
             f"{binary} parse: json: stdout is not valid JSON (exit {returncode}): "
             f"{exc}; stdout begins {excerpt!r}{more}"
@@ -219,6 +233,7 @@ def run_binary(
     parse_json: bool = False,
     not_found_hint: str | None = None,
     on_live: Callable[[dict[str, Any] | None], None] | None = None,
+    scrub_secrets: Callable[[str], str] | None = None,
 ) -> ToolResult:
     """Execute *binary* with *args* and return the result as a ToolResult.
 
@@ -278,7 +293,9 @@ def run_binary(
 
     value: Any = stdout
     if parse_json:
-        value = _parse_json_stdout(stdout, binary=binary, returncode=returncode)
+        value = _parse_json_stdout(
+            stdout, binary=binary, returncode=returncode, scrub=scrub_secrets
+        )
 
     return ToolResult(
         value=value,
@@ -322,6 +339,7 @@ class GenericSubprocessTool:
         params: dict[str, Any],
         timeout_seconds: int = 300,
         on_live: Callable[[dict[str, Any] | None], None] | None = None,
+        scrub_secrets: Callable[[str], str] | None = None,
     ) -> ToolResult:
         args = params.get("args")
         if not isinstance(args, list):
@@ -345,6 +363,7 @@ class GenericSubprocessTool:
             allow_nonzero=_as_bool(params.get("allow_nonzero")),
             parse_json=parse_json,
             not_found_hint=f"set runtime.plugins.{self.name}.binary",
+            scrub_secrets=scrub_secrets,
         )
 
     def check(self) -> CheckResult:

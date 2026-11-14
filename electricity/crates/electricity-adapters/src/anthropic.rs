@@ -350,10 +350,17 @@ fn interpret_body(raw: Value) -> Result<GenerateResult, AdapterError> {
         Some(Value::Dict(d)) => Some(d),
         Some(other) => return Err(attribute_error(other, "get")),
     };
-    let tokens_sent =
+    let input_tokens =
         int_if_not_none(usage_dict.and_then(|d| d.get(&Value::Str("input_tokens".to_string()))))?;
     let tokens_received =
         int_if_not_none(usage_dict.and_then(|d| d.get(&Value::Str("output_tokens".to_string()))))?;
+    let (tokens_cached_in, tokens_cache_write) = cache_fields(usage_dict);
+    // Every input token Anthropic counted, cache reads and writes included
+    // -- `input_tokens` alone excludes the cache.
+    let tokens_sent = input_tokens.map(|v| {
+        v.saturating_add(tokens_cached_in.unwrap_or(0))
+            .saturating_add(tokens_cache_write.unwrap_or(0))
+    });
     let finish_reason = match dict.get(&Value::Str("stop_reason".to_string())) {
         Some(Value::Str(s)) => Some(s.clone()),
         _ => None,
@@ -364,10 +371,24 @@ fn interpret_body(raw: Value) -> Result<GenerateResult, AdapterError> {
         raw,
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write,
         finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
     })
+}
+
+/// `adapters/anthropic.py::_cache_fields` -- `(cache_read_input_tokens,
+/// cache_creation_input_tokens)` from an Anthropic `usage` object, each
+/// `None` unless the reply's own field is a pyint -- absent, not 0,
+/// when the provider didn't report one.
+fn cache_fields(usage: Option<&Dict>) -> (Option<i64>, Option<i64>) {
+    let read =
+        usage.and_then(|d| int_if_pyint(d.get(&Value::Str("cache_read_input_tokens".to_string()))));
+    let write = usage
+        .and_then(|d| int_if_pyint(d.get(&Value::Str("cache_creation_input_tokens".to_string()))));
+    (read, write)
 }
 
 fn int_if_pyint(value: Option<&Value>) -> Option<i64> {
@@ -416,19 +437,24 @@ pub fn stream_on_line_progress(
             let Some(Value::Dict(message)) = dict.get(&Value::Str("message".to_string())) else {
                 return;
             };
-            let Some(input_tokens) = message
+            let usage_dict = message
                 .get(&Value::Str("usage".to_string()))
-                .and_then(Value::as_dict)
+                .and_then(Value::as_dict);
+            let Some(input_tokens) = usage_dict
                 .and_then(|d| int_if_pyint(d.get(&Value::Str("input_tokens".to_string()))))
             else {
                 return;
             };
-            tokens_sent.set(Some(input_tokens));
+            let (cache_read, cache_write) = cache_fields(usage_dict);
+            let sent = input_tokens
+                .saturating_add(cache_read.unwrap_or(0))
+                .saturating_add(cache_write.unwrap_or(0));
+            tokens_sent.set(Some(sent));
             if let Some(on_progress) = on_progress {
                 on_progress(GenerateProgress {
                     delta_chars: 0,
                     delta_count: 1,
-                    tokens_sent: Some(input_tokens),
+                    tokens_sent: Some(sent),
                     tokens_received: None,
                 });
             }
@@ -465,6 +491,8 @@ pub struct AnthropicStream {
     pub text: String,
     pub tokens_sent: Option<i64>,
     pub tokens_received: Option<i64>,
+    pub tokens_cached_in: Option<i64>,
+    pub tokens_cache_write: Option<i64>,
     pub stop_reason: Option<String>,
     pub saw_message_stop: bool,
     pub saw_event: bool,
@@ -476,6 +504,8 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
     let mut text = String::new();
     let mut tokens_sent: Option<i64> = None;
     let mut tokens_received: Option<i64> = None;
+    let mut tokens_cached_in: Option<i64> = None;
+    let mut tokens_cache_write: Option<i64> = None;
     let mut stop_reason: Option<String> = None;
     let mut saw_message_stop = false;
     let mut saw_event = false;
@@ -523,14 +553,22 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
                 };
             }
             "message_start" => {
-                if let Some(input_tokens) = dict
+                let usage_dict = dict
                     .get(&Value::Str("message".to_string()))
                     .and_then(Value::as_dict)
                     .and_then(|m| m.get(&Value::Str("usage".to_string())))
-                    .and_then(Value::as_dict)
+                    .and_then(Value::as_dict);
+                if let Some(input_tokens) = usage_dict
                     .and_then(|u| int_if_pyint(u.get(&Value::Str("input_tokens".to_string()))))
                 {
-                    tokens_sent = Some(input_tokens);
+                    let (cache_read, cache_write) = cache_fields(usage_dict);
+                    tokens_cached_in = cache_read;
+                    tokens_cache_write = cache_write;
+                    tokens_sent = Some(
+                        input_tokens
+                            .saturating_add(cache_read.unwrap_or(0))
+                            .saturating_add(cache_write.unwrap_or(0)),
+                    );
                 }
             }
             "content_block_delta" => {
@@ -570,6 +608,8 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
         text,
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write,
         stop_reason,
         saw_message_stop,
         saw_event,
@@ -677,17 +717,36 @@ pub fn interpret_streaming_outcome(
     let mut content_block = Dict::new();
     dict_insert(&mut content_block, "type", Value::Str("text".to_string()));
     dict_insert(&mut content_block, "text", Value::Str(parsed.text.clone()));
+    let input_tokens = parsed.tokens_sent.map(|sent| {
+        sent - parsed.tokens_cached_in.unwrap_or(0) - parsed.tokens_cache_write.unwrap_or(0)
+    });
     let mut usage = Dict::new();
     dict_insert(
         &mut usage,
         "input_tokens",
-        parsed.tokens_sent.map(Value::from).unwrap_or(Value::None),
+        input_tokens.map(Value::from).unwrap_or(Value::None),
     );
     dict_insert(
         &mut usage,
         "output_tokens",
         parsed
             .tokens_received
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
+    dict_insert(
+        &mut usage,
+        "cache_read_input_tokens",
+        parsed
+            .tokens_cached_in
+            .map(Value::from)
+            .unwrap_or(Value::None),
+    );
+    dict_insert(
+        &mut usage,
+        "cache_creation_input_tokens",
+        parsed
+            .tokens_cache_write
             .map(Value::from)
             .unwrap_or(Value::None),
     );
@@ -712,6 +771,8 @@ pub fn interpret_streaming_outcome(
         raw: Value::Dict(raw),
         tokens_sent: parsed.tokens_sent,
         tokens_received: parsed.tokens_received,
+        tokens_cached_in: parsed.tokens_cached_in,
+        tokens_cache_write: parsed.tokens_cache_write,
         finish_reason: parsed.stop_reason,
         warnings: Vec::new(),
         cost_usd: None,
@@ -1055,6 +1116,29 @@ mod tests {
     }
 
     #[test]
+    fn interpret_outcome_adds_cache_reads_and_writes_into_tokens_sent() {
+        let outcome = success(
+            r#"{"content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20}}"#,
+        );
+        let result = interpret_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, Some(3 + 100 + 20));
+        assert_eq!(result.tokens_received, Some(5));
+        assert_eq!(result.tokens_cached_in, Some(100));
+        assert_eq!(result.tokens_cache_write, Some(20));
+    }
+
+    #[test]
+    fn interpret_outcome_with_no_cache_fields_leaves_them_absent() {
+        let outcome = success(
+            r#"{"content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 3, "output_tokens": 5}}"#,
+        );
+        let result = interpret_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, Some(3));
+        assert_eq!(result.tokens_cached_in, None);
+        assert_eq!(result.tokens_cache_write, None);
+    }
+
+    #[test]
     fn interpret_outcome_raises_the_join_text_for_a_non_str_text_block() {
         let outcome = success(
             r#"{"content": [{"type": "text", "text": "a"}, {"type": "text", "text": null}]}"#,
@@ -1119,6 +1203,63 @@ mod tests {
     }
 
     #[test]
+    fn interpret_streaming_outcome_rebuilds_the_cache_fields_into_raw_usage() {
+        let body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":",
+            "{\"input_tokens\":3,\"cache_read_input_tokens\":100,",
+            "\"cache_creation_input_tokens\":20}}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},",
+            "\"usage\":{\"output_tokens\":5}}\n",
+            "data: {\"type\":\"message_stop\"}\n",
+        );
+        let outcome = success(body);
+        let result = interpret_streaming_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, Some(3 + 100 + 20));
+        assert_eq!(result.tokens_received, Some(5));
+        assert_eq!(result.tokens_cached_in, Some(100));
+        assert_eq!(result.tokens_cache_write, Some(20));
+        let usage = result
+            .raw
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("usage".to_string()))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert_eq!(
+            usage.get(&Value::Str("input_tokens".to_string())),
+            Some(&Value::from(3))
+        );
+        assert_eq!(
+            usage.get(&Value::Str("cache_read_input_tokens".to_string())),
+            Some(&Value::from(100))
+        );
+        assert_eq!(
+            usage.get(&Value::Str("cache_creation_input_tokens".to_string())),
+            Some(&Value::from(20))
+        );
+    }
+
+    #[test]
+    fn parse_anthropic_stream_adds_cache_reads_and_writes_into_tokens_sent() {
+        let body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":",
+            "{\"input_tokens\":3,\"cache_read_input_tokens\":100,",
+            "\"cache_creation_input_tokens\":20}}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},",
+            "\"usage\":{\"output_tokens\":5}}\n",
+            "data: {\"type\":\"message_stop\"}\n",
+        );
+        let parsed = parse_anthropic_stream(body);
+        assert_eq!(parsed.tokens_sent, Some(3 + 100 + 20));
+        assert_eq!(parsed.tokens_received, Some(5));
+        assert_eq!(parsed.tokens_cached_in, Some(100));
+        assert_eq!(parsed.tokens_cache_write, Some(20));
+    }
+
+    #[test]
     fn parse_anthropic_stream_reports_an_error_event() {
         let body = concat!(
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
@@ -1164,6 +1305,21 @@ mod tests {
             &tokens_sent,
         );
         assert_eq!(*seen.borrow(), vec![(0, Some(7)), (2, Some(7))]);
+    }
+
+    #[test]
+    fn stream_on_line_progress_message_start_adds_cache_reads_and_writes() {
+        let tokens_sent = Cell::new(None);
+        stream_on_line_progress(
+            concat!(
+                "data: {\"type\":\"message_start\",\"message\":{\"usage\":",
+                "{\"input_tokens\":3,\"cache_read_input_tokens\":100,",
+                "\"cache_creation_input_tokens\":20}}}"
+            ),
+            None,
+            &tokens_sent,
+        );
+        assert_eq!(tokens_sent.get(), Some(3 + 100 + 20));
     }
 
     #[tokio::test]

@@ -253,6 +253,7 @@ def test_parse_pi_output_reads_the_last_assistant_text_usage_and_cost() -> None:
     assert result.text == "the answer"
     assert result.session_id == "sess-1"
     assert (result.tokens_sent, result.tokens_received) == (1110, 5)
+    assert (result.tokens_cached_in, result.tokens_cache_write) == (1000, 100)
     assert result.cost_usd == pytest.approx(0.03)
     assert result.finish_reason == "stop"
     assert result.raw["events"][0]["type"] == "session"
@@ -272,6 +273,7 @@ def test_parse_pi_output_takes_a_plain_number_cost_and_sums_turns() -> None:
 def test_parse_pi_output_without_usage_reports_none() -> None:
     result = parse_pi_output(_completed(pi_events("x")))
     assert (result.tokens_sent, result.tokens_received, result.cost_usd) == (None, None, None)
+    assert (result.tokens_cached_in, result.tokens_cache_write) == (None, None)
 
 
 def test_parse_pi_output_auth_failure_carries_the_cli_text() -> None:
@@ -299,6 +301,7 @@ def test_parse_claude_output_reads_text_usage_cost_and_session() -> None:
     assert result.text == "hi"
     assert result.session_id == "sess-2"
     assert (result.tokens_sent, result.tokens_received) == (1110, 5)
+    assert (result.tokens_cached_in, result.tokens_cache_write) == (1000, 100)
     assert result.cost_usd == pytest.approx(0.0123)
     assert result.structured_output is None
 

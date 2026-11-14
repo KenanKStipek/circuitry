@@ -768,6 +768,8 @@ impl CyberdinerAdapter {
             raw: Value::Dict(raw),
             tokens_sent: None,
             tokens_received: as_int(job.get(&Value::Str("tokensProcessed".to_string()))),
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             finish_reason: None,
             warnings: crate::ignored_options_warning(&self.name, &GenerateOptions::default(), &[]),
             cost_usd: None,

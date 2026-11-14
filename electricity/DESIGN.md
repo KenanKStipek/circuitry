@@ -1068,11 +1068,25 @@ this section otherwise describes the full reference behavior, including the part
 auto-load, a bare run-id's input re-pass rule) electricity doesn't reach yet:
 
 - an effect is resumable iff `meta.completed_at` is truthy **and** `meta.error` is falsy; a
-  **successful `reflector` never writes `meta.completed_at` at all** (its own `meta` stays
-  `{"iterations": [...]}` only, issue #506's lane L1, matching Circuitry's own `setdefault`
-  shape) — a successful reflector is never resumable and always reruns from scratch, appending
-  its own new `meta.iterations` entries to whatever a prior run already left (the same
-  accumulation a reused, unnamed-loop/`if` node already gets);
+  successful `reflector` now writes `meta.completed_at` like any other effect (issue #585), so a
+  finished reflector is resumable and skipped whole, keeping its saved value and its own
+  `meta.iterations` record; one that didn't finish still reruns from its start, planning call
+  and generated plan included, appending its own new `meta.iterations` entries to whatever a
+  prior run already left (the same accumulation a reused, unnamed-loop/`if` node already gets) —
+  `meta.created_at` is still never written by the reflector itself, only by the actual run of a
+  generated plan;
+- a finished `use` whose inputs, resolved now against the resumed run's own inputs and state, no
+  longer match its recorded `meta.inputs` reruns too — and so does everything after it in the
+  same chain, by the same positional rule as an unfinished effect (issue #584). Resolved the same
+  way the child's own `meta.inputs` was recorded (rendered, then its declared `interface.inputs`
+  defaults/coercion applied) and compared as JSON values. Unaffected: a `use` that is a tree-flow
+  branch, and one whose own saved node didn't finish (the `record_children` continuation above
+  follows its own rules regardless of its inputs). A resume whose own run inputs differ from the
+  saved run's prints one `WARNING:` line naming each changed input as `name: <old> -> <new>`
+  (Python `repr`), in the interface's declared order and then any undeclared ones sorted, and
+  says every other finished effect keeps its saved results — identical text on both engines,
+  through each one's own warning channel (`log::warn!` here, `logger.warning` in Circuitry); a
+  resume with unchanged run inputs warns nothing new;
 - within one chain-flow `dynamic`'s own `effects:` list, resume is **positional**: the moment one
   effect isn't resumed whole, every later sibling in that same chain reruns too, regardless of
   what its own node might (misleadingly) show from a stale prior run;
@@ -1127,7 +1141,7 @@ reference's own message and failure point word for word (the Decisions above).
 | Interrupted by SIGTERM | `143` |
 | Interrupted by SIGHUP (the terminal closed), unless SIGHUP was ignored at start (`nohup`) | `129` |
 | A malformed `-e` value (`KEY=VALUE` parsing failure) — the one pre-run usage error the reference's own CLI never explicitly catches, left to Typer/Click's default `BadParameter` handling | `2` |
-| `--last` with no previous run at all (issue #760) — `cof run`'s own `_load_last_run` raises a bare `typer.BadParameter` too, never caught by `run_cmd` either, the same uncaught-`BadParameter` shape as a malformed `-e` | `2` |
+| `--last` with no previous run at all, or a present-but-unreadable stash (issue #760/#776) — `cof run`'s own `_load_last_run` raises a bare `typer.BadParameter` for either, never caught by `run_cmd` either, the same uncaught-`BadParameter` shape as a malformed `-e` | `2` |
 | Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path, `run`'s own missing-orchestration-positional check (issue #728: not one of the enumerated usage errors either, since the positional stands in for `--last`), `--resume last`'s own refusals and `--last`'s own stashed-secret/unsupported-setting refusals (issue #760) | `1` |
 
 All three interrupted cases still write `--out` exactly like an ordinary failure (runtime-semantics
@@ -1366,7 +1380,10 @@ these before it ever reaches the orchestration's own state:
   cost** — the reference's own accumulator starts at `None` and only becomes a number once
   something adds to it (an earlier draft of this design said it "sums to 0"; it does not,
   it stays absent-as-`null` the whole run if nothing uses an adapter that reports a cost — the
-  only two that do are `claude_code`/`pi`, §9.8, §10.5's own note).
+  only two that do are `claude_code`/`pi`, §9.8, §10.5's own note). `tokens_cached_in`/
+  `tokens_cache_write` (#627) gain the same keys as a prompt or `agent` tool effect's own
+  `meta` — absent from `totals` entirely, not `null`, unless at least one effect in the run
+  reported one.
 - **`runtime.effective_settings`**: `{model, adapter, out, plugins, runtime, sources}` plus an
   optional `profile` key, written exactly when `--profile` resolved a file for this run
   (§6.11 has the record's exact shape). `model`/`adapter` are the run's resolved defaults;
@@ -2660,7 +2677,8 @@ of M0-H's run wiring. **Loop progress** (the second bullet) landed with M1's own
   `--live-state` consumes — never by walking the finished state tree after the fact, since a
   `use` child in declared-outputs mode never leaves its effects in the final tree, and an unnamed
   loop overwrites the same node every pass; only the live event stream sees every leaf that
-  actually ran. `cost_usd` sums each prompt effect's own `meta.cost_usd` — a field none of the
+  actually ran. `tokens_cached_in`/`tokens_cache_write` (#627) sum the same way, present only
+  when at least one effect's own `meta` reported one. `cost_usd` sums each prompt effect's own `meta.cost_usd` — a field none of the
   OpenAI-compatible family, `anthropic`, `ollama` or `cyberdiner` populates (no documented
   per-call cost figure in any of their response shapes, and no price table in electricity
   either); `claude_code`/`pi` (§9.8) are the only two adapters that do, reporting the coding-agent
@@ -2928,7 +2946,7 @@ divergence.
 | — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Not applicable to electricity** (issues #727/#760): electricity has no `--resume <run-id>` of its own at all (the row below), so this check — which only ever guards a bare run-id resume with no single state file of its own — never has anything to apply to; `--state <file>` and `--resume last` both already carry their own resolved `input.*`, same as the reference. | No — see the scope row below. |
 | — | **electricity's own `--resume <run-id>` stays unsupported** (issue #727, narrowed by #760): `runtime.persistence` stays refused on electricity (§13's own persistence row), so a bare run-id has no backend to look itself up in. `--state <file>` and `--resume last` (issue #760: the same `--last` stash, `last-run.json`, either engine writes and reads, with the same checks and messages — no previous run, an unreadable stash, a different orchestration, no `--out`, a gone `--out` file) are both fully supported, matching the reference. `--resume <run-id>` given, with neither `--state` nor `last`, is refused the same way cof's own `_resolve_resume_state` refuses it — before anything runs, writing no state, exit 1 — naming `--state <file>`/`--resume last` as the forms electricity accepts, rather than attempting a lookup it can't perform. | **Accept, documented** — a client on the state-file or `--last`-stash path sees full parity; a client relying on a bare run-id still needs `cof run` until `runtime.persistence` is ported. | No — `runtime.persistence` support is a separate, larger piece of work. |
 | — | **A pre-run `--resume last` refusal's own framing on stdout** (issue #727, widened by #760): the reference raises each of these — no previous run, an unreadable stash, a different orchestration, no `--out`, a gone `--out` file, the document-hash mismatch, a bare run-id — as a bare `typer.BadParameter`, caught by `run_cmd` itself and printed as plain `Error: <message>` text via `console.print`, unconditionally — never the `{"ok": false, ...}` JSON payload a run failure's own non-TTY stdout contract uses, even when stdout is piped. electricity reports the identical message text through the ordinary `RunResult`/`print_stdout_contract` path instead (the document-hash check runs inside the same function `run()` itself does, unlike the reference's own CLI-layer check — [`electricity::run::RunResult::resume_refused`]'s own doc comment), so it always wraps it in that JSON payload. Plain `--last`'s own refusals (mutual exclusion with `--resume`, no stash at all, an unreadable stash, a redacted secret, or a stashed setting electricity cannot replay — the row below) are a separate code path entirely and print the identical plain `Error:` text with no JSON wrapper, matching the reference exactly; this row is about `--resume last` only. | **Accept, documented** — the message text and exit code match exactly; only the surrounding frame (plain line vs. JSON object) differs. | No — reusing the existing `RunResult` path keeps every `--resume last` refusal framed the same way, rather than adding a second, bespoke plain-text code path just for it. |
-| — | **A present-but-unreadable `--last` stash** (issue #760): `cof run`'s own `_load_last_run` has no graceful handling at all for a stash that exists but isn't valid JSON/a JSON object — an uncaught `JSONDecodeError`/`KeyError`, a Python traceback on stderr, exit 1. `--resume last` reads the same stash gracefully (one of issue #760's own listed refusals); plain `--last` does not. | **Report it cleanly instead**: a plain `Error: <message>` line on stdout, exit 1, the same text `read_last_run` already produces for `--resume last`'s own unreadable-stash refusal — never a reproduced traceback, which Rust has no equivalent of here anyway. | Yes — a real text divergence (no traceback), accepted since reproducing one serves no purpose. |
+| — | **A present-but-unreadable `--last` stash** (issue #776, closing the gap this row used to record): `cof run`'s own `_load_last_run` now reads the stash through the same total `read_last_run` both engines share, raising `typer.BadParameter(stash.error)` — Click's own usage-error exit `2`, never a traceback. | **No divergence**: electricity reports the identical `Invalid value: <message>` text at the same exit `2`, through the same uncaught-usage-error path `--last` with no previous run at all already uses (§6.9). | No — fixed on both engines; listed here as the record of the change. |
 | — | **`--last` refuses to replay a stashed setting electricity has no flag for** (issue #760): `cof run`'s own stash can carry `trust_document: false`/`remote_library_source: true` (a library-name or `run-library` run), a `service_profile`, or any of `--dry-run`/`--skip-preflight`/`--model`/`--profile-from-state`/`--scoring`/`--routing`/`--decompose`/`--split`/`--decompose-out` — none of which electricity's own CLI has a flag for, and silently dropping one would replay a materially different run. | **Refuse before anything runs** (`electricity_config::last_run::LastRun::unreplayable_setting`), naming the one setting found, in a fixed check order, rather than attempting a partial replay — exit 1, a plain `Error: the last run used <setting>, which electricity's --last cannot replay — run \`cof run --last\` instead.` line, written on stdout before config/orchestration resolution, the same position the redacted-secret refusal already checks at. The reference has no equivalent refusal: every one of these settings is a flag `cof run` itself understands, so its own `--last` replays all of them without issue. | No — a new refusal rather than a gap: `cof run --last` remains the only way to replay one of these stashes exactly. |
 | — | **`--resume`'s own `effective_settings.sources["out"]` label**: cof's own `"resume"` value (DESIGN.md §6.8, "writes back to the file it resumed from") versus the plain `"cli"` value an explicit `--out` gets. electricity's CLI does default `--out` to `--state`'s own file when `--resume` is given and `--out` isn't (§6.8's own rule, functionally implemented), but records that default the same way an explicit `--out` would (`"cli"`), not as a third, distinct `"resume"` string. | **Accept, documented** — the file actually written is correct; only the redacted `effective_settings.sources.out` string this one combination would read differs from cof's own. | No — narrow; revisit if a conformance case starts comparing `sources.out` text for this exact combination. |
 | — | **CLI usage-error exit code `2`**: not one of the four codes in an earlier draft's CLI-surface assumption. | **Settled 2026-10-06** (`0`/`1`/`130`/`143` plus `2` for usage errors, as `cof`/click; `129` for SIGHUP since Circuitry #357) — §6.9 now also maps which specific pre-run failures get `1` versus `2`, matching the reference's own case-by-case `BadParameter` handling rather than grouping every usage error under one code. | No — settled; listed here as the record of the decision. |

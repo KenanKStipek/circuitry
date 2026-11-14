@@ -1,0 +1,14 @@
+name: c627-retry-decode-then-success-cache
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: ask
+    prompt_type: json
+    schema:
+      type: object
+      required: ["a"]
+    template: "give json"
+    retries:
+      max_attempts: 2
+      backoff_ms: 1

@@ -138,6 +138,8 @@ class ConditionalRuntime:
         self._model_answer: str | None = None
         self._model_tokens_sent: int | None = None
         self._model_tokens_received: int | None = None
+        self._model_tokens_cached_in: int | None = None
+        self._model_tokens_cache_write: int | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Named decision: create a node for this conditional
@@ -236,6 +238,10 @@ class ConditionalRuntime:
                     meta["model"] = self.model
                     meta["tokens_sent"] = self._model_tokens_sent
                     meta["tokens_received"] = self._model_tokens_received
+                    if self._model_tokens_cached_in is not None:
+                        meta["tokens_cached_in"] = self._model_tokens_cached_in
+                    if self._model_tokens_cache_write is not None:
+                        meta["tokens_cache_write"] = self._model_tokens_cache_write
             if self.defn.on_error == "fail":
                 raise
             if self.defn.on_error == "skip":
@@ -268,6 +274,10 @@ class ConditionalRuntime:
                 meta["model"] = self.model
                 meta["tokens_sent"] = self._model_tokens_sent
                 meta["tokens_received"] = self._model_tokens_received
+                if self._model_tokens_cached_in is not None:
+                    meta["tokens_cached_in"] = self._model_tokens_cached_in
+                if self._model_tokens_cache_write is not None:
+                    meta["tokens_cache_write"] = self._model_tokens_cache_write
 
         branch_indent = "  " * (self.depth + 1)
         if self.verbose:
@@ -296,6 +306,7 @@ class ConditionalRuntime:
                 name = getattr(effect, "name", None) or "?"
                 is_prompt = isinstance(effect, PromptDefinition)
                 is_report = isinstance(effect, ReportDefinition)
+                is_use = isinstance(effect, UseDefinition)
 
                 if not is_enabled(effect):
                     _skip_disabled_effect(
@@ -315,10 +326,28 @@ class ConditionalRuntime:
                     )
                     continue
 
+                existing_node = child_store.state.get(name)
+                use_inputs_changed = False
+                if is_use and resume_active and effect_completed_ok(existing_node):
+                    from .use import use_rerun_for_changed_inputs
+
+                    use_inputs_changed = use_rerun_for_changed_inputs(
+                        effect,
+                        node=existing_node,
+                        ctx=ctx,
+                        adapter=self.adapter,
+                        model=self.model,
+                        model_locked=self.model_locked,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                    )
+
                 if (
                     resume_active
                     and name != "?"
-                    and effect_completed_ok(child_store.state.get(name))
+                    and effect_completed_ok(existing_node)
+                    and not use_inputs_changed
                 ):
                     if self.verbose and not is_prompt and not is_report:
                         _console.print(
@@ -549,6 +578,8 @@ class ConditionalRuntime:
         self._model_answer = None
         self._model_tokens_sent = None
         self._model_tokens_received = None
+        self._model_tokens_cached_in = None
+        self._model_tokens_cache_write = None
         if self.dry_run:
             return True  # Default to then branch in dry run
 
@@ -580,6 +611,8 @@ Answer (yes/no):"""
         self._model_answer = res.text
         self._model_tokens_sent = res.tokens_sent
         self._model_tokens_received = res.tokens_received
+        self._model_tokens_cached_in = res.tokens_cached_in
+        self._model_tokens_cache_write = res.tokens_cache_write
 
         # Parse response as a lenient yes/no; raises on an answer that
         # doesn't unambiguously read as one (see core.answers).

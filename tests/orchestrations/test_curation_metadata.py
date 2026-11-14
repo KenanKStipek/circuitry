@@ -75,6 +75,35 @@ def test_manifest_entry_name_matches_file_stem(manifest: dict) -> None:
         )
 
 
+def test_comic_strip_eject_example_writes_the_named_file(
+    manifest: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The manifest's own eject-first example for comic_strip (#604) must
+    actually produce the file its ``cof run`` half names: parsed from the
+    manifest text itself, not hardcoded here, so a stale edit to one command
+    without the other fails this test rather than only being caught by eye."""
+    import shlex
+
+    from typer.testing import CliRunner
+
+    from circuitry.cli.app import app as cli_app
+
+    entry = next(e for e in manifest["entries"] if e["name"] == "recipes/comic_strip")
+    eject_command, run_command = entry["example"].split(" && ", 1)
+    eject_args = shlex.split(eject_command)
+    run_args = shlex.split(run_command)
+    assert eject_args[:2] == ["cof", "eject"]
+    assert run_args[:2] == ["cof", "run"]
+
+    out_name = eject_args[eject_args.index("--out") + 1]
+    assert run_args[2] == out_name, "the run command must target the eject's --out file"
+
+    monkeypatch.chdir(tmp_path)
+    result = CliRunner().invoke(cli_app, eject_args[1:])
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / out_name).exists()
+
+
 def test_learn_hello_header_names_the_real_invocation_path() -> None:
     """learn/hello.yml's own header comment must name a runnable command
     (`cof run learn/hello`), not the nonexistent `orchestrations/hello.yml`
@@ -82,3 +111,45 @@ def test_learn_hello_header_names_the_real_invocation_path() -> None:
     text = (CURATION_DIR / "learn" / "hello.yml").read_text(encoding="utf-8")
     assert "orchestrations/hello.yml" not in text
     assert "cof run learn/hello" in text
+
+
+# ---------------------------------------------------------------------------
+# Trust (#604): `cof run <name>` by library name is a limited document.
+# ---------------------------------------------------------------------------
+
+#: Entries that write a local file as part of what they do (comic_strip's
+#: `comfyui` outputs) and so can never run as a limited document -- `cof
+#: run <name>` fails there by design; the documented way to run one is to
+#: `cof eject <name>` first and run the ejected copy by path, which is
+#: trusted. A new entry needing the same exception must be added here
+#: deliberately, not discovered by this test silently going green.
+_EJECT_FIRST_ENTRIES = frozenset({"recipes/comic_strip"})
+
+
+def test_every_entry_either_compiles_as_a_limited_document_or_is_eject_first(
+    manifest: dict,
+) -> None:
+    """A library name's own document is a limited one (#604): every
+    bundled entry's compile-time checks must pass that way, or the entry
+    must be on `_EJECT_FIRST_ENTRIES` and fail there with the
+    trusted-only-write refusal -- `scripts/smoke-curation.sh` only ever
+    runs `cof check` by path (trusted), so it alone would never have
+    caught comic_strip's own local writes."""
+    from circuitry.cli.runtime_shim import validate
+
+    failures = []
+    for entry in manifest["entries"]:
+        name = entry["name"]
+        path = CURATION_DIR / entry["file"]
+        report = validate(path, trust_document=False)
+        if name in _EJECT_FIRST_ENTRIES:
+            if report["ok"] or not any(
+                "only a document run by path" in error for error in report["errors"]
+            ):
+                failures.append(
+                    f"{name}: expected to fail as a limited document (eject-first) "
+                    f"with the trusted-only-write refusal, got: {report}"
+                )
+        elif not report["ok"]:
+            failures.append(f"{name}: failed to compile as a limited document: {report['errors']}")
+    assert not failures, "\n\n".join(failures)

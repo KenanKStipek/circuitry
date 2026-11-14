@@ -119,7 +119,7 @@ mod imp {
     use electricity_value::{Dict, Value};
     use std::collections::HashMap;
     use std::fs::{self, OpenOptions};
-    use std::io::{self, Read, Seek, SeekFrom};
+    use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -1135,6 +1135,16 @@ mod imp {
     }
 
     fn ensure_dir(dir: &Path) -> io::Result<()> {
+        if dir == default_state_dir() {
+            // `create_dir_all`'s own fallback below only applies `mode`
+            // to the leaf it creates; a first-ever service start would
+            // otherwise leave `~/.config/circuitry` itself at the
+            // process's default mode as a side effect of creating
+            // `services` under it.
+            if let Some(parent) = dir.parent() {
+                ensure_dir(parent)?;
+            }
+        }
         match create_0700(dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
@@ -1232,8 +1242,19 @@ mod imp {
         let tmp = dir.join(format!("{name}.json.tmp"));
         let text = dumps(&Value::Dict(record.clone()), WriteMode::PRETTY)
             .map_err(|e| runtime_error(format!("service: cannot encode the record: {e}")))?;
-        fs::write(&tmp, text)
-            .map_err(|e| runtime_error(format!("service: cannot write the record: {e}")))?;
+        // 0600 from creation, matching the state directory's own 0700: a
+        // service record can carry the command and env the service
+        // started with.
+        (|| -> io::Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(text.as_bytes())
+        })()
+        .map_err(|e| runtime_error(format!("service: cannot write the record: {e}")))?;
         fs::rename(&tmp, &path)
             .map_err(|e| runtime_error(format!("service: cannot write the record: {e}")))?;
         Ok(())
@@ -1793,6 +1814,8 @@ mod imp {
                     stdout_parsed: false,
                     tokens_sent: None,
                     tokens_received: None,
+                    tokens_cached_in: None,
+                    tokens_cache_write: None,
                     cost_usd: None,
                 });
             }
@@ -2002,6 +2025,8 @@ mod imp {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             cost_usd: None,
         })
     }
@@ -2040,7 +2065,7 @@ mod imp {
     /// (nothing to stop, or the group survived `SIGKILL`), or the
     /// group this call actually stopped.
     enum StopLocked {
-        Early(ToolResult),
+        Early(Box<ToolResult>),
         Stopped(Stopped),
     }
 
@@ -2076,7 +2101,9 @@ mod imp {
             }
         }
         let Some(rec) = record else {
-            return Ok(StopLocked::Early(stopped_false_result(&name, stale)));
+            return Ok(StopLocked::Early(Box::new(stopped_false_result(
+                &name, stale,
+            ))));
         };
         let pgid = get(&rec, "pgid").and_then(value_as_i64).unwrap_or(0) as u32;
         let (gone, sent) = terminate_group(pgid, grace).await;
@@ -2100,7 +2127,7 @@ mod imp {
                 Value::from("signal"),
                 sent.map(|s| Value::from(s.as_str())).unwrap_or(Value::None),
             );
-            return Ok(StopLocked::Early(ToolResult {
+            return Ok(StopLocked::Early(Box::new(ToolResult {
                 value: Value::None,
                 raw: Value::Dict(raw),
                 stdout: None,
@@ -2110,8 +2137,10 @@ mod imp {
                 stdout_parsed: false,
                 tokens_sent: None,
                 tokens_received: None,
+                tokens_cached_in: None,
+                tokens_cache_write: None,
                 cost_usd: None,
-            }));
+            })));
         }
         drop_record(&dir, &name);
         let ports: Vec<i64> = get(&rec, "ports")
@@ -2149,7 +2178,7 @@ mod imp {
             }
         };
         let stopped = match locked {
-            StopLocked::Early(result) => return Ok(result),
+            StopLocked::Early(result) => return Ok(*result),
             StopLocked::Stopped(stopped) => stopped,
         };
 

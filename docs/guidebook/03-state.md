@@ -150,7 +150,8 @@ Within the body, `{{prime.<step>.value}}` means *this pass's* `<step>`. Resoluti
 
 ```
 runtime.last_run                    # run_id, orchestration_path, dry_run, started_at, completed_at
-runtime.last_run.totals             # wall_time_s, effects_run, tokens_sent/received, cost_usd (null if unknown)
+runtime.last_run.totals             # wall_time_s, effects_run, tokens_sent/received, cost_usd (null if unknown),
+                                     #   tokens_cached_in/cache_write (absent unless some effect reported one)
 runtime.effective_settings          # every resolved setting …
 runtime.effective_settings.sources  # … and which layer supplied each one
 runtime.plugins                     # contract version, loaded plugins, hook events

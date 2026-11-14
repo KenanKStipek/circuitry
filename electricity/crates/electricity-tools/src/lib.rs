@@ -95,6 +95,12 @@ pub struct ToolResult {
     /// way a prompt's adapter reply does.
     pub tokens_sent: Option<i64>,
     pub tokens_received: Option<i64>,
+    /// `plugins/base.py::ToolResult.tokens_cached_in`/`.tokens_cache_write`
+    /// (#627): cache reads/writes behind `tokens_sent` (which already
+    /// includes them), each `None` unless the plugin's own call reported
+    /// one. Only `agent` sets these today.
+    pub tokens_cached_in: Option<i64>,
+    pub tokens_cache_write: Option<i64>,
     /// `plugins/base.py::ToolResult.cost_usd` -- `None` for every
     /// provider but `agent` (issue #720), which reports the CLI's own
     /// running cost figure on every `ToolResult` it returns, `ok: false`
@@ -123,6 +129,8 @@ impl ToolResult {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             cost_usd: None,
         }
     }
@@ -292,10 +300,14 @@ pub struct ToolCall<'a> {
     pub secret_headers: &'a [String],
     /// Issue #725: scrubs every secret this dispatch resolved out of a
     /// string, `electricity_tools::secrets::SecretValues::scrub_str`'s own
-    /// callback -- `None` for every provider but `http`. `HttpPlugin::
-    /// execute` applies it to an error body *before* cutting it to
-    /// `ERROR_EXCERPT_MAX_CHARS`, so no part of a secret survives the cut
+    /// callback -- always `Some` (issue #600 widened this past `http`:
+    /// every provider gets it, since the closure is a cheap no-op when
+    /// this dispatch resolved no secret). `HttpPlugin::execute` applies it
+    /// to an error body *before* cutting it to `ERROR_EXCERPT_MAX_CHARS`
     /// (`plugins/http.py::HttpPlugin.execute`'s own `scrub_secrets`
+    /// parameter); a subprocess-backed tool's own `parse: json` error
+    /// applies it to stdout the same way before its own excerpt is cut
+    /// (`plugins/_subprocess.py::_parse_json_stdout`'s own `scrub`
     /// parameter).
     pub scrub: Option<&'a dyn Fn(&str) -> String>,
     pub on_live: Option<&'a dyn Fn(process::LiveTail)>,

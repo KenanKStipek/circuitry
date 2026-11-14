@@ -225,6 +225,74 @@ class _SseLengthHandler(http.server.BaseHTTPRequestHandler):
         pass
 
 
+class _AnthropicSseCacheHandler(http.server.BaseHTTPRequestHandler):
+    """A real Anthropic SSE stream whose ``message_start`` reports cache
+    reads/writes (#627): ``tokens_sent`` is their sum, and both land
+    separately on ``tokens_cached_in``/``tokens_cache_write`` too."""
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        message_start = {
+            "type": "message_start",
+            "message": {
+                "usage": {
+                    "input_tokens": 3,
+                    "cache_read_input_tokens": 100,
+                    "cache_creation_input_tokens": 20,
+                }
+            },
+        }
+        delta = {"type": "content_block_delta", "delta": {"text": "hi"}}
+        message_delta = {
+            "type": "message_delta",
+            "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 2},
+        }
+        lines = [
+            f"data: {json.dumps(message_start)}\n\n",
+            f"data: {json.dumps(delta)}\n\n",
+            f"data: {json.dumps(message_delta)}\n\n",
+            'data: {"type": "message_stop"}\n\n',
+        ]
+        self.wfile.write("".join(lines).encode())
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
+class _OpenAISseCachedTokensHandler(http.server.BaseHTTPRequestHandler):
+    """A real OpenAI SSE stream whose final usage event reports
+    ``prompt_tokens_details.cached_tokens`` (#627)."""
+
+    def do_POST(self) -> None:
+        length = int(self.headers.get("Content-Length", 0))
+        self.rfile.read(length)
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.end_headers()
+        usage_event = {
+            "choices": [],
+            "usage": {
+                "prompt_tokens": 111,
+                "completion_tokens": 2,
+                "prompt_tokens_details": {"cached_tokens": 96},
+            },
+        }
+        lines = [
+            'data: {"choices": [{"delta": {"content": "hi"}}]}\n\n',
+            f"data: {json.dumps(usage_event)}\n\n",
+            "data: [DONE]\n\n",
+        ]
+        self.wfile.write("".join(lines).encode())
+
+    def log_message(self, *args: object) -> None:
+        pass
+
+
 def test_streamed_400_error_body_matches_non_streamed_text(monkeypatch: pytest.MonkeyPatch) -> None:
     with local_server(_JsonErrorHandler) as base_url:
         streamed = AnthropicAdapter(base_url=base_url)
@@ -384,3 +452,41 @@ def test_openai_adapters_own_streamed_success_assembles_text_and_usage(
         assert result.tokens_sent == 4
         assert result.tokens_received == 2
         assert deltas == ["6", "5"]
+
+
+def test_anthropic_streamed_success_sums_cache_into_tokens_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with local_server(_AnthropicSseCacheHandler) as base_url:
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-test")
+        adapter = AnthropicAdapter(base_url=base_url)
+        live_tokens_sent: list[int | None] = []
+        result = adapter.generate(
+            model="m",
+            prompt="x",
+            options=GenerateOptions(
+                on_progress=lambda p: live_tokens_sent.append(p.tokens_sent)
+            ),
+        )
+
+        assert result.tokens_sent == 3 + 100 + 20
+        assert result.tokens_received == 2
+        assert result.tokens_cached_in == 100
+        assert result.tokens_cache_write == 20
+        # The live progress's own tokens_sent agrees with the final
+        # figure: both include the cache.
+        assert live_tokens_sent[0] == 3 + 100 + 20
+
+
+def test_openai_streamed_success_reports_cached_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with local_server(_OpenAISseCachedTokensHandler) as base_url:
+        monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+        adapter = OpenAIAdapter(base_url=base_url)
+        result = adapter.generate(model="m", prompt="x")
+
+        assert result.tokens_sent == 111
+        assert result.tokens_cached_in == 96
+        assert result.tokens_cache_write is None
+        assert result.tokens_received == 2

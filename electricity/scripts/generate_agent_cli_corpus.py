@@ -62,6 +62,8 @@ def _result_to_dict(result: AgentCliResult) -> dict[str, Any]:
         "session_id": result.session_id,
         "tokens_sent": result.tokens_sent,
         "tokens_received": result.tokens_received,
+        "tokens_cached_in": result.tokens_cached_in,
+        "tokens_cache_write": result.tokens_cache_write,
         "cost_usd": result.cost_usd,
         "finish_reason": result.finish_reason,
         "structured_output": result.structured_output,

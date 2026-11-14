@@ -148,6 +148,8 @@ def _call_generate(
                 "raw": result.raw,
                 "tokens_sent": result.tokens_sent,
                 "tokens_received": result.tokens_received,
+                "tokens_cached_in": result.tokens_cached_in,
+                "tokens_cache_write": result.tokens_cache_write,
                 "finish_reason": result.finish_reason,
                 "warnings": list(result.warnings),
             }
@@ -201,6 +203,8 @@ def _call_generate_streaming(
                 "raw": result.raw,
                 "tokens_sent": result.tokens_sent,
                 "tokens_received": result.tokens_received,
+                "tokens_cached_in": result.tokens_cached_in,
+                "tokens_cache_write": result.tokens_cache_write,
                 "finish_reason": result.finish_reason,
                 "warnings": list(result.warnings),
             }
@@ -634,6 +638,8 @@ def _openai_compat_outcome_cases() -> list[dict[str, Any]]:
         (0, '{"choices": [{"message": {"content": " hi "}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 3, "completion_tokens": 5}}', ""),
         (0, '{"choices": []}', ""),
         (0, "not json", ""),
+        # Issue #627: a truthy non-dict `usage` raises, same as `usage_tokens`'s own callers.
+        (0, '{"choices": [{"message": {"content": "hi"}}], "usage": "x"}', ""),
         (
             22,
             '{"error": {"message": "Invalid API Key"}}',
@@ -806,6 +812,20 @@ def _openai_outcome_cases() -> list[dict[str, Any]]:
             '{"choices": [{"message": {"content": "hi"}}], "usage": {"prompt_tokens": "x"}}',
             "",
         ),
+        (
+            0,
+            ('{"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}], '
+            '"usage": {"prompt_tokens": 100, "completion_tokens": 2, '
+            '"prompt_tokens_details": {"cached_tokens": 96.0}}}'),
+            "",
+        ),
+        (
+            0,
+            ('{"choices": [{"message": {"content": "hi"}, "finish_reason": "stop"}], '
+            '"usage": {"prompt_tokens": 100, "completion_tokens": 2, '
+            '"prompt_tokens_details": {"cached_tokens": "96"}}}'),
+            "",
+        ),
         (22, '{"error": {"message": "bad key"}}', "curl: (22) The requested URL returned error: 401"),
         # Issue #660.
         (
@@ -946,6 +966,20 @@ def _anthropic_outcome_cases() -> list[dict[str, Any]]:
             0,
             ('{"content": [{"type": "text", "text": "a"}, {"type": "text", "text": "b"}], '
             '"stop_reason": "max_tokens"}'),
+            "",
+        ),
+        (
+            0,
+            ('{"content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 3.0, '
+            '"output_tokens": 5, "cache_read_input_tokens": 100, '
+            '"cache_creation_input_tokens": 20}, "stop_reason": "end_turn"}'),
+            "",
+        ),
+        (
+            0,
+            ('{"content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": "3", '
+            '"output_tokens": 5, "cache_read_input_tokens": 100, '
+            '"cache_creation_input_tokens": 20}, "stop_reason": "end_turn"}'),
             "",
         ),
         (22, '{"error": {"message": "overloaded"}}', "curl: (22) The requested URL returned error: 529"),

@@ -656,6 +656,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -691,6 +693,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -708,6 +712,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -770,6 +776,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -787,6 +795,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -804,6 +814,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -821,6 +833,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": false
@@ -838,6 +852,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": 0
@@ -860,6 +876,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": [
@@ -880,6 +898,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": {
@@ -907,6 +927,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": {
@@ -926,6 +948,8 @@
           "session_id": null,
           "tokens_sent": 17,
           "tokens_received": 7,
+          "tokens_cached_in": 5,
+          "tokens_cache_write": 2,
           "cost_usd": 0.5,
           "finish_reason": "end_turn",
           "structured_output": null
@@ -943,6 +967,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": 3,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -960,6 +986,8 @@
           "session_id": null,
           "tokens_sent": 1,
           "tokens_received": -2,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1010,6 +1038,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1027,6 +1057,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": "max_tokens",
           "structured_output": null
@@ -1044,6 +1076,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1079,6 +1113,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1097,6 +1133,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1113,6 +1151,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1129,6 +1169,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1201,6 +1243,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": "length",
           "structured_output": null
@@ -1217,6 +1261,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1233,6 +1279,8 @@
           "session_id": "pi-session-1",
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1249,6 +1297,8 @@
           "session_id": null,
           "tokens_sent": 9,
           "tokens_received": 3,
+          "tokens_cached_in": 1,
+          "tokens_cache_write": 1,
           "cost_usd": 0.5,
           "finish_reason": null,
           "structured_output": null
@@ -1265,6 +1315,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": 3,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1281,6 +1333,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1297,6 +1351,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1313,6 +1369,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null
@@ -1340,6 +1398,8 @@
           "session_id": null,
           "tokens_sent": null,
           "tokens_received": null,
+          "tokens_cached_in": null,
+          "tokens_cache_write": null,
           "cost_usd": null,
           "finish_reason": null,
           "structured_output": null

@@ -32,7 +32,12 @@ events = [
         "message": {
             "id": "m1",
             "model": "claude-fake",
-            "usage": {"input_tokens": 12, "output_tokens": 5},
+            "usage": {
+                "input_tokens": 12,
+                "cache_read_input_tokens": 100,
+                "cache_creation_input_tokens": 20,
+                "output_tokens": 5,
+            },
             "content": [{"type": "text", "text": "done"}],
         },
     },
@@ -43,7 +48,12 @@ events = [
         "result": "done",
         "session_id": "sess-c720-claude",
         "total_cost_usd": 0.02,
-        "usage": {"input_tokens": 12, "output_tokens": 5},
+        "usage": {
+            "input_tokens": 12,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 20,
+            "output_tokens": 5,
+        },
         "num_turns": 1,
     },
 ]

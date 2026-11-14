@@ -1,0 +1,12 @@
+- request:
+    method: POST
+    path: /v1/chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "hello from groq"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 111, "completion_tokens": 7,
+      "prompt_tokens_details": {"cached_tokens": 96}}}

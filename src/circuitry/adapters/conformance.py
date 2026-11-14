@@ -23,7 +23,12 @@ def validate_generate_result(result: GenerateResult, *, adapter_name: str) -> li
             f"{adapter_name}: 'raw' must be dict, got {type(result.raw).__name__}"
         )
 
-    for field_name in ("tokens_sent", "tokens_received"):
+    for field_name in (
+        "tokens_sent",
+        "tokens_received",
+        "tokens_cached_in",
+        "tokens_cache_write",
+    ):
         value: Any = getattr(result, field_name)
         if value is None:
             continue

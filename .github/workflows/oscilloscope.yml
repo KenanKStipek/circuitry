@@ -102,7 +102,7 @@ jobs:
           python-version: "3.11"
 
       - name: install Circuitry (cof) from this checkout
-        run: python3 -m pip install -e .
+        run: python3 -m pip install -e . -c electricity/scripts/generator-constraints.txt
 
       - name: cargo test (OSI_E2E_COF=1)
         working-directory: oscilloscope

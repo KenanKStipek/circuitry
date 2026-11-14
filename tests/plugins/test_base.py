@@ -107,3 +107,37 @@ def test_http_error_excerpt_non_json_body_falls_back_to_raw_text() -> None:
 def test_http_error_excerpt_empty_body_returns_empty_string() -> None:
     assert http_error_excerpt("") == ""
     assert http_error_excerpt("   ") == ""
+
+
+def test_http_error_excerpt_scrub_secrets_runs_on_the_decoded_message() -> None:
+    """#600 item 2: a raw-text scrub before this function can't catch a
+    JSON-escaped secret; scrub_secrets runs after decoding too, when it is
+    given."""
+    body = '{"error": "bad token: sec\\/ret"}'
+
+    def scrub(text: str) -> str:
+        return text.replace("sec/ret", "[secret:api]")
+
+    assert http_error_excerpt(body, scrub_secrets=scrub) == "bad token: [secret:api]"
+    # Without it, the decoded message still carries the literal value.
+    assert http_error_excerpt(body) == "bad token: sec/ret"
+
+
+def test_http_error_excerpt_scrubs_a_message_crossing_the_character_cut() -> None:
+    """#600 item 2: scrub_secrets runs on the whole decoded message before
+    the 500-character cut, not after -- a secret starting just before the
+    cut must not leave a fragment behind."""
+    secret = "tok3n-straddling-the-cut-600-xyz"
+    message = "x" * 490 + secret
+    body = json.dumps({"error": message})
+
+    def scrub(text: str) -> str:
+        return text.replace(secret, "[secret:api]")
+
+    excerpt = http_error_excerpt(body, scrub_secrets=scrub)
+    # The placeholder itself can still be cut short by the 500-character
+    # limit (it starts at character 490) -- what matters is that no part
+    # of the raw secret survives, not that the whole placeholder does.
+    assert "[secret:ap" in excerpt
+    for start in range(len(secret) - 5):
+        assert secret[start : start + 6] not in excerpt

@@ -350,6 +350,8 @@ impl Adapter for WatsonXAdapter {
             raw,
             tokens_sent,
             tokens_received,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             finish_reason: None,
             warnings: crate::ignored_options_warning(&self.name, options, &[]),
             cost_usd: None,

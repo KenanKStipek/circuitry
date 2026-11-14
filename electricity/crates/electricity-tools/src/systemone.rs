@@ -1052,6 +1052,8 @@ fn failed_result(raw: Dict, kind: &str, message: String, key: Option<&str>) -> T
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     }
 }
@@ -1363,7 +1365,7 @@ impl SystemOnePlugin {
                 )
             } else {
                 let mut message = format!("systemone HTTP {status} ({kind})");
-                let excerpt = crate::http::http_error_excerpt(&text, 500);
+                let excerpt = crate::http::http_error_excerpt(&text, 500, None);
                 if !excerpt.is_empty() {
                     message = format!("{message}: {excerpt}");
                 }
@@ -1447,6 +1449,8 @@ impl SystemOnePlugin {
             stdout_parsed: false,
             tokens_sent,
             tokens_received,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             cost_usd: None,
         }
     }

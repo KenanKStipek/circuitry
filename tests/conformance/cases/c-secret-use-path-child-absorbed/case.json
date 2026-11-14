@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #600 item 3 (cof and electricity agree: a use: path child's own malformed/untrusted secret is an ordinary, absorbable failure)",
+  "description": "A `use: {path: ...}` child's own `runtime.plugins.awk.env` names a malformed secret reference. A document's runtime block is checked for this only when that document itself is compiled -- the root document eagerly, a use child only when the use effect dispatches and compiles it -- so the child's own compile failure here is an ordinary use-child failure, absorbed by the use effect's own on_error: continue exactly like any other child failure, on both engines.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

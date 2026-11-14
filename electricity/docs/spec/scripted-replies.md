@@ -94,19 +94,25 @@ of `int`, so this is checked explicitly, not left to `isinstance(x, int)` alone.
 
 ```yaml
 - text: "the model's answer"
-  tokens_sent: 10     # optional, int >= 0
-  tokens_received: 4  # optional, int >= 0
-  finish_reason: stop # optional, string — the provider's own stop reason
+  tokens_sent: 10          # optional, int >= 0
+  tokens_received: 4       # optional, int >= 0
+  tokens_cached_in: 8      # optional, int >= 0 (#627)
+  tokens_cache_write: 2    # optional, int >= 0 (#627)
+  finish_reason: stop      # optional, string — the provider's own stop reason
 ```
 
 `text` is required and must be a string (it is exactly what the effect's own
-`prompt_type`/`schema` decode step then parses, same as a real adapter's reply). The two
-token fields, when present, feed the run's own `tokens_sent`/`tokens_received` and
-`*_total` accounting, so a replies file that cares about token totals in its expected
-output sets them explicitly — they default to absent (`null`), same as a real adapter
-reply that reports none. Python's own `int` is unbounded; electricity's token counts are
-`i64`-bounded, a documented divergence — a count beyond that range is a load-time error
-there, with a message Python has no equivalent of, rather than a silent truncation.
+`prompt_type`/`schema` decode step then parses, same as a real adapter's reply). The four
+token fields, when present, feed the run's own `tokens_sent`/`tokens_received`/
+`tokens_cached_in`/`tokens_cache_write` and `*_total` accounting, so a replies file that
+cares about token totals in its expected output sets them explicitly — they default to
+absent (`null`), same as a real adapter reply that reports none. `tokens_cached_in`/
+`tokens_cache_write` are never folded into `tokens_sent` by this adapter (a reply that
+wants a combined figure sets `tokens_sent` to it directly, as every real adapter's own
+`tokens_sent` already does) — the scripted adapter does not add them for you. Python's own
+`int` is unbounded; electricity's token counts are `i64`-bounded, a documented divergence
+— a count beyond that range is a load-time error there, with a message Python has no
+equivalent of, rather than a silent truncation.
 
 **`chunks` (issue #674/#676).** A text reply may carry a `chunks: [str, ...]` list instead
 of (or alongside) `text`; both engines' own scripted adapter deliver each entry as one

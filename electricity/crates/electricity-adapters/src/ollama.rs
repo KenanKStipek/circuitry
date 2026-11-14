@@ -272,6 +272,8 @@ fn result_from_final(raw: Value, text: String) -> Result<GenerateResult, Adapter
         raw,
         tokens_sent,
         tokens_received,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         finish_reason,
         warnings: Vec::new(),
         cost_usd: None,

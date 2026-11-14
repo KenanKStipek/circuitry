@@ -277,7 +277,11 @@ temporary directory is left behind.
 totals as `raw.tokens`/`raw.cost` — the session's usage over every turn,
 including a repair turn — under the fields a `prompt` effect uses, so
 `runtime.last_run.totals` and the live token counts a running orchestration
-shows count this effect like any other.
+shows count this effect like any other. `meta.tokens_cached_in`/
+`meta.tokens_cache_write` (input tokens the session's model calls read
+from/wrote to the provider's cache, already folded into `tokens_sent`
+above) are set the same way, only when the session's usage reported one —
+absent, not `null`, otherwise.
 
 ## Live progress while the session runs
 

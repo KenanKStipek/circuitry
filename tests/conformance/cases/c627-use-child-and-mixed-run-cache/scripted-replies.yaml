@@ -1,0 +1,10 @@
+prime.no_cache:
+  - text: "hi"
+    tokens_sent: 3
+    tokens_received: 1
+prime.cached_child.inner:
+  - text: "hi"
+    tokens_sent: 123
+    tokens_received: 2
+    tokens_cached_in: 100
+    tokens_cache_write: 20

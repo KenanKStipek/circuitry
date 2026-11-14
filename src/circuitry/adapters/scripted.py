@@ -125,6 +125,8 @@ class _Reply:
     chunks: tuple[str, ...] | None = None
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     finish_reason: str | None = None
     error_kind: str | None = None
     error_message: str | None = None
@@ -152,7 +154,15 @@ def _load_raw(path: Path) -> Any:
 #: load-time error (a typo like ``token_sent`` must not silently drop the
 #: count it was meant to set).
 _TEXT_REPLY_KEYS = frozenset(
-    {"text", "chunks", "tokens_sent", "tokens_received", "finish_reason"}
+    {
+        "text",
+        "chunks",
+        "tokens_sent",
+        "tokens_received",
+        "tokens_cached_in",
+        "tokens_cache_write",
+        "finish_reason",
+    }
 )
 _ERROR_KEYS = frozenset({"kind", "status", "message", "code"})
 
@@ -262,7 +272,12 @@ def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
             f"{source}: reply {index} for path '{path}': 'text' does not equal "
             "the concatenation of 'chunks'"
         )
-    for key in ("tokens_sent", "tokens_received"):
+    for key in (
+        "tokens_sent",
+        "tokens_received",
+        "tokens_cached_in",
+        "tokens_cache_write",
+    ):
         value = entry.get(key)
         if value is not None and (not _is_plain_int(value) or value < 0):
             raise ScriptedRepliesError(
@@ -278,6 +293,8 @@ def _parse_reply(entry: Any, *, path: str, index: int, source: Path) -> _Reply:
         chunks=chunks,
         tokens_sent=entry.get("tokens_sent"),
         tokens_received=entry.get("tokens_received"),
+        tokens_cached_in=entry.get("tokens_cached_in"),
+        tokens_cache_write=entry.get("tokens_cache_write"),
         finish_reason=finish_reason,
     )
 
@@ -412,6 +429,8 @@ class ScriptedAdapter:
             raw={"path": path},
             tokens_sent=reply.tokens_sent,
             tokens_received=reply.tokens_received,
+            tokens_cached_in=reply.tokens_cached_in,
+            tokens_cache_write=reply.tokens_cache_write,
             finish_reason=reply.finish_reason,
             warnings=ignored_options_warning(self.name, options),
         )

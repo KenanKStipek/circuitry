@@ -1,0 +1,6 @@
+effects:
+  - type: tool
+    name: hello
+    provider: awk
+    params:
+      args: ["{print}"]
