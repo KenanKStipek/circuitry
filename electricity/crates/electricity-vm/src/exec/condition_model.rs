@@ -864,8 +864,14 @@ mod tests {
                     Value::from("result"),
                 ]
             );
-            assert_eq!(meta.get(&Value::from("tokens_cached_in")), Some(&Value::from(100)));
-            assert_eq!(meta.get(&Value::from("tokens_cache_write")), Some(&Value::from(20)));
+            assert_eq!(
+                meta.get(&Value::from("tokens_cached_in")),
+                Some(&Value::from(100))
+            );
+            assert_eq!(
+                meta.get(&Value::from("tokens_cache_write")),
+                Some(&Value::from(20))
+            );
         });
     }
 
