@@ -2342,6 +2342,8 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 raw: Value::None,
                 tokens_sent: Some(1),
                 tokens_received: Some(1),
+                tokens_cached_in: None,
+                tokens_cache_write: None,
                 finish_reason: None,
                 warnings: Vec::new(),
                 cost_usd: None,

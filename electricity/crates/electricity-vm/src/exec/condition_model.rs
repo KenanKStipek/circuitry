@@ -153,8 +153,9 @@ pub async fn evaluate_model_condition(
 
 /// A model-mode `expect:`'s own outcome -- *meta* is the Python key
 /// order [`evaluate_model_expect`]'s own doc comment pins (`mode,
-/// template, answer, tokens_sent, tokens_received, [error], result`),
-/// what the caller records verbatim at `meta.expect`.
+/// template, answer, tokens_sent, tokens_received, [tokens_cached_in],
+/// [tokens_cache_write], [error], result`), what the caller records
+/// verbatim at `meta.expect`.
 #[derive(Debug)]
 pub struct ModelExpectOutcome {
     pub passed: bool,
@@ -247,6 +248,12 @@ pub async fn evaluate_model_expect(
             .map(Value::from)
             .unwrap_or(Value::None),
     );
+    if let Some(cached_in) = result.tokens_cached_in {
+        meta_map.insert(Value::from("tokens_cached_in"), Value::from(cached_in));
+    }
+    if let Some(cache_write) = result.tokens_cache_write {
+        meta_map.insert(Value::from("tokens_cache_write"), Value::from(cache_write));
+    }
 
     match super::prompt::answers::parse_boolean_answer(&result.text) {
         Ok(passed) => {
@@ -418,9 +425,25 @@ mod tests {
             raw: Value::None,
             tokens_sent: Some(tokens_sent),
             tokens_received: Some(tokens_received),
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             finish_reason: None,
             warnings: vec!["ignored".to_string()],
             cost_usd: Some(9.0),
+        }
+    }
+
+    fn reply_with_cache(
+        text: &str,
+        tokens_sent: i64,
+        tokens_received: i64,
+        tokens_cached_in: Option<i64>,
+        tokens_cache_write: Option<i64>,
+    ) -> GenerateResult {
+        GenerateResult {
+            tokens_cached_in,
+            tokens_cache_write,
+            ..reply(text, tokens_sent, tokens_received)
         }
     }
 
@@ -797,6 +820,84 @@ mod tests {
                     Value::from("result"),
                 ]
             );
+        });
+    }
+
+    #[tokio::test]
+    async fn an_expect_reply_with_cache_fields_carries_them_right_after_tokens_received() {
+        let adapter = Rc::new(FakeAdapter::replying(Ok(reply_with_cache(
+            "yes",
+            103,
+            4,
+            Some(100),
+            Some(20),
+        ))));
+        with_run_ctx!(adapter, false, |run_ctx| {
+            let template = plain_template("ok?");
+            let ctx = Value::Dict(IndexMap::new());
+            let token = CancellationToken::new();
+            let path = EffectPath::root();
+            let outcome = evaluate_model_expect(
+                &template,
+                &Value::None,
+                &Value::None,
+                &ctx,
+                &path,
+                7,
+                &run_ctx,
+                &token,
+            )
+            .await
+            .expect("a passing answer is not raised");
+            assert!(outcome.passed);
+            let meta = outcome.meta.as_dict().expect("a dict");
+            assert_eq!(
+                meta.keys().cloned().collect::<Vec<_>>(),
+                vec![
+                    Value::from("mode"),
+                    Value::from("template"),
+                    Value::from("answer"),
+                    Value::from("tokens_sent"),
+                    Value::from("tokens_received"),
+                    Value::from("tokens_cached_in"),
+                    Value::from("tokens_cache_write"),
+                    Value::from("result"),
+                ]
+            );
+            assert_eq!(
+                meta.get(&Value::from("tokens_cached_in")),
+                Some(&Value::from(100))
+            );
+            assert_eq!(
+                meta.get(&Value::from("tokens_cache_write")),
+                Some(&Value::from(20))
+            );
+        });
+    }
+
+    #[tokio::test]
+    async fn an_expect_reply_with_no_cache_fields_omits_them() {
+        let adapter = Rc::new(FakeAdapter::replying(Ok(reply("yes", 1, 1))));
+        with_run_ctx!(adapter, false, |run_ctx| {
+            let template = plain_template("ok?");
+            let ctx = Value::Dict(IndexMap::new());
+            let token = CancellationToken::new();
+            let path = EffectPath::root();
+            let outcome = evaluate_model_expect(
+                &template,
+                &Value::None,
+                &Value::None,
+                &ctx,
+                &path,
+                7,
+                &run_ctx,
+                &token,
+            )
+            .await
+            .expect("a passing answer is not raised");
+            let meta = outcome.meta.as_dict().expect("a dict");
+            assert!(!meta.contains_key(&Value::from("tokens_cached_in")));
+            assert!(!meta.contains_key(&Value::from("tokens_cache_write")));
         });
     }
 

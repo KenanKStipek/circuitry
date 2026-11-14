@@ -80,6 +80,11 @@ pub struct AgentCliResult {
     pub session_id: Option<String>,
     pub tokens_sent: Option<i64>,
     pub tokens_received: Option<i64>,
+    /// Cache reads/writes summed over every model turn, each set only
+    /// when at least one turn's usage reported that field (#627).
+    /// Already folded into `tokens_sent` above.
+    pub tokens_cached_in: Option<i64>,
+    pub tokens_cache_write: Option<i64>,
     pub cost_usd: Option<f64>,
     pub finish_reason: Option<String>,
     pub structured_output: Option<Value>,
@@ -498,6 +503,8 @@ pub fn parse_pi_output(proc: &process::Completed) -> Result<AgentCliResult, Agen
                     ],
                     usage.get(&Value::Str("output".to_string())),
                     cost,
+                    usage.get(&Value::Str("cacheRead".to_string())),
+                    usage.get(&Value::Str("cacheWrite".to_string())),
                 )
                 .map_err(AgentCliParseError::Numeric)?;
         }
@@ -544,6 +551,8 @@ pub fn parse_pi_output(proc: &process::Completed) -> Result<AgentCliResult, Agen
         session_id,
         tokens_sent: totals.sent,
         tokens_received: totals.received,
+        tokens_cached_in: totals.cached_in,
+        tokens_cache_write: totals.cache_write,
         cost_usd: totals.cost,
         finish_reason: stop_reason_str,
         structured_output: None,
@@ -648,6 +657,8 @@ pub fn parse_claude_output(
             ],
             get_usage("output_tokens"),
             raw.get(&Value::Str("total_cost_usd".to_string())),
+            get_usage("cache_read_input_tokens"),
+            get_usage("cache_creation_input_tokens"),
         )
         .map_err(AgentCliParseError::Numeric)?;
 
@@ -666,6 +677,8 @@ pub fn parse_claude_output(
         session_id,
         tokens_sent: totals.sent,
         tokens_received: totals.received,
+        tokens_cached_in: totals.cached_in,
+        tokens_cache_write: totals.cache_write,
         cost_usd: totals.cost,
         finish_reason,
         structured_output,
@@ -689,6 +702,11 @@ struct UsageTotals {
     sent: Option<i64>,
     received: Option<i64>,
     cost: Option<f64>,
+    /// Summed separately from `sent` (which already includes them) --
+    /// each set only when at least one turn's own usage reported that
+    /// field (#627).
+    cached_in: Option<i64>,
+    cache_write: Option<i64>,
 }
 
 impl UsageTotals {
@@ -697,6 +715,8 @@ impl UsageTotals {
         sent_parts: &[Option<&Value>],
         received: Option<&Value>,
         cost: Option<&Value>,
+        cache_read: Option<&Value>,
+        cache_write: Option<&Value>,
     ) -> Result<(), PyIntError> {
         for part in sent_parts.iter().flatten() {
             if is_number(part) {
@@ -718,6 +738,18 @@ impl UsageTotals {
                     _ => unreachable!("is_number only accepts Int/Float"),
                 };
                 self.cost = Some(self.cost.unwrap_or(0.0) + value);
+            }
+        }
+        if let Some(value) = cache_read {
+            if is_number(value) {
+                let value = py_int(value)?;
+                self.cached_in = Some(self.cached_in.unwrap_or(0).saturating_add(value));
+            }
+        }
+        if let Some(value) = cache_write {
+            if is_number(value) {
+                let value = py_int(value)?;
+                self.cache_write = Some(self.cache_write.unwrap_or(0).saturating_add(value));
             }
         }
         Ok(())
@@ -1982,8 +2014,12 @@ mod tests {
             sent: Some(i64::MAX),
             received: None,
             cost: None,
+            cached_in: None,
+            cache_write: None,
         };
-        totals.add(&[Some(&Value::from(1i64))], None, None).unwrap();
+        totals
+            .add(&[Some(&Value::from(1i64))], None, None, None, None)
+            .unwrap();
         assert_eq!(totals.sent, Some(i64::MAX));
     }
 

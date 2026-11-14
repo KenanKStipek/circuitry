@@ -250,3 +250,106 @@ async fn pi_runs_end_to_end_through_a_fake_binary() {
         &electricity_value::Value::Str("end_turn".to_string())
     );
 }
+
+/// A fake `claude` whose `usage` carries cache reads/writes (#627).
+const FAKE_CLAUDE_CACHE: &str = r#"#!/bin/sh
+cat >/dev/null
+printf '{"result": "claude says hi", "is_error": false, "usage": {"input_tokens": 3, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20, "output_tokens": 5}, "total_cost_usd": 0.5}\n'
+"#;
+
+#[tokio::test]
+async fn claude_code_records_cache_reads_and_writes() {
+    let dir = temp_dir("claude-code-cache");
+    let binary = write_executable(&dir, "claude", FAKE_CLAUDE_CACHE);
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(
+            r#"{{"runtime": {{"adapters": {{"claude_code": {{"binary": "{}"}}}}}}}}"#,
+            binary.display()
+        ),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: claude_code\nmodel: m1\neffects:\n  - type: prompt\n    name: greeting\n    template: \"say hello\"\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+    let state = result.state.unwrap();
+    let prime = as_dict(get(as_dict(&state), "prime"));
+    let greeting = as_dict(get(prime, "greeting"));
+    let meta = as_dict(get(greeting, "meta"));
+    assert_eq!(
+        get(meta, "tokens_sent"),
+        &electricity_value::Value::from(3i64 + 100 + 20)
+    );
+    assert_eq!(
+        get(meta, "tokens_cached_in"),
+        &electricity_value::Value::from(100i64)
+    );
+    assert_eq!(
+        get(meta, "tokens_cache_write"),
+        &electricity_value::Value::from(20i64)
+    );
+
+    let runtime = as_dict(get(as_dict(&state), "runtime"));
+    let last_run = as_dict(get(runtime, "last_run"));
+    let totals = as_dict(get(last_run, "totals"));
+    assert_eq!(
+        get(totals, "tokens_cached_in"),
+        &electricity_value::Value::from(100i64)
+    );
+    assert_eq!(
+        get(totals, "tokens_cache_write"),
+        &electricity_value::Value::from(20i64)
+    );
+}
+
+/// A fake `pi` whose `usage` carries cache reads/writes (#627).
+const FAKE_PI_CACHE: &str = r#"#!/bin/sh
+printf '{"type": "message_end", "message": {"role": "assistant", "content": "pi says hi", "stopReason": "end_turn", "usage": {"input": 4, "cacheRead": 50, "cacheWrite": 10, "output": 6, "cost": 0.25}}}\n'
+"#;
+
+#[tokio::test]
+async fn pi_records_cache_reads_and_writes() {
+    let dir = temp_dir("pi-cache");
+    let binary = write_executable(&dir, "pi", FAKE_PI_CACHE);
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(
+            r#"{{"runtime": {{"adapters": {{"pi": {{"binary": "{}"}}}}}}}}"#,
+            binary.display()
+        ),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: pi\neffects:\n  - type: prompt\n    name: greeting\n    template: \"say hello\"\n",
+    );
+    let req = request(config, doc);
+
+    let result = run(&req).await;
+
+    assert!(result.ok, "expected success, got: {:?}", result.error);
+    let state = result.state.unwrap();
+    let prime = as_dict(get(as_dict(&state), "prime"));
+    let greeting = as_dict(get(prime, "greeting"));
+    let meta = as_dict(get(greeting, "meta"));
+    assert_eq!(
+        get(meta, "tokens_sent"),
+        &electricity_value::Value::from(4i64 + 50 + 10)
+    );
+    assert_eq!(
+        get(meta, "tokens_cached_in"),
+        &electricity_value::Value::from(50i64)
+    );
+    assert_eq!(
+        get(meta, "tokens_cache_write"),
+        &electricity_value::Value::from(10i64)
+    );
+}

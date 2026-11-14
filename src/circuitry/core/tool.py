@@ -848,6 +848,8 @@ class ToolRuntime:
         # later attempt is the one that decides the outcome.
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        total_tokens_cached_in: int | None = None
+        total_tokens_cache_write: int | None = None
         # Every attempt this pass makes, oldest first (#668) -- written to
         # meta.attempts only once more than one attempt has run, exactly
         # when meta.retries_used is also set.
@@ -897,6 +899,10 @@ class ToolRuntime:
             meta.pop("tokens_received", None)
             meta.pop("tokens_sent_total", None)
             meta.pop("tokens_received_total", None)
+            meta.pop("tokens_cached_in", None)
+            meta.pop("tokens_cache_write", None)
+            meta.pop("tokens_cached_in_total", None)
+            meta.pop("tokens_cache_write_total", None)
             meta.pop("cost_usd", None)
             meta.pop("stdout_chars", None)
             meta.pop("stdout_sha256", None)
@@ -1221,6 +1227,10 @@ class ToolRuntime:
                     meta["tokens_sent_total"] = total_tokens_sent
                 if total_tokens_received is not None:
                     meta["tokens_received_total"] = total_tokens_received
+                if total_tokens_cached_in is not None:
+                    meta["tokens_cached_in_total"] = total_tokens_cached_in
+                if total_tokens_cache_write is not None:
+                    meta["tokens_cache_write_total"] = total_tokens_cache_write
                 is_last_attempt = attempt_index >= max_attempts - 1
                 if self.verbose:
                     elapsed = time.monotonic() - t0
@@ -1291,6 +1301,14 @@ class ToolRuntime:
             if result.tokens_received is not None:
                 total_tokens_received = (total_tokens_received or 0) + result.tokens_received
                 meta["tokens_received_total"] = total_tokens_received
+            if result.tokens_cached_in is not None:
+                total_tokens_cached_in = (total_tokens_cached_in or 0) + result.tokens_cached_in
+                meta["tokens_cached_in_total"] = total_tokens_cached_in
+            if result.tokens_cache_write is not None:
+                total_tokens_cache_write = (
+                    total_tokens_cache_write or 0
+                ) + result.tokens_cache_write
+                meta["tokens_cache_write_total"] = total_tokens_cache_write
 
             if not result.ok:
                 failure = RuntimeError(
@@ -1391,6 +1409,10 @@ class ToolRuntime:
                 meta["tokens_sent"] = result.tokens_sent
             if result.tokens_received is not None:
                 meta["tokens_received"] = result.tokens_received
+            if result.tokens_cached_in is not None:
+                meta["tokens_cached_in"] = result.tokens_cached_in
+            if result.tokens_cache_write is not None:
+                meta["tokens_cache_write"] = result.tokens_cache_write
             if result.cost_usd is not None:
                 meta["cost_usd"] = result.cost_usd
 

@@ -26,6 +26,14 @@ class GenerateResult:
     raw: dict[str, Any]
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    #: Input tokens the provider read from its own cache / wrote to it,
+    #: each set only when the provider's reply carries that count (even
+    #: when it is 0) -- ``None`` otherwise, never a placeholder zero.
+    #: Anthropic reports both; OpenAI-compatible providers report only
+    #: ``tokens_cached_in`` (no write count); ``tokens_sent`` already
+    #: counts both either way (see each adapter's own docstring).
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     #: The provider's own stop reason (``stop``, ``length``, ``end_turn``,
     #: ``max_tokens``, ...), or ``None`` when it reports none.
     finish_reason: str | None = None

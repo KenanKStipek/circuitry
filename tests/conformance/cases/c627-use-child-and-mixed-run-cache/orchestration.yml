@@ -1,0 +1,16 @@
+name: c627-use-child-and-mixed-run-cache
+adapter: scripted
+model: m
+effects:
+  - type: prompt
+    name: no_cache
+    template: "hi"
+  - type: use
+    name: cached_child
+    inline: |
+      adapter: scripted
+      model: m
+      effects:
+        - type: prompt
+          name: inner
+          template: "hi"

@@ -1,0 +1,6 @@
+{"v":1,"seq":0,"ts":"2026-11-14T09:29:10.696Z","ev":"run_start","run_id":"41f7b4dd-d1fa-4060-b83c-d3105e054e4b","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":47256}
+{"v":1,"seq":1,"ts":"2026-11-14T09:29:10.697Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-14T09:29:10.698Z","ev":"start","id":1,"path":"prime.ask"}
+{"v":1,"seq":3,"ts":"2026-11-14T09:29:10.701Z","ev":"end","id":1,"path":"prime.ask","ok":false,"ms":3,"error":"JSON schema validation failed: model returned None (JSON could not be parsed). Check the model's response format."}
+{"v":1,"seq":4,"ts":"2026-11-14T09:29:10.701Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3}
+{"v":1,"seq":5,"ts":"2026-11-14T09:29:10.701Z","ev":"run_end","ok":true}

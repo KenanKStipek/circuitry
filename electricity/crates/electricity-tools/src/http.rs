@@ -1815,6 +1815,8 @@ fn finalize_streamed_save(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }
@@ -1908,6 +1910,8 @@ fn finalize_response_save(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }
@@ -1998,6 +2002,8 @@ fn finalize_response(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }

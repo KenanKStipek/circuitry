@@ -1,0 +1,11 @@
+{
+  "spec_case": "issue #627 (anthropic cache reads/writes fold into tokens_sent)",
+  "description": "An Anthropic reply with cache_read_input_tokens/cache_creation_input_tokens: tokens_sent is their sum with input_tokens, and both land separately on meta.tokens_cached_in/meta.tokens_cache_write and the run totals.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {
+    "ANTHROPIC_API_KEY": "circuitry-test-fake-anthropic-key"
+  }
+}

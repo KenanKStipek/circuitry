@@ -195,6 +195,8 @@ enum ExpectedOutcome {
         text: String,
         tokens_sent: Option<i64>,
         tokens_received: Option<i64>,
+        tokens_cached_in: Option<i64>,
+        tokens_cache_write: Option<i64>,
         finish_reason: Option<String>,
     },
     Err {
@@ -219,6 +221,8 @@ fn expected_from_result(result: &Value) -> ExpectedOutcome {
             text: get(result, "text").as_str().unwrap().to_string(),
             tokens_sent: i64_opt(get(result, "tokens_sent")),
             tokens_received: i64_opt(get(result, "tokens_received")),
+            tokens_cached_in: i64_opt(get(result, "tokens_cached_in")),
+            tokens_cache_write: i64_opt(get(result, "tokens_cache_write")),
             finish_reason: str_opt(get(result, "finish_reason")),
         }
     } else {
@@ -242,6 +246,8 @@ fn assert_matches_expected(
                 text,
                 tokens_sent,
                 tokens_received,
+                tokens_cached_in,
+                tokens_cache_write,
                 finish_reason,
             },
         ) => {
@@ -250,6 +256,14 @@ fn assert_matches_expected(
             assert_eq!(
                 &result.tokens_received, tokens_received,
                 "{context}: tokens_received"
+            );
+            assert_eq!(
+                &result.tokens_cached_in, tokens_cached_in,
+                "{context}: tokens_cached_in"
+            );
+            assert_eq!(
+                &result.tokens_cache_write, tokens_cache_write,
+                "{context}: tokens_cache_write"
             );
             assert_eq!(
                 &result.finish_reason, finish_reason,

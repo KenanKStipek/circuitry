@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #627 (cache tokens on an if/while model-mode condition and an expect: {mode: model} check)",
+  "description": "A model-mode if's condition, a model-mode while's condition, and a tool's expect: {mode: model} check each report cache reads/writes on their own adapter call -- the if and the while's own meta carry tokens_cached_in/tokens_cache_write (the while's own tokens_cached_in_total/tokens_cache_write_total too), the tool's meta.expect carries its pair, and the run's own totals sum all three. The while runs two checks: the first reports cache usage, the second doesn't, so its own meta ends with both keys absent rather than the first check's stale count.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

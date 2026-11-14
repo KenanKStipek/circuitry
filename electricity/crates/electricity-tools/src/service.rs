@@ -1793,6 +1793,8 @@ mod imp {
                     stdout_parsed: false,
                     tokens_sent: None,
                     tokens_received: None,
+                    tokens_cached_in: None,
+                    tokens_cache_write: None,
                     cost_usd: None,
                 });
             }
@@ -2002,6 +2004,8 @@ mod imp {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             cost_usd: None,
         })
     }
@@ -2040,7 +2044,7 @@ mod imp {
     /// (nothing to stop, or the group survived `SIGKILL`), or the
     /// group this call actually stopped.
     enum StopLocked {
-        Early(ToolResult),
+        Early(Box<ToolResult>),
         Stopped(Stopped),
     }
 
@@ -2076,7 +2080,9 @@ mod imp {
             }
         }
         let Some(rec) = record else {
-            return Ok(StopLocked::Early(stopped_false_result(&name, stale)));
+            return Ok(StopLocked::Early(Box::new(stopped_false_result(
+                &name, stale,
+            ))));
         };
         let pgid = get(&rec, "pgid").and_then(value_as_i64).unwrap_or(0) as u32;
         let (gone, sent) = terminate_group(pgid, grace).await;
@@ -2100,7 +2106,7 @@ mod imp {
                 Value::from("signal"),
                 sent.map(|s| Value::from(s.as_str())).unwrap_or(Value::None),
             );
-            return Ok(StopLocked::Early(ToolResult {
+            return Ok(StopLocked::Early(Box::new(ToolResult {
                 value: Value::None,
                 raw: Value::Dict(raw),
                 stdout: None,
@@ -2110,8 +2116,10 @@ mod imp {
                 stdout_parsed: false,
                 tokens_sent: None,
                 tokens_received: None,
+                tokens_cached_in: None,
+                tokens_cache_write: None,
                 cost_usd: None,
-            }));
+            })));
         }
         drop_record(&dir, &name);
         let ports: Vec<i64> = get(&rec, "ports")
@@ -2149,7 +2157,7 @@ mod imp {
             }
         };
         let stopped = match locked {
-            StopLocked::Early(result) => return Ok(result),
+            StopLocked::Early(result) => return Ok(*result),
             StopLocked::Stopped(stopped) => stopped,
         };
 

@@ -1,0 +1,34 @@
+name: c627-if-while-expect-cache
+adapter: scripted
+model: m
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: model
+      template: "proceed?"
+    then:
+      - type: tool
+        name: then_step
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else: []
+  - type: loop
+    name: lp
+    min_iterations: 1
+    max_iterations: 5
+    while:
+      mode: model
+      template: "keep going?"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {idx: "{{iter.index}}"}}
+  - type: tool
+    name: fetch
+    provider: json
+    params: {mode: parse, input: "{\"ok\": true}"}
+    expect:
+      mode: model
+      template: "is this ok?"
