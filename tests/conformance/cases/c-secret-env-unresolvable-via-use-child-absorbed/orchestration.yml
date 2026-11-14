@@ -1,0 +1,20 @@
+name: c-secret-env-unresolvable-via-use-child-absorbed
+runtime:
+  secrets:
+    api:
+      env: CONFORMANCE_UNSET_600
+  plugins:
+    awk:
+      env:
+        TOKEN: {secret: api}
+effects:
+  - type: use
+    name: child
+    path: child.yml
+    on_error: continue
+  - type: tool
+    name: after
+    provider: json
+    params:
+      mode: parse
+      input: "{\"ok\": true}"

@@ -135,6 +135,16 @@ def _assert_no_token(text: str) -> None:
     assert TOKEN_SHA256 not in text
 
 
+def _assert_no_window(text: str, secret: str, window: int = 6) -> None:
+    """No substring of *secret* at least *window* characters long survives
+    in *text* -- stronger than a whole-value check, since a scrub that
+    only matches the exact resolved value can still leave a fragment of
+    it (e.g. straddling a cut) still long enough to recognize."""
+    for start in range(max(len(secret) - window + 1, 0)):
+        fragment = secret[start : start + window]
+        assert fragment not in text, f"{fragment!r} (secret[{start}:{start + window}]) found in text"
+
+
 # ---------------------------------------------------------------------------
 # Resolution.
 # ---------------------------------------------------------------------------
@@ -206,6 +216,20 @@ def test_scrub_replaces_prefixed_and_bare_values() -> None:
         "k": ["Bearer [secret:api] and [secret:api]", 1],
         "[secret:api]": None,
     }
+
+
+def test_scrub_matches_a_secrets_json_escaped_forms() -> None:
+    """#600 item 2: a secret with a character JSON escapes (here ``/``) is
+    also scrubbed in its escaped forms -- a plain, unescaped match alone
+    would miss a secret a server echoes inside a JSON string literal."""
+    values = SecretValues()
+    runtime = {
+        "secrets": {"api": {"command": [sys.executable, "-c", "print('sec/ret-600')"]}}
+    }
+    assert values.resolve(SecretRef("api"), runtime) == "sec/ret-600"
+    assert values.scrub("bare: sec/ret-600, escaped: sec\\/ret-600") == (
+        "bare: [secret:api], escaped: [secret:api]"
+    )
 
 
 def test_scrub_live_tail_drops_a_line_carrying_part_of_a_multiline_secret() -> None:
@@ -443,6 +467,45 @@ def test_a_token_that_straddles_the_error_excerpts_cut_leaves_no_part_behind(
         result.error or "",
     ):
         assert TOKEN[:10] not in text
+
+
+def test_a_json_escaped_secret_in_an_error_body_is_still_scrubbed(
+    tmp_path: Path, servers: ServerPair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#600 item 2: a server that JSON-escapes the token (a backslash
+    before a literal slash) defeats a raw-text-only scrub, since the
+    exact, unescaped value never appears in the raw text for it to
+    match; the parsed ``error`` this picks out, and the escaped form
+    still in ``raw.body``, are both still scrubbed."""
+    slash_token = "sec/ret-600-tok3n"
+    monkeypatch.setenv("SLASH_TOKEN_VAR", slash_token)
+    body = '{"error": "bad token: sec\\/ret-600-tok3n"}'
+    servers.routes["/fail"] = Route(400, {"Content-Type": "application/json"}, body)
+    result = run(
+        RunRequest(
+            orchestration_path=_http_doc(tmp_path, f"{servers.http}/fail"),
+            state_path=None,
+            out_path=None,
+            events_path=tmp_path / "events.jsonl",
+            dry_run=False,
+            validate_only=False,
+            config=_config({"api": {"env": "SLASH_TOKEN_VAR"}}),
+            skip_preflight=True,
+            trust_document=True,
+        )
+    )
+    assert not result.ok
+    meta = result.state["prime"]["call"]["meta"]
+    assert meta["error"] == "HTTP 400: Bad Request: bad token: [secret:api]"
+    assert meta["raw"]["body"] == body.replace("sec\\/ret-600-tok3n", "[secret:api]")
+    for text in (
+        json.dumps(result.state),
+        (tmp_path / "events.jsonl").read_text(),
+        result.error or "",
+    ):
+        assert slash_token not in text
+        assert "sec\\/ret-600-tok3n" not in text
+        _assert_no_window(text, slash_token)
 
 
 def test_a_failing_command_secret_fails_the_effect_naming_it(
@@ -1055,3 +1118,128 @@ effects:
     )
     for text in (events.read_text(), json.dumps(result.state)):
         _assert_no_token(text)
+
+
+def test_a_secret_straddling_the_parse_json_excerpts_cut_leaves_no_part_behind(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    """#600 item 1: the scrub runs on the whole stdout before the 200-char
+    excerpt is cut, so a secret printed starting just before the cut never
+    leaves its first part in the error."""
+    fake_awk = tmp_path / "fake-awk"
+    fake_awk.write_text(
+        f"""#!{sys.executable}
+import os
+print("x" * 190 + os.environ["SERVICE_TOKEN"] + "more", end="")
+""",
+        encoding="utf-8",
+    )
+    fake_awk.chmod(0o755)
+    doc = _write(
+        tmp_path,
+        "doc.yml",
+        """
+effects:
+  - type: tool
+    name: run_it
+    provider: awk
+    params: {args: ["{print}"], parse: json}
+""",
+    )
+    events = tmp_path / "events.jsonl"
+    result = run(
+        RunRequest(
+            orchestration_path=doc,
+            state_path=None,
+            out_path=None,
+            events_path=events,
+            dry_run=False,
+            validate_only=False,
+            config=_config(
+                _KEYCHAIN,
+                plugins={
+                    "awk": {
+                        "binary": str(fake_awk),
+                        "env": {"SERVICE_TOKEN": {"secret": "api"}},
+                    }
+                },
+            ),
+            skip_preflight=True,
+            trust_document=True,
+        )
+    )
+    assert not result.ok
+    meta = result.state["prime"]["run_it"]["meta"]
+    # The excerpt keeps the first 200 characters; the full placeholder itself
+    # straddles that cut here, same as the http excerpt test above -- what
+    # matters is that no part of the raw token survives it.
+    assert "[secret:ap" in meta["error"]
+    for text in (events.read_text(), json.dumps(result.state), result.error or ""):
+        assert TOKEN[:10] not in text
+        _assert_no_window(text, TOKEN)
+
+
+def test_e2e_cof_run_subprocess_never_leaks_an_escaped_secret_into_any_artifact(
+    tmp_path: Path, servers: ServerPair
+) -> None:
+    """#600 item 2, end to end: a real `cof run` subprocess, a fake secret
+    resolved from a temp HOME's own environment (never the real Keychain),
+    and every artifact `cof run` can produce -- --out, --events,
+    --live-state, stdout and stderr -- checked for the secret and every
+    six-character window of it."""
+    slash_token = "sec/ret-600-e2e-tok3n"
+    body = '{"error": "bad token: sec\\/ret-600-e2e-tok3n"}'
+    servers.routes["/fail"] = Route(400, {"Content-Type": "application/json"}, body)
+
+    doc = _write(
+        tmp_path,
+        "doc.yml",
+        f"""
+effects:
+  - type: tool
+    name: call
+    provider: http
+    params:
+      url: "{servers.http}/fail"
+      headers:
+        Authorization: {{secret: api, prefix: "Bearer "}}
+""",
+    )
+    config = _write(
+        tmp_path,
+        "config.json",
+        json.dumps({"runtime": {"secrets": {"api": {"env": "FAKE_SLASH_TOKEN_600"}}}}),
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    out = tmp_path / "out.json"
+    events = tmp_path / "events.jsonl"
+    live = tmp_path / "live.json"
+
+    env = {key: value for key, value in os.environ.items() if key not in _CREDENTIAL_ENV_VARS}
+    env.update(HOME=str(home), FAKE_SLASH_TOKEN_600=slash_token, COLUMNS="200")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "circuitry.cli.app", "run", str(doc),
+            "--config", str(config),
+            "--out", str(out),
+            "--events", str(events),
+            "--live-state", str(live),
+            "--skip-preflight",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+
+    artifacts = [proc.stdout, proc.stderr]
+    artifacts.extend(path.read_text() for path in (out, events, live) if path.exists())
+    assert any("[secret:api]" in text for text in artifacts)
+    for text in artifacts:
+        assert slash_token not in text
+        assert "sec\\/ret-600-e2e-tok3n" not in text
+        _assert_no_window(text, slash_token)

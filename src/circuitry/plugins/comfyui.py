@@ -16,7 +16,7 @@ from typing import Any
 from ..core.cancellation import run_tracked
 from ..curl_support import curl_failure_message, redact_host_url, run_curl
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import LIMITED_WRITE_FIX, ToolResult
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -88,6 +88,55 @@ def _validate_image_dir(
         ) from None
 
     return resolved
+
+
+#: Why a limited document may never save a ComfyUI image locally (#604):
+#: `image_output` defaults to `path`, which writes under the `network`
+#: capability alone, the same gap `http`'s `save_to` closed (#602).
+_LIMITED_IMAGE_OUTPUT = (
+    "only a document run by path may save ComfyUI's output to a local file "
+    "(a limited document, a library entry or a generated plan cannot); set "
+    "params.image_output to base64 or url instead" + LIMITED_WRITE_FIX
+)
+
+#: `image_output` values that never write a local file.
+_NON_WRITING_IMAGE_OUTPUTS = frozenset({"base64", "url"})
+
+
+def _image_output_writes_locally(image_output: Any) -> bool:
+    """Whether *image_output* (``params.image_output``, as written —
+    absent, a literal, or a dynamic reference) could write a file: every
+    value but a literal ``base64``/``url`` does, including the unset
+    default (``path``) and anything not statically known (a ``{from:
+    ...}`` reference or a template). The match is exact, not
+    case-folded: the executor below also compares ``image_output``
+    exactly, so ``BASE64`` writes a file there too."""
+    return not (isinstance(image_output, str) and image_output in _NON_WRITING_IMAGE_OUTPUTS)
+
+
+def static_param_errors(params: dict[str, Any], *, trusted: bool) -> list[str]:
+    """Problems ``cof check`` can see in a ``comfyui`` effect's params
+    (#604): only a trusted document may save an image locally, and
+    ``image_output`` defaults to doing exactly that."""
+    if trusted:
+        return []
+    errors: list[str] = []
+    if "image_dir" in params:
+        errors.append(f"params.image_dir: {_LIMITED_IMAGE_OUTPUT}")
+    if _image_output_writes_locally(params.get("image_output")):
+        errors.append(f"params.image_output: {_LIMITED_IMAGE_OUTPUT}")
+    return errors
+
+
+def reject_limited_image_output(params: dict[str, Any]) -> None:
+    """A limited document's ``comfyui`` effect never saves an image
+    locally, whatever the fully rendered ``image_output``/``image_dir``
+    (``params_json``, or a profile that switched the provider to
+    ``comfyui``); checked at dispatch."""
+    if "image_dir" in params:
+        raise ValueError(f"ComfyUIPlugin: params['image_dir']: {_LIMITED_IMAGE_OUTPUT}.")
+    if _image_output_writes_locally(params.get("image_output")):
+        raise ValueError(f"ComfyUIPlugin: params['image_output']: {_LIMITED_IMAGE_OUTPUT}.")
 
 
 @dataclass(frozen=True)

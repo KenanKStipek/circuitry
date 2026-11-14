@@ -175,7 +175,7 @@ fn http_error_excerpt_cases_match_circuitry() {
     for case in corpus["http_error_excerpt_cases"].as_array().unwrap() {
         let body = case["body"].as_str().unwrap();
         let expected = case["expected"].as_str().unwrap();
-        let actual = electricity_tools::http::http_error_excerpt(body, 500);
+        let actual = electricity_tools::http::http_error_excerpt(body, 500, None);
         assert_eq!(actual, expected, "case: {case:?}");
     }
 }

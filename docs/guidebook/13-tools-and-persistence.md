@@ -171,6 +171,8 @@ Two are gated on purpose. `shell` runs a single binary from an allowlist that is
 
 `prime.logo.value` is then `{path, bytes, sha256, content_type, status}`, and the body itself is in the file and nowhere else: not in state, not in events, not in an error. The path is relative to the run's working directory, or to a `within:` directory, and must stay inside it once symlinks are resolved; an existing file is replaced only with `overwrite: true`, and `max_bytes` (100 MiB by default) stops a runaway download. Every path problem fails the effect before the request is sent, a failure leaves no partial file, and a non-2xx response writes nothing. Only a document you run by path may save a file. [The reference](../orchestration-reference.md#saving-a-response-body-to-a-file-https-save_to) has every rule.
 
+`comfyui` and `s3` are two more `network`-tagged providers with a param that saves a file the same unguarded way `save_to` would have (#604): `comfyui`'s `image_output` defaults to `path`, which writes the generated image to `image_dir`, and `s3`'s `mode: get` writes the object to `path` when one is given. Only a document run by path may use either that way; a limited document's `comfyui` effect must set `image_output: base64` or `image_output: url`, and its `s3` effect must omit `path` under `mode: get`.
+
 ### Delegating to a coding agent
 
 A `prompt` is one model call. Some work needs an agent: read the code, edit it, run the tests, read the failure, try again — for minutes, sometimes hours, in a working directory. The `agent` provider runs one such session of pi or Claude Code as a tool effect, through the CLI's own login:

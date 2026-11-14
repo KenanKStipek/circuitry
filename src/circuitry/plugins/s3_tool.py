@@ -25,7 +25,45 @@ from pathlib import Path
 from typing import Any
 
 from ..preflight import CheckResult
-from .base import ToolResult
+from .base import LIMITED_WRITE_FIX, ToolResult
+
+#: Why a limited document may never use ``s3``'s ``get`` mode with a
+#: ``path`` to write locally (#604): the same gap `http`'s `save_to`
+#: closed (#602), under `s3`'s `network` capability tag alone.
+_LIMITED_GET_PATH = (
+    "only a document run by path may download an s3 object to a local file "
+    "(a limited document, a library entry or a generated plan cannot)" + LIMITED_WRITE_FIX
+)
+
+
+def _get_mode_writes_locally(params: dict[str, Any]) -> bool:
+    """Whether *params* (as rendered) is an ``s3`` ``get`` that names a
+    local ``path`` to write the object's body to. ``mode`` defaults to
+    ``list``, which never writes, so only a literal ``get`` counts."""
+    mode = str(params.get("mode") or "list").strip().lower()
+    return mode == "get" and "path" in params
+
+
+def static_param_errors(params: dict[str, Any], *, trusted: bool) -> list[str]:
+    """Problems ``cof check`` can see in an ``s3`` effect's params (#604):
+    only a trusted document may use ``mode: get`` with ``path`` to save an
+    object locally. A dynamic ``mode`` (a template or ``{from: ...}``) is
+    not statically known, so this only catches the literal case —
+    :func:`reject_limited_get_path` is the dispatch-time gate that always
+    sees the actual, rendered value."""
+    if trusted:
+        return []
+    if _get_mode_writes_locally(params):
+        return [f"params.path: {_LIMITED_GET_PATH}"]
+    return []
+
+
+def reject_limited_get_path(params: dict[str, Any]) -> None:
+    """A limited document's ``s3`` effect never saves an object locally,
+    whatever the fully rendered ``mode``/``path`` (``params_json``, or a
+    profile that switched the provider to ``s3``); checked at dispatch."""
+    if _get_mode_writes_locally(params):
+        raise ValueError(f"S3ToolPlugin: params['path']: {_LIMITED_GET_PATH}.")
 
 
 def _client(timeout_seconds: int, region: str | None = None) -> Any:

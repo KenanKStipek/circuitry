@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-11-14T11:30:16.646Z","ev":"run_start","run_id":"9323be26-2216-48ac-81c8-2d900511641a","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":41087}
+{"v":1,"seq":1,"ts":"2026-11-14T11:30:16.648Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-14T11:30:16.648Z","ev":"start","id":1,"path":"prime.child"}
+{"v":1,"seq":3,"ts":"2026-11-14T11:30:16.649Z","ev":"start","id":2,"path":"prime.child.hello"}
+{"v":1,"seq":4,"ts":"2026-11-14T11:30:16.650Z","ev":"end","id":2,"path":"prime.child.hello","ok":false,"ms":0,"error":"secret 'api': environment variable 'CONFORMANCE_UNSET_600' is not set."}
+{"v":1,"seq":5,"ts":"2026-11-14T11:30:16.650Z","ev":"end","id":1,"path":"prime.child","ok":false,"ms":2,"error":"prime.hello: secret 'api': environment variable 'CONFORMANCE_UNSET_600' is not set."}
+{"v":1,"seq":6,"ts":"2026-11-14T11:30:16.650Z","ev":"start","id":3,"path":"prime.after"}
+{"v":1,"seq":7,"ts":"2026-11-14T11:30:16.650Z","ev":"end","id":3,"path":"prime.after","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-11-14T11:30:16.650Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":9,"ts":"2026-11-14T11:30:16.650Z","ev":"run_end","ok":true}
