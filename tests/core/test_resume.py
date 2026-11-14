@@ -782,6 +782,85 @@ effects:
     assert result.state["prime"]["plan_it"]["meta"]["completed_at"]
 
 
+def test_resume_reruns_a_failed_reflector_and_clears_its_old_error(
+    tmp_path: Path,
+) -> None:
+    """issue #585 follow-up: a reflector that failed on a prior attempt
+    and then succeeds on resume reads as finished -- ``meta.error`` is
+    cleared at the start of this run, not left over from the attempt
+    that failed, which `effect_completed_ok` would otherwise keep
+    reading as a failure on every later resume even after a run that
+    actually succeeded.
+    """
+    orch = _write(
+        tmp_path,
+        "reflector_resume_clears_error.yml",
+        """
+effects:
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose"
+""".lstrip(),
+    )
+
+    class _StopReflectorAdapter:
+        name = "stop-reflector"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            self.calls.append(prompt)
+            return GenerateResult(text="done: true", raw={})
+
+    adapter = _StopReflectorAdapter()
+    # A prior attempt that failed: completed_at *and* error both set --
+    # exactly what `reflector.py::ReflectorRuntime.execute`'s own
+    # failure path writes, left over from before this issue's fix.
+    state: dict[str, Any] = {
+        "prime": {
+            "plan_it": {
+                "value": False,
+                "meta": {
+                    "iterations": [{"i": 0, "error": "boom", "stop": False}],
+                    "completed_at": "t",
+                    "error": "boom",
+                },
+            },
+        }
+    }
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=state,
+            resume=True,
+        )
+    )
+    assert result.ok is True, result.error
+    # `effect_completed_ok` required a rerun (meta.error was truthy) --
+    # one fresh planning call.
+    assert len(adapter.calls) == 1
+    plan_it = result.state["prime"]["plan_it"]
+    assert plan_it["value"] is True
+    assert not plan_it["meta"].get("error")
+    assert plan_it["meta"]["completed_at"]
+    from circuitry.core.resume import effect_completed_ok
+
+    assert effect_completed_ok(plan_it) is True
+
+
 def test_resume_reruns_a_finished_use_whose_resolved_inputs_changed(
     tmp_path: Path,
 ) -> None:

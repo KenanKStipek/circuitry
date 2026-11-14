@@ -26,9 +26,10 @@
 //! `value`/`meta`/`generated_key` are every one `setdefault`-shaped: a
 //! reused node (an unnamed loop's later pass, a reflector inside an
 //! unnamed `if` inside a loop) keeps its own earlier content, so
-//! `meta.iterations` keeps growing across passes and a stale
-//! `meta.error` from an earlier failed pass survives a later successful
-//! one. Success leaves `meta` as `{"iterations": [...], "completed_at":
+//! `meta.iterations` keeps growing across passes; `meta.error` is
+//! cleared at the top of every run (below), so a stale one from an
+//! earlier failed pass never survives a later successful one (#585).
+//! Success leaves `meta` as `{"iterations": [...], "completed_at":
 //! ...}` -- `completed_at` set like any other effect's (#585), so
 //! `--resume` skips a finished reflector whole; never `created_at`,
 //! which only the actual run of a generated plan writes.
@@ -92,6 +93,12 @@ pub(crate) async fn execute_reflector(
     store
         .ensure_dict(&node, key(&reflector.generated_key))
         .map_err(store_err)?;
+    // A rerun (resumed after an earlier failed attempt, or any other
+    // reason this reflector runs again) starts with a clean slate --
+    // `effect_completed_ok` cares about *this* attempt's own outcome,
+    // not a stale `meta.error` a prior one left behind (`core/
+    // reflector.py::ReflectorRuntime.execute`'s own matching clear).
+    store.set_leaf(&meta_node, key("error"), Value::None);
 
     let effect_path = frame.effect_path(&op.path);
     let instance = observer.effect_start(&effect_path);

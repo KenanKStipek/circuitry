@@ -112,6 +112,17 @@ fn remove(state: &mut Value, parent_path: &str, child_key: &str) {
     dict.shift_remove(&key(child_key));
 }
 
+/// Inserts (or overwrites) *child_key* under *parent_path*, unlike
+/// `set` above which requires the full dotted path to already exist --
+/// for a key a saved state may never have written at all (an effect
+/// whose own node has no `meta.error` key yet because it never failed).
+fn insert(state: &mut Value, parent_path: &str, child_key: &str, value: Value) {
+    let dict = at_mut(state, parent_path)
+        .as_dict_mut()
+        .expect("parent is a dict");
+    dict.insert(key(child_key), value);
+}
+
 fn write_state(dir: &Path, name: &str, state: &Value) -> PathBuf {
     let path = dir.join(name);
     electricity::out::write_out(&path, state, true).unwrap();
@@ -1061,6 +1072,68 @@ async fn a_finished_reflector_is_skipped_on_resume() {
         resumed_after, saved_after,
         "and the chain step after it is skipped too"
     );
+}
+
+#[tokio::test]
+async fn a_reflector_that_failed_then_succeeds_on_resume_clears_its_old_error() {
+    // issue #585 follow-up: `meta.error` is cleared at the start of
+    // every reflector run (`exec/reflector.rs`'s own matching clear),
+    // so a reflector that failed on a prior attempt and then succeeds
+    // on resume is read as finished -- not kept failing forever by a
+    // stale `meta.error` `effect_completed_ok` would otherwise still
+    // see on every later resume.
+    let dir = temp_dir("reflector-resume-clears-error");
+    let replies_path = write(
+        &dir,
+        "scripted-replies.yaml",
+        "prime.plan_it.inner.propose_steps:\n  - text: |\n      done: true\n",
+    );
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(
+            r#"{{"runtime": {{"adapters": {{"scripted": {{"replies_file": "{}"}}}}}}}}"#,
+            replies_path.display()
+        ),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: scripted\nmodel: test\neffects:\n  - type: reflector\n    name: plan_it\n    \
+         prime_template: \"Plan it.\"\n    effects:\n      - type: prompt\n        \
+         name: propose_steps\n        template: \"propose\"\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    // Simulate a prior attempt that failed: completed_at *and* error
+    // both set, exactly what the failure path writes, left over from
+    // before this issue's fix.
+    insert(
+        &mut state,
+        "prime.plan_it.meta",
+        "error",
+        Value::Str("boom".to_string()),
+    );
+    set(&mut state, "prime.plan_it.value", Value::Bool(false));
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let resumed_meta = at_mut(&mut resumed, "prime.plan_it.meta").clone();
+    assert_eq!(
+        child(&resumed_meta, "error"),
+        Value::None,
+        "the stale error is cleared, not carried over from the failed attempt"
+    );
+    assert_ne!(child(&resumed_meta, "completed_at"), Value::None);
+    assert_eq!(child(at_mut(&mut resumed, "prime.plan_it"), "value"), Value::Bool(true));
 }
 
 #[tokio::test]
