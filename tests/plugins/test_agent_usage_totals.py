@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 import yaml
-from agent_cli_test_support import pi_events, write_fake_cli
+from agent_cli_test_support import claude_result, pi_events, write_fake_cli
 
 from circuitry.adapters.base import GenerateResult
 from circuitry.cli.config import CircuitryConfig
@@ -204,6 +204,60 @@ def test_run_totals_gain_cached_tokens_only_when_an_agent_call_reports_them(
     inner_meta = result.state["prime"]["agent_use"]["inner_agent"]["meta"]
     assert inner_meta["tokens_cached_in"] == 100
     assert inner_meta["tokens_cache_write"] == 20
+
+
+def test_run_totals_include_the_claude_engines_own_cache_tokens(
+    tmp_path: Path, workdir: Path
+) -> None:
+    """The same accounting, with the agent tool's other engine: a claude
+    CLI result's usage carries cache_read_input_tokens/
+    cache_creation_input_tokens, which the agent tool reads the same way
+    the live tracker already does (#636/#674)."""
+    fake_claude = write_fake_cli(tmp_path, "claude", stdout=claude_result())
+    orch_path = tmp_path / "orch.yml"
+    orch_path.write_text(
+        yaml.safe_dump(
+            {
+                "effects": [
+                    {
+                        **_agent_tool("agent_a", cwd=workdir),
+                        "params": {
+                            "prompt": "go",
+                            "cwd": str(workdir),
+                            "engine": "claude_code",
+                        },
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=_UnusedAdapter(),
+            config=CircuitryConfig(
+                default_adapter="fake",
+                default_model="test",
+                runtime={"plugins": {"agent": {"claude_code": {"binary": str(fake_claude)}}}},
+            ),
+            skip_preflight=True,
+        )
+    )
+    assert result.ok, result.error
+
+    meta = result.state["prime"]["agent_a"]["meta"]
+    assert meta["tokens_cached_in"] == 1000
+    assert meta["tokens_cache_write"] == 100
+    totals = result.state["runtime"]["last_run"]["totals"]
+    assert totals["tokens_cached_in"] == 1000
+    assert totals["tokens_cache_write"] == 100
 
 
 def test_dynamic_tree_token_sum_includes_an_agent_effect_in_a_chain_a_loop_and_a_use_child(
