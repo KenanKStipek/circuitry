@@ -65,8 +65,8 @@ jobs:
           # cloud SDKs) are NOT installed — those tests inject fakes
           # via sys.modules. The constraints file pins every library the
           # conformance suite compares against (electricity/scripts/
-          # generator-constraints.txt), so this matrix's own python-version
-          # axis can never turn a case red by itself.
+          # generator-constraints.txt), so every matrix leg resolves the
+          # same reference-library versions.
           pip install -e ".[tools]" -c electricity/scripts/generator-constraints.txt
           pip install -r requirements-dev.txt
 

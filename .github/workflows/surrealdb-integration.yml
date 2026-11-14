@@ -37,7 +37,7 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e ".[tools,surrealdb]"
+          pip install -e ".[tools,surrealdb]" -c electricity/scripts/generator-constraints.txt
           pip install -r requirements-dev.txt
           pip install "${{ matrix.surrealdb-sdk }}"
 
