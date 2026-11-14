@@ -29,7 +29,7 @@ Top-level fields of an orchestration YAML file:
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic. `chain` or `tree` |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
-| `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. A signal that arrives while one of these is itself running does not cut it short — see [Resuming a Run](#resuming-a-run-cof-run---resume) below. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
+| `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. The first signal that arrives while one of these is itself running does not cut it short — see [Resuming a Run](#resuming-a-run-cof-run---resume) below. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
 | `prompts` | object | no | — | Declared prompts — named text any template in the document can splice in with `{{> name}}`. See [Prompt composition](#prompt-composition) |
 | `label` | string | no | — | Mustache template for this run's label, rendered once when the run starts, against `{{input.*}}` only — see [Labelling a Run](#labelling-a-run) |
 

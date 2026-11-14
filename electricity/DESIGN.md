@@ -917,7 +917,12 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
   running leaf, which this list's first bullet still does for a leaf outside `finally:`);
   electricity already behaved this way without a dedicated fix of its own, since its cooperative
   `CancellationToken` is suppressed for the whole `TryFinally` region regardless of what is
-  running inside it, and its conformance cases for this now come from #796's own tests.
+  running inside it; #796's own tests for this are cross-engine CLI parity tests, not
+  conformance cases. A genuine *second* signal still ends a `finally:` step's own tracked
+  process, same as any other running leaf -- electricity's own version of this (its
+  `TryFinally` region's `finally:` runs against a token fully disconnected from the real one,
+  so nothing on it would otherwise ever see *any* signal) keeps a separate, process-wide
+  registry of processes started this way for exactly that second-signal kill.
 - the state an interrupted run leaves is **otherwise unchanged**: an interrupted leaf's or
   branch's result is not recorded and not merged, whether it was already running or never
   started — an interrupted parallel/tree step is not merged, `--resume` reruns it like any other
@@ -929,9 +934,8 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
   already-finished-branch case for electricity's fix to carve out specially: the fix changes which
   branches ever *run* (none that hadn't started when the signal arrived), not which already-done
   ones get merged (none, on either engine, before or after the fix).
-- **an interrupted `dynamic`, named `loop` or `use` must not look finished to `--resume`; an
-  `if` already doesn't.** A conditional catches only `except Exception`, so a real interrupt
-  passes straight through it untouched, and `--resume` reruns it. A named `dynamic` catches the
+- **an interrupted `dynamic`, named `loop`, named `if` or `use` must not look finished to
+  `--resume`.** A named `dynamic` catches the
   interrupt (`except BaseException`) so it can still run its own `finally:` and record the
   failure: a named `dynamic` still on the call stack when the signal arrives gets its own
   `meta.completed_at` set, same as today, but its own `meta.error` must be set to the *same*
@@ -950,7 +954,13 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
   grafts the child's record and, since #796, writes the same literal interrupt text and
   `completed_at` too — `--resume` still reruns it regardless, since the error it wrote stays
   non-empty (electricity's `exec/use_.rs` pairs the `use`'s own `start`/`end` and writes the same
-  two fields on `VmError::Cancelled`, instead of leaving that `start` unanswered).
+  two fields on `VmError::Cancelled`, instead of leaving that `start` unanswered). A named `if`
+  caught only `except Exception` before #796, so a real interrupt passed straight through it
+  untouched, writing neither `meta.error` nor `meta.completed_at` -- `--resume` already reran
+  it (nothing to look finished), but its own `end` event read `ok: true`. Since #796 a named
+  `if` also catches the interrupt and writes the same two fields `dynamic`/`use` do
+  (electricity: `exec/conditional.rs` writes the same on `VmError::Cancelled`, instead of
+  returning before any write at all).
 - **a second SIGINT/SIGTERM received while this stop-and-unwind sequence is still in progress
   ends the run at once** (no `--out`, no traceback), with that second signal's own exit code
   (`130`/`143`), as in Circuitry — cleanup does not get a second grace period;
