@@ -313,6 +313,23 @@ def test_static_shell_allowed_commands_collects_literal_shell_effects() -> None:
     assert static_shell_allowed_commands(orch) == frozenset({"node", "jq"})
 
 
+def test_static_shell_allowed_commands_never_counts_a_templated_entry() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "a",
+                "provider": "shell",
+                "params": {
+                    "command": "node",
+                    "allowed_commands": ["node", "{{prime.whatever.value}}"],
+                },
+            }
+        ]
+    }
+    assert static_shell_allowed_commands(orch) == frozenset({"node"})
+
+
 def test_resolved_shell_allowlist_unions_default_and_document_literal() -> None:
     allowed = resolved_shell_allowlist(frozenset({"node"}), host_pin=None)
     assert "node" in allowed

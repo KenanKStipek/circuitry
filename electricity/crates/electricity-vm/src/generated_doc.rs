@@ -383,7 +383,9 @@ fn walk_shell_allowed_commands(effects: Option<&Value>, commands: &mut BTreeSet<
                         if let Some(Value::List(allowed)) = get(params, "allowed_commands") {
                             for c in allowed {
                                 if let Some(s) = c.as_str() {
-                                    commands.insert(s.to_string());
+                                    if !s.contains("{{") {
+                                        commands.insert(s.to_string());
+                                    }
                                 }
                             }
                         }
@@ -1172,6 +1174,16 @@ mod tests {
             providers,
             BTreeSet::from(["shell".to_string(), "docker".to_string()])
         );
+    }
+
+    #[test]
+    fn static_shell_allowed_commands_never_counts_a_templated_entry() {
+        let orch = parse(
+            "effects:\n  - type: tool\n    name: a\n    provider: shell\n    params:\n      \
+             command: node\n      allowed_commands: [node, '{{prime.whatever.value}}']\n",
+        );
+        let commands = static_shell_allowed_commands(&orch);
+        assert_eq!(commands, BTreeSet::from(["node".to_string()]));
     }
 
     #[test]

@@ -235,7 +235,9 @@ def _walk_shell_allowed_commands(effects: Any, commands: set[str]) -> None:
             if prov == "shell" and isinstance(params, dict):
                 allowed = params.get("allowed_commands")
                 if isinstance(allowed, list):
-                    commands.update(c for c in allowed if isinstance(c, str))
+                    commands.update(
+                        c for c in allowed if isinstance(c, str) and "{{" not in c
+                    )
         elif etype == "dynamic":
             _walk_shell_allowed_commands(
                 effect.get("effects") or effect.get("steps"), commands
@@ -268,6 +270,11 @@ def static_shell_allowed_commands(orch: Any) -> frozenset[str]:
     text, recursing the same way :func:`static_tool_providers` does. A
     generated ``shell`` effect's own ``allowed_commands`` is never collected
     here — only an *enclosing*, non-generated document's own text counts.
+    An entry that still carries a Mustache tag never grants anything either
+    (#772 rule 2): it isn't a literal command name the author wrote, even
+    before :func:`circuitry.core.tool._reject_templated_security_params`
+    would refuse it outright once this document's own ``shell`` effect
+    dispatches.
     """
     commands: set[str] = set()
     if isinstance(orch, dict):
