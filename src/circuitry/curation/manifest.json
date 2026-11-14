@@ -359,7 +359,7 @@
         "panel_count": {"type": "number", "required": false, "description": "Number of panels (2–4, 0 = random)."},
         "genre": {"type": "string", "required": false, "description": "Genre (defaults to dark comedy)."}
       },
-      "example": "cof run recipes/comic_strip -e prompt='a cat discovers gravity'"
+      "example": "cof eject recipes/comic_strip && cof run comic_strip.yml -e prompt='a cat discovers gravity'"
     },
     {
       "name": "recipes/research_brief",

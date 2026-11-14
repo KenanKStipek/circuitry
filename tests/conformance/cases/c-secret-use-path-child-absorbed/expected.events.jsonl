@@ -1,0 +1,8 @@
+{"v":1,"seq":0,"ts":"2026-11-14T09:45:11.298Z","ev":"run_start","run_id":"75a176fe-78b9-4313-8e5f-59ffe25f0930","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":67550}
+{"v":1,"seq":1,"ts":"2026-11-14T09:45:11.300Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-14T09:45:11.300Z","ev":"start","id":1,"path":"prime.child"}
+{"v":1,"seq":3,"ts":"2026-11-14T09:45:11.302Z","ev":"end","id":1,"path":"prime.child","ok":false,"ms":2,"error":"runtime.plugins.awk.env.TOKEN: a secret reference 'secret' must name a runtime.secrets entry (letters, digits, '_' and '-', not starting with a digit or '-'), got 'bad name!'."}
+{"v":1,"seq":4,"ts":"2026-11-14T09:45:11.302Z","ev":"start","id":2,"path":"prime.after"}
+{"v":1,"seq":5,"ts":"2026-11-14T09:45:11.302Z","ev":"end","id":2,"path":"prime.after","ok":true,"ms":0}
+{"v":1,"seq":6,"ts":"2026-11-14T09:45:11.302Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":7,"ts":"2026-11-14T09:45:11.302Z","ev":"run_end","ok":true}

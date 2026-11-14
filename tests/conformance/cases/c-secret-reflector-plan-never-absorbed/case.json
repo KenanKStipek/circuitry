@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #600 item 3 (cof and electricity agree: a reflector-generated plan's secret reference is never absorbed by on_error)",
+  "description": "A reflector-generated plan names a secret in an http header, untrusted like any generated plan. The reflector's own loop always re-raises a generated child's failure regardless of on_error -- core/reflector.py::ReflectorRuntime.execute never reads an on_error field, which ReflectorDefinition doesn't even carry -- so on_error: continue on the reflector effect never absorbs it, on either engine; the whole run fails with the generated child's own secret-placement text.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

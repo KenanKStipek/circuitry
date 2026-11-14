@@ -1625,9 +1625,28 @@ def _compile_tool(
                 f"Tool effect '{name}' (http) at '{effect_path}': " + "; ".join(problems)
             )
 
+    # A network-tagged tool that can also write a local file (#604): only
+    # a trusted document may, the same rule `http`'s `save_to` uses (#602).
+    if provider.strip().lower() == "comfyui":
+        from ..plugins.comfyui import static_param_errors as comfyui_param_errors
+
+        problems = comfyui_param_errors(params, trusted=_current_document_trusted())
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (comfyui) at '{effect_path}': " + "; ".join(problems)
+            )
+    if provider.strip().lower() == "s3":
+        from ..plugins.s3_tool import static_param_errors as s3_param_errors
+
+        problems = s3_param_errors(params, trusted=_current_document_trusted())
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (s3) at '{effect_path}': " + "; ".join(problems)
+            )
+
     # The document's trust, whatever the provider: a profile may switch a
-    # tool to `http` after this, and a limited document's `http` effect
-    # never saves a file (#602).
+    # tool to `http`/`comfyui`/`s3` after this, and a limited document's
+    # effect never saves a file that way (#602, #604).
     limited = not _current_document_trusted()
     confine_to: str | None = None
     if provider.strip().lower() == "systemone":

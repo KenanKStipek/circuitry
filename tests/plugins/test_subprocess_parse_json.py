@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 import stat
+import subprocess
 import sys
 import textwrap
 from pathlib import Path
@@ -13,6 +16,16 @@ from circuitry.core.store import Store
 from circuitry.core.tool import ToolDefinition, ToolRuntime
 from circuitry.plugins._subprocess import GenericSubprocessTool
 from circuitry.plugins.shell import ShellPlugin
+
+_CREDENTIAL_ENV_VARS = ("OPENAI_API_KEY", "CYBERDINER_TOKEN", "CYBERDINER_EXPO_URL")
+
+
+def _assert_no_window(text: str, secret: str, window: int = 6) -> None:
+    """No substring of *secret* at least *window* characters long survives
+    in *text*."""
+    for start in range(max(len(secret) - window + 1, 0)):
+        fragment = secret[start : start + window]
+        assert fragment not in text, f"{fragment!r} (secret[{start}:{start + window}]) found in text"
 
 
 def _script(tmp_path: Path, stdout: str, *, exit_code: int = 0) -> str:
@@ -97,6 +110,31 @@ def test_empty_stdout_is_an_error(tmp_path: Path, stdout: str) -> None:
         tool.execute(params={"args": [], "parse": "json"})
 
 
+def test_scrub_secrets_runs_on_the_whole_stdout_before_the_excerpt_is_cut(
+    tmp_path: Path,
+) -> None:
+    """#600 item 1: a secret straddling the 200-character cut leaves no
+    fragment once ``scrub_secrets`` is given -- scrubbing the excerpt
+    alone, after the cut, could never find the whole value to replace."""
+    secret = "sk-straddle-600"
+    stdout = "x" * 190 + secret + "more"
+    tool = _generic(_script(tmp_path, stdout))
+    with pytest.raises(ValueError) as excinfo:
+        tool.execute(
+            params={"args": [], "parse": "json"},
+            scrub_secrets=lambda text: text.replace(secret, "[secret:x]"),
+        )
+    message = str(excinfo.value)
+    assert secret[:10] not in message
+    assert "[secret:x]" in message
+
+
+def test_without_scrub_secrets_the_excerpt_is_unaffected(tmp_path: Path) -> None:
+    tool = _generic(_script(tmp_path, "not json"))
+    with pytest.raises(ValueError, match="not json"):
+        tool.execute(params={"args": [], "parse": "json"})
+
+
 def test_unknown_parse_mode_is_rejected_before_the_process_runs(
     tmp_path: Path,
 ) -> None:
@@ -169,6 +207,20 @@ def test_shell_allowlist_is_checked_before_parse_mode() -> None:
         )
 
 
+def test_shell_scrub_secrets_runs_on_the_whole_stdout_before_the_excerpt_is_cut() -> None:
+    """#600 item 1, for `shell` too."""
+    secret = "sk-straddle-600-shell"
+    stdout = "x" * 190 + secret
+    with pytest.raises(ValueError) as excinfo:
+        ShellPlugin().execute(
+            params={"command": "echo", "args": ["-n", stdout], "parse": "json"},
+            scrub_secrets=lambda text: text.replace(secret, "[secret:x]"),
+        )
+    message = str(excinfo.value)
+    assert secret[:10] not in message
+    assert "[secret:x]" in message
+
+
 def test_tool_effect_value_is_parsed_and_raw_stdout_is_on_meta() -> None:
     defn = ToolDefinition(
         name="report",
@@ -199,3 +251,85 @@ def test_tool_effect_invalid_json_fails_the_effect() -> None:
     assert node["value"] is None
     assert "not valid JSON" in node["meta"]["error"]
     assert "plain text" in node["meta"]["error"]
+
+
+def test_e2e_cof_run_subprocess_secret_straddling_parse_json_cut_never_leaks(
+    tmp_path: Path,
+) -> None:
+    """#600 item 1, end to end: a real `cof run` subprocess, a fake secret
+    resolved from a temp HOME's own environment (never the real Keychain),
+    and every artifact `cof run` can produce -- --out, --events,
+    --live-state, stdout and stderr -- checked for the secret and every
+    six-character window of it."""
+    secret = "tok3n-e2e-straddle-600-xyz"
+    fake_awk = tmp_path / "fake-awk"
+    fake_awk.write_text(
+        f"""#!{sys.executable}
+import os
+print("x" * 190 + os.environ["FAKE_SECRET_600"] + "tail", end="")
+""",
+        encoding="utf-8",
+    )
+    fake_awk.chmod(fake_awk.stat().st_mode | stat.S_IXUSR)
+
+    doc = tmp_path / "doc.yml"
+    doc.write_text(
+        """
+effects:
+  - type: tool
+    name: run_it
+    provider: awk
+    params: {args: ["{print}"], parse: json}
+""",
+        encoding="utf-8",
+    )
+    config = tmp_path / "config.json"
+    config.write_text(
+        json.dumps(
+            {
+                "runtime": {
+                    "secrets": {"api": {"env": "FAKE_SECRET_600"}},
+                    "plugins": {
+                        "awk": {"binary": str(fake_awk), "env": {"TOK": {"secret": "api"}}}
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    home = tmp_path / "home"
+    home.mkdir()
+    out = tmp_path / "out.json"
+    events = tmp_path / "events.jsonl"
+    live = tmp_path / "live.json"
+
+    env = {key: value for key, value in os.environ.items() if key not in _CREDENTIAL_ENV_VARS}
+    env.update(HOME=str(home), FAKE_SECRET_600=secret, COLUMNS="200")
+    proc = subprocess.run(
+        [
+            sys.executable, "-m", "circuitry.cli.app", "run", str(doc),
+            "--config", str(config),
+            "--out", str(out),
+            "--events", str(events),
+            "--live-state", str(live),
+            "--skip-preflight",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=tmp_path,
+        timeout=120,
+        check=False,
+    )
+    assert proc.returncode != 0, proc.stdout + proc.stderr
+
+    artifacts = [proc.stdout, proc.stderr]
+    artifacts.extend(path.read_text() for path in (out, events, live) if path.exists())
+    # The placeholder itself can be cut short by the 200-character excerpt
+    # limit the same way the secret it replaces was -- what matters is
+    # that no part of the raw secret survives, not that the whole
+    # placeholder does.
+    assert any("[secret:ap" in text for text in artifacts)
+    for text in artifacts:
+        assert secret not in text
+        _assert_no_window(text, secret)

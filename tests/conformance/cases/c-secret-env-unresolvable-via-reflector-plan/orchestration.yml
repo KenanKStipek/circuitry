@@ -1,0 +1,20 @@
+name: c-secret-env-unresolvable-via-reflector-plan
+adapter: scripted
+model: test
+runtime:
+  secrets:
+    api:
+      env: CONFORMANCE_UNSET_600
+  plugins:
+    awk:
+      env:
+        TOKEN: {secret: api}
+effects:
+  - type: reflector
+    name: plan_it
+    on_error: continue
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

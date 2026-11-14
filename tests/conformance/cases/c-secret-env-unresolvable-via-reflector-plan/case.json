@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #600 item 3 (cof and electricity agree: an unresolvable host-env secret reached through a reflector-generated plan fails the run, never absorbed)",
+  "description": "`runtime.plugins.awk.env.TOKEN: {secret: api}` and `runtime.secrets.api: {env: <unset>}` live in the root document, which compiles cleanly. The reflector's generated plan runs an `awk` tool that inherits that config and only discovers the variable is unset when it dispatches -- an ordinary tool failure, but the reflector's own loop always re-raises a generated child's failure regardless of on_error (core/reflector.py::ReflectorRuntime.execute never reads one), so on_error: continue on the reflector effect never absorbs it, on either engine; the whole run fails with the same message on both.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

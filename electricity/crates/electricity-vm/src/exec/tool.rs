@@ -1553,10 +1553,15 @@ pub async fn execute_tool<R: ParamsCtx>(
                                 // excerpt is scrubbed before it is cut, so
                                 // no part of a secret survives the cut
                                 // (`plugins/http.py::HttpPlugin.execute`'s
-                                // own `scrub_secrets`).
+                                // own `scrub_secrets`). Issue #600 widens
+                                // this to every provider: a subprocess
+                                // tool's own `parse: json` error excerpt
+                                // needs the same scrub-before-cut, and
+                                // `SecretValues::scrub_str` is a cheap
+                                // clone-and-return when this dispatch
+                                // resolved no secret at all.
                                 let scrub_closure = |s: &str| dispatch_secrets.scrub_str(s);
-                                let scrub: Option<&dyn Fn(&str) -> String> =
-                                    if is_http { Some(&scrub_closure) } else { None };
+                                let scrub: Option<&dyn Fn(&str) -> String> = Some(&scrub_closure);
                                 let dispatch = tokio::select! {
                                     biased;
                                     result = async {

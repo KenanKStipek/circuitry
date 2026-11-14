@@ -506,7 +506,9 @@ class HttpPlugin:
             stderr = f"HTTP {status}: {exc.reason}"
             if policy is not None and policy.refused:
                 stderr = f"{stderr}: {_REFUSED_REDIRECT_NOTES[redirects]}"
-            excerpt = http_error_excerpt(scrub_secrets(text) if scrub_secrets else text)
+            excerpt = http_error_excerpt(
+                scrub_secrets(text) if scrub_secrets else text, scrub_secrets=scrub_secrets
+            )
             if excerpt:
                 stderr = f"{stderr}: {excerpt}"
         except urllib.error.URLError as exc:
