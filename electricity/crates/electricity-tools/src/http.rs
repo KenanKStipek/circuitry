@@ -2759,3 +2759,29 @@ mod headers_param_tests {
         assert!(coerce_headers_param(Some(&value)).is_err());
     }
 }
+
+#[cfg(test)]
+mod error_excerpt_scrub_tests {
+    use super::*;
+
+    #[test]
+    fn scrub_runs_before_the_character_cut_not_after() {
+        // Mirrors Python's test_http_error_excerpt_scrubs_a_message_crossing_the_character_cut
+        // (tests/plugins/test_base.py): a decoded `error` field long enough that the secret
+        // straddles `max_chars` must come out with no 6-character window of the secret left,
+        // which only holds if `scrub` runs on the whole field before the cut, not after.
+        let secret = "fake-tok3n-straddling-the-cut-xyz";
+        let message = format!("{}{}", "x".repeat(490), secret);
+        let body = format!(r#"{{"error": "{message}"}}"#);
+        let scrub: &dyn Fn(&str) -> String = &|s: &str| s.replace(secret, "[secret:api]");
+
+        let excerpt = http_error_excerpt(&body, ERROR_EXCERPT_MAX_CHARS, Some(scrub));
+
+        for start in 0..secret.len().saturating_sub(5) {
+            assert!(
+                !excerpt.contains(&secret[start..start + 6]),
+                "excerpt still contains a window of the secret: {excerpt:?}"
+            );
+        }
+    }
+}
