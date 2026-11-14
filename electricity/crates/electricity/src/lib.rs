@@ -38,6 +38,13 @@ pub use run::{RunRequest, RunResult, Signal};
 /// a cancelled run displaced must finish before the process exits).
 pub use electricity_tools::service::join_pending_teardowns;
 
+/// `electricity_tools::process::kill_every_cleanup_process` --
+/// re-exported the same way, so `electricity-cli`'s own signal-handling
+/// thread can kill a `finally:` step's own tracked process on a
+/// genuine *second* SIGINT/SIGTERM (#796) without its own direct
+/// dependency on `electricity-tools`.
+pub use electricity_tools::process::kill_every_cleanup_process;
+
 /// The crate's version, taken from the workspace's `Cargo.toml`.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 

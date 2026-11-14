@@ -682,7 +682,18 @@ class DynamicRuntime:
                 # exit code. Never true when the token was *already* set
                 # before `finally:` started (the body's own interruption,
                 # if any, is already `body_exc`).
-                if not was_set_before_finally and get_token().is_set():
+                # Never true either while an outer `finally:` is still the
+                # one running this one as one of its own cleanup steps
+                # (`in_cleanup()`): raising here would abandon that outer
+                # `finally:`'s own remaining steps the moment this nested
+                # one returns (#796). The outermost `cleanup()` scope's own
+                # exit raises the parked signal once every nested
+                # `finally:` is actually done.
+                if (
+                    not was_set_before_finally
+                    and get_token().is_set()
+                    and not get_token().in_cleanup()
+                ):
                     # No message, deliberately: `_error_text` stringifies
                     # this to `str(exc)` first, and a non-empty message
                     # here would read back as this dynamic's own

@@ -212,7 +212,14 @@ pub(crate) fn execute_dynamic<'a>(
         let was_set_before_finally = token.is_set();
         let finally_result = match finally {
             Some(Region::Block { ops, .. }) => {
-                let finally_token = CancellationToken::new();
+                // `new_cleanup_scope` (#796), not a plain `new()`: a
+                // process this `finally:` starts registers itself with
+                // `electricity_tools::process`'s own global cleanup-
+                // process list instead, so a genuine *second*
+                // SIGINT/SIGTERM still kills it before
+                // `std::process::exit` -- this disconnected token's own
+                // `is_set`/`cancelled` never sees any signal at all.
+                let finally_token = CancellationToken::new_cleanup_scope();
                 Some(
                     // `core/dynamic.py::_execute_chain`'s own
                     // `resume_active=False`: cleanup always reruns in

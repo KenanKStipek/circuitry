@@ -41,17 +41,21 @@ one branch).
 On `main`, every `finally_interrupt`/`second_signal` scenario fails on
 cof (`cleanup_one` is killed outright and `cleanup_two` never runs,
 unlike electricity's own already-correct behaviour), and every
-`body_interrupt` scenario fails on electricity (the container's own
-`start` is left unpaired, with no matching `end` event at all, unlike
-cof's own -- itself wrong in a different way before this change,
-ending `ok: true` instead of `ok: false`).
+`body_interrupt` scenario with a `use` in it (`use_child`, `tree_loop_use`)
+fails on electricity (the `use`'s own `start` is left unpaired, with no
+matching `end` event at all, unlike cof's own -- itself wrong in a
+different way before this change, ending `ok: true` instead of
+`ok: false`). `top_level`/`body_interrupt` has no `use` in it at all, so
+it already passes on both engines before this change -- a baseline.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -80,7 +84,17 @@ _VOLATILE_KEYS = frozenset({
 })
 
 ENGINES = ("cof", "electricity")
-SHAPES = ("top_level", "use_child", "tree_loop_use")
+#: Every container kind an interruption can pass through on its way from
+#: a leaf `tool` step to the root: the document root itself (`top_level`),
+#: a `use` (`use_child`), a named `dynamic` (`dynamic_use`), a named `if`
+#: branch (`if_branch_use`), a chain (sequential) named loop's one pass
+#: (`loop_pass_use`), a tree-flow named loop's one branch
+#: (`tree_loop_use`), and a `use` inside another `use`'s own child
+#: (`use_in_use`).
+SHAPES = (
+    "top_level", "use_child", "dynamic_use", "if_branch_use", "loop_pass_use",
+    "tree_loop_use", "use_in_use",
+)
 TIMINGS = ("body_interrupt", "finally_interrupt", "second_signal")
 
 #: Generous but bounded -- `finally_interrupt` waits out a real `sleep 5`
@@ -131,9 +145,13 @@ def _body_and_finally(timing: str, *, indent: str) -> str:
     else:
         assert timing == "second_signal"
         body_script = "touch started"
+        # `$$` is this `bash -c` process's own pid -- the test asserts it
+        # is dead after the run exits, proving the second signal's own
+        # `kill_cleanup_processes_too` actually reaches this step's
+        # process and not just `cleanup_two` never running (#796).
         cleanup_one_script = (
-            "touch cleanup_started; kill -TERM $PPID; sleep 1; "
-            "kill -TERM $PPID; exec sleep 30"
+            "echo $$ > cleanup_one.pid; touch cleanup_started; "
+            "kill -TERM $PPID; sleep 1; kill -TERM $PPID; exec sleep 30"
         )
     body = _shell_step("body", body_script, indent=indent)
     cleanup_one = _shell_step("cleanup_one", cleanup_one_script, indent=indent)
@@ -144,27 +162,71 @@ def _body_and_finally(timing: str, *, indent: str) -> str:
     )
 
 
+#: shape -> the orchestration.yml that wraps `child.yml` (which always
+#: holds *pair*, the body/`finally:` document root itself) -- every shape
+#: but `top_level` (no wrapper at all: *pair* **is** orchestration.yml)
+#: and `use_in_use` (two levels of `use`, handled separately below).
+_WRAPPER_ORCHESTRATIONS: dict[str, str] = {
+    "use_child": "effects:\n  - type: use\n    name: child\n    path: child.yml\n",
+    "tree_loop_use": (
+        "interface:\n  inputs:\n    items: {default: [0]}\n"
+        "effects:\n  - type: loop\n    name: lp\n    flow: tree\n"
+        "    each: {in: input.items, as: x}\n    body:\n"
+        "      - type: use\n        name: child\n        path: child.yml\n"
+    ),
+    "dynamic_use": (
+        "effects:\n  - type: dynamic\n    name: dyn\n    effects:\n"
+        "      - type: use\n        name: child\n        path: child.yml\n"
+    ),
+    "if_branch_use": (
+        "effects:\n  - type: if\n    name: gate\n"
+        '    if: {mode: cel, expr: "true"}\n    then:\n'
+        "      - type: use\n        name: child\n        path: child.yml\n"
+    ),
+    "loop_pass_use": (
+        "interface:\n  inputs:\n    items: {default: [0]}\n"
+        "effects:\n  - type: loop\n    name: lp\n"
+        "    each: {in: input.items, as: x}\n    body:\n"
+        "      - type: use\n        name: child\n        path: child.yml\n"
+    ),
+}
+
+
 def _write_case(shape: str, timing: str, case_dir: Path) -> None:
     case_dir.mkdir(parents=True)
     pair = _body_and_finally(timing, indent="  ")
     if shape == "top_level":
         (case_dir / "orchestration.yml").write_text(pair, encoding="utf-8")
-    elif shape == "use_child":
+    elif shape == "use_in_use":
         (case_dir / "orchestration.yml").write_text(
+            "effects:\n  - type: use\n    name: outer\n    path: outer_child.yml\n",
+            encoding="utf-8",
+        )
+        (case_dir / "outer_child.yml").write_text(
             "effects:\n  - type: use\n    name: child\n    path: child.yml\n",
             encoding="utf-8",
         )
         (case_dir / "child.yml").write_text(pair, encoding="utf-8")
     else:
-        assert shape == "tree_loop_use"
         (case_dir / "orchestration.yml").write_text(
-            "interface:\n  inputs:\n    items: {default: [0]}\n"
-            "effects:\n  - type: loop\n    name: lp\n    flow: tree\n"
-            "    each: {in: input.items, as: x}\n    body:\n"
-            "      - type: use\n        name: child\n        path: child.yml\n",
-            encoding="utf-8",
+            _WRAPPER_ORCHESTRATIONS[shape], encoding="utf-8"
         )
         (case_dir / "child.yml").write_text(pair, encoding="utf-8")
+
+
+def _assert_process_dead(pid: int, *, timeout: float, label: Any) -> None:
+    """Poll *pid* until `kill(pid, 0)` reports it gone, or fail after
+    *timeout* seconds -- a second signal's own `kill_cleanup_processes_too`
+    must actually reach a `finally:` step's own tracked process, not just
+    leave `cleanup_two` never running (#796)."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    pytest.fail(f"cleanup_one's own process (pid {pid}) is still alive: {label}")
 
 
 def _run(
@@ -226,25 +288,42 @@ def _effects_run(state: dict[str, Any]) -> int | None:
     return None
 
 
+#: shape -> the path prefix its own `child.yml` (holding the body/
+#: `finally:` pair) writes under, and every container between that and
+#: the root, inclusive -- none of them may end `ok: true` once the run
+#: itself was interrupted (#796's own parity rule).
+_SHAPE_CONTAINERS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "use_child": ("prime.child", ("prime.child", "prime")),
+    "dynamic_use": ("prime.dyn.child", ("prime.dyn.child", "prime.dyn", "prime")),
+    "if_branch_use": ("prime.gate.child", ("prime.gate.child", "prime.gate", "prime")),
+    "loop_pass_use": (
+        "prime.lp.iter_0.child",
+        ("prime.lp.iter_0.child", "prime.lp", "prime"),
+    ),
+    "tree_loop_use": (
+        "prime.lp.iter_0.child",
+        ("prime.lp.iter_0.child", "prime.lp", "prime"),
+    ),
+    "use_in_use": ("prime.outer.child", ("prime.outer.child", "prime.outer", "prime")),
+}
+
+
 def _leaf_path(shape: str, name: str) -> str:
     if shape == "top_level":
         return f"prime.{name}"
-    if shape == "use_child":
-        return f"prime.child.{name}"
-    assert shape == "tree_loop_use"
-    return f"prime.lp.iter_0.child.{name}"
+    prefix, _ = _SHAPE_CONTAINERS[shape]
+    return f"{prefix}.{name}"
 
 
 def _container_paths(shape: str) -> list[str]:
     """Every container between the leaf steps and the root, inclusive --
     none of them may end `ok: true` once the run itself was interrupted
-    (#796's own `use`/`dynamic`/tree-loop-branch parity rule)."""
+    (#796's own `use`/`dynamic`/`if`/named-loop/tree-loop-branch parity
+    rule)."""
     if shape == "top_level":
         return ["prime"]
-    if shape == "use_child":
-        return ["prime.child", "prime"]
-    assert shape == "tree_loop_use"
-    return ["prime.lp.iter_0.child", "prime.lp", "prime"]
+    _, containers = _SHAPE_CONTAINERS[shape]
+    return list(containers)
 
 
 @pytest.mark.parametrize("timing", TIMINGS)
@@ -282,6 +361,9 @@ def test_interrupt_matches_across_engines(
         assert not finally_ran_cof, (
             "a second signal must cut finally: short", timing, shape,
         )
+        for case_dir in (cof_dir, elec_dir):
+            pid = int((case_dir / "cleanup_one.pid").read_text(encoding="utf-8").strip())
+            _assert_process_dead(pid, timeout=5.0, label=(case_dir, timing, shape))
 
     cof_events_text = (cof_dir / "events.jsonl").read_text(encoding="utf-8")
     elec_events_text = (elec_dir / "events.jsonl").read_text(encoding="utf-8")
@@ -295,44 +377,42 @@ def test_interrupt_matches_across_engines(
 
     if timing == "body_interrupt":
         for ends in (cof_ends, elec_ends):
-            # The leaf `tool` step itself either never fires its own `end`
-            # event at all (a real signal interrupts the main thread
-            # directly, mid-step, before the tool's own exception handling
-            # ever runs -- the `top_level`/`use_child` shapes) or does,
-            # reporting the killed subprocess as an ordinary failure (a
-            # tree branch's own worker thread, which a real signal never
-            # reaches directly -- `tree_loop_use` -- only ever sees its
-            # subprocess die via `CancellationToken.request`'s kill).
-            # Both are pre-existing, unrelated to #796; this module's own
-            # `assert_events_equal` below is what actually proves the two
-            # engines agree on which of the two happens for a given shape.
-            if body_path in ends:
-                assert ends[body_path]["ok"] is False, (body_path, ends)
+            # The leaf `tool` step itself never fires its own `end` event
+            # at all: a real signal interrupts the main thread directly,
+            # mid-step, before the tool's own exception handling ever runs
+            # (`top_level`/`use_child`); a tree branch's own worker thread,
+            # which a real signal never reaches directly, instead only
+            # ever sees its tracked subprocess die via
+            # `CancellationToken.request`'s kill, which both engines now
+            # recognise as a cancellation rather than an ordinary failure
+            # (`tree_loop_use`).
+            assert body_path not in ends, (body_path, ends)
             for container in container_paths:
                 # Never `ok: true` once the leaf it contains was
                 # interrupted (#796's own parity rule) -- the exact
                 # error text varies with how the kill reached the leaf
                 # (a real signal straight into the main thread reports
                 # "Interrupted (...)"; a tree branch's own worker thread
-                # only ever sees its subprocess die, an ordinary failure
-                # wrapped with the branch's own path prefix) -- checked
-                # for being the *same* text on both engines below, by
+                # only ever sees its subprocess die, wrapped with the
+                # branch's own path prefix) -- checked for being the
+                # *same* text on both engines below, by
                 # `assert_events_equal`, not pinned here.
                 assert ends[container]["ok"] is False, (container, ends)
             assert ends[cleanup_one_path]["ok"] is True
             assert ends[cleanup_two_path]["ok"] is True
+            # The root always reads the run's own top-level interrupt
+            # text, regardless of how deep the leaf that was killed sits.
+            assert ends["prime"]["error"] == "Interrupted (SIGTERM)", ends
     elif timing == "finally_interrupt":
         for ends in (cof_ends, elec_ends):
-            assert cleanup_one_path not in ends or ends[cleanup_one_path]["ok"] is True, (
-                (
-                    "cleanup_one's own shell command must succeed -- the signal "
-                    "landed on the engine, not on this step"
-                ),
-                ends,
-            )
+            # cleanup_one's own shell command always runs to completion
+            # and exits 0 -- the signal landed on the engine, not on this
+            # step -- so its own `end` event is never missing.
+            assert ends[cleanup_one_path]["ok"] is True, (cleanup_one_path, ends)
             assert ends[cleanup_two_path]["ok"] is True
             for container in container_paths:
                 assert ends[container]["ok"] is False, (container, ends)
+            assert ends["prime"]["error"] == "Interrupted (SIGTERM)", ends
     else:
         assert timing == "second_signal"
         for ends in (cof_ends, elec_ends):
@@ -345,21 +425,7 @@ def test_interrupt_matches_across_engines(
             )
             assert cleanup_two_path not in ends
 
-    # `tree_loop_use`/`body_interrupt` is excluded from every full-stream
-    # comparison below for a narrower reason, outside #796's own two
-    # sub-issues: a tree branch's own leaf `tool` step, once its tracked
-    # subprocess is killed, reports an ordinary nonzero-exit failure on
-    # cof (`core/tool.py` never consults the cancellation token at all)
-    # but is left with no `end` event on electricity -- a real signal
-    # never reaches a worker thread directly on either engine, so neither
-    # one's own *leaf* `tool` step recognises the kill as a cancellation
-    # the way the enclosing `use` now does (the fix above). The
-    # container-level (`use`/tree-branch/root) checks already above cover
-    # #796's own acceptance for this shape; this gap is reported
-    # separately, not papered over here.
-    skip_full_stream_comparison = (shape, timing) == ("tree_loop_use", "body_interrupt")
-
-    if timing != "second_signal" and not skip_full_stream_comparison:
+    if timing != "second_signal":
         # A second signal ends the process via `os._exit` (#356) --
         # `--events` never gets its own closing `run_end` line, so
         # `assert_events_equal`'s own internal-consistency check (every
@@ -391,3 +457,89 @@ def test_interrupt_matches_across_engines(
     elif timing == "second_signal":
         assert not (cof_dir / "out.json").exists()
         assert not (elec_dir / "out.json").exists()
+
+
+_NESTED_FINALLY_DOC = """\
+effects:
+  - type: tool
+    name: body
+    provider: shell
+    params:
+      command: bash
+      args: ["-c", "touch started"]
+      allowed_commands: ["bash"]
+finally:
+  - type: dynamic
+    name: inner
+    effects:
+      - type: tool
+        name: inner_body
+        provider: shell
+        params:
+          command: bash
+          args: ["-c", "touch inner_started"]
+          allowed_commands: ["bash"]
+    finally:
+      - type: tool
+        name: inner_cleanup
+        provider: shell
+        params:
+          command: bash
+          args: ["-c", "touch inner_cleanup_started; kill -TERM $PPID; exec sleep 5"]
+          allowed_commands: ["bash"]
+  - type: tool
+    name: outer_cleanup
+    provider: shell
+    params:
+      command: bash
+      args: ["-c", "touch outer_cleanup_ran"]
+      allowed_commands: ["bash"]
+"""
+
+
+def test_nested_finally_signal_does_not_cut_outer_cleanup_short(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """A first signal landing during a *nested* `finally:` -- a dynamic
+    with its own `finally:`, itself one of the root's own cleanup steps --
+    must not cut the root's own remaining cleanup short (#796): `inner`
+    finishes both its body and its own `finally:` (reading `ok: true`,
+    the same way a plain `cleanup_one` tool step does in the single-level
+    scenarios above -- the signal landed on the engine, not on `inner`),
+    `outer_cleanup` still runs after it, and only then does the run exit
+    interrupted. On `main`, cof's own nested `dynamic` raises once its
+    own `finally:` returns, which aborts the root's own `finally:` chain
+    before `outer_cleanup` ever runs -- electricity already runs it.
+    """
+    env = _sandboxed_env(tmp_path)
+    results: dict[str, subprocess.CompletedProcess[str]] = {}
+    case_dirs: dict[str, Path] = {}
+    for engine in ENGINES:
+        case_dir = tmp_path / engine
+        case_dir.mkdir()
+        (case_dir / "orchestration.yml").write_text(_NESTED_FINALLY_DOC, encoding="utf-8")
+        case_dirs[engine] = case_dir
+        results[engine] = _run(engine, electricity_binary, case_dir, env)
+
+    cof_result, elec_result = results["cof"], results["electricity"]
+    assert cof_result.returncode == elec_result.returncode == 143, (
+        cof_result.stdout, cof_result.stderr, elec_result.stdout, elec_result.stderr,
+    )
+
+    for case_dir in case_dirs.values():
+        assert (case_dir / "started").exists()
+        assert (case_dir / "inner_started").exists()
+        assert (case_dir / "inner_cleanup_started").exists()
+        assert (case_dir / "outer_cleanup_ran").exists(), (
+            "a signal during a nested finally: must not skip the root's "
+            "own remaining cleanup steps"
+        )
+
+    cof_dir, elec_dir = case_dirs["cof"], case_dirs["electricity"]
+    cof_ends = _end_events_by_path((cof_dir / "events.jsonl").read_text(encoding="utf-8"))
+    elec_ends = _end_events_by_path((elec_dir / "events.jsonl").read_text(encoding="utf-8"))
+    for ends in (cof_ends, elec_ends):
+        assert ends["prime.inner"]["ok"] is True, ends
+        assert ends["prime.inner.inner_cleanup"]["ok"] is True, ends
+        assert ends["prime.outer_cleanup"]["ok"] is True, ends
+        assert ends["prime"]["ok"] is False, ends

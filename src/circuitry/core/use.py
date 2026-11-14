@@ -1534,7 +1534,11 @@ class UseRuntime:
             # catches that case too (#796): reported, and recorded, the
             # same way an interrupted `use` anywhere else is, rather than
             # as a plain failure whose `on_error` might even swallow it.
-            if get_token().is_set():
+            # Never true while a `finally:` is running (`in_cleanup()`):
+            # an ordinary failure inside cleanup -- the child's own token
+            # is fresh there too -- must still go through `on_error` as
+            # usual, not be reported as this run's own interrupt.
+            if get_token().is_set() and not get_token().in_cleanup():
                 from .dynamic import _error_text
 
                 cancelled = RunCancelledBySignal()
@@ -1604,7 +1608,20 @@ class UseRuntime:
 
             if record_children and child_store is not None:
                 _graft_child_record(node, child_store.state)
-            meta["error"] = _error_text(e)
+            # `check()`/`sleep_or_raise()` raise `RunCancelledBySignal`
+            # with its own message ("run cancelled"/"run cancelled during
+            # backoff") when a worker thread's own poll is what notices
+            # cancellation -- `_error_text` would read that back verbatim,
+            # unlike the root's own top-level `RunResult.error`
+            # (`cli.runtime_shim`), which always uses the signal-name
+            # wording regardless of which exception actually reached it.
+            # A fresh, message-less instance makes this `use` node agree
+            # with the root on the same interrupt (#796) -- a real
+            # `KeyboardInterrupt`/`SigTermInterrupt`/`SigHupInterrupt`
+            # already has no message of its own, so this is a no-op for
+            # those.
+            error_source = RunCancelledBySignal() if isinstance(e, RunCancelledBySignal) else e
+            meta["error"] = _error_text(error_source)
             meta["completed_at"] = _now_iso()
             raise
         finally:
