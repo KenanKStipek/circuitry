@@ -1013,6 +1013,53 @@ class UseRuntime:
 
         return _publish
 
+    def resolved_inputs_match_recorded(
+        self, *, node: dict[str, Any] | None, ctx: dict[str, Any]
+    ) -> bool:
+        """Whether this use's inputs, resolved now, equal *node*'s recorded
+        ``meta.inputs`` -- the check ``cof run --resume`` (#584) makes
+        before skipping a finished ``use`` whole, so a chain whose inputs
+        changed reruns it (and everything after it) instead.
+
+        Resolved the same way :meth:`execute` resolves them when it
+        records ``meta.inputs``: rendered against *ctx*, then run through
+        the child's own ``interface.inputs`` (defaults filled, declared-
+        typed values coerced) -- never the raw, pre-check rendering.
+        Compared as JSON values (:func:`_saved_form`), the same comparison
+        :class:`_SavedChildRun` uses for the unfinished-child case (#567).
+        Shares ``_render_inputs`` with :meth:`execute` itself; electricity's
+        own ``use_.rs::resolved_inputs_now`` has no real attempt of its own
+        to share that rendering with, so it keeps its own copy instead --
+        see that function's own doc comment.
+
+        Any failure to resolve the child now (it no longer loads, a newly
+        missing required input, ...) answers False: the mismatch then
+        surfaces normally, from the real run ``execute`` is about to make.
+        """
+        if not isinstance(node, dict):
+            return False
+        meta = node.get("meta")
+        recorded = meta.get("inputs") if isinstance(meta, dict) else None
+        if not isinstance(recorded, dict):
+            return False
+        try:
+            child_orch, _label, _identity, _digest = self._load_child_orch(ctx)
+            child_inputs: dict[str, Any] = {}
+            unresolved: dict[str, str] = {}
+            if self.defn.inputs:
+                child_inputs = _render_inputs(
+                    self.defn.inputs,
+                    ctx,
+                    declared=declared_prompts(self.runtime_config),
+                    known_names=known_effect_names(self.runtime_config),
+                )
+                unresolved = _unresolved_references(self.defn.inputs, child_inputs)
+            self._check_interface(child_orch, child_inputs, unresolved)
+        except Exception:
+            return False
+        saved = _saved_form(child_inputs)
+        return saved is not _UNSAVEABLE and saved == _saved_form(recorded)
+
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         from ..capability_gate import install_capability_ceiling
         from .compiler import compile_orchestration
@@ -1532,3 +1579,34 @@ class UseRuntime:
             raise
         finally:
             store.fire_effect_complete(self.defn.name, node)
+
+
+def use_rerun_for_changed_inputs(
+    effect: UseDefinition,
+    *,
+    node: dict[str, Any] | None,
+    ctx: dict[str, Any],
+    adapter: Adapter,
+    model: str,
+    model_locked: bool,
+    runtime_config: dict[str, Any],
+    dry_run: bool,
+    timeout_seconds: int,
+) -> bool:
+    """True when a finished ``use`` *effect*'s inputs, resolved now, no
+    longer match *node*'s recorded ``meta.inputs`` (#584) -- the one extra
+    check ``cof run --resume`` makes, beyond ``effect_completed_ok``,
+    before skipping a finished ``use`` whole. Shared by every chain body
+    that re-implements the positional resume-skip loop (``dynamic``, a
+    named loop pass, an ``if`` branch), so the three can't drift.
+    """
+    probe = UseRuntime(
+        effect,
+        adapter=adapter,
+        model=model,
+        model_locked=model_locked,
+        runtime_config=runtime_config,
+        dry_run=dry_run,
+        timeout_seconds=timeout_seconds,
+    )
+    return not probe.resolved_inputs_match_recorded(node=node, ctx=ctx)

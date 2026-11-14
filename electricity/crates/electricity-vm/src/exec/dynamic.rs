@@ -440,6 +440,7 @@ fn execute_chain<'a>(
                 observer,
                 token,
                 resume_active,
+                true,
             )
             .await;
             // `core/dynamic.py`'s own chain loop calls `store.on_write`
@@ -581,6 +582,7 @@ fn execute_tree<'a>(
                         observer,
                         token,
                         resume_active,
+                        false,
                     )
                     .await;
                     // `core/dynamic.py::DynamicRuntime._execute_branch`'s

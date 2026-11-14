@@ -2002,6 +2002,75 @@ fn run_subcommand_use_childs_label_is_ignored() {
     assert_eq!(state["runtime"]["last_run"]["label"], "parent label");
 }
 
+/// issue #584: a saved state with no `input` mapping at all (one
+/// predating the key, written by hand here rather than by an older
+/// binary) is treated as `{}`, the same as `cli/app.py`'s own
+/// `saved_input.get(key)` default -- so the same `-e` still warns
+/// about every key as a change from `None`, rather than the state's
+/// own missing `input` silently suppressing the warning.
+#[test]
+fn resume_with_no_saved_input_mapping_still_warns_with_none_as_old() {
+    let (mut cmd, home) = command("resume-no-input-mapping");
+    let doc = home.path.join("doc.yml");
+    fs::write(
+        &doc,
+        "interface:\n  inputs:\n    x: {type: string, default: a}\n\
+         effects:\n  - name: a\n    type: tool\n    provider: uuid\n",
+    )
+    .unwrap();
+    let config = home.config("{}");
+    let state_path = home.path.join("state.json");
+    let first = cmd
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--out",
+            state_path.to_str().unwrap(),
+            "-e",
+            "x=a",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(first.status.code(), Some(0), "{:?}", first.stderr);
+
+    let mut state: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(&state_path).unwrap()).unwrap();
+    state.as_object_mut().unwrap().remove("input");
+    fs::write(&state_path, serde_json::to_string(&state).unwrap()).unwrap();
+
+    let mut cmd2 = Command::new(bin());
+    cmd2.env_clear();
+    cmd2.env("HOME", &home.path);
+    cmd2.env("PATH", env::var("PATH").unwrap_or_default());
+    let second = cmd2
+        .args([
+            "run",
+            doc.to_str().unwrap(),
+            "--config",
+            config.to_str().unwrap(),
+            "--state",
+            state_path.to_str().unwrap(),
+            "--resume",
+            "state",
+            "--force",
+            "-e",
+            "x=b",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(second.status.code(), Some(0), "{:?}", second.stderr);
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        stderr.contains(
+            "Resuming with changed input(s): x: None -> 'b'. Other finished effects keep \
+             their saved results."
+        ),
+        "{stderr}"
+    );
+}
+
 /// The legacy `electricity <config.json> <doc>` form has no `--label`
 /// of its own -- an unrecognized option there, same as any other.
 #[test]

@@ -815,6 +815,136 @@ fn not_retried(message: String) -> AttemptProblem {
     }
 }
 
+/// *use_op*'s inputs, resolved now, the same way [`attempt_once`]
+/// resolves them right before it records `meta.inputs`: loaded,
+/// compiled (for its own `interface.inputs`), rendered against *ctx*,
+/// then run through [`electricity_compiler::apply_declared_inputs`]
+/// (defaults filled, declared-typed values coerced) -- never the
+/// retry/record-children machinery `attempt_once` itself threads
+/// through, since `cof run --resume`'s own check (#584) that a
+/// finished `use`'s inputs still match its recorded ones never
+/// performs or records a real attempt. `None` on any failure to
+/// resolve (the child no longer loads or compiles, a newly missing
+/// required input, ...) -- the caller then treats that as a mismatch,
+/// so the real run surfaces the failure normally.
+///
+/// Copies the input-rendering loop and interface pre-check
+/// `attempt_once` (below) runs for a real attempt -- Python's own
+/// `UseRuntime.resolved_inputs_match_recorded` shares `_render_inputs`
+/// with `UseRuntime.execute` instead, which this function has no
+/// equivalent of to share with (`attempt_once`'s own retry/record-
+/// children machinery, this doc comment's own first paragraph). Keep
+/// the two in sync by hand until something unifies them.
+async fn resolved_inputs_now<R: ParamsCtx>(
+    use_op: &UseOp,
+    name: &str,
+    ctx: &R,
+    run_ctx: &RunContext<'_>,
+) -> Option<IndexMap<Value, Value>> {
+    let loaded = load_child(
+        name,
+        &use_op.source,
+        use_op.validate,
+        use_op.parent_trusted,
+        ctx,
+        run_ctx,
+    )
+    .await
+    .ok()?;
+    let child_program =
+        electricity_compiler::compile_document(&loaded.document, &loaded.origin).ok()?;
+
+    let mut rendered_inputs: IndexMap<Value, Value> = IndexMap::new();
+    let mut unresolved: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    if let Some(electricity_bytecode::ParamNode::Map(entries)) = &use_op.inputs {
+        for (key, node) in entries {
+            let value = match node {
+                electricity_bytecode::ParamNode::From { path, as_json, .. } => {
+                    let resolved = ctx.resolve_from(path).unwrap_or(Value::None);
+                    if matches!(resolved, Value::None) {
+                        if let Value::Str(key_str) = key {
+                            unresolved.insert(key_str.clone(), path.clone());
+                        }
+                        resolved
+                    } else if *as_json {
+                        Value::Str(crate::params::serialize_as_json(&resolved).ok()?)
+                    } else {
+                        resolved
+                    }
+                }
+                electricity_bytecode::ParamNode::Template(text) => Value::Str(
+                    crate::compose::render_with_composition(
+                        &text.source,
+                        ctx,
+                        run_ctx.declared_prompts,
+                        run_ctx.effect_names,
+                        &format!("inputs.{}", key.py_str()),
+                        &electricity_template::PlainCtx,
+                        matches!(text.escape, electricity_bytecode::Escape::Html),
+                    )
+                    .ok()?,
+                ),
+                electricity_bytecode::ParamNode::Literal(value) => value.clone(),
+                electricity_bytecode::ParamNode::Map(_)
+                | electricity_bytecode::ParamNode::List(_) => return None,
+            };
+            rendered_inputs.insert(key.clone(), value);
+        }
+    }
+
+    let interface = child_program.interface.as_ref().and_then(Value::as_dict);
+    let iface_inputs = interface
+        .and_then(|d| d.get(&Value::Str("inputs".to_string())))
+        .and_then(Value::as_dict);
+    if let Some(iface_inputs) = iface_inputs {
+        for (key, spec) in iface_inputs {
+            let Value::Str(key_str) = key else { continue };
+            let Some(spec_dict) = spec.as_dict() else {
+                continue;
+            };
+            if is_truthy(spec_dict.get(&Value::Str("required".to_string())))
+                && unresolved.contains_key(key_str)
+            {
+                return None;
+            }
+        }
+        electricity_compiler::apply_declared_inputs(&mut rendered_inputs, iface_inputs).ok()?;
+    }
+
+    Some(rendered_inputs)
+}
+
+/// Whether a finished `use` *op*'s inputs, resolved now against *ctx*,
+/// no longer match *existing*'s recorded `meta.inputs` -- the one
+/// extra check `cof run --resume` (#584) makes, beyond
+/// [`super::effect_completed_ok`], before skipping a finished `use`
+/// whole. Compared with [`saved_form`], the same JSON-value comparison
+/// [`SavedChildRun::matches`] uses for the unfinished-child case
+/// (#567). Any failure to resolve answers `true` (changed): the
+/// mismatch then surfaces normally, from the real run this effect is
+/// about to make.
+pub(crate) async fn use_rerun_for_changed_inputs<R: ParamsCtx>(
+    use_op: &UseOp,
+    name: &str,
+    existing: &NodeRef,
+    store: &Store,
+    ctx: &R,
+    run_ctx: &RunContext<'_>,
+) -> bool {
+    let Ok(Some(meta)) = store.child(existing, &Value::Str("meta".to_string())) else {
+        return true;
+    };
+    let recorded = read_key(store, &meta, "inputs");
+    if !matches!(recorded, Value::Dict(_)) {
+        return true;
+    }
+    match resolved_inputs_now(use_op, name, ctx, run_ctx).await {
+        Some(resolved) => saved_form(&Value::Dict(resolved)) != saved_form(&recorded),
+        None => true,
+    }
+}
+
 /// One full attempt: load, allowlist, cycle, compile, render inputs,
 /// check interface, run the child isolated, map outputs, evaluate
 /// `expect:` -- `core/use.py::UseRuntime.execute`'s own per-attempt
@@ -934,7 +1064,11 @@ async fn attempt_once<R: ParamsCtx>(
 
     // Render `inputs:` -- a top-level `{from:}`/template/literal walk
     // (`core/use.py::_render_inputs`), never `crate::params`'s own
-    // tool-shaped walk (this module's own doc comment).
+    // tool-shaped walk (this module's own doc comment). `resolved_
+    // inputs_now` above duplicates this same walk and the interface
+    // pre-check just below for #584's own resume check, which has no
+    // real attempt of its own to share this one with; keep the two in
+    // sync by hand until something unifies them.
     let mut rendered_inputs: IndexMap<Value, Value> = IndexMap::new();
     let mut unresolved: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();

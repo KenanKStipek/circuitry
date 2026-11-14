@@ -1018,11 +1018,25 @@ this section otherwise describes the full reference behavior, including the part
 auto-load, a bare run-id's input re-pass rule) electricity doesn't reach yet:
 
 - an effect is resumable iff `meta.completed_at` is truthy **and** `meta.error` is falsy; a
-  **successful `reflector` never writes `meta.completed_at` at all** (its own `meta` stays
-  `{"iterations": [...]}` only, issue #506's lane L1, matching Circuitry's own `setdefault`
-  shape) — a successful reflector is never resumable and always reruns from scratch, appending
-  its own new `meta.iterations` entries to whatever a prior run already left (the same
-  accumulation a reused, unnamed-loop/`if` node already gets);
+  successful `reflector` now writes `meta.completed_at` like any other effect (issue #585), so a
+  finished reflector is resumable and skipped whole, keeping its saved value and its own
+  `meta.iterations` record; one that didn't finish still reruns from its start, planning call
+  and generated plan included, appending its own new `meta.iterations` entries to whatever a
+  prior run already left (the same accumulation a reused, unnamed-loop/`if` node already gets) —
+  `meta.created_at` is still never written by the reflector itself, only by the actual run of a
+  generated plan;
+- a finished `use` whose inputs, resolved now against the resumed run's own inputs and state, no
+  longer match its recorded `meta.inputs` reruns too — and so does everything after it in the
+  same chain, by the same positional rule as an unfinished effect (issue #584). Resolved the same
+  way the child's own `meta.inputs` was recorded (rendered, then its declared `interface.inputs`
+  defaults/coercion applied) and compared as JSON values. Unaffected: a `use` that is a tree-flow
+  branch, and one whose own saved node didn't finish (the `record_children` continuation above
+  follows its own rules regardless of its inputs). A resume whose own run inputs differ from the
+  saved run's prints one `WARNING:` line naming each changed input as `name: <old> -> <new>`
+  (Python `repr`), in the interface's declared order and then any undeclared ones sorted, and
+  says every other finished effect keeps its saved results — identical text on both engines,
+  through each one's own warning channel (`log::warn!` here, `logger.warning` in Circuitry); a
+  resume with unchanged run inputs warns nothing new;
 - within one chain-flow `dynamic`'s own `effects:` list, resume is **positional**: the moment one
   effect isn't resumed whole, every later sibling in that same chain reruns too, regardless of
   what its own node might (misleadingly) show from a stale prior run;

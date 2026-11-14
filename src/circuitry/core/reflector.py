@@ -127,6 +127,13 @@ class ReflectorRuntime:
         meta = _ensure_dict(node, "meta")
         meta.setdefault("iterations", [])
         node.setdefault(self.defn.generated_key, {})
+        # A rerun (resumed after an earlier failed attempt, or any other
+        # reason this reflector runs again) starts with a clean slate:
+        # `effect_completed_ok` cares about *this* attempt's own outcome,
+        # not a stale `meta.error` a prior one left behind -- left
+        # untouched, a reflector that failed, then succeeded on resume,
+        # would still read as failed on every later resume.
+        meta["error"] = None
 
         reflector_store = store.child(self.defn.name)
 
@@ -152,9 +159,11 @@ class ReflectorRuntime:
 
                 if rec.get("stop", False):
                     node["value"] = True
+                    meta["completed_at"] = _now_iso()
                     return
 
             node["value"] = True
+            meta["completed_at"] = _now_iso()
         except Exception as e:
             node["value"] = False
             meta.setdefault("error", str(e))
