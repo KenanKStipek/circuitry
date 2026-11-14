@@ -203,6 +203,103 @@ fn walk_op_tool_providers(op: &electricity_bytecode::Op, providers: &mut BTreeSe
     }
 }
 
+/// Every `use`/`reflector` effect's own literal `allow_tools:` entry that
+/// doesn't name a known tool-plugin provider -- `core/compiler.py::
+/// _compile_allow_tools`'s own check, which `compile_allow_tools`
+/// (`electricity-compiler/src/compile/leaves.rs`) cannot make itself: that
+/// crate cannot depend on `electricity-tools` (circular), so an unknown
+/// name there compiles as inert text rather than a compile error. Walked
+/// off the already-compiled tree instead, once, by a caller (the
+/// `electricity` crate) that depends on both. Named with each effect's own
+/// local path (`EffectPath`'s own `Display`, not a [`crate::frame::Frame`]-
+/// prefixed one -- there is no [`crate::frame::Frame`] yet at this point,
+/// before the run has even started).
+pub fn unknown_allow_tools_errors(op: &electricity_bytecode::Op) -> Vec<String> {
+    let known: BTreeSet<String> = electricity_tools::registry::supported_names()
+        .into_iter()
+        .collect();
+    let mut errors = Vec::new();
+    walk_op_unknown_allow_tools(op, &known, &mut errors);
+    errors
+}
+
+fn walk_op_unknown_allow_tools(
+    op: &electricity_bytecode::Op,
+    known: &BTreeSet<String>,
+    errors: &mut Vec<String>,
+) {
+    use electricity_bytecode::{LeafKind, NodeKind};
+    match &op.kind {
+        NodeKind::Leaf(leaf) => match leaf.as_ref() {
+            LeafKind::Use(use_op) => {
+                check_allow_tools(&use_op.allow_tools, "Use", &op.path, known, errors);
+            }
+            LeafKind::Reflector(reflector_op) => {
+                check_allow_tools(
+                    &reflector_op.allow_tools,
+                    "Reflector",
+                    &op.path,
+                    known,
+                    errors,
+                );
+                walk_region_unknown_allow_tools(&reflector_op.inner, known, errors);
+            }
+            LeafKind::Tool(_) | LeafKind::Prompt(_) | LeafKind::Yield(_) | LeafKind::Report(_) => {}
+        },
+        NodeKind::Control(region) => walk_region_unknown_allow_tools(region, known, errors),
+    }
+}
+
+fn check_allow_tools(
+    allow_tools: &BTreeSet<String>,
+    label: &str,
+    path: &electricity_bytecode::EffectPath,
+    known: &BTreeSet<String>,
+    errors: &mut Vec<String>,
+) {
+    for name in allow_tools {
+        if !known.contains(name) {
+            let known_sorted: Vec<&str> = known.iter().map(String::as_str).collect();
+            errors.push(format!(
+                "{label} effect at '{path}': 'allow_tools' names unknown tool provider \
+                 '{name}'. Known providers: {}.",
+                known_sorted.join(", ")
+            ));
+        }
+    }
+}
+
+fn walk_region_unknown_allow_tools(
+    region: &electricity_bytecode::Region,
+    known: &BTreeSet<String>,
+    errors: &mut Vec<String>,
+) {
+    use electricity_bytecode::Region;
+    match region {
+        Region::Block { ops, .. } => {
+            for op in ops {
+                walk_op_unknown_allow_tools(op, known, errors);
+            }
+        }
+        Region::Parallel { branches, .. } => {
+            for op in branches {
+                walk_op_unknown_allow_tools(op, known, errors);
+            }
+        }
+        Region::If { then_, else_, .. } => {
+            walk_region_unknown_allow_tools(then_, known, errors);
+            if let Some(else_) = else_ {
+                walk_region_unknown_allow_tools(else_, known, errors);
+            }
+        }
+        Region::Loop { body, .. } => walk_region_unknown_allow_tools(body, known, errors),
+        Region::TryFinally { body, finally } => {
+            walk_region_unknown_allow_tools(body, known, errors);
+            walk_region_unknown_allow_tools(finally, known, errors);
+        }
+    }
+}
+
 fn walk_region_tool_providers(
     region: &electricity_bytecode::Region,
     providers: &mut BTreeSet<String>,
@@ -976,6 +1073,35 @@ mod tests {
         assert!(errors[0].contains("'rm'"));
         assert!(!errors[0].contains("node"));
         assert!(errors[0].contains("runtime.plugins.shell.allowed_commands"));
+    }
+
+    #[test]
+    fn unknown_allow_tools_name_is_refused_after_compiling() {
+        let doc = parse(
+            "effects:\n  - type: use\n    name: child\n    allow_tools: [bogus_tool]\n    inline: 'effects: []'\n",
+        );
+        let program = electricity_compiler::compile_document(
+            &doc,
+            &electricity_compiler::DocumentOrigin::Generated,
+        )
+        .expect("compiles");
+        let errors = unknown_allow_tools_errors(&program.root);
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("bogus_tool"));
+        assert!(errors[0].contains("allow_tools"));
+    }
+
+    #[test]
+    fn a_known_allow_tools_name_is_not_flagged() {
+        let doc = parse(
+            "effects:\n  - type: use\n    name: child\n    allow_tools: [shell]\n    inline: 'effects: []'\n",
+        );
+        let program = electricity_compiler::compile_document(
+            &doc,
+            &electricity_compiler::DocumentOrigin::Generated,
+        )
+        .expect("compiles");
+        assert!(unknown_allow_tools_errors(&program.root).is_empty());
     }
 
     #[test]
