@@ -203,16 +203,18 @@ without a new tag.
 
 ### TestPyPI dry run
 
-A dispatch run never uploads anywhere real, even with `dry_run=false` —
-`publish-pypi` always targets the `pypi` environment and PyPI's trusted
-publisher is scoped to that. To rehearse an actual upload, add a second
-trusted publisher on **TestPyPI** (same repo, workflow filename and `pypi`
-environment name, pointed at `https://test.pypi.org/manage/project/circuitry-cof/settings/publishing/`)
-and a second workflow (or a repository-variable-gated branch in this one)
-that publishes to `https://test.pypi.org/legacy/` instead. Setting up a
-TestPyPI trusted publisher is a one-time, owner-only step — it isn't
-something a contributor's PR can add, since it requires access to the
-TestPyPI project settings.
+`dry_run=false`, whether from a tag push or a dispatch, runs the real
+`publish-pypi` job and uploads to the real `circuitry-cof` project on
+PyPI — there's no separate dry-run destination. To rehearse an upload
+without touching the real project, add a trusted publisher on
+**TestPyPI** (pointed at `https://test.pypi.org/manage/project/circuitry-cof/settings/publishing/`,
+with the `pypi` environment name) naming whichever workflow file
+actually performs the TestPyPI upload — a separate workflow, or a
+repository-variable-gated branch added to this one, publishing to
+`https://test.pypi.org/legacy/` instead. Setting up a TestPyPI trusted
+publisher is a one-time, owner-only step — it isn't something a
+contributor's PR can add, since it requires access to the TestPyPI
+project settings.
 
 ## Pre-releases
 
