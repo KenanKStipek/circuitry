@@ -442,9 +442,12 @@ def _planner_path(runtime_config: Mapping[str, Any]) -> Path:
     )
 
 
-def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
+def _planner_runtime_config(
+    runtime_config: dict[str, Any], planner_orch: Mapping[str, Any]
+) -> dict[str, Any]:
     """The planner's runtime: the caller's, with both decomposition triggers
-    switched off.
+    switched off, and running as its own literal document rather than
+    inheriting the caller's generated-document ceiling (#772).
 
     The planner's own planning prompt scores off the chart by construction —
     left on, decomposition would recurse into itself before the first plan
@@ -455,7 +458,29 @@ def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
     under ``splitting.on_failure: fail`` would turn every over-threshold
     decomposition attempt into a planner failure. Scoring and routing are
     left as configured.
+
+    The planner itself is a document the project ships, not one the model
+    wrote — decomposing inside an already-generated document previously ran
+    the planner (and the ``validate_yaml``/``json`` tool effects it uses to
+    check its own output) under the *caller's* ceiling, which routinely
+    lacks either provider, so decomposition inside a generated document
+    always failed its own self-check. The planner gets a fresh ceiling
+    computed from its own text instead, the same way any other non-generated
+    document does (``core.use.UseRuntime._check_generated_document``'s
+    ``_fresh_ceiling``); the plan it goes on to emit is unaffected and still
+    runs under the caller's inherited ceiling (:func:`_plan_tool_ceiling_overlay`).
     """
+    from ..generated_doc import (
+        GENERATED_DOCUMENT_GENERATING_PATH_KEY,
+        GENERATED_DOCUMENT_IS_GENERATED_KEY,
+        GENERATED_DOCUMENT_PROVIDERS_KEY,
+        GENERATED_DOCUMENT_SHELL_COMMANDS_KEY,
+        host_shell_pin,
+        resolved_shell_allowlist,
+        static_shell_allowed_commands,
+        static_tool_providers,
+    )
+
     out = dict(runtime_config)
     complexity = runtime_config.get("complexity")
     if isinstance(complexity, Mapping):
@@ -464,6 +489,15 @@ def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
             "decomposition": {"enabled": False},
             "splitting": {"enabled": False},
         }
+    out[GENERATED_DOCUMENT_IS_GENERATED_KEY] = False
+    out[GENERATED_DOCUMENT_PROVIDERS_KEY] = sorted(static_tool_providers(planner_orch))
+    out[GENERATED_DOCUMENT_SHELL_COMMANDS_KEY] = sorted(
+        resolved_shell_allowlist(
+            static_shell_allowed_commands(planner_orch),
+            host_pin=host_shell_pin(runtime_config),
+        )
+    )
+    out[GENERATED_DOCUMENT_GENERATING_PATH_KEY] = ""
     return out
 
 
@@ -578,7 +612,7 @@ def _run_planner(
             node_path=node_path,
             adapter=adapter,
             model=model,
-            runtime_config=_planner_runtime_config(runtime_config),
+            runtime_config=_planner_runtime_config(runtime_config, planner_orch),
             timeout_seconds=timeout_seconds,
             verbose=verbose,
             display_depth=display_depth,

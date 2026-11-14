@@ -1040,7 +1040,27 @@ pub(crate) async fn maybe_decompose(
     };
 
     let planner_settings_value = planner_settings(settings);
-    let planner_frame = child_frame(frame, &op.path);
+    // The planner is a document the project ships, not one the model
+    // wrote -- it runs under its own, fresh ceiling computed from its own
+    // text (#772), never the caller's generated-document ceiling: a
+    // planner run inside an already-generated document previously
+    // inherited that document's ceiling, which routinely lacks the
+    // `validate_yaml`/`json` providers the planner's own self-check uses,
+    // so decomposition inside a generated document always failed. The
+    // plan the planner goes on to emit is unaffected and still runs
+    // under the caller's own inherited ceiling (`decomposition_allowed_providers(frame)`,
+    // computed from the outer frame, never `planner_frame`).
+    let planner_host_pin = crate::generated_doc::host_shell_pin(run_ctx.runtime_config);
+    let planner_frame = child_frame(frame, &op.path).with_document_tool_providers(
+        crate::generated_doc::static_tool_providers_from_op(&planner_program.root),
+        crate::generated_doc::resolved_shell_allowlist(
+            &crate::generated_doc::static_shell_allowed_commands_from_op(&planner_program.root),
+            planner_host_pin.as_ref(),
+        ),
+        false,
+        String::new(),
+        true,
+    );
     let planner_run_ctx = child_run_ctx(
         run_ctx,
         &planner_settings_value,
@@ -2628,6 +2648,21 @@ mod tests {
         let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
             .expect("the copy compiles");
         assert!(first_unsupported(&program, false, &Supported::current(&[])).is_none());
+    }
+
+    #[test]
+    fn the_planner_copy_runs_under_its_own_fresh_ceiling_not_an_empty_caller_one() {
+        // #772: the planner document's own validate_yaml/json tool effects
+        // must stay usable even when the caller's enclosing document (a
+        // generated one, say) grants neither -- this is the ceiling
+        // `maybe_decompose` installs on `planner_frame`, computed from the
+        // planner's own compiled program rather than inherited.
+        let parsed = electricity_yaml::load_yaml(PLANNER_YAML).unwrap();
+        let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
+            .expect("the copy compiles");
+        let providers = crate::generated_doc::static_tool_providers_from_op(&program.root);
+        assert!(providers.contains("validate_yaml"));
+        assert!(providers.contains("json"));
     }
 
     #[test]

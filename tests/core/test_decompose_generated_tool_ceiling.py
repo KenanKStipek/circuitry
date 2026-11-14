@@ -10,8 +10,12 @@ additionally always allowed the fixed, side-effect-free
 
 from __future__ import annotations
 
+from circuitry.core.decompose import _planner_path, _planner_runtime_config
 from circuitry.core.decompose import _check_generated_tool_ceiling
-from circuitry.generated_doc import GENERATED_DOCUMENT_PROVIDERS_KEY
+from circuitry.generated_doc import (
+    GENERATED_DOCUMENT_IS_GENERATED_KEY,
+    GENERATED_DOCUMENT_PROVIDERS_KEY,
+)
 
 
 def test_a_safe_data_tool_the_document_never_uses_is_not_refused() -> None:
@@ -90,3 +94,21 @@ effects:
 def test_unparseable_yaml_reports_nothing_here() -> None:
     """Already reported by the schema check elsewhere."""
     assert _check_generated_tool_ceiling("not: valid: yaml: :", {}) == []
+
+
+def test_planner_runtime_config_runs_as_its_own_non_generated_document() -> None:
+    """#772 P1: the planner's own validate_yaml/json self-check must not be
+    judged against a generated caller's own (commonly empty) ceiling -- it
+    runs as its own, literal document, with its own providers.
+    """
+    from circuitry.cli.orchestration_loader import load_orchestration_file
+
+    planner_orch = load_orchestration_file(_planner_path({}))
+    caller_runtime_config = {
+        GENERATED_DOCUMENT_IS_GENERATED_KEY: True,
+        GENERATED_DOCUMENT_PROVIDERS_KEY: [],
+    }
+    out = _planner_runtime_config(caller_runtime_config, planner_orch)
+    assert out[GENERATED_DOCUMENT_IS_GENERATED_KEY] is False
+    assert "validate_yaml" in out[GENERATED_DOCUMENT_PROVIDERS_KEY]
+    assert "json" in out[GENERATED_DOCUMENT_PROVIDERS_KEY]
