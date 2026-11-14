@@ -179,15 +179,23 @@ class OpenAIAdapter:
 
         text, finish_reason = parse_chat_response(raw)
 
-        # Extract token usage
+        # Extract token usage. This adapter's own non-streamed path has
+        # always cast with a lenient `int(x) if x is not None` (truncating
+        # a float, raising on a bad string) rather than `usage_tokens`'s
+        # own strict `isinstance(x, int)` check its streamed path uses --
+        # kept exactly as it was; only `tokens_cached_in` is new.
         usage = raw.get("usage", {})
-        tokens_sent, tokens_received, tokens_cached_in = usage_tokens(usage)
+        tokens_sent = usage.get("prompt_tokens")
+        tokens_received = usage.get("completion_tokens")
+        _, _, tokens_cached_in = usage_tokens(usage)
 
         return GenerateResult(
             text=text,
             raw=raw,
-            tokens_sent=tokens_sent,
-            tokens_received=tokens_received,
+            tokens_sent=int(tokens_sent) if tokens_sent is not None else None,
+            tokens_received=int(tokens_received)
+            if tokens_received is not None
+            else None,
             tokens_cached_in=tokens_cached_in,
             finish_reason=finish_reason,
         )
