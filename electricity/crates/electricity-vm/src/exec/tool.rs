@@ -388,8 +388,9 @@ fn tool_params_map(params: &ParamNode) -> &IndexMap<Value, ParamNode> {
 /// matching Python's own `if not isinstance(value, list): continue`.
 fn reject_security_sensitive_literal(params: &IndexMap<Value, ParamNode>) -> Result<(), String> {
     let by_reference_text = |key: &str| {
+        let hint = electricity_compiler::compile::params::security_sensitive_param_hint(key);
         format!(
-            "params.{key} must be a literal list of strings; a by-reference \
+            "params.{key} must be {hint}; a by-reference \
              '{{from: ...}}' value is not honoured for this security-sensitive setting."
         )
     };
@@ -399,12 +400,14 @@ fn reject_security_sensitive_literal(params: &IndexMap<Value, ParamNode>) -> Res
         };
         match node {
             ParamNode::List(items) => {
+                let hint =
+                    electricity_compiler::compile::params::security_sensitive_param_hint(key_name);
                 for item in items {
                     match item {
                         ParamNode::Template(text) => {
                             if text.source.contains("{{") {
                                 return Err(format!(
-                                    "params.{key_name} must be a literal list of strings; \
+                                    "params.{key_name} must be {hint}; \
                                      a templated value is not honoured for this \
                                      security-sensitive setting."
                                 ));

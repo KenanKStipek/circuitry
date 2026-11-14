@@ -2583,13 +2583,13 @@
     "validate": {
       "ok": false,
       "errors": [
-        "Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal value."
+        "Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal list of strings."
       ],
       "warnings": []
     },
-    "run_error": "Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal value.",
+    "run_error": "Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal list of strings.",
     "definition": null,
-    "definition_error": "ValueError: Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal value.",
+    "definition_error": "ValueError: Tool effect 'x' param 'params.allowed_commands': a by-reference '{from: ...}' value is not honoured for this security-sensitive setting; it must be a literal list of strings.",
     "digest": "55f6f49da8c639e02c869c5a3c3c8748c2277b22358fda70286555d4fb631baa",
     "comparison": {
       "validate_errors": [

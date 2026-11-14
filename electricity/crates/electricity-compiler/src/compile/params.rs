@@ -34,6 +34,21 @@ use std::collections::BTreeSet;
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
 pub(crate) const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 2] = ["allowed_commands", "shell"];
 
+/// `core/tool.py::_SECURITY_SENSITIVE_PARAM_HINTS` -- what each
+/// security-sensitive key's own literal value must be, named in every
+/// refusal that mentions it; differs by key (a list of strings for
+/// `allowed_commands`, a bare bool for `shell`). `pub`, not `pub(crate)`:
+/// `electricity_vm::exec::tool`'s own dispatch-time mirror
+/// (`reject_security_sensitive_literal`) names the same hint, rather
+/// than a separate copy that could drift.
+pub fn security_sensitive_param_hint(key: &str) -> &'static str {
+    match key {
+        "allowed_commands" => "a literal list of strings",
+        "shell" => "a literal true or false",
+        _ => unreachable!("every SECURITY_SENSITIVE_PARAM_KEYS entry has a hint"),
+    }
+}
+
 /// A `{from: <path>}` leaf's path, `default:` and `as:` as written -- ports
 /// `core/tool.py::ParamReference`.
 pub(crate) struct ParamReference {
@@ -113,12 +128,17 @@ fn validate_reference_as(
 /// Ports `core/compiler.py::_check_security_sensitive_param_leaf`:
 /// rejects a by-reference `{from: ...}` leaf anywhere inside a
 /// security-sensitive param, recursively.
-fn check_no_reference(value: &Value, name: &str, field: &str) -> Result<(), CompileError> {
+fn check_no_reference(
+    value: &Value,
+    name: &str,
+    field: &str,
+    hint: &str,
+) -> Result<(), CompileError> {
     if param_reference(value).is_some() {
         return Err(CompileError(format!(
             "Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' \
              value is not honoured for this security-sensitive setting; it must \
-             be a literal value."
+             be {hint}."
         )));
     }
     match value {
@@ -128,12 +148,12 @@ fn check_no_reference(value: &Value, name: &str, field: &str) -> Result<(), Comp
                     Value::Str(s) => s.clone(),
                     other => other.py_str(),
                 };
-                check_no_reference(item, name, &format!("{field}.{key_str}"))?;
+                check_no_reference(item, name, &format!("{field}.{key_str}"), hint)?;
             }
         }
         Value::List(items) => {
             for (index, item) in items.iter().enumerate() {
-                check_no_reference(item, name, &format!("{field}[{index}]"))?;
+                check_no_reference(item, name, &format!("{field}[{index}]"), hint)?;
             }
         }
         _ => {}
@@ -232,7 +252,12 @@ pub(crate) fn build_tool_params(
     )?;
     for sensitive_key in SECURITY_SENSITIVE_PARAM_KEYS {
         if let Some(value) = params.get(&Value::Str(sensitive_key.to_string())) {
-            check_no_reference(value, name, &format!("params.{sensitive_key}"))?;
+            check_no_reference(
+                value,
+                name,
+                &format!("params.{sensitive_key}"),
+                security_sensitive_param_hint(sensitive_key),
+            )?;
         }
     }
     Ok(node)

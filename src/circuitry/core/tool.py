@@ -346,6 +346,15 @@ def _deep_merge_params(base: dict[str, Any], overlay: dict[str, Any]) -> dict[st
 #: block, so neither can widen what a document is allowed to run.
 _SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands", "shell"})
 
+#: What each security-sensitive key's own literal value must be, named in
+#: every refusal below and in ``core.compiler``'s compile-time mirror --
+#: keyed by the top-level key itself, since it differs by key (a list of
+#: strings for ``allowed_commands``, a bare bool for ``shell``).
+_SECURITY_SENSITIVE_PARAM_HINTS: dict[str, str] = {
+    "allowed_commands": "a literal list of strings",
+    "shell": "a literal true or false",
+}
+
 
 def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
     """Raise if a security-sensitive param's literal value is by-reference, or
@@ -368,9 +377,10 @@ def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
         if key not in raw_params:
             continue
         value = raw_params[key]
+        hint = _SECURITY_SENSITIVE_PARAM_HINTS[key]
         if param_reference(value) is not None:
             raise ValueError(
-                f"params.{key} must be a literal value; a by-reference "
+                f"params.{key} must be {hint}; a by-reference "
                 "'{from: ...}' value is not honoured for this security-sensitive setting."
             )
         if not isinstance(value, list):
@@ -378,13 +388,13 @@ def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
         for item in value:
             if not isinstance(item, str):
                 raise ValueError(
-                    f"params.{key} must be a literal list of strings; a "
+                    f"params.{key} must be {hint}; a "
                     "by-reference '{from: ...}' value is not honoured for this "
                     "security-sensitive setting."
                 )
             if "{{" in item:
                 raise ValueError(
-                    f"params.{key} must be a literal list of strings; a templated "
+                    f"params.{key} must be {hint}; a templated "
                     "value is not honoured for this security-sensitive setting."
                 )
 
