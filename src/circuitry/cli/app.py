@@ -63,6 +63,7 @@ from .library_sources import (
     build_registry,
 )
 from .logging_setup import configure_cli_logging
+from .man_pages import register_man
 from .orchestration_loader import load_orchestration_file, serialize_orchestration
 from .profiles import ProfileError, ProfileSettings, load_profile
 from .redaction import REDACTED, redact_env_pairs
@@ -193,6 +194,7 @@ def _root(
 
 
 register_doctor(app)
+register_man(app)
 register_score(app)
 register_setup(app)
 register_trust(app)
@@ -983,7 +985,7 @@ def run_cmd(
         help=(
             "Literal text for this run's label, shown wherever a run's label "
             "appears (e.g. --events' run_start, runtime.last_run.label). "
-            "Beats the document's own top-level label: template; never "
+            "Beats the document's top-level label: template; never "
             "rendered. Cleaned the same way either way: whitespace collapsed "
             "to one space, control characters and escape sequences dropped, "
             "trimmed, and cut at 64 characters; empty after cleaning means no "
@@ -1106,9 +1108,9 @@ def run_cmd(
         help=(
             "Force runtime.complexity.splitting on/off for this run. Beats "
             "--profile and the orchestration/config. Needs no scoring: an "
-            "effect's own split.budget_tokens still splits even with this "
+            "effect's split.budget_tokens still splits even with this "
             "off, and --no-split does not stop it either — only an effect's "
-            "own split.enabled: false opts it out."
+            "split.enabled: false opts it out."
         ),
     ),
 ):
@@ -1717,9 +1719,9 @@ def run_library_cmd(
         help=(
             "Force runtime.complexity.splitting on/off for this run. Beats "
             "--profile and the orchestration/config. Needs no scoring: an "
-            "effect's own split.budget_tokens still splits even with this "
+            "effect's split.budget_tokens still splits even with this "
             "off, and --no-split does not stop it either — only an effect's "
-            "own split.enabled: false opts it out."
+            "split.enabled: false opts it out."
         ),
     ),
 ):
@@ -2884,7 +2886,7 @@ orchestrations on purpose; reach for `wizard` when you want the conversation.
 
 @app.command(
     "wizard",
-    help="Build an orchestration by talking to the wizard, headlessly. (Not `cof gen` — see below.)",
+    help="Build an orchestration by talking to the wizard, headlessly; unlike `cof gen`, it asks clarifying questions.",
     epilog=WIZARD_EPILOG,
 )
 def wizard_cmd(

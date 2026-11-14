@@ -122,6 +122,10 @@ release alongside the Python distributions, marked as a preview.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
   JSON Schema shapes (#507); a reflector plan containing a date (#512).
 
+`electricity man [run]` shows electricity(1)/electricity-run(1) through `man` on a
+terminal, or prints its roff when piped or given `--roff` -- it works even where
+`MANPATH` doesn't reach the release archive's own `man/man1/`.
+
 ## Build and test
 
 From the repository root:

@@ -1,0 +1,40 @@
+.TH COF-INIT 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-init \- Initialize a new circuitry project in the current directory
+.SH SYNOPSIS
+.nf
+cof init [OPTIONS]
+.fi
+.SH DESCRIPTION
+Initializes a new Circuitry project in the current directory: a starter config
+and example orchestration.
+.SH OPTIONS
+.TP
+.B --yes, -y
+Non-interactive: accept defaults (or --adapter/--adapter-url/--model) without
+prompting.
+.TP
+.B --adapter
+\fIADAPTER\fR Adapter to configure (default: ollama).
+.TP
+.B --adapter-url
+\fIADAPTER_URL\fR Adapter base URL (default: http://localhost:11434).
+.TP
+.B --model
+\fIMODEL\fR Default model (default: llama3.1:8b).
+.SH EXAMPLES
+.TP
+.B cof init
+Scaffolds a new project in the current directory.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or the input was invalid.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-setup(1)\fR
