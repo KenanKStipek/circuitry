@@ -2,6 +2,9 @@ name: electricity
 
 on:
   pull_request:
+    # Jobs with the draft condition below skip on a draft PR;
+    # ready_for_review runs them once the PR is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "electricity/**"
       - ".github/workflows/electricity.yml"
@@ -29,6 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -106,6 +110,7 @@ jobs:
 
   msrv:
     name: MSRV check
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -127,6 +132,7 @@ jobs:
 
   build:
     name: release build (no publish)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     uses: ./.github/workflows/rust-release-build.yml
     permissions:
       contents: read

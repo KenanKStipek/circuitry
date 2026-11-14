@@ -2,6 +2,9 @@ name: quality
 
 on:
   pull_request:
+    # Jobs with the draft condition below skip on a draft PR;
+    # ready_for_review runs them once the PR is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
   push:
     branches:
       - main
@@ -13,6 +16,7 @@ jobs:
   # instead of each building its own copy from a cold cache (issue #775).
   build-electricity:
     name: build electricity (shared by the test matrix)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -40,6 +44,7 @@ jobs:
 
   test:
     needs: build-electricity
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 80
     strategy:
@@ -158,6 +163,7 @@ jobs:
         run: python scripts/check-direct-references.py dist/*.whl dist/*.tar.gz
 
   man-pages:
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
