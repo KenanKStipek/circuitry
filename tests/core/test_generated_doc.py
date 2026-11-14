@@ -394,7 +394,7 @@ def test_a_generated_shell_command_beyond_the_document_literal_allowlist_is_refu
 
 
 def test_a_bad_command_containing_a_single_quote_gets_pythons_double_quote_repr() -> None:
-    """#772 item 6: repr(['a single-quote command']) switches to double
+    """#772: repr(['a single-quote command']) switches to double
     quotes for an entry containing ' and no " -- electricity's own
     refusal text must match this, not always single-quote the name."""
     orch = {

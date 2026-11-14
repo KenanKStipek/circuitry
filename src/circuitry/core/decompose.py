@@ -471,6 +471,7 @@ def _planner_runtime_config(
     runs under the caller's inherited ceiling (:func:`_plan_tool_ceiling_overlay`).
     """
     from ..generated_doc import (
+        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY,
         GENERATED_DOCUMENT_GENERATING_PATH_KEY,
         GENERATED_DOCUMENT_IS_GENERATED_KEY,
         GENERATED_DOCUMENT_PROVIDERS_KEY,
@@ -498,6 +499,9 @@ def _planner_runtime_config(
         )
     )
     out[GENERATED_DOCUMENT_GENERATING_PATH_KEY] = ""
+    # A literal document again, so its own use/reflector effects may name
+    # allow_tools, as electricity's planner frame allows.
+    out[GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY] = True
     return out
 
 

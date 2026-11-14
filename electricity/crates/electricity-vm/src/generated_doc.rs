@@ -1346,7 +1346,7 @@ mod tests {
 
     #[test]
     fn a_bad_command_containing_a_single_quote_gets_pythons_double_quote_repr() {
-        // #772 item 6: Python's own repr switches to double quotes for a
+        // #772: Python's own repr switches to double quotes for a
         // string containing a ' and no " -- the refusal text must match
         // byte-for-byte on both engines, not always single-quote the name.
         let orch = parse(
@@ -1718,7 +1718,7 @@ mod tests {
         assert!(errors.is_empty());
     }
 
-    // -- #772 item 6: an empty/null effects falls back to steps ----------
+    // -- #772: an empty/null effects falls back to steps -----------------
 
     #[test]
     fn effects_of_falls_back_to_steps_when_effects_is_an_empty_list() {

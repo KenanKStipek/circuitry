@@ -2651,12 +2651,12 @@ mod tests {
     }
 
     #[test]
-    fn the_planner_copy_runs_under_its_own_fresh_ceiling_not_an_empty_caller_one() {
-        // #772: the planner document's own validate_yaml/json tool effects
-        // must stay usable even when the caller's enclosing document (a
-        // generated one, say) grants neither -- this is the ceiling
-        // `maybe_decompose` installs on `planner_frame`, computed from the
-        // planner's own compiled program rather than inherited.
+    fn the_planner_copys_own_providers_include_its_validate_yaml_and_json_checks() {
+        // The providers `maybe_decompose` gives `planner_frame` come from the
+        // planner's own compiled program, so they must include the two tools
+        // its self-check uses. That decomposition succeeds inside a
+        // generated document is covered end to end by the conformance case
+        // c772-decomposition-inside-generated-document.
         let parsed = electricity_yaml::load_yaml(PLANNER_YAML).unwrap();
         let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
             .expect("the copy compiles");

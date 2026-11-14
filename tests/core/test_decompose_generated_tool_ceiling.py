@@ -100,7 +100,7 @@ def test_unparseable_yaml_reports_nothing_here() -> None:
 
 
 def test_planner_runtime_config_runs_as_its_own_non_generated_document() -> None:
-    """#772 P1: the planner's own validate_yaml/json self-check must not be
+    """#772: the planner's own validate_yaml/json self-check must not be
     judged against a generated caller's own (commonly empty) ceiling -- it
     runs as its own, literal document, with its own providers.
     """
