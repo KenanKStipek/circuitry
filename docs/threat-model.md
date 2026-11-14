@@ -683,9 +683,15 @@ reference that only resolved to an unauthorized value once rendered — is
 refused at that point: the effect fails that one attempt and is never
 retried, recorded on the effect the same way any other failure is, under
 the generating effect's own `on_error`. The two checks call the same rule
-functions, so the first is never stricter than the second — they can only
-ever agree, or the first simply can't decide yet what the second
-authoritatively will.
+functions against whatever each can see, so they can never disagree about
+what a rule means — but the first can still be *stricter* than the second
+on a value that hasn't rendered yet: a still-templated `shell:` counts as
+true under the same boolean coercion the `service` plugin itself uses,
+and a still-templated `command:` entry is never a bare name, so the first
+check refuses either one up front even when it would end up rendering to
+an allowed value. The second check, seeing the value actually rendered,
+may allow what the first refused this way; the first never lets through
+something the second would refuse.
 
 **What is checked.** A generated document's `shell` effects may run only
 what the host config and the document that generated it already allow: the
