@@ -157,7 +157,7 @@ class OpenAIAdapter:
                     retry_info=classify_curl_exit(18, ""),
                 )
 
-            tokens_sent, tokens_received = usage_tokens(usage)
+            tokens_sent, tokens_received, tokens_cached_in = usage_tokens(usage)
             return GenerateResult(
                 text=text.strip(),
                 raw={
@@ -166,6 +166,7 @@ class OpenAIAdapter:
                 },
                 tokens_sent=tokens_sent,
                 tokens_received=tokens_received,
+                tokens_cached_in=tokens_cached_in,
                 finish_reason=finish_reason,
             )
 
@@ -180,16 +181,14 @@ class OpenAIAdapter:
 
         # Extract token usage
         usage = raw.get("usage", {})
-        tokens_sent = usage.get("prompt_tokens")
-        tokens_received = usage.get("completion_tokens")
+        tokens_sent, tokens_received, tokens_cached_in = usage_tokens(usage)
 
         return GenerateResult(
             text=text,
             raw=raw,
-            tokens_sent=int(tokens_sent) if tokens_sent is not None else None,
-            tokens_received=int(tokens_received)
-            if tokens_received is not None
-            else None,
+            tokens_sent=tokens_sent,
+            tokens_received=tokens_received,
+            tokens_cached_in=tokens_cached_in,
             finish_reason=finish_reason,
         )
 

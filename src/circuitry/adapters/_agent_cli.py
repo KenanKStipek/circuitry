@@ -34,6 +34,8 @@ def generate_result(
         raw=result.raw,
         tokens_sent=result.tokens_sent,
         tokens_received=result.tokens_received,
+        tokens_cached_in=result.tokens_cached_in,
+        tokens_cache_write=result.tokens_cache_write,
         finish_reason=result.finish_reason,
         warnings=ignored_options_warning(adapter_name, options),
         cost_usd=result.cost_usd,

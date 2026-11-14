@@ -147,13 +147,19 @@ def _attempt_entry(
     fallback_attempts: list[dict[str, Any]],
     tokens_sent: int | None,
     tokens_received: int | None,
+    tokens_cached_in: int | None = None,
+    tokens_cache_write: int | None = None,
 ) -> dict[str, Any]:
     """One ``meta.attempts`` entry for a prompt: ``core.use._attempt_entry``'s
     counterpart, with a prompt's own per-attempt fields in place of a use
     effect's child-run ones. A prompt has no ``expect`` to carry (see
     :class:`PromptDefinition`), unlike ``tool``'s own entry.
+
+    ``tokens_cached_in``/``tokens_cache_write`` are included only when not
+    ``None`` -- unlike ``tokens_sent``/``tokens_received``, which are always
+    present (R1: absent, not null, when the provider never reported one).
     """
-    return {
+    entry: dict[str, Any] = {
         "created_at": created_at,
         "completed_at": completed_at,
         "value": copy.deepcopy(value),
@@ -162,6 +168,11 @@ def _attempt_entry(
         "tokens_sent": tokens_sent,
         "tokens_received": tokens_received,
     }
+    if tokens_cached_in is not None:
+        entry["tokens_cached_in"] = tokens_cached_in
+    if tokens_cache_write is not None:
+        entry["tokens_cache_write"] = tokens_cache_write
+    return entry
 
 
 def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
@@ -169,6 +180,38 @@ def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> Non
     contract as ``core.use._write_attempts``."""
     meta.pop("attempts", None)
     meta["attempts"] = list(attempts)
+
+
+def _fallback_attempt_entry(
+    *,
+    adapter: str,
+    model: str,
+    status: str,
+    error: str | None,
+    res: GenerateResult,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """One ``meta.fallback_attempts`` entry for an attempt that reached a
+    provider reply (as opposed to a failed adapter call, which has no
+    ``res`` and so no tokens at all). ``tokens_cached_in``/
+    ``tokens_cache_write`` are included only when ``res`` carries them
+    (R1).
+    """
+    entry: dict[str, Any] = {
+        "adapter": adapter,
+        "model": model,
+        "status": status,
+        "error": error,
+        "tokens_sent": res.tokens_sent,
+        "tokens_received": res.tokens_received,
+    }
+    if res.tokens_cached_in is not None:
+        entry["tokens_cached_in"] = res.tokens_cached_in
+    if res.tokens_cache_write is not None:
+        entry["tokens_cache_write"] = res.tokens_cache_write
+    if extra:
+        entry.update(extra)
+    return entry
 
 
 @dataclass
@@ -733,6 +776,10 @@ class PromptRuntime:
             "warnings",
             "assets",
             "cost_usd",
+            "tokens_cached_in",
+            "tokens_cache_write",
+            "tokens_cached_in_total",
+            "tokens_cache_write_total",
             "template_files",
             "error_code",
             "http_status",
@@ -810,6 +857,8 @@ class PromptRuntime:
         attempts_meta: list[dict[str, Any]] = []
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        total_tokens_cached_in: int | None = None
+        total_tokens_cache_write: int | None = None
         # Every attempt this pass makes, oldest first (#668) -- written to
         # meta.attempts only once more than one attempt has run, exactly
         # when meta.retries_used is also set. Named apart from `attempts`
@@ -980,14 +1029,28 @@ class PromptRuntime:
                     received = attempt_entry.get("tokens_received")
                     if received is not None:
                         total_tokens_received = (total_tokens_received or 0) + received
+                    cached_in = attempt_entry.get("tokens_cached_in")
+                    if cached_in is not None:
+                        total_tokens_cached_in = (total_tokens_cached_in or 0) + cached_in
+                    cache_write = attempt_entry.get("tokens_cache_write")
+                    if cache_write is not None:
+                        total_tokens_cache_write = (total_tokens_cache_write or 0) + cache_write
                 meta["tokens_sent_total"] = total_tokens_sent
                 meta["tokens_received_total"] = total_tokens_received
+                if total_tokens_cached_in is not None:
+                    meta["tokens_cached_in_total"] = total_tokens_cached_in
+                if total_tokens_cache_write is not None:
+                    meta["tokens_cache_write_total"] = total_tokens_cache_write
 
                 if generation_error is None and res is not None:
                     # Success
                     node["value"] = decoded_value
                     meta["tokens_sent"] = res.tokens_sent
                     meta["tokens_received"] = res.tokens_received
+                    if res.tokens_cached_in is not None:
+                        meta["tokens_cached_in"] = res.tokens_cached_in
+                    if res.tokens_cache_write is not None:
+                        meta["tokens_cache_write"] = res.tokens_cache_write
                     cost_usd = getattr(res, "cost_usd", None)
                     if cost_usd is not None:
                         meta["cost_usd"] = cost_usd
@@ -1010,6 +1073,8 @@ class PromptRuntime:
                             fallback_attempts=attempts_meta,
                             tokens_sent=res.tokens_sent,
                             tokens_received=res.tokens_received,
+                            tokens_cached_in=res.tokens_cached_in,
+                            tokens_cache_write=res.tokens_cache_write,
                         )
                     )
                     if _attempt > 0:
@@ -1066,6 +1131,12 @@ class PromptRuntime:
                         ),
                         tokens_received=(
                             last_fallback.get("tokens_received") if last_fallback else None
+                        ),
+                        tokens_cached_in=(
+                            last_fallback.get("tokens_cached_in") if last_fallback else None
+                        ),
+                        tokens_cache_write=(
+                            last_fallback.get("tokens_cache_write") if last_fallback else None
                         ),
                     )
                 )
@@ -1154,6 +1225,8 @@ class PromptRuntime:
                             fallback_attempts=[],
                             tokens_sent=None,
                             tokens_received=None,
+                            tokens_cached_in=None,
+                            tokens_cache_write=None,
                         )
                     )
                 else:
@@ -1171,6 +1244,12 @@ class PromptRuntime:
                     retry_attempts[-1]["error"] = meta["error"]
                     retry_attempts[-1]["tokens_sent"] = meta["tokens_sent"]
                     retry_attempts[-1]["tokens_received"] = meta["tokens_received"]
+                    for key in ("tokens_cached_in", "tokens_cache_write"):
+                        value = meta.get(key)
+                        if value is not None:
+                            retry_attempts[-1][key] = value
+                        else:
+                            retry_attempts[-1].pop(key, None)
                 _write_attempts(meta, retry_attempts)
             if self.defn.on_error in ("skip", "continue"):
                 # A reused node (an unnamed loop's prior pass, a resume)
@@ -1784,27 +1863,25 @@ class PromptRuntime:
             except Exception as e:
                 last_error = e
                 attempts_meta.append(
-                    {
-                        "adapter": adapter_name,
-                        "model": model_name,
-                        "status": _decode_failure_status(e),
-                        "error": redact(str(e)),
-                        "tokens_sent": res.tokens_sent,
-                        "tokens_received": res.tokens_received,
-                        "raw_reply": _cap_reply_text(res.text),
-                    }
+                    _fallback_attempt_entry(
+                        adapter=adapter_name,
+                        model=model_name,
+                        status=_decode_failure_status(e),
+                        error=redact(str(e)),
+                        res=res,
+                        extra={"raw_reply": _cap_reply_text(res.text)},
+                    )
                 )
                 continue
 
             attempts_meta.append(
-                {
-                    "adapter": adapter_name,
-                    "model": model_name,
-                    "status": "succeeded",
-                    "error": None,
-                    "tokens_sent": res.tokens_sent,
-                    "tokens_received": res.tokens_received,
-                }
+                _fallback_attempt_entry(
+                    adapter=adapter_name,
+                    model=model_name,
+                    status="succeeded",
+                    error=None,
+                    res=res,
+                )
             )
             return (res, decoded_value, attempts_meta, None, attempt_index)
 

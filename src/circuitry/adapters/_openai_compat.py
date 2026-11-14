@@ -128,14 +128,24 @@ def stream_error_retry_info(error: Any) -> RetryInfo:
     return RetryInfo(retryable=False)
 
 
-def usage_tokens(usage: Any) -> tuple[int | None, int | None]:
+def usage_tokens(usage: Any) -> tuple[int | None, int | None, int | None]:
+    """``(tokens_sent, tokens_received, tokens_cached_in)`` from a Chat
+    Completions ``usage`` object. ``prompt_tokens`` already counts cache
+    reads (R2's OpenAI-compatible rule), so ``tokens_sent`` is unchanged;
+    ``tokens_cached_in`` is ``usage.prompt_tokens_details.cached_tokens``
+    when the provider reports one, else ``None`` -- there is no write
+    count in this wire format.
+    """
     if not isinstance(usage, dict):
-        return None, None
+        return None, None, None
     sent = usage.get("prompt_tokens")
     received = usage.get("completion_tokens")
+    details = usage.get("prompt_tokens_details")
+    cached_in = details.get("cached_tokens") if isinstance(details, dict) else None
     return (
         int(sent) if isinstance(sent, int) else None,
         int(received) if isinstance(received, int) else None,
+        int(cached_in) if isinstance(cached_in, int) else None,
     )
 
 
@@ -366,7 +376,7 @@ def chat_completion(
                 retry_info=classify_curl_exit(18, ""),
             )
 
-        tokens_sent, tokens_received = usage_tokens(usage)
+        tokens_sent, tokens_received, tokens_cached_in = usage_tokens(usage)
         raw: dict[str, Any] = {
             "choices": [{"message": {"content": text}, "finish_reason": finish_reason}],
             "usage": usage,
@@ -376,6 +386,7 @@ def chat_completion(
             raw=raw,
             tokens_sent=tokens_sent,
             tokens_received=tokens_received,
+            tokens_cached_in=tokens_cached_in,
             finish_reason=finish_reason,
         )
 
@@ -392,16 +403,14 @@ def chat_completion(
     text, finish_reason = parse_chat_response(raw)
 
     usage = raw.get("usage") or {}
-    tokens_sent = usage.get("prompt_tokens")
-    tokens_received = usage.get("completion_tokens")
+    tokens_sent, tokens_received, tokens_cached_in = usage_tokens(usage)
 
     return GenerateResult(
         text=text,
         raw=raw,
-        tokens_sent=int(tokens_sent) if isinstance(tokens_sent, int) else None,
-        tokens_received=int(tokens_received)
-        if isinstance(tokens_received, int)
-        else None,
+        tokens_sent=tokens_sent,
+        tokens_received=tokens_received,
+        tokens_cached_in=tokens_cached_in,
         finish_reason=finish_reason,
     )
 

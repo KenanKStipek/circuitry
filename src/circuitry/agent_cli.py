@@ -104,6 +104,12 @@ class AgentCliResult:
     session_id: str | None = None
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    #: Cache reads/writes summed over every model turn, each set only when
+    #: at least one turn's usage reported that field -- ``None`` otherwise.
+    #: Already folded into ``tokens_sent`` above; these are the separate
+    #: breakdown (#627).
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     cost_usd: float | None = None
     finish_reason: str | None = None
     structured_output: Any = None
@@ -318,6 +324,8 @@ def parse_pi_output(proc: subprocess.CompletedProcess[str]) -> AgentCliResult:
                 sent=(usage.get("input"), usage.get("cacheRead"), usage.get("cacheWrite")),
                 received=usage.get("output"),
                 cost=cost.get("total") if isinstance(cost, dict) else cost,
+                cache_read=usage.get("cacheRead"),
+                cache_write=usage.get("cacheWrite"),
             )
 
     if last_message is None:
@@ -336,6 +344,8 @@ def parse_pi_output(proc: subprocess.CompletedProcess[str]) -> AgentCliResult:
         session_id=session_id,
         tokens_sent=usage_totals.sent,
         tokens_received=usage_totals.received,
+        tokens_cached_in=usage_totals.cached_in,
+        tokens_cache_write=usage_totals.cache_write,
         cost_usd=usage_totals.cost,
         finish_reason=stop_reason if isinstance(stop_reason, str) else None,
     )
@@ -393,6 +403,8 @@ def parse_claude_output(
         ),
         received=usage.get("output_tokens"),
         cost=raw.get("total_cost_usd"),
+        cache_read=usage.get("cache_read_input_tokens"),
+        cache_write=usage.get("cache_creation_input_tokens"),
     )
     session_id = raw.get("session_id")
     stop_reason = raw.get("stop_reason")
@@ -402,6 +414,8 @@ def parse_claude_output(
         session_id=session_id if isinstance(session_id, str) else None,
         tokens_sent=usage_totals.sent,
         tokens_received=usage_totals.received,
+        tokens_cached_in=usage_totals.cached_in,
+        tokens_cache_write=usage_totals.cache_write,
         cost_usd=usage_totals.cost,
         finish_reason=stop_reason if isinstance(stop_reason, str) else None,
         structured_output=structured,
@@ -410,13 +424,28 @@ def parse_claude_output(
 
 @dataclass
 class _UsageTotals:
-    """Token and cost sums; each stays ``None`` until a number arrives."""
+    """Token and cost sums; each stays ``None`` until a number arrives.
+
+    ``cache_read``/``cache_write`` are summed separately from ``sent``
+    (which already includes them, per R2) -- each set only when at least
+    one turn's own usage reported that field (R3).
+    """
 
     sent: int | None = None
     received: int | None = None
     cost: float | None = None
+    cached_in: int | None = None
+    cache_write: int | None = None
 
-    def add(self, *, sent: Sequence[Any], received: Any, cost: Any) -> None:
+    def add(
+        self,
+        *,
+        sent: Sequence[Any],
+        received: Any,
+        cost: Any,
+        cache_read: Any = None,
+        cache_write: Any = None,
+    ) -> None:
         for value in sent:
             if _is_number(value):
                 self.sent = (self.sent or 0) + int(value)
@@ -424,6 +453,10 @@ class _UsageTotals:
             self.received = (self.received or 0) + int(received)
         if _is_number(cost):
             self.cost = (self.cost or 0.0) + float(cost)
+        if _is_number(cache_read):
+            self.cached_in = (self.cached_in or 0) + int(cache_read)
+        if _is_number(cache_write):
+            self.cache_write = (self.cache_write or 0) + int(cache_write)
 
 
 def _is_number(value: Any) -> bool:

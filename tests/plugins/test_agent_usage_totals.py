@@ -128,6 +128,82 @@ def test_run_totals_include_agent_effects_in_a_chain_a_loop_and_a_use_child(
     assert totals["tokens_sent"] == 5 * 5
     assert totals["tokens_received"] == 5 * 2
     assert totals["cost_usd"] == pytest.approx(5 * 0.001)
+    # Every one of these calls' usage explicitly reports 0 cache reads/
+    # writes (#627 R1: present, as 0, not absent, since the field itself
+    # was in the reply).
+    assert totals["tokens_cached_in"] == 0
+    assert totals["tokens_cache_write"] == 0
+
+
+def test_run_totals_gain_cached_tokens_only_when_an_agent_call_reports_them(
+    tmp_path: Path, workdir: Path
+) -> None:
+    """#627: a run where one agent call reports cache usage and the top-
+    level fake adapter's prompt effect doesn't still gains the two keys on
+    ``last_run.totals``, summing only the calls that reported them -- and
+    the agent tool effect's own node (a ``use`` child) carries them too."""
+    fake_pi = write_fake_cli(
+        tmp_path,
+        "pi",
+        stdout=pi_events(
+            usage={"input": 5, "output": 2, "cacheRead": 100, "cacheWrite": 20, "cost": {"total": 0.001}}
+        ),
+    )
+    child_path = tmp_path / "child.yml"
+    child_path.write_text(
+        yaml.safe_dump({"effects": [_agent_tool("inner_agent", cwd=workdir)]}),
+        encoding="utf-8",
+    )
+    orch_path = tmp_path / "orch.yml"
+    orch_path.write_text(
+        yaml.safe_dump(
+            {
+                "effects": [
+                    {
+                        "type": "prompt",
+                        "name": "no_cache_prompt",
+                        "template": "hi",
+                    },
+                    {
+                        # Full namespace mode (no `outputs`): the child's
+                        # own `prime.inner_agent` subtree, meta included,
+                        # is grafted directly under this node.
+                        "type": "use",
+                        "name": "agent_use",
+                        "path": str(child_path),
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch_path,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            initial_state={},
+            adapter=_EchoAdapter(tokens_sent=3, tokens_received=1),
+            config=CircuitryConfig(
+                default_adapter="fake",
+                default_model="test",
+                runtime={"plugins": {"agent": {"pi": {"binary": str(fake_pi)}}}},
+            ),
+            skip_preflight=True,
+        )
+    )
+    assert result.ok, result.error
+
+    totals = result.state["runtime"]["last_run"]["totals"]
+    assert totals["tokens_cached_in"] == 100
+    assert totals["tokens_cache_write"] == 20
+    assert "tokens_cached_in" not in result.state["prime"]["no_cache_prompt"]["meta"]
+    inner_meta = result.state["prime"]["agent_use"]["inner_agent"]["meta"]
+    assert inner_meta["tokens_cached_in"] == 100
+    assert inner_meta["tokens_cache_write"] == 20
 
 
 def test_dynamic_tree_token_sum_includes_an_agent_effect_in_a_chain_a_loop_and_a_use_child(

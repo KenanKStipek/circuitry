@@ -169,6 +169,8 @@ behaviour and failure semantics.
 | `messages` | `/api/chat` turns | `messages` turns | `system` field + turns |
 | image assets | base64 `images` (local files only) | `image_url` parts (`data:` URL for a local file) | `image` blocks (base64 or `url`) |
 | a failed response's `meta.error_code` | none for Ollama's flat `{"error": "..."}` body | the body's `error.code`, else `error.type`, each only when a non-empty string | `error.type` (no `code` field at all) |
+| `meta.tokens_sent` | `usage.prompt_eval_count`, no cache field | `usage.prompt_tokens`, which already includes the cache | `usage.input_tokens` plus `cache_read_input_tokens`/`cache_creation_input_tokens` when the response carries them |
+| `meta.tokens_cached_in` / `tokens_cache_write` | not reported | `usage.prompt_tokens_details.cached_tokens` / not reported | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens`, each only when present |
 
 A `tool` turn has no standalone form in the OpenAI-compatible or Anthropic APIs, so those adapters send it as a user turn prefixed `tool:`. Images go with the last user turn. Every other adapter (`litellm`, `replicate`, `watsonx`, `cyberdiner`, `pi`, `claude_code`, `host_claude`, and an out-of-tree adapter whose `generate()` has no `options` keyword) runs the prompt as before, with `messages` flattened into one `role: content` string, and records one warning naming what it ignored. `cof check` and run preflight warn when a prompt's image assets go to an adapter that cannot send images.
 
@@ -181,6 +183,7 @@ What lands in `meta` beyond the usual keys, each only when it has something to s
 - `meta.prompt_sent` / `meta.prompt_sent_sha256` / `meta.prompt_chars` — the text sent (as `runtime.state.prompt_sent` leaves it), and its SHA-256 and length in characters; always present. See [Recording the prompt text](#recording-the-prompt-text-runtimestateprompt_sent).
 - `meta.template_files` — one `{field, path, sha256, chars}` per `file: {from: ...}` source read at dispatch. See [Reading a prompt file at dispatch](#reading-a-prompt-file-at-dispatch-file-from-state-path).
 - `meta.tokens_sent_total` / `meta.tokens_received_total` — every attempt this dispatch made, failed/retried/fallen-back-from included, summed across all of them; `meta.tokens_sent`/`meta.tokens_received` stay the winning attempt's own count, unchanged in meaning.
+- `meta.tokens_cached_in` / `meta.tokens_cache_write` — input tokens the winning attempt's provider read from its own cache / wrote to it, right after `meta.tokens_received`. `meta.tokens_sent` already counts both either way — these are the separate breakdown. Each is set only when the provider's reply carried that count, even when it is 0; otherwise the key is absent, never `null`. Anthropic reports both when `cache_read_input_tokens`/`cache_creation_input_tokens` are in the response; OpenAI-compatible providers report only `tokens_cached_in` (`usage.prompt_tokens_details.cached_tokens`), never a write count; the agent CLIs (`pi`, `claude_code`) report both the same way the live tracker already does (`meta.live.tokens_cached_in`/`tokens_cache_write` on the `agent` tool, unchanged by this). `meta.tokens_cached_in_total` / `meta.tokens_cache_write_total` sum every attempt this dispatch made the same way `tokens_sent_total` does, present only when at least one attempt reported one; each failed/decoded `meta.fallback_attempts[]` entry carries its own copy of whichever of the two its own attempt reported.
 - `meta.http_status` / `meta.error_code` — on a failed prompt only, from the attempt whose error ended the effect (the last entry of the final pass's `meta.fallback_attempts`): the failed response's HTTP status, and the provider's own error code (the body's `error.code` when that is a non-empty string, else `error.type`; see the adapter table above). Absent, never `null`, on success (a recovered fallback included), a template/render/decode/schema failure, a missing key, a timeout or connection failure, and an allowlist denial. Each failed `meta.fallback_attempts[]` entry carries its own copy of the two fields, after `tokens_sent`/`tokens_received`.
 
 **Example — an image to a local vision model:**
@@ -273,6 +276,7 @@ Runtime plugins read the effect's `meta`, so what they store follows the setting
 | `model:` | pi's `provider/id`, e.g. `claude-bridge/claude-sonnet-4-5` | a Claude Code model, e.g. `claude-sonnet-4-5` |
 | `prompt_type: json` with a `schema` | the reply's text is decoded and validated as usual | `--json-schema`; the answer is Claude Code's `structured_output`, then validated as usual. Claude Code accepts only an object schema, so any other (`prompt_type: array`, say) is sent as `{"type": "object", "properties": {"value": <schema>}, "required": ["value"], "additionalProperties": false}` and the answer's `value` is taken |
 | `meta.tokens_sent` / `tokens_received` | input tokens including cache reads and writes / output tokens, summed over the call's model turns | the same, from the result's `usage` |
+| `meta.tokens_cached_in` / `tokens_cache_write` | `usage.cacheRead` / `usage.cacheWrite`, summed the same way, each present only when at least one turn's own usage reported it | `usage.cache_read_input_tokens` / `usage.cache_creation_input_tokens`, summed the same way |
 | `meta.cost_usd` | `usage.cost`, summed | `total_cost_usd` |
 
 `--tools ""` turns off only Claude Code's built-in tools, so `claude_code` also passes `--strict-mcp-config`: no MCP server starts, neither one from your Claude Code config nor a project `.mcp.json`. Each call runs in a fresh temporary directory, so no project's `AGENTS.md`/`CLAUDE.md` is read, and in its own process group: a timeout or a cancelled run (Ctrl-C, SIGTERM) stops the CLI and everything it started. A timeout is retried like any other; a CLI error is not, and fails the attempt with the CLI's own message — an auth failure (`Failed to authenticate. API Error: 401 ...`) or a CLI too old for the requested model (`... version X or newer is required`). `params`, `messages` turns and images are not sent: the prompt arrives flattened, with one warning naming what was ignored.
@@ -1016,7 +1020,11 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
   effect. A retried tool's `tokens_sent_total`/`tokens_received_total` sum
   every attempt the same way a retried prompt's do; the non-total fields are
   the attempt that decided the outcome, and usage an earlier, failed attempt
-  spent still counts toward the total.
+  spent still counts toward the total. `meta.tokens_cached_in`/
+  `meta.tokens_cache_write`, right after `meta.tokens_received`, follow the
+  same rule — set only when the session's own usage reported that count,
+  `tokens_cached_in_total`/`tokens_cache_write_total` summing every attempt
+  the same way, present only when at least one attempt reported one.
 
 **Supported providers:**
 
