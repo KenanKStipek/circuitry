@@ -955,8 +955,11 @@ with `path` (the LLM-callable tool, `plugins/s3_tool.py`, not the
 limited document's effect fails `cof check` when `params` alone already
 show it writing — the default, any literal other than `base64`/`url`, or
 `image_dir`/a `path` named there — and fails only at dispatch when a
-profile switches the provider to one of them after that check, or when
-`params_json` overrides an otherwise-safe literal; `cof check` cannot see
+profile switches the provider to one of them after that check, when
+`params_json` overrides an otherwise-safe literal, or, for `s3`, when
+`mode` isn't a literal at all (a template or `{from: ...}`) — `cof check`
+only catches a literal `mode: get`, so a dynamic one reaches dispatch
+unseen and is refused there instead; `cof check` cannot see
 `params_json` itself, so an effect that relies on it alone for a safe
 value fails at `cof check` too, as if unset. A bundled or library entry
 can still write locally by running trusted: eject it first (`cof eject
