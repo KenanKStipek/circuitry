@@ -42,13 +42,13 @@
     "validate": {
       "ok": false,
       "errors": [
-        "The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git"
+        "The 'toon-format' package is required to load .toon files. Install it with: pip install 'circuitry-cof[toon]'"
       ],
       "warnings": []
     },
-    "run_error": "The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
+    "run_error": "The 'toon-format' package is required to load .toon files. Install it with: pip install 'circuitry-cof[toon]'",
     "definition": null,
-    "definition_error": "ImportError: The 'toon-format' package is required to load .toon files. Install it with: pip install git+https://github.com/toon-format/toon-python.git",
+    "definition_error": "ImportError: The 'toon-format' package is required to load .toon files. Install it with: pip install 'circuitry-cof[toon]'",
     "digest": "865f84ae38fbe34d1688af1bc40a0e4153e79aab4e9656b6ef48055395a7429c",
     "comparison": {
       "validate_errors": [

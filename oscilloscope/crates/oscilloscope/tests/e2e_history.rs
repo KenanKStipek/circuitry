@@ -14,7 +14,7 @@ use std::time::Duration;
 use oscilloscope_core::history;
 use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, TestHome, e2e_electricity_enabled, e2e_enabled,
-    osi_command, osi_electricity_command, wait_with_timeout_capturing_stdout,
+    osi_command, osi_electricity_command, scripted_config, wait_with_timeout_capturing_stdout,
     wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
@@ -144,6 +144,62 @@ fn a_failed_run_is_recorded_as_failed_and_never_feeds_the_statistics() {
         "a failed run must not count as ok"
     );
     assert!(stats.whole_run.is_none());
+}
+
+/// Issue #780: `--log` never runs the TUI's own redraw loop, the
+/// one path `RunModel::observe` ever gets called from before this
+/// fix -- `RunModel::backfill_from_final_state`, called right
+/// before `HistoryHandle::write`, must still have filled in a
+/// prompt's own tokens by the time the record is written.
+#[test]
+fn a_log_runs_history_record_carries_a_prompts_own_tokens() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let history_dir = tempfile::tempdir().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "adapter: scripted\nmodel: scripted-model\neffects:\n  - name: ask\n    type: prompt\n    template: \"hi\"\n",
+    );
+    let replies = write_doc(
+        work.path(),
+        "replies.yaml",
+        "prime.ask:\n  - text: \"hello back\"\n    tokens_sent: 100\n    tokens_received: 50\n",
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let (status, stdout) = run_once(
+        &home,
+        history_dir.path(),
+        &doc,
+        &config,
+        work.path(),
+        "run1",
+    );
+    assert!(status.success(), "stdout:\n{stdout}");
+
+    let document = std::fs::canonicalize(&doc)
+        .unwrap()
+        .to_string_lossy()
+        .into_owned();
+    let records = history::read_records(history_dir.path(), &document);
+    assert_eq!(records.len(), 1, "expected one record, got {records:?}");
+    let step = records[0]
+        .steps
+        .values()
+        .find(|s| s.tokens_sent.is_some())
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a step with recorded tokens, got {:?}",
+                records[0].steps
+            )
+        });
+    assert_eq!(step.tokens_sent, Some(100));
+    assert_eq!(step.tokens_received, Some(50));
 }
 
 #[test]

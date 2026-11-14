@@ -60,7 +60,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-toon = ["toon-format @ git+https://github.com/toon-format/toon-python.git"]
+toon = ["toon-format>=1.2,<2"]
 
 # Terminal UI. `cof tui` (and a bare `cof` on a TTY) needs this; every
 # other subcommand works without it.

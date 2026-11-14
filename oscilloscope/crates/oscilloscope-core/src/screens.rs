@@ -611,6 +611,11 @@ pub struct FocusedStep {
     /// [`crate::flow::FlowRow::tokens`] uses.
     pub tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    /// Issue #627/#780's cached input, already part of `Self::
+    /// tokens` -- `crate::model::node_cached_tokens`'s own `None`,
+    /// never a false `0`, for whichever a finished node didn't
+    /// report.
+    pub tokens_cached_in: Option<u64>,
     /// A step's own usual busy time from history (issue #649's
     /// now-pane bar, issue #716's tool detail: `1m54s · usual
     /// 30.2s`) -- `None` below the 3-run threshold.
@@ -815,6 +820,7 @@ pub(crate) fn build_focused_step(
     let cost_usd = node
         .and_then(|n| n.meta.get("cost_usd"))
         .and_then(Value::as_f64);
+    let tokens_cached_in = node.and_then(|n| crate::model::node_cached_tokens(&n.meta).0);
     let attempts = node.map(|n| attempts_for(&n.meta)).unwrap_or_default();
     let retries_used = node
         .and_then(|n| n.meta.get("retries_used"))
@@ -838,7 +844,13 @@ pub(crate) fn build_focused_step(
     let history_usual = history_key
         .as_ref()
         .and_then(|key| header.history_step_usual.get(key));
-    let usual_tokens = history_usual.and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+    // A step with no token field at all (a tool, a decision, a bare
+    // loop container) still gets a `StepStats` entry whose own `tokens_
+    // p50` is a literal `0`, never a real usual to show (`tape_row_
+    // usual_tokens`'s own rule, shared here).
+    let usual_tokens = history_usual
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)))
+        .filter(|(t, _)| *t > 0);
     // Issue #716: a running tool's own elapsed time against its
     // usual busy time (`1m54s · usual 30.2s`) -- the same history
     // `usual_tokens` above already reads, now for a step's own
@@ -883,6 +895,7 @@ pub(crate) fn build_focused_step(
         share_pct,
         tokens,
         cost_usd,
+        tokens_cached_in,
         attempts,
         retries_used,
         meta_extra,
@@ -1279,6 +1292,10 @@ pub struct TapeSelectedDetail {
     pub finished_ts: Option<String>,
     pub tokens_sent: Option<u64>,
     pub tokens_received: Option<u64>,
+    /// Issue #627/#780's cached input, already part of `tokens_sent`
+    /// above -- `None` whenever nothing reported it, drawn as a
+    /// muted parenthetical right after the sent figure.
+    pub tokens_cached_in: Option<u64>,
     pub prompt_sent: Option<String>,
     pub prompt_sent_tokens: Option<u64>,
     pub reply: Option<String>,
@@ -2335,6 +2352,7 @@ fn build_tape_selected_detail(
             finished_ts,
             tokens_sent: has_tokens.then_some(figures.tokens_sent).flatten(),
             tokens_received: has_tokens.then_some(figures.tokens_received).flatten(),
+            tokens_cached_in: has_tokens.then_some(figures.tokens_cached_in).flatten(),
             description,
             ..Default::default()
         };
@@ -2349,13 +2367,14 @@ fn build_tape_selected_detail(
     // line simply doesn't draw until the row actually finishes; the
     // Live block below is what a running prompt's detail pane shows
     // instead.
-    let (sent, received) = if is_running {
-        (None, None)
+    let (sent, received, cached_in) = if is_running {
+        (None, None, None)
     } else {
         let (sent, received) = node
             .map(|n| crate::model::node_tokens(&n.meta))
             .unwrap_or((0, 0));
-        (Some(sent), Some(received))
+        let cached_in = node.and_then(|n| crate::model::node_cached_tokens(&n.meta).0);
+        (Some(sent), Some(received), cached_in)
     };
     let live = is_running
         .then(|| crate::model::prompt_live_figures(node, &row.path, model, now))
@@ -2371,6 +2390,7 @@ fn build_tape_selected_detail(
         finished_ts,
         tokens_sent: sent,
         tokens_received: received,
+        tokens_cached_in: cached_in,
         prompt_sent,
         prompt_sent_tokens: sent,
         live,
@@ -3423,10 +3443,14 @@ pub fn build_tape(
         )
     });
 
+    // Same rule as `tape_row_usual_tokens`/`usual_tokens` above: a
+    // tool/decision/container's own literal `0` is never a real
+    // usual to show.
     let selected_usual = selected_path
         .and_then(|p| crate::history::display_key(p, plan))
         .and_then(|key| header.history_step_usual.get(&key))
-        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)))
+        .filter(|(t, _)| *t > 0);
 
     // Issue #702's rule 4 ("a share never exceeds 100%"): a running
     // agent's own live tokens (unlike a running prompt's, always
@@ -3653,6 +3677,10 @@ pub struct SignalReadings {
     /// headline follows.
     pub sent_live: bool,
     pub received_live: bool,
+    /// Issue #627/#780's cached input, following `sent` the same way
+    /// it follows the Totals row's own figure (`header.tokens_
+    /// cached_in`) -- `None` with nothing reported.
+    pub tokens_cached_in: Option<u64>,
     /// Sent to received, to one decimal (§2.2: `11.5 : 1`) -- `None`
     /// with nothing received yet.
     pub ratio: Option<f64>,
@@ -4708,6 +4736,7 @@ pub fn build_signal(
             received: received_sum,
             sent_live,
             received_live,
+            tokens_cached_in: header.tokens_cached_in,
             ratio,
             peak,
             largest,
@@ -4761,6 +4790,10 @@ pub struct SelectedPassStep {
     pub status: RowStatus,
     pub sent: u64,
     pub received: u64,
+    /// Issue #627/#780's cached input, summed over this step's own
+    /// subtree the same way `sent`/`received` are -- `None` with
+    /// nothing reported.
+    pub cached_in: Option<u64>,
     pub usual: Option<u64>,
     pub produced: Option<String>,
 }
@@ -4972,6 +5005,7 @@ fn build_selected_pass(
         .filter(|r| r.kind == RowKind::Prompt)
         .map(|r| {
             let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
+            let cached_in = crate::model::subtree_cached_tokens(&r.path, flat);
             let usual = tape_row_usual_tokens(&r.path, plan, header);
             let produced = flat.get(&r.path).and_then(|n| {
                 if crate::summary::is_json_shaped(&n.value) {
@@ -4986,6 +5020,7 @@ fn build_selected_pass(
                 status: r.status.clone(),
                 sent,
                 received,
+                cached_in,
                 usual,
                 produced,
             }
@@ -5451,6 +5486,7 @@ mod tests {
             tokens_received: 500,
             tokens_sent_live_estimate: 0,
             tokens_received_live_estimate: 0,
+            tokens_cached_in: None,
             innermost_loop_eta_s: Some(360.0),
             innermost_loop_eta_ts: Some("2026-10-08T11:58:00Z".to_string()),
             history_eta_ts: None,

@@ -172,17 +172,23 @@ git push origin v0.2.0
 
 The workflow then:
 
-1. Runs the test matrix on Python 3.9–3.13.
-2. Verifies the tag matches `pyproject.toml`'s, `electricity/Cargo.toml`'s
+1. Runs the test matrix on Python 3.10–3.13.
+2. Verifies the tag's commit is on `main` (`git merge-base --is-ancestor`)
+   and that the tag matches `pyproject.toml`'s, `electricity/Cargo.toml`'s
    **and** `oscilloscope/Cargo.toml`'s version (catches forgot-to-bump tags
    before they ship).
-3. Builds wheel + sdist and runs `twine check` on them, and in parallel
-   builds electricity's and osi's release archives — the same reusable
-   workflow builds both — and validates electricity's container image
-   (without pushing it yet; osi has none).
-4. Once every build succeeds: uploads to PyPI via OIDC trusted publishing,
-   then pushes the container image to ghcr.io.
-5. Creates a GitHub Release with the changelog excerpt, the Python
+3. Builds wheel + sdist and, in parallel, builds electricity's and osi's
+   release archives — the same reusable workflow builds both — and
+   validates electricity's container image (without pushing it yet; osi
+   has none).
+4. Runs the same gate `quality.yml` runs on a fresh checkout and the just-
+   built dists: `ruff check .`, `mypy src`, `scripts/smoke-curation.sh`,
+   `scripts/sync-bundled-docs.py --check`, `scripts/build-changelog.py
+   --check`, and `scripts/check-direct-references.py` on the wheel and
+   sdist. Nothing publishes if any of this fails.
+5. Once every build and the gate succeed: uploads to PyPI via OIDC trusted
+   publishing, then pushes the container image to ghcr.io.
+6. Creates a GitHub Release with the changelog excerpt, the Python
    artifacts, and electricity's and osi's archives/checksums, all attached.
 
 `cof`'s own man pages install from the Python wheel/sdist into
@@ -200,6 +206,43 @@ gh run watch
 ```
 
 A typical end-to-end takes 4–6 minutes.
+
+## Dry run
+
+`release.yml` also takes a `workflow_dispatch` trigger with a `dry_run`
+input (default `true`). Dispatch it from any branch:
+
+```bash
+gh workflow run release.yml --ref <branch>            # dry_run=true
+gh workflow run release.yml --ref vX.Y.Z -f dry_run=false  # publishes for real
+```
+
+A dry run (`dry_run=true`, the default) runs everything above except the
+three publishing steps: the PyPI upload, the image push and the GitHub
+Release are all skipped. It's the way to exercise the whole pipeline — the version
+checks, every build, and the full gate — before cutting a real tag.
+`dry_run=false` on a manual dispatch runs the real publish steps too,
+exactly like a tag push — but only when dispatched against an existing
+release tag (`--ref vX.Y.Z`); it refuses up front otherwise, since
+publishing an untagged commit is never correct. It still runs the
+main-ancestor check too, refusing a tag whose commit isn't on `main`.
+Prefer tagging; a dispatch only reaches `dry_run=false` on a tag that
+already triggered the same publish via the push above, so in practice
+there's rarely a reason to.
+
+### TestPyPI dry run
+
+`dry_run=false`, whether from a tag push or a dispatch, runs the real
+`publish-pypi` job and uploads to the real `circuitry-cof` project on
+PyPI — there's no separate dry-run destination. To rehearse an upload
+without touching the real project, add a trusted publisher on
+**TestPyPI** (pointed at `https://test.pypi.org/manage/project/circuitry-cof/settings/publishing/`,
+with the `pypi` environment name) naming whichever workflow file
+actually performs the TestPyPI upload — a separate workflow, or a
+repository-variable-gated branch added to this one, publishing to
+`https://test.pypi.org/legacy/` instead. Setting up a TestPyPI trusted
+publisher is a one-time step for a maintainer with access to the TestPyPI
+project settings; a contributor's PR can't add it.
 
 ## Pre-releases
 
@@ -255,4 +298,5 @@ ls -la dist/   # circuitry_cof-<version>.tar.gz + .whl
 | `changelog.d/` | Per-PR changelog fragments, compiled into `CHANGELOG.md` at release |
 | `scripts/build-changelog.py` | The fragment compiler |
 | `scripts/check-changelog.py` | CI gate: fragment required, no direct Unreleased edits |
+| `scripts/check-direct-references.py` | CI/release gate: fails on a direct-URL dependency in a built wheel or sdist |
 | `RELEASING.md` | This document |
