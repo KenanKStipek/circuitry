@@ -386,11 +386,15 @@ fn create_0700(dir: &Path) -> io::Result<()> {
 fn write_atomic(path: &Path, content: &str) -> io::Result<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let tmp_path = parent.join(format!(".last-run.{}.tmp", std::process::id()));
+    // A stale file at this exact name (left by a crash whose pid got
+    // reused) is removed first, so `create_new` below always opens a
+    // fresh file, `0600` from creation -- never a stale file that kept
+    // its own looser mode, and never a symlink planted at this name.
+    let _ = std::fs::remove_file(&tmp_path);
     let result = (|| -> io::Result<()> {
         let mut file = std::fs::OpenOptions::new()
             .write(true)
-            .create(true)
-            .truncate(true)
+            .create_new(true)
             .mode(0o600)
             .open(&tmp_path)?;
         file.write_all(content.as_bytes())?;
