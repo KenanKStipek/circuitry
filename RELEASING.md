@@ -196,10 +196,13 @@ last two steps: the PyPI upload, the image push and the GitHub Release are
 all skipped. It's the way to exercise the whole pipeline — the version
 checks, every build, and the full gate — before cutting a real tag.
 `dry_run=false` on a manual dispatch runs the real publish steps too,
-exactly like a tag push, including the main-ancestor check — it still
-refuses to publish from a branch that isn't on `main`. Prefer tagging;
-use `dry_run=false` only if you specifically need to repeat a publish
-without a new tag.
+exactly like a tag push — but only when dispatched against an existing
+release tag (`--ref vX.Y.Z`); it refuses up front otherwise, since
+publishing an untagged commit is never correct. It still runs the
+main-ancestor check too, refusing a tag whose commit isn't on `main`.
+Prefer tagging; a dispatch only reaches `dry_run=false` on a tag that
+already triggered the same publish via the push above, so in practice
+there's rarely a reason to.
 
 ### TestPyPI dry run
 

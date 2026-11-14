@@ -63,6 +63,16 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # need origin/main's history for the ancestor check below
+      - name: Refuse a non-dry-run dispatch against an untagged commit
+        # A workflow_dispatch's GITHUB_REF is whatever ref it was run
+        # against, not necessarily a tag — only a tag push or a dispatch
+        # against an existing tag may really publish.
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.dry_run }}
+        run: |
+          if [[ "$GITHUB_REF" != refs/tags/v* ]]; then
+            echo "::error::dry_run=false requires dispatching against an existing release tag (--ref vX.Y.Z); $GITHUB_REF is not a tag — refusing to publish an untagged commit"
+            exit 1
+          fi
       - name: Refuse to publish from a commit that is not on main
         # Always enforced for a tag push. A workflow_dispatch dry run may
         # exercise the pipeline from any branch; only a non-dry-run dispatch
@@ -337,6 +347,7 @@ jobs:
             prerelease_flag="--prerelease"
           fi
           gh release create "v$version" \
+            --target "$GITHUB_SHA" \
             --title "v$version" \
             --notes-file "${{ steps.changelog.outputs.notes_file }}" \
             $prerelease_flag \
