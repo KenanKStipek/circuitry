@@ -614,6 +614,26 @@ fn build_level(
             }
             continue;
         }
+        // Issue #779: a decision with no evidence of its own
+        // (an empty branch, or simply not started yet) still has a
+        // real plan position -- the first later sibling's own row
+        // to appear proves this decision comes before it, so it is
+        // spliced in right here, ahead of that row, rather than
+        // left for the trailing fallback below to append after
+        // everything on this level once the scan ends. Several
+        // decisions can share the same trigger row; emitting them
+        // in `unnamed`'s own plan order (ascending `k`) keeps them
+        // in plan order relative to each other too.
+        while let Some(k) = (0..unnamed.len()).find(|&k| {
+            !unnamed_emitted[k] && unnamed[k].later_siblings.iter().any(|p| p == &row.path)
+        }) {
+            unnamed_emitted[k] = true;
+            let (station, fork, _, hide) =
+                build_unnamed_decision(&unnamed[k], rows, i, depth, k, ctx);
+            items.push(RailItem::Station(station));
+            items.push(RailItem::Fork(fork));
+            hidden.extend(hide);
+        }
         if let Some(pos) = (0..unnamed.len()).find(|&k| {
             !unnamed_emitted[k]
                 && unnamed[k]
@@ -701,10 +721,10 @@ fn build_level(
             }
         }
     }
-    // Any decision this level never found a row for (neither
-    // branch has started) is still a real, pending `if` -- placed
-    // right after its own host's row, the same way the removed tree
-    // screen's `by_host_after` fallback did.
+    // A decision no row ever triggered -- neither its own branches
+    // nor any later sibling of its own ever started -- has nothing
+    // left at this level to prove it comes before, so it draws
+    // last, still pending.
     for (k, decision) in unnamed.iter().enumerate() {
         if unnamed_emitted[k] {
             continue;
@@ -2680,6 +2700,136 @@ mod tests {
             &model,
             "2026-01-01T00:00:00Z",
         )
+    }
+
+    /// Issue #635's own vacuous-else shape (ported for #779's unit
+    /// test below): `a`'s taken branch is an `else` with no steps at
+    /// all, so neither of its own branches ever gets a real node --
+    /// only a later sibling resolving first can prove `a` is settled.
+    fn vacuous_else_unnamed_if_yaml(a: &str, b: &str) -> String {
+        format!(
+            "effects:\n  - type: if\n    if: {{mode: cel, expr: \"false\"}}\n    then:\n      - name: {a}_then\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n  - type: if\n    if: {{mode: cel, expr: \"true\"}}\n    then:\n      - name: {b}_then\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n"
+        )
+    }
+
+    /// Issue #779: two unnamed `if`s, `a` then `b`, on one host --
+    /// `a` takes an `else` with no steps in it, so neither of its own
+    /// branches ever gets a real row of its own, while `b` takes a
+    /// branch with a real step. `rows` is built by hand here, never
+    /// through `render::build`/`RunModel`'s own status inference
+    /// (whose own chain-flow heuristic would otherwise guess `a_then`
+    /// `LikelyRunning` the moment nothing else in the document is,
+    /// manufacturing evidence this test must not have) -- `a_then`'s
+    /// row stays `Pending` throughout, the same as a real run leaves
+    /// an untaken, empty-sided branch with no node at all.
+    ///
+    /// The rail must draw `a`'s decision before `b`'s, in plan order,
+    /// both before and after `b_then` resolves -- never after, the
+    /// reverse plan order issue #779 reports.
+    #[test]
+    fn an_unnamed_if_with_no_evidence_keeps_its_plan_position() {
+        let plan = compile_doc(&vacuous_else_unnamed_if_yaml("a", "b"));
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let zone = chrono::FixedOffset::east_opt(0).unwrap();
+        let root_row = Row {
+            path: "prime".to_string(),
+            depth: 0,
+            label: "prime".to_string(),
+            kind: RowKind::Root,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: true,
+        };
+        let a_then_row = Row {
+            path: "prime.a_then".to_string(),
+            depth: 1,
+            label: "a_then".to_string(),
+            kind: RowKind::Tool,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Pending,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: false,
+        };
+        let mut b_then_row = a_then_row.clone();
+        b_then_row.path = "prime.b_then".to_string();
+        b_then_row.label = "b_then".to_string();
+
+        // Before `b` resolves: neither decision has any evidence at
+        // all -- both must still draw in plan order, `a` then `b`.
+        let before_state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null}}
+        });
+        let before_flat = flat_from(before_state.clone());
+        let before_rows = vec![root_row.clone(), a_then_row.clone(), b_then_row.clone()];
+        let before_rail = build_rail(
+            &before_rows,
+            &before_flat,
+            &plan,
+            &header,
+            Some(&before_state),
+            &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(
+            lane_stations(&before_rail, None),
+            vec![
+                "prime.__if".to_string(),
+                "prime.a_then".to_string(),
+                "prime.__if_1".to_string(),
+                "prime.b_then".to_string(),
+            ]
+        );
+
+        // After `b` resolves (its own `then` step ran) while `a`
+        // still has no evidence of its own: `a`'s decision must keep
+        // drawing *before* `b`'s, never after. `b_then`'s own row
+        // comes *before* `a_then`'s here, matching `render::build`'s
+        // real row order once one has a real timestamp and the other
+        // doesn't (`child_segments`'s own earliest-evidence sort) --
+        // exactly the ordering issue #779 reports, `a`'s decision
+        // without any evidence of its own sitting behind a later
+        // sibling's real row.
+        let mut b_then_done = b_then_row.clone();
+        b_then_done.status.kind = StatusKind::Done;
+        b_then_done.duration_s = Some(0.0);
+        let after_state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "b_then": {"value": "x", "meta": {"created_at": "t0", "completed_at": "t1"}}}
+        });
+        let after_flat = flat_from(after_state.clone());
+        let after_rows = vec![root_row, b_then_done, a_then_row];
+        let after_rail = build_rail(
+            &after_rows,
+            &after_flat,
+            &plan,
+            &header,
+            Some(&after_state),
+            &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(
+            lane_stations(&after_rail, None),
+            vec![
+                "prime.__if".to_string(),
+                "prime.__if_1".to_string(),
+                "prime.b_then".to_string(),
+            ],
+            "a's decision (`.__if`) must still draw before b's (`.__if_1`), never after it"
+        );
     }
 
     fn unnamed_if_yaml(a: &str, b: &str) -> String {
