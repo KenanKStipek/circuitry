@@ -1622,6 +1622,22 @@ further passes only bump a per-path count with no timing -- a bound
 the Time screen (issue #650) is the first thing expected to approach,
 not this one.
 
+Tokens and cost (issue #780) always come from state, whichever
+source gave the interval its own timing: an `--events`-paired
+interval's own `end` carries neither, so `RunModel::push_state_
+interval` backfills `tokens_sent`/`tokens_received`/`cost_usd` onto
+it the moment the matching node shows finished in state. Two
+callers reach it: `RunModel::observe`, on every redraw of the TUI's
+own loop, and `RunModel::backfill_from_final_state`, called once
+more right before every `HistoryHandle::write` for every other
+caller (`--log`, `--glance` off a terminal, plain `osi watch`),
+none of which ever calls `observe` with state at all. Before #780
+neither existed, so a step's own tokens and cost went unrecorded
+for any run, attached or not. A step that reported no tokens at all
+records `0`, the same as a state-only interval already did; a
+history file written before this existed still reads, its older
+steps' tokens/cost simply `None` (unknown), never a false `0`.
+
 **The file format:** one JSONL file per document, in
 `$XDG_STATE_HOME/circuitry/osi/history/<sha256 of the absolute
 path>.jsonl` (`~/.local/state/...` by default, macOS included --
@@ -2352,6 +2368,33 @@ longer leave room for both it and that one required space, rather
 than let the pane's own clipping cut the count instead (an agent's
 own total, cached input tokens included, routinely reaches six
 digits or more).
+
+**Cached input** (issue #627, the UI side; the adapters that report
+it land separately). A provider that reports how much of a prompt's
+input came from its own cache writes `meta.tokens_cached_in`/
+`tokens_cache_write` on the effect, already folded into `tokens_
+sent` -- `model::node_cached_tokens` reads the first of the two
+(`None`, never a false `0`, for whichever the provider didn't
+report), and `model::subtree_cached_tokens` sums it over a subtree
+the same way `model::subtree_tokens` already does for the plain
+pair. Two displays exist, depending on the pane: a one-line place
+(the Totals row's own `Header::tokens_cached_in`, the Flow's own
+selected-pass pane's `SelectedPassStep::cached_in`, and the
+Signal's own Readings Sent line's `SignalReadings::tokens_
+cached_in`) adds a muted `(N cached)` parenthetical right after the
+sent figure (`format::format_cached_suffix`, built from the shared
+`format_tokens`), dropped first, rather than wrap or cut into a
+figure's own digits, once the whole line doesn't have room for it.
+A key/value pane with its own `Tokens` field (the Tape's detail
+pane and its own full-screen reuse, through `TapeSelectedDetail::
+tokens_cached_in`, and the full-screen step view shared by the
+Signal and the Store, through `FocusedStep::tokens_cached_in`)
+instead shows a separate `Cached` field right under `Tokens`
+(`format::format_cached_value`), wrapped the same way every other
+field already is rather than dropped. Every one of these reads
+`None`, never a false `0`, with nothing reported. Every design
+frame and golden fixture carries no cached keys at all, so none of
+them change.
 
 **The Signal's own agent trace** (issue #702, replacing the single
 Now-column estimate an agent otherwise would have gotten).

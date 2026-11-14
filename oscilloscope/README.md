@@ -650,8 +650,16 @@ falling back to `tokens_sent`/`tokens_received` otherwise — the same pair
 both `cof`'s and electricity's own `runtime.last_run.totals` are built
 from, so a retried prompt can never make one surface disagree with
 another. There is no live *output* count: both engines report a prompt's
-tokens only once it finishes. Every token count is formatted the same one
-way too (`369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`), and so is every duration,
+tokens only once it finishes. Where a node reports cached input (`meta.
+tokens_cached_in`, already part of `tokens_sent`), a one-line Tokens
+figure (the header, the Flow's own selected-pass pane, the Signal's own
+Readings Sent line) adds a muted `(N cached)` right after the sent one,
+dropped first if the line runs short of room; a key/value pane with its
+own `Tokens` field (the Tape's detail pane, and the full-screen step view
+shared by the Signal and the Store) instead shows it on a separate
+`Cached` line right under `Tokens`. Every token count is formatted the
+same one way too (`369 t`, `18.0 kt`, `142 kt`, `2.1 Mt`), and so is every
+duration,
 everywhere one shows up (`0.4s`, `6m12s`, `2h05m`, `3d04h`) —
 `oscilloscope_core::format`'s one formatter each. Clock times (`HH:MM:SS`
 in the log, the story, the header's own `since 11:04:58` while a run is
