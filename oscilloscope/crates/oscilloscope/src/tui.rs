@@ -2964,6 +2964,11 @@ fn draw_totals_row(
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
+    let totals_live_style = if live {
+        Style::default().fg(ctx.theme.dim)
+    } else {
+        Style::default().fg(ctx.theme.text)
+    };
     let mut spans = vec![
         Span::styled(
             " ",
@@ -2977,28 +2982,37 @@ fn draw_totals_row(
         ),
         Span::styled(
             format!(
-                "{}↑{} ↓{} · ",
+                "{}↑{} ",
                 if live { "≈" } else { "" },
-                oscilloscope_core::format::format_tokens_arrow(sent_total),
-                oscilloscope_core::format::format_tokens_arrow(received_total)
+                oscilloscope_core::format::format_tokens_arrow(sent_total)
             ),
-            if live {
-                Style::default().fg(ctx.theme.dim)
-            } else {
-                Style::default().fg(ctx.theme.text)
-            },
-        ),
-        Span::styled(
-            oscilloscope_core::format::format_tokens(sent_total + received_total),
-            if live {
-                Style::default().fg(ctx.theme.dim)
-            } else {
-                Style::default()
-                    .fg(ctx.theme.text)
-                    .add_modifier(Modifier::BOLD)
-            },
+            totals_live_style,
         ),
     ];
+    // Issue #627/#780's drop-first rule: the cached-input
+    // parenthetical is spliced in right here (right after the sent
+    // figure), but only once the whole row -- every field that
+    // follows included -- still fits `area.width` with it in,
+    // measured below once the rest of the row has been built;
+    // never cutting a figure's own digits to make room for it.
+    let cached_splice_at = spans.len();
+    spans.push(Span::styled(
+        format!(
+            "↓{} · ",
+            oscilloscope_core::format::format_tokens_arrow(received_total)
+        ),
+        totals_live_style,
+    ));
+    spans.push(Span::styled(
+        oscilloscope_core::format::format_tokens(sent_total + received_total),
+        if live {
+            Style::default().fg(ctx.theme.dim)
+        } else {
+            Style::default()
+                .fg(ctx.theme.text)
+                .add_modifier(Modifier::BOLD)
+        },
+    ));
     if let Some(pct) = usual_pct {
         // §3.6: the 0-25% band is bold here even though a row's own
         // deviation isn't -- every other band is already bold.
@@ -3050,6 +3064,18 @@ fn draw_totals_row(
         "Cost ",
         Style::default().fg(ctx.theme.fg_muted),
     ));
+    if let Some(suffix) = oscilloscope_core::format::format_cached_suffix(header.tokens_cached_in) {
+        let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+        if used + 1 + suffix.chars().count() <= area.width as usize {
+            spans.insert(
+                cached_splice_at,
+                Span::styled(
+                    format!("{suffix} "),
+                    Style::default().fg(ctx.theme.fg_muted),
+                ),
+            );
+        }
+    }
     // The Tape's own Totals row fills the rest of the pane with this
     // dash's own colour (§2.1's own blank-row convention); every
     // other screen keeps its pre-§678 shape, a single bare dash with
@@ -3703,6 +3729,58 @@ fn detail_key_width_for_step(step: &oscilloscope_core::screens::FocusedStep) -> 
     }
 }
 
+/// [`detail_field_lines`]'s own value column width for `step`'s own
+/// field key width -- the width a Tokens line's own cached-input
+/// parenthetical (issue #627/#780) is measured against, since
+/// `detail_field_lines` itself wraps a value that doesn't fit rather
+/// than cutting it, and the drop-first rule needs to decide *before*
+/// that happens, never after.
+fn detail_value_width_for_step(
+    step: &oscilloscope_core::screens::FocusedStep,
+    width: usize,
+) -> usize {
+    width
+        .saturating_sub(detail_key_width_for_step(step) + 2)
+        .max(1)
+}
+
+/// A Tokens line's own spans (issue #627/#780): `↑SENT ↓RECEIVED ·
+/// TOTAL`, with a muted `(CACHED cached)` parenthetical right after
+/// the sent figure wherever `cached_in` reports one -- dropped
+/// first, before anything wraps or cuts, once the whole line
+/// (parenthetical included) would not fit `value_width`; a figure's
+/// own digits are never cut.
+fn tokens_line_spans(
+    sent_text: &str,
+    received_text: &str,
+    total_text: &str,
+    cached_in: Option<u64>,
+    value_width: usize,
+    default: Style,
+    muted: Style,
+) -> Vec<Span<'static>> {
+    let base_len = format!("↑{sent_text} ↓{received_text} · {total_text}")
+        .chars()
+        .count();
+    let cached_suffix = oscilloscope_core::format::format_cached_suffix(cached_in);
+    let show_cached = cached_suffix
+        .as_ref()
+        .is_some_and(|s| base_len + 1 + s.chars().count() <= value_width);
+    let mut spans = vec![Span::styled(format!("↑{sent_text} "), default)];
+    if show_cached {
+        if let Some(suffix) = cached_suffix {
+            spans.push(Span::styled(format!("{suffix} "), muted));
+        }
+    }
+    spans.push(Span::styled(format!("↓{received_text} "), default));
+    spans.push(Span::styled("· ", muted));
+    spans.push(Span::styled(
+        total_text.to_string(),
+        default.add_modifier(Modifier::BOLD),
+    ));
+    spans
+}
+
 fn detail_field_lines(
     fields: &[(&'static str, Vec<Span<'static>>)],
     key_width: usize,
@@ -3766,6 +3844,8 @@ fn tape_detail_scroll_follow(
 mod detail_renderer_tests {
     use super::*;
     use crate::theme::ThemeName;
+    use ratatui::Terminal;
+    use ratatui::backend::TestBackend;
 
     fn ctx<'a>(theme: &'a Theme, zone: &'a chrono::FixedOffset) -> DrawCtx<'a> {
         DrawCtx {
@@ -4136,6 +4216,116 @@ mod detail_renderer_tests {
         assert!(focused.contains("above"), "{focused}");
         assert_eq!(app.selected_path.as_deref(), Some("prime.ask"));
     }
+
+    fn totals_row_header(tokens_cached_in: Option<u64>) -> oscilloscope_core::render::Header {
+        oscilloscope_core::render::Header {
+            document: "demo.yml".to_string(),
+            engine: "cof".to_string(),
+            run_id: None,
+            label: None,
+            status: oscilloscope_core::model::RunStatus::Running,
+            elapsed_s: 10.0,
+            run_start_ts: None,
+            run_end_ts: None,
+            effects_done: 3,
+            effects_planned: Some(6),
+            effects_planned_is_lower_bound: false,
+            effects_planned_full: None,
+            tokens_sent: 24_900_000,
+            tokens_received: 125_000,
+            tokens_sent_live_estimate: 0,
+            tokens_received_live_estimate: 0,
+            tokens_cached_in,
+            innermost_loop_eta_s: None,
+            innermost_loop_eta_ts: None,
+            history_eta_ts: None,
+            history_eta_past_usual: false,
+            history_eta_remaining_s: None,
+            history_eta_low_ts: None,
+            history_eta_high_ts: None,
+            history_vs_usual_s: None,
+            history_usual_total_s: None,
+            history_usual_total_tokens: None,
+            history_same_hash_count: None,
+            history_step_usual: Default::default(),
+            latest_report: None,
+            engine_alive: true,
+        }
+    }
+
+    /// Issue #627/#780: the Totals row shows cached input right
+    /// after the sent figure, as a muted parenthetical, wherever the
+    /// run's own totals carry one.
+    #[test]
+    fn totals_row_shows_cached_input_after_the_sent_figure() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let header = totals_row_header(Some(24_600_000));
+        let mut terminal = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_totals_row(f, f.area(), &header, false, None, None, None, false, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(text.contains("↑24.9M (24.6 Mt cached) ↓125k"), "{text}");
+    }
+
+    /// The same cached-input figure as above, but at a width too
+    /// narrow for the whole row -- the parenthetical drops first,
+    /// and the sent/received figures keep every one of their own
+    /// digits (issue #627/#780's drop-first rule).
+    #[test]
+    fn totals_row_drops_cached_input_at_a_narrow_width() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let header = totals_row_header(Some(24_600_000));
+        let mut terminal = Terminal::new(TestBackend::new(60, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_totals_row(f, f.area(), &header, false, None, None, None, false, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(!text.contains("cached"), "{text}");
+        assert!(text.contains("↑24.9M ↓125k"), "{text}");
+    }
+
+    /// With nothing reported, the Totals row draws exactly as it did
+    /// before cached input existed at all.
+    #[test]
+    fn totals_row_has_no_parenthetical_with_no_cached_input() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let header = totals_row_header(None);
+        let mut terminal = Terminal::new(TestBackend::new(120, 1)).unwrap();
+        terminal
+            .draw(|f| {
+                draw_totals_row(f, f.area(), &header, false, None, None, None, false, &ctx);
+            })
+            .unwrap();
+        let text = terminal.backend().to_string();
+        assert!(!text.contains("cached"), "{text}");
+        assert!(text.contains("↑24.9M ↓125k"), "{text}");
+    }
 }
 
 /// The Normal/Usual states' own detail pane (§2.1): the selected
@@ -4302,16 +4492,18 @@ fn tape_normal_detail_lines(
             .map(oscilloscope_core::format::format_tokens_arrow)
             .unwrap_or_else(|| "—".to_string());
         let total = detail.tokens_sent.unwrap_or(0) + detail.tokens_received.unwrap_or(0);
+        let total_text = oscilloscope_core::format::format_tokens(total);
         fields.push((
             "Tokens",
-            vec![
-                Span::styled(format!("↑{sent_text} ↓{received_text} "), default),
-                Span::styled("· ", muted),
-                Span::styled(
-                    oscilloscope_core::format::format_tokens(total),
-                    default.add_modifier(Modifier::BOLD),
-                ),
-            ],
+            tokens_line_spans(
+                &sent_text,
+                &received_text,
+                &total_text,
+                detail.tokens_cached_in,
+                detail_value_width_for_step(step, width),
+                default,
+                muted,
+            ),
         ));
     }
 
@@ -9814,23 +10006,27 @@ fn draw_signal_readings(
     };
     let sent_marker = if readings.sent_live { "≈" } else { "" };
     let received_marker = if readings.received_live { "≈" } else { "" };
+    // Issue #627/#780's drop-first rule: the cached-input
+    // parenthetical only joins the Sent line once the whole line
+    // still fits without it needing `readings_cut_line`'s own `⋯`
+    // -- a clean drop beats a mid-parenthetical cut.
+    let sent_text = format!(
+        "{sent_marker}{}",
+        oscilloscope_core::format::format_tokens(readings.sent)
+    );
+    let mut sent_spans = vec![
+        Span::styled("Sent     ", muted),
+        Span::styled(sent_text.clone(), sent_style),
+    ];
+    if let Some(suffix) = oscilloscope_core::format::format_cached_suffix(readings.tokens_cached_in)
+    {
+        let base_len = "Sent     ".len() + sent_text.chars().count();
+        if base_len + 1 + suffix.chars().count() <= line_width {
+            sent_spans.push(Span::styled(format!(" {suffix}"), muted));
+        }
+    }
     let mut lines = vec![
-        pad_line(
-            readings_cut_line(
-                vec![
-                    Span::styled("Sent     ", muted),
-                    Span::styled(
-                        format!(
-                            "{sent_marker}{}",
-                            oscilloscope_core::format::format_tokens(readings.sent)
-                        ),
-                        sent_style,
-                    ),
-                ],
-                line_width,
-            ),
-            line_width,
-        ),
+        pad_line(readings_cut_line(sent_spans, line_width), line_width),
         pad_line(
             readings_cut_line(
                 vec![
@@ -12952,7 +13148,7 @@ fn draw_flow_selected_pane(
     let viewport = area.height.saturating_sub(2) as usize;
     let content_width = (area.width as usize).saturating_sub(3);
     let lines = if let Some(pass) = &screen.selected_pass {
-        selected_pass_lines(pass, wide, ctx)
+        selected_pass_lines(pass, wide, content_width, ctx)
     } else if let Some(decision) = &screen.selected_decision {
         decision_detail_lines(decision, ctx)
     } else if let Some(step) = &screen.selected_step {
@@ -13030,6 +13226,7 @@ fn pad_line_to_width(line: Line<'static>, width: usize, fallback_fg: Color) -> L
 fn selected_pass_lines(
     pass: &oscilloscope_core::screens::SelectedPass,
     wide: bool,
+    content_width: usize,
     ctx: &DrawCtx,
 ) -> Vec<Line<'static>> {
     // Below the three-pane threshold (DESIGN.md's own §5, 100×30),
@@ -13075,16 +13272,40 @@ fn selected_pass_lines(
         ];
         let total = step.sent + step.received;
         if total > 0 {
+            let sent_text = oscilloscope_core::format::format_tokens_arrow(step.sent);
+            let received_text = oscilloscope_core::format::format_tokens_arrow(step.received);
+            let total_text = oscilloscope_core::format::format_tokens(total);
+            // Issue #627/#780's drop-first rule: the parenthetical
+            // only draws once the prefix already on this line plus
+            // the whole token block still fits `content_width` --
+            // never cutting the sent/received/total figures' own
+            // digits to make room for it.
+            let prefix_len: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+            let base_len = format!("↑{sent_text} ↓{received_text} · {total_text}")
+                .chars()
+                .count();
+            let cached_suffix = oscilloscope_core::format::format_cached_suffix(step.cached_in);
+            let show_cached = cached_suffix.as_ref().is_some_and(|suffix| {
+                prefix_len + base_len + 1 + suffix.chars().count() <= content_width
+            });
             spans.push(Span::styled(
-                format!(
-                    "↑{} ↓{} · ",
-                    oscilloscope_core::format::format_tokens_arrow(step.sent),
-                    oscilloscope_core::format::format_tokens_arrow(step.received)
-                ),
+                format!("↑{sent_text} "),
+                Style::default().fg(ctx.theme.text),
+            ));
+            if show_cached {
+                if let Some(suffix) = &cached_suffix {
+                    spans.push(Span::styled(
+                        format!("{suffix} "),
+                        Style::default().fg(ctx.theme.fg_muted),
+                    ));
+                }
+            }
+            spans.push(Span::styled(
+                format!("↓{received_text} · "),
                 Style::default().fg(ctx.theme.text),
             ));
             spans.push(Span::styled(
-                format!("{}  ", oscilloscope_core::format::format_tokens(total)),
+                format!("{total_text}  "),
                 Style::default()
                     .fg(ctx.theme.text)
                     .add_modifier(Modifier::BOLD),
@@ -15404,17 +15625,75 @@ mod flow_layout_tests {
                 },
                 sent: 1_200,
                 received: 100,
+                cached_in: None,
                 usual: Some(1_500_000),
                 produced: None,
             }],
         };
-        let lines = selected_pass_lines(&pass, true, &ctx);
+        let lines = selected_pass_lines(&pass, true, 120, &ctx);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter())
             .map(|s| s.content.as_ref())
             .collect();
         assert!(text.contains("vs usual 1.5 Mt"), "{text}");
+    }
+
+    /// Issue #627/#780: a pass step whose node reported cached input
+    /// shows it right after its own sent figure.
+    #[test]
+    fn selected_pass_lines_shows_cached_input_after_the_sent_figure() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::Dracula);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: false,
+        };
+        let pass = oscilloscope_core::screens::SelectedPass {
+            index: 0,
+            label: "iter_0".to_string(),
+            active_label: "Draft".to_string(),
+            active_status: oscilloscope_core::model::RowStatus {
+                kind: StatusKind::Done,
+                skip_reason: None,
+                retrying: false,
+            },
+            active_elapsed_s: None,
+            slot: None,
+            steps: vec![oscilloscope_core::screens::SelectedPassStep {
+                label: "Draft".to_string(),
+                status: oscilloscope_core::model::RowStatus {
+                    kind: StatusKind::Done,
+                    skip_reason: None,
+                    retrying: false,
+                },
+                sent: 24_900_000,
+                received: 125_000,
+                cached_in: Some(24_600_000),
+                usual: None,
+                produced: None,
+            }],
+        };
+        let lines = selected_pass_lines(&pass, true, 120, &ctx);
+        let text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(text.contains("↑24.9M (24.6 Mt cached) ↓125k"), "{text}");
+
+        // At a narrow width the parenthetical drops, never cutting
+        // the sent/received figures' own digits.
+        let narrow_lines = selected_pass_lines(&pass, true, 30, &ctx);
+        let narrow_text: String = narrow_lines
+            .iter()
+            .flat_map(|l| l.spans.iter())
+            .map(|s| s.content.as_ref())
+            .collect();
+        assert!(!narrow_text.contains("cached"), "{narrow_text}");
+        assert!(narrow_text.contains("↑24.9M ↓125k"), "{narrow_text}");
     }
 
     #[test]
@@ -16450,6 +16729,73 @@ mod golden_tests {
         let description_pos = text.find("Builds the release binary.").unwrap();
         let status_pos = text.find("Status").unwrap();
         assert!(description_pos < status_pos, "{text}");
+    }
+
+    /// Issue #627/#780: a finished step whose node reported cached
+    /// input shows it right after the sent figure, as a muted
+    /// parenthetical -- the Tape detail pane and the Tape's own
+    /// full-screen step share this same renderer.
+    #[test]
+    fn tape_normal_detail_lines_shows_cached_input_after_the_sent_figure() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut screen = tool_tape_screen(tool_focused_step(false));
+        screen.selected_detail = Some(oscilloscope_core::screens::TapeSelectedDetail {
+            tokens_sent: Some(24_900_000),
+            tokens_received: Some(125_000),
+            tokens_cached_in: Some(24_600_000),
+            ..Default::default()
+        });
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            80,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(text.contains("↑24.9M (24.6 Mt cached) ↓125k"), "{text}");
+    }
+
+    /// The same cached-input figure as above, but at a width too
+    /// narrow for the whole line -- the parenthetical drops first,
+    /// and the sent/received figures keep every one of their own
+    /// digits (issue #627/#780's drop-first rule).
+    #[test]
+    fn tape_normal_detail_lines_drops_cached_input_at_a_narrow_width() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut screen = tool_tape_screen(tool_focused_step(false));
+        screen.selected_detail = Some(oscilloscope_core::screens::TapeSelectedDetail {
+            tokens_sent: Some(24_900_000),
+            tokens_received: Some(125_000),
+            tokens_cached_in: Some(24_600_000),
+            ..Default::default()
+        });
+        let text = agent_block_lines_text(&tape_normal_detail_lines(
+            &screen,
+            34,
+            40,
+            None,
+            "2026-01-01T00:01:54Z",
+            false,
+            &ctx,
+        ));
+        assert!(!text.contains("cached"), "{text}");
+        assert!(text.contains("↑24.9M ↓125k"), "{text}");
     }
 
     /// Issue #716: a repeated word drops from the Type field --
@@ -18859,6 +19205,7 @@ mod highlight_tests {
                 tokens_received: 0,
                 tokens_sent_live_estimate: 0,
                 tokens_received_live_estimate: 0,
+                tokens_cached_in: None,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
                 history_eta_ts: None,
@@ -20307,6 +20654,7 @@ mod tape_frame_goldens {
                 tokens_received: 0,
                 tokens_sent_live_estimate: 0,
                 tokens_received_live_estimate: 0,
+                tokens_cached_in: None,
                 innermost_loop_eta_s: None,
                 innermost_loop_eta_ts: None,
                 history_eta_ts: None,
@@ -25011,6 +25359,108 @@ mod tape_frame_goldens {
             largest_count, 1,
             "the Largest line must never wrap onto a second row: {rows:?}"
         );
+    }
+
+    /// Issue #627/#780: the Readings pane's own Sent line shows
+    /// cached input right after the sent figure, the same way the
+    /// Totals row does (`readings.sent`/`.tokens_cached_in` follow
+    /// the Totals row's own figures).
+    #[test]
+    fn signal_readings_shows_cached_input_after_the_sent_figure() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::screens::SignalScreen {
+            readings: oscilloscope_core::screens::SignalReadings {
+                sent: 24_900_000,
+                received: 125_000,
+                tokens_cached_in: Some(24_600_000),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 8,
+        };
+        let backend = TestBackend::new(60, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_signal_readings(f, area, &screen, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..8)
+            .map(|y| {
+                buffer_row_cells(buf, y, 0..60)
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect()
+            })
+            .collect();
+        let sent_row = rows
+            .iter()
+            .find(|r| r.contains("Sent"))
+            .unwrap_or_else(|| panic!("expected a Sent row: {rows:?}"));
+        assert!(
+            sent_row.contains("24.9 Mt (24.6 Mt cached)"),
+            "{sent_row:?}"
+        );
+    }
+
+    /// The same cached-input figure as above, at a width too narrow
+    /// for the whole Sent line -- the parenthetical drops first,
+    /// never leaving a mid-parenthetical `⋯` cut or touching the
+    /// sent figure's own digits.
+    #[test]
+    fn signal_readings_drops_cached_input_at_a_narrow_width() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &frame_zone(),
+            no_animation: true,
+        };
+        let screen = oscilloscope_core::screens::SignalScreen {
+            readings: oscilloscope_core::screens::SignalReadings {
+                sent: 24_900_000,
+                received: 125_000,
+                tokens_cached_in: Some(24_600_000),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 20,
+            height: 8,
+        };
+        let backend = TestBackend::new(20, 8);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| draw_signal_readings(f, area, &screen, &ctx))
+            .unwrap();
+        let buf = terminal.backend().buffer();
+        let rows: Vec<String> = (0..8)
+            .map(|y| {
+                buffer_row_cells(buf, y, 0..20)
+                    .iter()
+                    .map(|c| c.ch)
+                    .collect()
+            })
+            .collect();
+        let sent_row = rows
+            .iter()
+            .find(|r| r.contains("Sent"))
+            .unwrap_or_else(|| panic!("expected a Sent row: {rows:?}"));
+        assert!(!sent_row.contains("cached"), "{sent_row:?}");
+        assert!(sent_row.contains("24.9 Mt"), "{sent_row:?}");
     }
 
     /// Every line on the single-run Signal's own Readings pane, not

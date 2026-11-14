@@ -447,6 +447,12 @@ pub struct StepTokensSoFar {
     /// finished step's exact total or a stale leftover's last known
     /// one -- a front end draws only this case faint/`≈`.
     pub live: bool,
+    /// Issue #627/#780's cached input: a finished node's own
+    /// `meta.tokens_cached_in`, or a running agent session's own
+    /// `meta.live.tokens_cached_in` -- `None` with nothing reported
+    /// yet (a running prompt's own live estimate never carries one
+    /// at all).
+    pub tokens_cached_in: Option<u64>,
 }
 
 impl StepTokensSoFar {
@@ -483,6 +489,7 @@ pub fn step_tokens_so_far(
                 tokens_sent: Some(sent),
                 tokens_received: Some(received),
                 live: false,
+                tokens_cached_in: node_cached_tokens(&node.meta).0,
             };
         }
         if let Some(agent_live) = &node.live {
@@ -490,6 +497,7 @@ pub fn step_tokens_so_far(
                 tokens_sent: agent_live.tokens_sent,
                 tokens_received: agent_live.tokens_received,
                 live: agent_live.is_recent(now),
+                tokens_cached_in: agent_live.tokens_cached_in,
             };
         }
     }
@@ -500,6 +508,7 @@ pub fn step_tokens_so_far(
             tokens_sent: sent.map(|(n, _)| n),
             tokens_received: received.map(|(n, _)| n),
             live: sent.is_some() || received.is_some(),
+            tokens_cached_in: None,
         };
     }
     StepTokensSoFar::default()
@@ -841,6 +850,24 @@ pub fn node_tokens(meta: &Value) -> (u64, u64) {
     (sent, received)
 }
 
+/// One node's own cached input (issue #627): `meta.tokens_cached_in`
+/// (input read from the provider's cache) and `meta.tokens_cache_
+/// write` (input written to it), each `None` exactly when the
+/// provider never reported it -- never a false `Some(0)` the way
+/// [`node_tokens`] reads an absent `tokens_sent`/`tokens_received`,
+/// since "the provider didn't say" and "the provider said zero" are
+/// different facts a front end must tell apart before it can show a
+/// cached parenthetical only where one was actually reported. Both
+/// are already part of `tokens_sent` (the adapters fold cache reads
+/// and writes into it), so a caller must never add either on top of
+/// `node_tokens`'s own sent figure.
+pub fn node_cached_tokens(meta: &Value) -> (Option<u64>, Option<u64>) {
+    (
+        meta.get("tokens_cached_in").and_then(Value::as_u64),
+        meta.get("tokens_cache_write").and_then(Value::as_u64),
+    )
+}
+
 /// Every entry at `path` itself or under it, `path.*`— the same set
 /// a naive `flat.iter().filter(|(p, _)| p == path || p.starts_with(
 /// &prefix))` scan would find, but in `O(log n + matches)` instead of
@@ -874,6 +901,23 @@ pub fn subtree_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> (u64, u6
         let (s, r) = node_tokens(&node.meta);
         (sent + s, received + r)
     })
+}
+
+/// [`node_cached_tokens`]'s own cached-in figure, summed over `path`
+/// and every one of its descendants (issue #627/#780) -- `None`
+/// exactly when nothing in the subtree ever reported one, the same
+/// "absent, not a false zero" rule `node_cached_tokens` itself
+/// follows.
+pub fn subtree_cached_tokens(path: &str, flat: &BTreeMap<String, NodeMeta>) -> Option<u64> {
+    let mut any = false;
+    let mut total = 0u64;
+    for (_, node) in subtree_entries(path, flat) {
+        if let Some(n) = node_cached_tokens(&node.meta).0 {
+            any = true;
+            total += n;
+        }
+    }
+    any.then_some(total)
 }
 
 /// The token bar's "what's in flight" line (DESIGN.md §6.3, issues
@@ -1235,13 +1279,16 @@ pub struct RunModel {
     start_ts_by_id: BTreeMap<i64, String>,
     /// Every concrete path that has had at least one id-paired
     /// `start` observed via events -- `observe`'s own state-based
-    /// interval capture (`push_state_interval`) skips any path in
-    /// this set, since its events-sourced `end` already covers it
-    /// exactly (or will once it arrives). Marked at `start`, not at
-    /// `end`, so a redraw that observes the node already finished in
-    /// state before the matching `end` line has been read still
-    /// skips it, rather than logging the same pass from both
-    /// sources.
+    /// interval capture (`push_state_interval`) never pushes a new
+    /// `StepInterval` for a path in this set, since its events-
+    /// sourced `end` already covers its timing exactly (or will once
+    /// it arrives); it backfills tokens and cost onto that interval
+    /// instead (issue #780), the one thing an events-sourced interval
+    /// never carries of its own. Marked at `start`, not at `end`, so
+    /// a redraw that observes the node already finished in state
+    /// before the matching `end` line has been read still treats it
+    /// as events-covered, rather than logging the same pass from
+    /// both sources.
     paths_with_id_events: BTreeSet<String>,
     /// One entry per effect instance that has run to completion,
     /// however it was observed (issue #649's history record: "a
@@ -1864,9 +1911,13 @@ impl RunModel {
     }
 
     /// Pushes a state-sourced interval (`observe`'s own "just finished"
-    /// hook) -- a no-op when `path` already has id-paired event
-    /// coverage, or this exact `(path, created_at)` pass was already
-    /// recorded on an earlier redraw.
+    /// hook) -- or, when `path` already has id-paired event coverage
+    /// (issue #780), backfills tokens and cost onto that events-
+    /// sourced interval instead, since an `end` event carries neither
+    /// (DESIGN.md): the state node is the one source that ever does,
+    /// whichever source gave the interval its own timing. A no-op
+    /// once this exact `(path, created_at)` pass was already recorded
+    /// on an earlier redraw.
     fn push_state_interval(
         &mut self,
         path: &str,
@@ -1874,7 +1925,26 @@ impl RunModel {
         completed_at: &str,
         node: &NodeMeta,
     ) {
+        let (tokens_sent, tokens_received) = node_tokens(&node.meta);
+        let cost_usd = node.meta.get("cost_usd").and_then(Value::as_f64);
         if self.paths_with_id_events.contains(path) {
+            // The matching `end` event already pushed this pass's own
+            // `StepInterval` with its timing and no tokens (`None`);
+            // found by searching from the end, since an unnamed path
+            // reused by concurrent instances can have more than one
+            // entry still waiting for its own figures, and the most
+            // recently started one is the most likely match for the
+            // instance that just finished in state.
+            if let Some(interval) = self
+                .step_intervals
+                .iter_mut()
+                .rev()
+                .find(|interval| interval.path == path && interval.tokens_sent.is_none())
+            {
+                interval.tokens_sent = Some(tokens_sent);
+                interval.tokens_received = Some(tokens_received);
+                interval.cost_usd = cost_usd;
+            }
             return;
         }
         let key = (path.to_string(), created_at.to_string());
@@ -1882,7 +1952,6 @@ impl RunModel {
             return;
         }
         self.recorded_state_intervals.insert(key);
-        let (tokens_sent, tokens_received) = node_tokens(&node.meta);
         self.push_step_interval(StepInterval {
             path: path.to_string(),
             start_ts: created_at.to_string(),
@@ -1890,7 +1959,7 @@ impl RunModel {
             ok: node.is_ok(),
             tokens_sent: Some(tokens_sent),
             tokens_received: Some(tokens_received),
-            cost_usd: node.meta.get("cost_usd").and_then(Value::as_f64),
+            cost_usd,
         });
     }
 
@@ -2203,7 +2272,11 @@ impl RunModel {
                 // alone, captured right here, exactly once per
                 // `created_at` -- the only moment a reused (unnamed-
                 // loop) path's finished pass is still visible before
-                // the next one overwrites it.
+                // the next one overwrites it. A path that *does* have
+                // id-paired events instead backfills tokens and cost
+                // onto the matching events-sourced interval here
+                // (issue #780): an `end` event alone never carries
+                // either.
                 if let (Some(created_at), Some(completed_at)) =
                     (&node.created_at, &node.completed_at)
                 {
@@ -2738,6 +2811,36 @@ mod tests {
         assert_eq!(figures.tokens_sent, Some(11550));
         assert_eq!(figures.tokens_received, Some(130));
         assert!(!figures.live);
+    }
+
+    /// Issue #627/#780: a finished node's own `meta.tokens_cached_in`
+    /// comes along with its exact totals.
+    #[test]
+    fn step_tokens_so_far_reads_a_finished_nodes_cached_input() {
+        let meta = json!({
+            "created_at": "2026-10-08T11:46:43Z", "completed_at": "2026-10-08T11:46:58Z",
+            "tokens_sent": 24_900_000, "tokens_received": 125_000,
+            "tokens_cached_in": 24_600_000
+        });
+        let node = NodeMeta::from_object(&Value::Null, &meta);
+        let model = RunModel::new();
+        let figures = step_tokens_so_far(Some(&node), "prime.gate", &model, "2026-10-08T11:46:59Z");
+        assert_eq!(figures.tokens_cached_in, Some(24_600_000));
+    }
+
+    /// Issue #627/#780: a running agent's own live `meta.live.
+    /// tokens_cached_in` comes along with its live totals, the same
+    /// way `tokens_sent`/`tokens_received` already do.
+    #[test]
+    fn step_tokens_so_far_reads_a_running_agents_live_cached_input() {
+        let node = agent_node(json!({"live": {
+            "engine": "pi", "updated_at": "2026-10-08T11:46:50Z",
+            "tokens_sent": 2100, "tokens_received": 40, "tokens_cached_in": 1800
+        }}));
+        let model = RunModel::new();
+        let figures =
+            step_tokens_so_far(Some(&node), "prime.fixer", &model, "2026-10-08T11:46:51Z");
+        assert_eq!(figures.tokens_cached_in, Some(1800));
     }
 
     #[test]
@@ -4379,6 +4482,39 @@ mod tests {
         assert_ne!((sent, received), (11, 22));
     }
 
+    /// Issue #627: `node_cached_tokens` reads `None` for either key
+    /// the provider never reported, never a false `Some(0)`.
+    #[test]
+    fn node_cached_tokens_reads_none_for_a_node_with_neither_key() {
+        let meta = json!({"tokens_sent": 100, "tokens_received": 50});
+        assert_eq!(node_cached_tokens(&meta), (None, None));
+    }
+
+    /// Issue #627: `node_cached_tokens` reads whichever of the two
+    /// keys the provider actually wrote, independently of the other.
+    #[test]
+    fn node_cached_tokens_reads_each_key_independently() {
+        let meta = json!({"tokens_cached_in": 2_000_000});
+        assert_eq!(node_cached_tokens(&meta), (Some(2_000_000), None));
+        let meta = json!({"tokens_cache_write": 50_000});
+        assert_eq!(node_cached_tokens(&meta), (None, Some(50_000)));
+    }
+
+    /// Issue #627/#780: `subtree_cached_tokens` sums every descendant
+    /// that reported cached input, and reads `None` only when none
+    /// of them did at all.
+    #[test]
+    fn subtree_cached_tokens_sums_the_subtree_and_is_none_with_nothing_reported() {
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": "t1"},
+            "a": {"value": 1, "meta": {"completed_at": "t1", "tokens_cached_in": 100}},
+            "b": {"value": 2, "meta": {"completed_at": "t1", "tokens_cached_in": 200}},
+            "c": {"value": 3, "meta": {"completed_at": "t1"}}
+        }});
+        let flat = flatten_state(&state);
+        assert_eq!(subtree_cached_tokens("prime", &flat), Some(300));
+        assert_eq!(subtree_cached_tokens("prime.c", &flat), None);
+    }
+
     /// Issue #650's own seam: an unnamed loop's passes reuse the same
     /// path, but `--events` still gives each pass its own id, so
     /// `step_intervals` logs both passes as separate intervals rather
@@ -4419,6 +4555,59 @@ mod tests {
         assert_eq!(intervals[1].start_ts, "2026-01-01T00:00:05Z");
         assert_eq!(intervals[1].end_ts, "2026-01-01T00:00:12Z");
         assert!(intervals.iter().all(|i| i.path == "prime.u_nap"));
+    }
+
+    /// Issue #780: an id-paired `start`/`end` interval carries no
+    /// tokens or cost of its own (DESIGN.md: events never report
+    /// them), but once the matching state node shows the pass
+    /// finished, `observe`'s own "just finished" hook backfills them
+    /// onto that same interval rather than logging a second one or
+    /// leaving it without figures forever.
+    #[test]
+    fn step_intervals_with_id_events_backfill_tokens_from_state() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.gate".to_string(),
+        });
+        model.observe_event(&Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.gate".to_string(),
+            ok: true,
+            ms: Some(5000),
+            error: None,
+        });
+        let intervals = model.step_intervals();
+        assert_eq!(intervals.len(), 1);
+        assert_eq!(intervals[0].tokens_sent, None);
+        assert_eq!(intervals[0].tokens_received, None);
+        assert_eq!(intervals[0].cost_usd, None);
+
+        let state = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "gate": {"value": "ok", "meta": {
+                "created_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:00:05Z",
+                "error": null,
+                "tokens_sent": 348,
+                "tokens_received": 41,
+                "cost_usd": 0.012
+            }}
+        }});
+        model.observe(&state, &PlanTree::empty(), ProcessState::Running);
+        // Re-observing the same finished snapshot again (the TUI's
+        // own redraw tick) must not log a second interval, nor undo
+        // the backfill.
+        model.observe(&state, &PlanTree::empty(), ProcessState::Running);
+
+        let intervals = model.step_intervals();
+        assert_eq!(intervals.len(), 1, "no second interval from state");
+        assert_eq!(intervals[0].start_ts, "2026-01-01T00:00:00Z");
+        assert_eq!(intervals[0].end_ts, "2026-01-01T00:00:05Z");
+        assert_eq!(intervals[0].tokens_sent, Some(348));
+        assert_eq!(intervals[0].tokens_received, Some(41));
+        assert_eq!(intervals[0].cost_usd, Some(0.012));
     }
 
     /// Without `--events`, an unnamed loop's finished pass is only

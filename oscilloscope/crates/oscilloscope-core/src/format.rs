@@ -165,6 +165,15 @@ pub fn format_tokens(n: u64) -> String {
     }
 }
 
+/// A Tokens line's own cached-input parenthetical (issue #627/#780):
+/// `(24.6 Mt cached)`, right after the sent figure -- `None` for
+/// `None` or `Some(0)`, since a line with nothing cached draws
+/// exactly as it did before this existed.
+pub fn format_cached_suffix(cached_in: Option<u64>) -> Option<String> {
+    let n = cached_in.filter(|&n| n > 0)?;
+    Some(format!("({} cached)", format_tokens(n)))
+}
+
 /// The arrows' own unit-less form (issue #715, `design/tui-design.md`
 /// §3.5's "Arrows carry no unit"): `212`, `1.2k`, `35.4M`, `1.2G` --
 /// the same scale and rounding as [`format_tokens`], just without
@@ -358,6 +367,20 @@ mod tests {
     #[test]
     fn duration_carries_hours_into_days() {
         assert_eq!(format_duration(86_399.6), "1d00h");
+    }
+
+    #[test]
+    fn cached_suffix_reads_none_for_none_or_zero() {
+        assert_eq!(format_cached_suffix(None), None);
+        assert_eq!(format_cached_suffix(Some(0)), None);
+    }
+
+    #[test]
+    fn cached_suffix_formats_through_format_tokens() {
+        assert_eq!(
+            format_cached_suffix(Some(24_600_000)),
+            Some("(24.6 Mt cached)".to_string())
+        );
     }
 
     #[test]

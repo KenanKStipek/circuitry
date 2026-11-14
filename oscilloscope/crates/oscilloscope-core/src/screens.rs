@@ -1279,6 +1279,10 @@ pub struct TapeSelectedDetail {
     pub finished_ts: Option<String>,
     pub tokens_sent: Option<u64>,
     pub tokens_received: Option<u64>,
+    /// Issue #627/#780's cached input, already part of `tokens_sent`
+    /// above -- `None` whenever nothing reported it, drawn as a
+    /// muted parenthetical right after the sent figure.
+    pub tokens_cached_in: Option<u64>,
     pub prompt_sent: Option<String>,
     pub prompt_sent_tokens: Option<u64>,
     pub reply: Option<String>,
@@ -2335,6 +2339,7 @@ fn build_tape_selected_detail(
             finished_ts,
             tokens_sent: has_tokens.then_some(figures.tokens_sent).flatten(),
             tokens_received: has_tokens.then_some(figures.tokens_received).flatten(),
+            tokens_cached_in: has_tokens.then_some(figures.tokens_cached_in).flatten(),
             description,
             ..Default::default()
         };
@@ -2349,13 +2354,14 @@ fn build_tape_selected_detail(
     // line simply doesn't draw until the row actually finishes; the
     // Live block below is what a running prompt's detail pane shows
     // instead.
-    let (sent, received) = if is_running {
-        (None, None)
+    let (sent, received, cached_in) = if is_running {
+        (None, None, None)
     } else {
         let (sent, received) = node
             .map(|n| crate::model::node_tokens(&n.meta))
             .unwrap_or((0, 0));
-        (Some(sent), Some(received))
+        let cached_in = node.and_then(|n| crate::model::node_cached_tokens(&n.meta).0);
+        (Some(sent), Some(received), cached_in)
     };
     let live = is_running
         .then(|| crate::model::prompt_live_figures(node, &row.path, model, now))
@@ -2371,6 +2377,7 @@ fn build_tape_selected_detail(
         finished_ts,
         tokens_sent: sent,
         tokens_received: received,
+        tokens_cached_in: cached_in,
         prompt_sent,
         prompt_sent_tokens: sent,
         live,
@@ -3653,6 +3660,10 @@ pub struct SignalReadings {
     /// headline follows.
     pub sent_live: bool,
     pub received_live: bool,
+    /// Issue #627/#780's cached input, following `sent` the same way
+    /// it follows the Totals row's own figure (`header.tokens_
+    /// cached_in`) -- `None` with nothing reported.
+    pub tokens_cached_in: Option<u64>,
     /// Sent to received, to one decimal (§2.2: `11.5 : 1`) -- `None`
     /// with nothing received yet.
     pub ratio: Option<f64>,
@@ -4708,6 +4719,7 @@ pub fn build_signal(
             received: received_sum,
             sent_live,
             received_live,
+            tokens_cached_in: header.tokens_cached_in,
             ratio,
             peak,
             largest,
@@ -4761,6 +4773,10 @@ pub struct SelectedPassStep {
     pub status: RowStatus,
     pub sent: u64,
     pub received: u64,
+    /// Issue #627/#780's cached input, summed over this step's own
+    /// subtree the same way `sent`/`received` are -- `None` with
+    /// nothing reported.
+    pub cached_in: Option<u64>,
     pub usual: Option<u64>,
     pub produced: Option<String>,
 }
@@ -4972,6 +4988,7 @@ fn build_selected_pass(
         .filter(|r| r.kind == RowKind::Prompt)
         .map(|r| {
             let (sent, received) = crate::model::subtree_tokens(&r.path, flat);
+            let cached_in = crate::model::subtree_cached_tokens(&r.path, flat);
             let usual = tape_row_usual_tokens(&r.path, plan, header);
             let produced = flat.get(&r.path).and_then(|n| {
                 if crate::summary::is_json_shaped(&n.value) {
@@ -4986,6 +5003,7 @@ fn build_selected_pass(
                 status: r.status.clone(),
                 sent,
                 received,
+                cached_in,
                 usual,
                 produced,
             }
@@ -5451,6 +5469,7 @@ mod tests {
             tokens_received: 500,
             tokens_sent_live_estimate: 0,
             tokens_received_live_estimate: 0,
+            tokens_cached_in: None,
             innermost_loop_eta_s: Some(360.0),
             innermost_loop_eta_ts: Some("2026-10-08T11:58:00Z".to_string()),
             history_eta_ts: None,
