@@ -577,6 +577,86 @@ def test_generated_service_start_with_a_path_executable_is_refused() -> None:
     assert "/usr/bin/node" in errors[0]
 
 
+# ── a generated service start's env can't redirect how the executable resolves ──
+
+
+def test_generated_service_start_setting_env_path_is_refused() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {
+                    "action": "start",
+                    "name": "svc",
+                    "command": ["node", "server.js"],
+                    "env": {"PATH": "/tmp/evil"},
+                },
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"service"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"node"}),
+    )
+    assert errors
+    assert "'PATH'" in errors[0]
+
+
+def test_generated_service_start_setting_env_ld_preload_is_refused() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {
+                    "action": "start",
+                    "name": "svc",
+                    "command": ["node", "server.js"],
+                    "env": {"LD_PRELOAD": "/tmp/evil.so"},
+                },
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"service"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"node"}),
+    )
+    assert errors
+    assert "'LD_PRELOAD'" in errors[0]
+
+
+def test_generated_service_start_with_an_unrelated_env_key_is_clean() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {
+                    "action": "start",
+                    "name": "svc",
+                    "command": ["node", "server.js"],
+                    "env": {"PORT": "8080"},
+                },
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"service"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"node"}),
+    )
+    assert errors == []
+
+
 # ── a nested, still-templated inline inside a literal inline is generated ──
 
 
