@@ -119,7 +119,7 @@ mod imp {
     use electricity_value::{Dict, Value};
     use std::collections::HashMap;
     use std::fs::{self, OpenOptions};
-    use std::io::{self, Read, Seek, SeekFrom};
+    use std::io::{self, Read, Seek, SeekFrom, Write};
     use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
     use std::os::unix::io::AsRawFd;
     use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -1135,6 +1135,16 @@ mod imp {
     }
 
     fn ensure_dir(dir: &Path) -> io::Result<()> {
+        if dir == default_state_dir() {
+            // `create_dir_all`'s own fallback below only applies `mode`
+            // to the leaf it creates; a first-ever service start would
+            // otherwise leave `~/.config/circuitry` itself at the
+            // process's default mode as a side effect of creating
+            // `services` under it.
+            if let Some(parent) = dir.parent() {
+                ensure_dir(parent)?;
+            }
+        }
         match create_0700(dir) {
             Ok(()) => Ok(()),
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => Ok(()),
@@ -1232,8 +1242,19 @@ mod imp {
         let tmp = dir.join(format!("{name}.json.tmp"));
         let text = dumps(&Value::Dict(record.clone()), WriteMode::PRETTY)
             .map_err(|e| runtime_error(format!("service: cannot encode the record: {e}")))?;
-        fs::write(&tmp, text)
-            .map_err(|e| runtime_error(format!("service: cannot write the record: {e}")))?;
+        // 0600 from creation, matching the state directory's own 0700: a
+        // service record can carry the command and env the service
+        // started with.
+        (|| -> io::Result<()> {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(&tmp)?;
+            file.write_all(text.as_bytes())
+        })()
+        .map_err(|e| runtime_error(format!("service: cannot write the record: {e}")))?;
         fs::rename(&tmp, &path)
             .map_err(|e| runtime_error(format!("service: cannot write the record: {e}")))?;
         Ok(())
