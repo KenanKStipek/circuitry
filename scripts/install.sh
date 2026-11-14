@@ -6,7 +6,7 @@ set -e
 
 REPO_URL="git+https://github.com/kenankstipek/circuitry.git"
 PIPX_PACKAGE="circuitry-cof"
-MIN_PYTHON="3.9"
+MIN_PYTHON="3.10"
 
 log()  { printf '  \033[1;36m%s\033[0m %s\n' "$1" "$2"; }
 err()  { printf '  \033[1;31m%s\033[0m %s\n' "ERROR" "$1" >&2; exit 1; }
@@ -20,7 +20,7 @@ for cmd in python3 python; do
         if [ -n "$ver" ]; then
             major=$(echo "$ver" | cut -d. -f1)
             minor=$(echo "$ver" | cut -d. -f2)
-            if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 9 ]; }; then
+            if [ "$major" -gt 3 ] || { [ "$major" -eq 3 ] && [ "$minor" -ge 10 ]; }; then
                 PYTHON="$cmd"
                 break
             fi
