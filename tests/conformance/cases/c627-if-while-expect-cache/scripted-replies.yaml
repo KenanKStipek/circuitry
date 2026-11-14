@@ -5,11 +5,14 @@ prime.gate:
     tokens_cached_in: 20
     tokens_cache_write: 1
 prime.lp:
-  - text: "no"
+  - text: "yes"
     tokens_sent: 13
     tokens_received: 1
     tokens_cached_in: 10
     tokens_cache_write: 2
+  - text: "no"
+    tokens_sent: 14
+    tokens_received: 1
 prime.fetch:
   - text: "yes"
     tokens_sent: 9

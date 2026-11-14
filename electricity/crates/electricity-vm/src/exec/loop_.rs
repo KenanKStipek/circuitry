@@ -1976,9 +1976,13 @@ fn write_model_while_reply(
     );
     if let Some(cached_in) = generated.and_then(|g| g.tokens_cached_in) {
         store.set_leaf(meta, key("tokens_cached_in"), Value::from(cached_in));
+    } else {
+        meta.borrow_mut().shift_remove(&key("tokens_cached_in"));
     }
     if let Some(cache_write) = generated.and_then(|g| g.tokens_cache_write) {
         store.set_leaf(meta, key("tokens_cache_write"), Value::from(cache_write));
+    } else {
+        meta.borrow_mut().shift_remove(&key("tokens_cache_write"));
     }
     store.set_leaf(
         meta,

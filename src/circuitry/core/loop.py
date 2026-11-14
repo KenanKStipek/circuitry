@@ -1016,8 +1016,12 @@ class LoopRuntime:
                                     meta["tokens_received"] = self._model_tokens_received
                                     if self._model_tokens_cached_in is not None:
                                         meta["tokens_cached_in"] = self._model_tokens_cached_in
+                                    else:
+                                        meta.pop("tokens_cached_in", None)
                                     if self._model_tokens_cache_write is not None:
                                         meta["tokens_cache_write"] = self._model_tokens_cache_write
+                                    else:
+                                        meta.pop("tokens_cache_write", None)
                                     meta["tokens_sent_total"] = self._model_tokens_sent_total
                                     meta["tokens_received_total"] = self._model_tokens_received_total
                                     if self._model_tokens_cached_in_total is not None:
@@ -1037,8 +1041,12 @@ class LoopRuntime:
                                     meta["tokens_received"] = self._model_tokens_received
                                     if self._model_tokens_cached_in is not None:
                                         meta["tokens_cached_in"] = self._model_tokens_cached_in
+                                    else:
+                                        meta.pop("tokens_cached_in", None)
                                     if self._model_tokens_cache_write is not None:
                                         meta["tokens_cache_write"] = self._model_tokens_cache_write
+                                    else:
+                                        meta.pop("tokens_cache_write", None)
                                     meta["tokens_sent_total"] = self._model_tokens_sent_total
                                     meta["tokens_received_total"] = self._model_tokens_received_total
                                     if self._model_tokens_cached_in_total is not None:
