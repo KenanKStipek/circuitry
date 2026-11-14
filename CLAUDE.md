@@ -18,6 +18,7 @@ mypy src
 bash scripts/smoke-curation.sh
 python scripts/sync-bundled-docs.py --check
 python scripts/generate-conformance-cases.py --check
+python scripts/generate-man-pages.py --check
 for g in electricity/scripts/generate_*.py; do python "$g" --check || echo "STALE: $g"; done
 ```
 CI is `.github/workflows/quality.yml` (pytest matrix 3.10–3.13, ruff, mypy,

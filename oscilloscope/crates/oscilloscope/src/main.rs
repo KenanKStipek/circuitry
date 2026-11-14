@@ -24,12 +24,13 @@ mod highlight;
 mod history_io;
 mod icon;
 mod keys;
+mod man;
 mod registry_io;
 mod terminal;
 mod theme;
 mod tui;
 
-use clap::{Parser, ValueEnum};
+use clap::{ArgAction, Parser, ValueEnum};
 use crossterm::event::{self, Event as CEvent, KeyEventKind};
 use oscilloscope_core::diff::Differ;
 use oscilloscope_core::engine::{
@@ -57,23 +58,35 @@ osi (oscilloscope) launches a Circuitry orchestration on cof or electricity \
 and shows it running.
 
   osi <orchestration> [config.json] [-e key=value]... [--engine cof|electricity] [--out-dir DIR] [--log] [--label TEXT]
+
   osi watch <dir | state.live.json> [--plan doc.yml]
 
 With no orchestration, on a TTY with no --log: finds the orchestrations already running on this machine (the run
 registry, a process scan, and any state.live.json in the current directory) and attaches to the only one, or shows
 a Select screen to choose among several, or a Recent Runs table from history with none. Without a TTY, or with
---log, it instead prints one line per running orchestration and exits 0.";
+--log, it instead prints one line per running orchestration and exits 0.
+
+osi man [watch] shows this page or osi-watch(1) through man on a terminal, or prints its roff when piped or given --roff.";
 
 #[derive(Parser, Debug)]
-#[command(name = "osi", version = VERSION, about = ABOUT)]
+#[command(
+    name = "osi",
+    version = VERSION,
+    about = "Launches a Circuitry orchestration on cof or electricity and shows it running.",
+    long_about = ABOUT,
+    disable_help_flag = true
+)]
 struct RunArgs {
+    /// Print help and exit.
+    #[arg(short = 'h', long = "help", action = ArgAction::HelpLong)]
+    help: Option<bool>,
     /// The orchestration document to run (YAML or JSON). With none,
-    /// on a TTY with no `--log` osi opens the Select screen instead
-    /// (issue #698); without a TTY, or with `--log`, it lists the
-    /// orchestrations already running on this machine and exits 0.
+    /// on a TTY with no `--log` osi opens the Select screen instead;
+    /// without a TTY, or with `--log`, it lists the orchestrations
+    /// already running on this machine and exits 0.
     orchestration: Option<String>,
-    /// The engine's own config (JSON), passed through unchanged. With
-    /// none, the engine resolves its own default (DESIGN.md §4).
+    /// The engine's config (JSON), passed through unchanged. With
+    /// none, the engine resolves its default.
     config: Option<String>,
     /// `-e key=value` inputs, passed through to the engine unchanged.
     #[arg(short = 'e', value_name = "key=value")]
@@ -86,66 +99,71 @@ struct RunArgs {
     /// way; it prints where that one ended up once the run ends.
     #[arg(long, value_name = "DIR")]
     out_dir: Option<PathBuf>,
-    /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY.
+    /// Forces the plain-text stream even on a TTY.
     #[arg(long)]
     log: bool,
-    /// Shows only the header line (issue #626), without the tabs,
-    /// rewritten in place about once a second -- for a tmux status
-    /// line. Can't be combined with `--log`.
+    /// Shows only the header line, without the tabs, rewritten in
+    /// place about once a second -- for a tmux status line. Can't be
+    /// combined with `--log`.
     #[arg(long)]
     glance: bool,
-    /// Switches off the scope icon's own trace: the header draws a
-    /// still frame in its place instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's trace: the header draws a
+    /// still frame in its place instead.
     #[arg(long)]
     no_animation: bool,
-    /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
-    /// this isn't given; `terminal` (today's look) otherwise.
+    /// The colour theme. `OSI_THEME` is used when this isn't given;
+    /// `terminal` (today's look) otherwise.
     #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
-    /// Turns run history off (issue #649): nothing is read or written,
-    /// and no history directory is created. `OSI_HISTORY=off` does the
-    /// same.
+    /// Turns run history off: nothing is read or written, and no
+    /// history directory is created. `OSI_HISTORY=off` does the same.
     #[arg(long)]
     no_history: bool,
-    /// Literal text for this run's own label (issue #752), passed
-    /// through to the engine unchanged -- wins over the document's
-    /// own `label:` template. Shown in place of the run's generated
-    /// name wherever one is shown, from the first frame; `osi watch`
-    /// has no `--label` of its own, since it never launches anything.
+    /// Literal text for this run's label, passed through to the
+    /// engine unchanged -- wins over the document's `label:`
+    /// template. Shown in place of the run's generated name wherever
+    /// one is shown, from the first frame; `osi watch` has no
+    /// `--label`, since it never launches anything.
     #[arg(long, value_name = "TEXT")]
     label: Option<String>,
 }
 
 #[derive(Parser, Debug)]
-#[command(name = "osi watch")]
+#[command(
+    name = "osi watch",
+    about = "Attaches to a Circuitry orchestration run already in progress, or watches its finished state.",
+    disable_help_flag = true
+)]
 struct WatchArgs {
+    /// Print help and exit.
+    #[arg(short = 'h', long = "help", action = ArgAction::HelpLong)]
+    help: Option<bool>,
     /// A run directory, or a `state.live.json` file directly.
     target: String,
     /// Compiles this document into a plan, the same one a live `osi
-    /// <doc>` run of it would have from the start (DESIGN.md §5) --
-    /// without it, container detection (an `if`/loop vs. a leaf) can
-    /// briefly fall back to a snapshot it hasn't seen yet instead.
+    /// <doc>` run of it would have from the start -- without it,
+    /// container detection (an `if`/loop vs. a leaf) can briefly fall
+    /// back to a snapshot it hasn't seen yet instead.
     #[arg(long, value_name = "doc.yml")]
     plan: Option<PathBuf>,
-    /// The config `--plan`'s own document should be checked against
-    /// (K4) — the same `config.json` the watched run itself used, if
-    /// any. Needed for a document whose plan depends on a config-
-    /// defined `concurrency_groups`/`runtime:` block; without it,
-    /// `--plan` still compiles, just without that merge.
+    /// The config `--plan`'s document should be checked against
+    /// -- the same `config.json` the watched run itself used, if any.
+    /// Needed for a document whose plan depends on a config-defined
+    /// `concurrency_groups`/`runtime:` block; without it, `--plan`
+    /// still compiles, just without that merge.
     #[arg(long, value_name = "config.json")]
     config: Option<PathBuf>,
-    /// `-e key=value` inputs `--plan`'s own document needs to compile
-    /// (K4) — the same ones the watched run itself was given, if any.
+    /// `-e key=value` inputs `--plan`'s document needs to compile
+    /// -- the same ones the watched run itself was given, if any.
     #[arg(short = 'e', value_name = "key=value")]
     set: Vec<String>,
-    /// Forces the plain-text stream (DESIGN.md §6.2) even on a TTY —
-    /// the TUI's own default otherwise, the same split `osi <doc>`
-    /// makes.
+    /// Forces the plain-text stream even on a TTY -- the TUI's
+    /// default otherwise, the same split `osi <doc>` makes.
     #[arg(long)]
     log: bool,
-    /// Shows only the header line (issue #626), without the tabs,
-    /// rewritten in place about once a second -- for a tmux status
-    /// line. Can't be combined with `--log`.
+    /// Shows only the header line, without the tabs, rewritten in
+    /// place about once a second -- for a tmux status line. Can't be
+    /// combined with `--log`.
     #[arg(long)]
     glance: bool,
     /// With `--glance`: prints the current line once and exits 0,
@@ -153,16 +171,15 @@ struct WatchArgs {
     /// own command on a timer instead of leaving one process attached.
     #[arg(long)]
     once: bool,
-    /// Switches off the scope icon's own trace: the header draws a
-    /// still frame in its place instead (DESIGN.md §6.3).
+    /// Switches off the scope icon's trace: the header draws a
+    /// still frame in its place instead.
     #[arg(long)]
     no_animation: bool,
-    /// The colour theme (DESIGN.md §6.3). `OSI_THEME` is used when
-    /// this isn't given; `terminal` (today's look) otherwise.
+    /// The colour theme. `OSI_THEME` is used when this isn't given;
+    /// `terminal` (today's look) otherwise.
     #[arg(long, value_enum)]
     theme: Option<theme::ThemeName>,
-    /// Turns run history off (issue #649) -- see `osi --help`'s own
-    /// `--no-history`.
+    /// Turns run history off -- see `osi --help`'s `--no-history`.
     #[arg(long)]
     no_history: bool,
 }
@@ -6125,10 +6142,61 @@ fn run(args: impl IntoIterator<Item = String>) -> ExitCode {
             Ok(args) => do_watch(args),
             Err(err) => report_clap_error(err),
         }
+    } else if args.get(1).map(String::as_str) == Some("man") {
+        run_man(&args[2..])
     } else {
         match RunArgs::try_parse_from(args.clone()) {
             Ok(parsed) => do_run(parsed),
             Err(err) => report_clap_error(err),
+        }
+    }
+}
+
+/// `osi man [watch] [--roff]` (issue #764), same reserved-first-token
+/// dispatch as `watch` above. Shows the named page through `man` on a
+/// terminal, or prints its roff when piped or given `--roff`; an
+/// unknown page name is a usage error (exit 2) listing `osi, watch`.
+fn run_man(args: &[String]) -> ExitCode {
+    let mut roff = false;
+    let mut watch = false;
+    let mut saw_page = false;
+    for arg in args {
+        match arg.as_str() {
+            "--roff" => roff = true,
+            "watch" if !saw_page => {
+                watch = true;
+                saw_page = true;
+            }
+            other => {
+                eprintln!("osi man: no such page: {other}\nPages: osi, watch");
+                return ExitCode::from(2);
+            }
+        }
+    }
+    let (name, text) = if watch {
+        ("osi-watch", man::build_man_page(man::Page::Watch))
+    } else {
+        ("osi", man::build_man_page(man::Page::Run))
+    };
+    if roff || !std::io::stdout().is_terminal() {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+    let path = match man::create_temp_man_file(name, &text) {
+        Ok(path) => path,
+        Err(_) => {
+            print!("{text}");
+            return ExitCode::SUCCESS;
+        }
+    };
+    let status = std::process::Command::new("man").arg(&path).status();
+    let _ = std::fs::remove_file(&path);
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
+        Err(_) => {
+            print!("{text}");
+            ExitCode::SUCCESS
         }
     }
 }
@@ -6884,7 +6952,7 @@ mod tests {
         assert!(rendered.contains("Puts the run directory"));
         assert!(rendered.contains("Forces the plain-text stream"));
         assert!(rendered.contains("Shows only the header line"));
-        assert!(rendered.contains("Switches off the scope icon's own trace"));
+        assert!(rendered.contains("Switches off the scope icon's trace"));
         assert!(rendered.contains("The colour theme"));
         assert!(rendered.contains("Turns run history off"));
         // Finding 10: `--theme`'s possible values (a derived
@@ -7053,6 +7121,110 @@ mod tests {
         // the required `target` positional) — proving dispatch reached
         // WatchArgs, not RunArgs (which has no required `target` field).
         assert_eq!(run(args(&["watch"])), ExitCode::from(2));
+    }
+
+    /// `osi man` (issue #764) is reserved the same way `watch` is:
+    /// dispatched by string match, never reaching `RunArgs`.
+    #[test]
+    fn man_prints_the_osi_page_on_a_pipe() {
+        let code = run(args(&["man", "--roff"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn man_watch_prints_the_osi_watch_page_on_a_pipe() {
+        let code = run(args(&["man", "watch", "--roff"]));
+        assert_eq!(code, ExitCode::SUCCESS);
+    }
+
+    #[test]
+    fn man_unknown_page_exits_2() {
+        let code = run(args(&["man", "bogus"]));
+        assert_eq!(code, ExitCode::from(2));
+    }
+
+    /// Every page `osi man` builds renders without a `mandoc -Tlint`
+    /// warning (issue #764's own acceptance criterion).
+    #[test]
+    fn every_man_page_is_mandoc_lint_clean() {
+        for page in [man::Page::Run, man::Page::Watch] {
+            let roff = man::build_man_page(page);
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("page.1");
+            std::fs::write(&path, &roff).unwrap();
+            let output = std::process::Command::new("mandoc")
+                .args(["-Tlint"])
+                .arg(&path)
+                .output();
+            let Ok(output) = output else {
+                // `mandoc` isn't installed everywhere CI runs this suite;
+                // skip rather than fail when it's simply unavailable.
+                continue;
+            };
+            assert!(
+                output.status.success(),
+                // mandoc -Tlint reports on stdout, not stderr.
+                "{page:?} has a mandoc warning:\n{}",
+                String::from_utf8_lossy(&output.stdout)
+            );
+        }
+    }
+
+    /// `man/man1/osi.1`/`osi-watch.1` (issue #764) are committed
+    /// snapshots of exactly what `man::build_man_page` computes --
+    /// the same guarantee `scripts/generate-man-pages.py --check`
+    /// gives from the Python side, run here too since `cargo test` is
+    /// the gate every oscilloscope change already needs green.
+    #[test]
+    fn committed_man_pages_match_build_man_page() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../man/man1")
+            .canonicalize()
+            .expect("man/man1 exists at the repo root");
+        for (page, filename) in [(man::Page::Run, "osi.1"), (man::Page::Watch, "osi-watch.1")] {
+            let committed = std::fs::read_to_string(repo_root.join(filename))
+                .unwrap_or_else(|e| panic!("reading man/man1/{filename}: {e}"));
+            assert_eq!(
+                committed,
+                man::build_man_page(page),
+                "man/man1/{filename} is stale -- run scripts/generate-man-pages.py"
+            );
+        }
+    }
+
+    /// Help text is documentation too (issue #764): no issue numbers
+    /// or design-doc section references, in either page.
+    #[test]
+    fn man_pages_cite_no_issue_numbers_or_design_docs() {
+        let digit_after_hash = |text: &str| {
+            text.split('#')
+                .skip(1)
+                .any(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        };
+        for page in [man::Page::Run, man::Page::Watch] {
+            let text = man::build_man_page(page);
+            assert!(
+                !digit_after_hash(&text),
+                "{page:?} cites an issue number: {text}"
+            );
+            assert!(
+                !text.contains("DESIGN.md"),
+                "{page:?} cites a design doc: {text}"
+            );
+        }
+    }
+
+    /// No literal backtick reaches a page (issue #764): a markdown
+    /// code span is turned into roff bold instead.
+    #[test]
+    fn man_pages_have_no_literal_backtick() {
+        for page in [man::Page::Run, man::Page::Watch] {
+            let text = man::build_man_page(page);
+            assert!(
+                !text.contains('`'),
+                "{page:?} has a literal backtick: {text}"
+            );
+        }
     }
 
     #[test]
