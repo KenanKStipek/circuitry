@@ -2649,9 +2649,10 @@ saved node took (`meta.branch`), that branch continues at its first
 unfinished effect, by the same positional rule; if it selects the other
 branch, that branch runs from its start. An **unnamed** `if` has no node
 to record its branch, so its branch always runs from its start. A
-`reflector` always reruns from its start on `--resume`: it records no
-`completed_at`, so a finished reflector is not skipped either (#585 tracks
-changing that).
+`reflector` whose node already finished without error is skipped whole
+too, keeping its saved value and the record of its generated plan; one
+that didn't finish reruns from its start, planning call and generated
+plan included.
 Inside a resumed pass or branch, the first effect that didn't finish
 resumes the same way it would at the top level: a nested loop at its own
 first unfinished pass, a nested `if` inside its branch, a `dynamic` at its
@@ -2659,7 +2660,23 @@ first unfinished effect, and a `use` inside its child (below), unless it
 says [`resume: restart`](#resume-restart).
 
 A `use` effect whose node already finished without error is skipped whole
-too. One that didn't finish reruns its child from the start, in a fresh
+too, *unless* its inputs, resolved now against the resumed run's own
+inputs and state, no longer match its recorded `meta.inputs`: a changed
+input reruns it, and so does everything after it in the same chain, by
+the usual positional rule, the same as a `use` that never finished. The
+comparison is exact: resolved the same way the child's own `meta.inputs`
+was recorded, then compared as JSON values — a declared default filled in
+or a declared type coerced counts as unchanged if the resolved value
+ends up the same either way. Unaffected: a tree-flow branch (below), and
+a `use` whose own saved node didn't finish (continuing inside its child,
+above, follows #567's rules regardless of its inputs). A resume whose own
+run inputs differ from the saved run's — any `-e`/`--state` value, not
+only one a changed `use` input came from — prints one `WARNING:` line
+naming each changed input as `name: <old> -> <new>` (Python `repr`), in
+the interface's declared order and then any undeclared ones sorted,
+and says that every other finished effect keeps its saved results; a
+resume whose run inputs are unchanged prints nothing new. One that didn't
+finish reruns its child from the start, in a fresh
 state, unless the saved state holds the child's record
 ([`runtime.state.record_children: true`](#complete-record-opt-in)). With
 the record, `--resume` continues *inside* the child by the same rules as

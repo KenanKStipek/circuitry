@@ -351,6 +351,14 @@ doesn't lose the 249 frames it already rendered. `cof run frames.yml --state
 run.json --resume x` picks up at frame 250, and the adapter/tool calls for
 frames 0–249 never happen again.
 
+A `-e`/`--state` value that differs from the run being resumed can still
+change its outcome: a finished `use` whose inputs, resolved against the
+resumed run's own inputs, no longer match what it ran with reruns — and so
+does everything after it in the same chain — instead of being skipped
+like any other finished effect. The resume then warns once, naming each
+changed input, and says every other finished effect still keeps its saved
+result.
+
 `electricity run` has the same `--state <file> --resume <anything>`,
 `--resume last`, `--force` and `--last` flags, applying the same
 skip/rerun rule — a state file either engine wrote resumes on the other,

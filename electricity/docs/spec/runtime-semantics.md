@@ -1953,7 +1953,11 @@ unfinished **named `if`** (`core/conditional.py`, `resume`) reads its saved
 `meta.branch` before anything else, evaluates its condition again (a model
 condition asks again), and, when the condition selects that branch again,
 runs the branch by the same positional rule; the other branch runs from its
-start. An unnamed `if` and a `reflector` rerun whole. electricity run
+start. An unnamed `if` reruns whole. A `reflector` follows the same
+`effect_completed_ok()` rule as any other effect (issue #585): one that
+finished without error is skipped whole, keeping its saved value and its own
+`meta.iterations` record; one that didn't finish reruns whole, planning call
+and generated plan included. electricity run
 accepts --state/--resume/--force too (issue #727), with the same rules.
 
 An unfinished **`use`** (`core/use.py` `UseRuntime.execute`,
@@ -1972,6 +1976,23 @@ first attempt resumes — a `retries` retry reruns the child whole. A `use`
 that is the first unfinished effect of a resumed loop pass or `if` branch
 resumes inside its child the same way; one in a tree-flow branch, or in a
 pass or branch that runs from its start, reruns whole.
+
+A **finished** `use`'s inputs are checked too (issue #584): resolved now
+against the resumed run's own inputs and state the same way they were
+resolved when `meta.inputs` was recorded (rendered, then its declared
+`interface.inputs` defaults/coercion applied), then compared as JSON
+values. Changed, it reruns — and so does everything after it in the same
+chain, by the same positional rule as an unfinished effect; unchanged, it
+stays skipped. A tree-flow branch is unaffected (it has its own,
+independent skip check, not the chain's positional one), and so is a `use`
+whose own saved node didn't finish (the `record_children` continuation
+above follows its own rules regardless of its inputs). A resume whose own
+run inputs differ from the saved run's prints one `WARNING:` line naming
+each changed input as `name: <old> -> <new>` (Python `repr`), in the
+interface's declared order and then any undeclared ones sorted, and says
+every other finished effect keeps its saved results; a resume with
+unchanged run inputs warns nothing new. The text is identical on both
+engines.
 
 A `dynamic` or `use` with **`resume: restart`** (`core/dynamic.py`,
 `core/use.py`, #590) whose saved node did not finish without error runs
