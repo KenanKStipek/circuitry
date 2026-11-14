@@ -933,7 +933,7 @@ def run(req: RunRequest) -> RunResult:
             resolved_shell_allowlist as _resolved_shell_allowlist,
         )
         from ..generated_doc import (
-            static_shell_allowed_commands as _static_shell_commands,
+            static_shell_allowed_commands_from_definitions as _static_shell_commands_from_definitions,
         )
         from ..generated_doc import (
             static_tool_providers_from_definitions as _static_tool_providers_from_definitions,
@@ -945,7 +945,8 @@ def run(req: RunRequest) -> RunResult:
         )
         runtime_config[_DOC_SHELL_KEY] = sorted(
             _resolved_shell_allowlist(
-                _static_shell_commands(orch), host_pin=_shell_host_pin(runtime_config)
+                _static_shell_commands_from_definitions(root_def),
+                host_pin=_shell_host_pin(runtime_config),
             )
         )
 

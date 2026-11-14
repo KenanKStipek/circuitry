@@ -316,6 +316,63 @@ def _walk_definition_tool_providers(effects: Any, providers: set[str]) -> None:
                     _walk_tool_providers(parsed.get("finally"), providers)
 
 
+def _walk_definition_shell_allowed_commands(effects: Any, commands: set[str]) -> None:
+    from .core.conditional import ConditionalDefinition
+    from .core.dynamic import DynamicDefinition
+    from .core.loop import LoopDefinition
+    from .core.reflector import ReflectorDefinition
+    from .core.tool import ToolDefinition
+    from .core.use import UseDefinition
+
+    for effect in effects or ():
+        if isinstance(effect, ToolDefinition):
+            if _normalize_name(effect.provider) == "shell":
+                allowed = effect.params.get("allowed_commands")
+                if isinstance(allowed, list):
+                    commands.update(
+                        c for c in allowed if isinstance(c, str) and "{{" not in c
+                    )
+        elif isinstance(effect, DynamicDefinition):
+            _walk_definition_shell_allowed_commands(effect.effects, commands)
+            _walk_definition_shell_allowed_commands(effect.finally_effects, commands)
+        elif isinstance(effect, ConditionalDefinition):
+            _walk_definition_shell_allowed_commands(effect.then_effects, commands)
+            _walk_definition_shell_allowed_commands(effect.else_effects, commands)
+        elif isinstance(effect, LoopDefinition):
+            _walk_definition_shell_allowed_commands(effect.body, commands)
+        elif isinstance(effect, ReflectorDefinition):
+            _walk_definition_shell_allowed_commands(effect.inner.effects, commands)
+        elif isinstance(effect, UseDefinition) and effect.inline is not None:
+            parsed = _best_effort_yaml(effect.inline)
+            if isinstance(parsed, dict):
+                _walk_shell_allowed_commands(
+                    parsed.get("effects") or parsed.get("steps"), commands
+                )
+                _walk_shell_allowed_commands(parsed.get("finally"), commands)
+
+
+def static_shell_allowed_commands_from_definitions(root: Any) -> frozenset[str]:
+    """Every command the compiled root document's own literal ``shell``
+    effects allow (#772 rule 9), walked off the compiled
+    ``DynamicDefinition`` tree rather than the raw YAML dict -- so a
+    profile's own per-effect ``provider:`` override
+    (:func:`circuitry.core.compiler.apply_effect_overrides`, applied before
+    this runs) is reflected the same way electricity's own
+    :func:`static_shell_allowed_commands_from_op` already reflects it,
+    rather than reading the pre-override raw document
+    (:func:`static_shell_allowed_commands`). Walks the same shape that
+    function walks over raw YAML, plus a literal ``use: inline:`` leaf's
+    own text (best-effort re-parsed, the same as
+    :func:`static_tool_providers_from_definitions`).
+    """
+    commands: set[str] = set()
+    _walk_definition_shell_allowed_commands(getattr(root, "effects", None), commands)
+    _walk_definition_shell_allowed_commands(
+        getattr(root, "finally_effects", None), commands
+    )
+    return frozenset(commands)
+
+
 def static_tool_providers_from_definitions(root: Any) -> frozenset[str]:
     """Every ``type: tool`` provider the compiled root document references,
     walked off the compiled ``DynamicDefinition`` tree rather than the raw
