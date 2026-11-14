@@ -691,7 +691,8 @@ class TestUnsetPathFollowsEvaluation:
         expr = "(state.input.m.x == 1 || true) && 1/0 == 1"
         with pytest.raises(CelEvaluationError) as excinfo:
             evaluate_cel(expr, self.CTX)
-        assert "divide by zero" in str(excinfo.value)
+        assert "CEL evaluation failed for" in str(excinfo.value)
+        assert "division by zero" in str(excinfo.value)
 
     def test_strict_ternary_guarded_read_does_not_raise(self):
         expr = "has(state.input.a.b) ? state.input.a.b.c == 1 : true"
@@ -780,6 +781,292 @@ class TestNestingErrorWinsOverUnsetPath:
 
 
 # ---------------------------------------------------------------------------
+# Index/key/division errors: one line, never a container's contents (#629)
+# ---------------------------------------------------------------------------
+
+
+class TestIndexAndKeyErrorsNeverEmbedAContainer:
+    CTX: ClassVar[dict] = {"input": {"m": {"a": 1, "b": [1, 2]}, "l": [1, 2, 3], "n": 5}}
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX, strict=True)
+        return str(excinfo.value)
+
+    def test_missing_string_key(self):
+        assert self._error_text("state.input.m['zz'] == 1").endswith("no such key: 'zz'")
+
+    def test_missing_int_key(self):
+        assert self._error_text("state.input.m[7] == 1").endswith("no such key: 7")
+
+    def test_list_index_out_of_range(self):
+        text = self._error_text("state.input.l[5] == 1")
+        assert text.endswith("list index out of range: 5")
+
+    def test_list_indexed_by_a_string(self):
+        text = self._error_text("state.input.l['a'] == 1")
+        assert text.endswith("cannot index a list with a string")
+
+    def test_int_indexed_by_an_int(self):
+        text = self._error_text("state.input.n[0] == 1")
+        assert text.endswith("cannot index an int with an int")
+
+    def test_negative_index_is_unaffected(self):
+        assert evaluate_cel("state.input.l[-1] == 3", self.CTX, strict=True) is True
+
+    def test_dot_access_of_a_missing_map_key(self):
+        # A macro-bound variable, not a ``state.`` path: the absent-path
+        # rule only ever marks a ``state.`` occurrence, so this is the
+        # only way to reach ``member_dot``'s own map lookup rather than
+        # that rule's own "unset" outcome.
+        text = self._error_text("[{'a': 1}].exists(x, x.zz == 1)")
+        assert text.endswith("no such key: 'zz'")
+
+    def test_field_selection_on_a_list_never_shows_its_elements(self):
+        text = self._error_text("[[1, 2, 3]].exists(x, x.zz == 1)")
+        assert text.endswith("cannot select field 'zz' on a list")
+
+    def test_no_error_text_contains_a_tuple_repr(self):
+        for expr in (
+            "state.input.m['zz'] == 1",
+            "state.input.m[7] == 1",
+            "state.input.l[5] == 1",
+            "state.input.l['a'] == 1",
+            "state.input.n[0] == 1",
+            "1 / 0 == 1",
+            "1 % 0 == 1",
+        ):
+            text = self._error_text(expr)
+            assert "KeyError" not in text
+            assert "IndexError" not in text
+            assert "TypeError" not in text
+            assert "ZeroDivisionError" not in text
+
+
+class TestDivisionAndModulusByZero:
+    def test_division_by_zero(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("1 / 0 == 1", {})
+        assert str(excinfo.value).endswith("division by zero")
+
+    def test_modulus_by_zero(self):
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel("1 % 0 == 1", {})
+        assert str(excinfo.value).endswith("modulus by zero")
+
+    def test_float_division_by_zero_is_unaffected(self):
+        assert evaluate_cel("1.0 / 0.0 > 0.0", {}) is True
+
+
+class TestOtherOverloadErrorsNeverEmbedAValue:
+    """Type-mismatch errors cel-python's own base ``Evaluator`` methods
+    raise (relational/arithmetic operators ``_StateEvaluator`` leaves
+    alone) -- some of these otherwise carry a whole operand's repr
+    (``celtypes.celtypes.py``'s own ``no such overload: <repr> != <repr>``
+    for ``<``/``<=``/``>``/``>=``), never just surfaced here."""
+
+    CTX: ClassVar[dict] = {"input": {"m": {"a": 1, "b": [1, 2]}, "l": [1, 2, 3], "n": 5}}
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX)
+        return str(excinfo.value)
+
+    def test_relational_type_mismatch_names_the_types_not_the_values(self):
+        # Matches `electricity-cel`'s own wording for the same failure
+        # (`cel::ExecutionError::ValuesNotComparable`) exactly.
+        text = self._error_text("state.input.n < state.input.m")
+        assert text.endswith("cannot compare an int to a map")
+
+    def test_in_type_mismatch(self):
+        text = self._error_text("5 in state.input.n")
+        assert text.endswith("cannot apply 'in' to an int and an int")
+
+    def test_addition_type_mismatch(self):
+        text = self._error_text("state.input.l + state.input.m")
+        assert text.endswith("cannot apply '+' to a list and a map")
+
+    def test_logical_and_type_mismatch(self):
+        text = self._error_text("1 && true")
+        assert text.endswith("cannot apply '&&' to an int and a bool")
+
+    def test_logical_or_type_mismatch(self):
+        text = self._error_text("1 || false")
+        assert text.endswith("cannot apply '||' to an int and a bool")
+
+    def test_ternary_non_bool_condition(self):
+        text = self._error_text("(1 ? 2 : 3) == 2")
+        assert text.endswith("cannot apply '?:' to an int, an int and a bool")
+
+    def test_no_error_text_contains_a_python_class_repr_or_tuple(self):
+        for expr in (
+            "state.input.n < state.input.m",
+            "5 in state.input.n",
+            "state.input.l + state.input.m",
+            "1 && true",
+            "1 || false",
+            "(1 ? 2 : 3) == 2",
+        ):
+            text = self._error_text(expr)
+            assert "<class" not in text
+            assert "Token(" not in text
+            assert "MapType(" not in text
+            assert "ListType(" not in text
+            assert "StringType(" not in text
+            assert "IntType(" not in text
+
+    def test_in_element_type_mismatch_keeps_cel_pythons_own_bare_text(self):
+        # cel-python's own ``operator_in`` raises this one without going
+        # through the "found no matching overload for ..." shape
+        # ``_error_text`` otherwise rewords, so it stays exactly this --
+        # matching electricity's own ``in``-mismatch text for the same
+        # case (issue #629).
+        assert (
+            self._error_text("1 in [1.0]")
+            == "CEL evaluation failed for '1 in [1.0]': no such overload"
+        )
+
+
+class TestOverflowDuplicateKeyAndInvalidMapKeyType:
+    """Every other cel-python error that embeds a Python class repr or
+    value, worded Circuitry's own way instead (issue #629)."""
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, {})
+        return str(excinfo.value)
+
+    def test_int_addition_overflow(self):
+        text = self._error_text("9223372036854775807 + 1 == 1")
+        assert text.endswith("return error for overflow")
+
+    def test_int_multiplication_overflow(self):
+        text = self._error_text("9223372036854775807 * 2 == 1")
+        assert text.endswith("return error for overflow")
+
+    def test_uint_addition_overflow(self):
+        text = self._error_text("18446744073709551615u + 1u == 1u")
+        assert text.endswith("return error for overflow")
+
+    def test_uint_multiplication_overflow(self):
+        text = self._error_text("18446744073709551615u * 2u == 1u")
+        assert text.endswith("return error for overflow")
+
+    def test_duplicate_map_literal_key(self):
+        text = self._error_text("{'a': 1, 'a': 2}.a == 1")
+        assert text.endswith("duplicate key: 'a'")
+
+    def test_invalid_map_literal_key_type(self):
+        text = self._error_text("{[1]: 2} == {}")
+        assert text.endswith("cannot use a list as a key")
+
+    def test_no_error_text_contains_a_python_class_repr(self):
+        for expr in (
+            "9223372036854775807 + 1 == 1",
+            "9223372036854775807 * 2 == 1",
+            "18446744073709551615u + 1u == 1u",
+            "18446744073709551615u * 2u == 1u",
+            "{'a': 1, 'a': 2}.a == 1",
+            "{[1]: 2} == {}",
+        ):
+            text = self._error_text(expr)
+            assert "StringType(" not in text
+            assert "ListType(" not in text
+            assert "<class" not in text
+
+
+class TestMismatchedIntegerMapKeys:
+    CTX: ClassVar[dict] = {"input": {"m": {1: "a"}}}
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr, self.CTX, strict=True)
+        return str(excinfo.value)
+
+    def test_uint_probe_against_an_int_key_of_the_same_value(self):
+        assert self._error_text("state.input.m[1u] == 1").endswith(
+            "cannot index a map with a uint"
+        )
+
+    def test_bool_probe_against_an_int_key_of_the_same_value(self):
+        assert self._error_text("state.input.m[true] == 1").endswith(
+            "cannot index a map with a bool"
+        )
+
+    def test_uint_probe_with_no_value_collision_is_a_plain_miss(self):
+        assert self._error_text("state.input.m[5u] == 1").endswith("no such key: 5")
+
+
+class TestEvaluateCelValueErrorText:
+    """The ``cel`` tool's own entry point (#735) shares this evaluator,
+    so every row above applies to it too."""
+
+    def _error_text(self, expr: str) -> str:
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel_value(expr, {"input": {"l": [1, 2, 3]}}, strict=True)
+        return str(excinfo.value)
+
+    def test_list_index_out_of_range(self):
+        assert self._error_text("state.input.l[5]").endswith(
+            "list index out of range: 5"
+        )
+
+    def test_division_by_zero(self):
+        assert self._error_text("1 / 0").endswith("division by zero")
+
+
+# ---------------------------------------------------------------------------
+# Nested too deeply: a check error, named at its own location (#629)
+# ---------------------------------------------------------------------------
+
+
+class TestNestedTooDeeplyIsACheckError:
+    def _nested_expr(self, depth: int = 150) -> str:
+        return "(" * depth + "state.input.missing" + ")" * depth
+
+    def test_validate_cel_syntax_names_the_location(self):
+        with pytest.raises(CelValidationError) as excinfo:
+            validate_cel_syntax(
+                self._nested_expr(),
+                effect_path="prime.effects[0]",
+                effect_name="g",
+            )
+        text = str(excinfo.value)
+        assert text == (
+            "CEL expression at 'prime.effects[0]' (effect 'g'): expression is "
+            "nested too deeply"
+        )
+
+    def test_never_the_raw_recursion_error_text(self):
+        with pytest.raises(CelValidationError) as excinfo:
+            validate_cel_syntax(self._nested_expr(), effect_path="prime.effects[0]")
+        text = str(excinfo.value)
+        assert "maximum recursion depth" not in text
+        assert "getting the str of an object" not in text
+
+    def test_chain_length_sweep_is_always_clean(self):
+        """Every length from just under to just over cof's own floor for a
+        member-access chain (614 links on 3.11, after this fix) is either
+        a clean success or exactly the one-line check error -- never a raw
+        ``RecursionError`` escaping uncaught."""
+        from circuitry.core import cel_eval
+
+        expected = (
+            "CEL expression at 'prime.effects[0]' (effect 'g'): expression is "
+            "nested too deeply"
+        )
+        for depth in range(590, 701):
+            cel_eval.clear_expression_cache()
+            expr = "state.input" + ".a" * depth
+            try:
+                validate_cel_syntax(
+                    expr, effect_path="prime.effects[0]", effect_name="g"
+                )
+            except CelValidationError as exc:
+                assert str(exc) == expected, (depth, str(exc))
+
+
+# ---------------------------------------------------------------------------
 # Undeclared references: one line, never the activation (#658)
 # ---------------------------------------------------------------------------
 
@@ -855,6 +1142,20 @@ class TestFreeIdentifiers:
 
     def test_three_argument_map_binds_nothing(self):
         assert free_identifiers("[1, 2, 3].map(i, i > 0, i * 2)") == ("i", "i", "i")
+
+    def test_own_walk_overflow_is_the_same_check_error_not_a_bare_one(self, monkeypatch):
+        # This walk is a second, separate recursive pass over the tree
+        # _compile already built -- a shape that compiles cleanly can still
+        # overflow *this* walk's own, independent recursion budget.
+        import circuitry.core.cel_eval as cel_eval_module
+
+        def _raise(*_args, **_kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(cel_eval_module, "_walk_free_identifiers", _raise)
+        with pytest.raises(CelValidationError) as excinfo:
+            free_identifiers("state.a == 1")
+        assert str(excinfo.value) == "expression is nested too deeply"
 
     def test_macro_variable_named_like_a_loop_binding_is_bound(self):
         assert free_identifiers("state.input.items.all(unit, unit > 0)") == ("state",)

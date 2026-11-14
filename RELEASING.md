@@ -91,6 +91,24 @@ Then refresh `oscilloscope/Cargo.lock` the same way you would
 or just let the next `cargo build`/`cargo test` there rewrite it, since no
 dependency version changed, only the workspace's own.
 
+Every `man/man1/*.1` page embeds this version in its own `.TH` line, so
+regenerate them now that it's bumped:
+
+```bash
+python scripts/generate-man-pages.py
+```
+
+`cof`'s own pages come straight from `pyproject.toml`'s version (not the
+installed package's — see `scripts/generate-man-pages.py`'s own
+`_pyproject_version`), so this is safe even in an editable checkout that
+hasn't been reinstalled yet. `electricity`'s/`osi`'s own pages are built
+from whichever binary is already at `electricity/target/debug/electricity`/
+`oscilloscope/target/debug/osi` (or freshly built if missing) — build both
+workspaces first if this is a from-scratch checkout, so their own pages
+pick up the version you just bumped too. `python scripts/generate-man-pages.py
+--check` confirms every page is current; `pytest`/`cargo test` fail on a
+stale one either way.
+
 For a release-candidate tag, the Cargo files spell the version differently
 from `pyproject.toml`: it uses PEP 440 (`0.2.0rc1`), but Cargo requires
 valid semver, so `electricity/Cargo.toml` and `oscilloscope/Cargo.toml` both
@@ -145,7 +163,7 @@ release workflow extracts to populate the GitHub Release notes.
 ### 4. Commit, tag, push
 
 ```bash
-git add pyproject.toml electricity/Cargo.toml electricity/Cargo.lock oscilloscope/Cargo.toml oscilloscope/Cargo.lock CHANGELOG.md changelog.d   # includes the consumed fragments
+git add pyproject.toml electricity/Cargo.toml electricity/Cargo.lock oscilloscope/Cargo.toml oscilloscope/Cargo.lock man/man1 CHANGELOG.md changelog.d   # includes the consumed fragments and the regenerated man pages
 git commit -m "release v0.2.0"
 git tag v0.2.0
 git push origin main
@@ -172,6 +190,14 @@ The workflow then:
    publishing, then pushes the container image to ghcr.io.
 6. Creates a GitHub Release with the changelog excerpt, the Python
    artifacts, and electricity's and osi's archives/checksums, all attached.
+
+`cof`'s own man pages install from the Python wheel/sdist into
+`share/man/man1` (`man cof` finds them once that prefix's `bin` is on
+`PATH`); electricity's and osi's own pages travel inside their release
+archives, under `man/man1/`. `scripts/generate-man-pages.py` writes all of
+them from `man/man1/*.1` at the repo root — see that script's own
+docstring, and `cof man`/`electricity man`/`osi man`, which show the same
+pages without any of this installed at all.
 
 Watch progress at:
 

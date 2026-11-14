@@ -60,11 +60,21 @@ took when its condition selects that branch again, a `use` with
 saved record's own digest and inputs still match, and `finally:` always
 reruns. A document that changed since the saved run is refused unless
 `--force`. A state file either engine wrote resumes on the other.
-`--resume last`/a run-id (cof's own persistence-backed modes) are not
-supported -- only naming a saved file directly with `--state`; a `--resume`
+`--resume last` resolves through the same `--last` stash both
+`cof run --last` and `electricity run --last` share
+(`~/.config/circuitry/last-run.json`): the prior run's own `--out`,
+with the same checks and messages on either engine (no previous run, an
+unreadable stash, a different orchestration, no `--out`, a gone `--out`
+file). A stash carrying a setting electricity's own CLI has no flag for
+(a run-library's own `service_profile`/`remote_library_source`, or any
+of `--dry-run`/`--skip-preflight`/`--model`/`--profile-from-state`/
+`--scoring`/`--routing`/`--decompose`/`--split`/`--decompose-out`)
+refuses plain `--last` outright, naming the setting, rather than
+replaying a run missing it; `cof run --last` still replays that stash in
+full. `--resume <run-id>` (cof's own persistence-backed mode) is still
+not supported -- only `--state <file>`/`--resume last`; a `--resume`
 with neither is refused the same way cof's own safety checks refuse it
-(before anything runs, writing no state, exit 1), naming `--state <file>`
-as the only form electricity accepts (`--last`'s own stash is #760). [What
+(before anything runs, writing no state, exit 1). [What
 electricity can't run yet](#what-electricity-cant-run-yet), below, still
 refuses with a preview message pointing at `cof run`. A document and its
 literal `use` children are checked before the run starts; an inline or
@@ -91,19 +101,18 @@ release alongside the Python distributions, marked as a preview.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
 - **Persistence.** `runtime.persistence` is refused -- clients need the
-  `--state`-file resume path first (#727); a backend can follow. `cof
-  run`'s own `--resume last`/a run-id (looked up via its own `--last`
-  stash or a `runtime.persistence` backend) isn't supported either --
-  `--resume` always needs `--state <file>` naming the saved state
-  directly; electricity's own `--last` stash is tracked separately (#760).
+  `--state`-file/`--last`-stash resume paths first (#727, #760); a
+  backend can follow. `cof run --resume <run-id>` (looked up via a
+  `runtime.persistence` backend) still isn't supported -- `--resume`
+  always needs `--state <file>` or `--resume last`.
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
 - **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
   `--out`/`-o`, `--live-state`, `--events`, `--allow-capabilities`,
   `--adapter`, `--label` and `--quiet` -- the same names, meaning and config discovery.
-  `--state`/`-s`, `--resume` and `--force` are accepted too (#727, with
-  the one narrowing above). Every other `cof run` option is
-  engine-specific, not yet accepted: `--last`; `--profile` (name,
+  `--state`/`-s`, `--resume`, `--force` and `--last` are accepted too
+  (#727, #760, with the one narrowing above). Every other `cof run`
+  option is engine-specific, not yet accepted: `--profile` (name,
   not a path) and `--profile-from-state`; `--print`, `--dry-run`,
   `--validate-only`, `--json`, `--verbose`/`-v`, `--tail`,
   `--skip-preflight`; `--model`, `--explain-routing`, `--decompose-out`,
@@ -112,6 +121,10 @@ release alongside the Python distributions, marked as a preview.
   `use: {ref: ...}` are refused. Windows isn't supported.
 - **Known gaps, tracked:** schema error wording and order (#528); rare
   JSON Schema shapes (#507); a reflector plan containing a date (#512).
+
+`electricity man [run]` shows electricity(1)/electricity-run(1) through `man` on a
+terminal, or prints its roff when piped or given `--roff` -- it works even where
+`MANPATH` doesn't reach the release archive's own `man/man1/`.
 
 ## Build and test
 

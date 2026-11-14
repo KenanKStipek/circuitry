@@ -1,9 +1,7 @@
 {
-  "spec_case": "issue #403: a member-access chain past electricity's own MAX_ACCESSOR_NESTING_DEPTH",
-  "description": "A 613-link member-access chain fails Circuitry itself before the document ever runs: path collection walks the whole parse tree once per '.' link with no recursion guard, so the RecursionError it raises escapes every try/except in core/cel_eval.py uncaught, with no 'CEL evaluation failed for ...' wrapping and no effect-path prefix, just Python's own bare exception text. electricity matches the phase (rejected at compile time, the document never runs) and the simpler of Circuitry's two observed text forms; only the shared 'maximum recursion depth exceeded' substring is compared, since Circuitry's own exact wording varies by call context.",
+  "spec_case": "issue #403: a member-access chain past Circuitry's own recursion budget for this shape",
+  "description": "A 700-link member-access chain fails cof itself before the document ever runs: path collection walks the whole parse tree once per '.' link with no recursion guard, raising a RecursionError. core/cel_eval.py::_compile catches it and raises the same one line every other CEL check error uses, framed with the failing effect's own path (issue #629) -- electricity matches the phase (rejected at compile time, the document never runs) and now this exact text too, well above both engines' limits for this shape (electricity's own accessor-nesting cap, and cof's own floor on 3.11, 614 links after this fix). Neither limit is anywhere near 700, so a few frames' change in either engine's own call depth can't move this case across it; the boundary itself is covered by tests/core/test_cel_eval.py's own chain-length sweep (590-700 on cof).",
   "engines": ["python", "electricity"],
   "expect": "failure",
-  "error_compare": "location",
-  "location_pattern": "maximum recursion depth exceeded",
   "python_runner_versions": ["3.11"]
 }

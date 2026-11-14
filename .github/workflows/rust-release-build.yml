@@ -38,6 +38,7 @@ jobs:
   version:
     name: Read workspace version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -68,6 +69,7 @@ jobs:
             runner: macos-latest
             zigbuild: false
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -106,10 +108,15 @@ jobs:
           version="${{ needs.version.outputs.version }}"
           name="${{ inputs.binary-name }}"
           stage="${name}-${version}-${{ matrix.target }}"
-          mkdir -p "$stage"
+          mkdir -p "$stage" "$stage/man/man1"
           cp "target/${{ matrix.target }}/release/${name}" "$stage/"
           cp ../LICENSE "$stage/"
           cp README.md "$stage/"
+          # This tool's own man pages (issue #764) -- `../man/man1/` has
+          # both electricity's and osi's, named by prefix (electricity.1/
+          # electricity-run.1, osi.1/osi-watch.1), so `${name}*.1` picks
+          # out only this archive's own.
+          cp ../man/man1/${name}*.1 "$stage/man/man1/"
           tar czf "$stage.tar.gz" "$stage"
           shasum -a 256 "$stage.tar.gz" > "$stage.tar.gz.sha256"
 
@@ -126,6 +133,7 @@ jobs:
     if: inputs.build-image
     needs: [version, build-archives]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

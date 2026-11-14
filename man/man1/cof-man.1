@@ -1,0 +1,35 @@
+.TH COF-MAN 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-man \- Show a cof man page through man, or print its roff when piped or
+given --roff
+.SH SYNOPSIS
+.nf
+cof man [OPTIONS] [command]
+.fi
+.SH DESCRIPTION
+Shows a cof man page through man on a terminal, or prints its roff when piped
+or given --roff. Works even where MANPATH doesn't reach the installed pages:
+the pages are generated from the same code this command itself runs.
+.SH OPTIONS
+.TP
+.B COMMAND
+Command to show the page for (default: cof itself).
+.TP
+.B --roff
+Print the page's roff instead of showing it through man.
+.SH EXAMPLES
+.TP
+.B cof man run
+Shows cof-run(1) through man.
+.TP
+.B cof man run --roff | groff -man -Tutf8
+Renders cof-run(1)'s roff directly.
+.SH EXIT STATUS
+.TP
+.B 0
+The page was shown or printed.
+.TP
+.B 2
+COMMAND doesn't name a page; the available pages are listed.
+.SH SEE ALSO
+\fBcof(1)\fR

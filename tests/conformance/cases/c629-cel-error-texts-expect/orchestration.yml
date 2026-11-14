@@ -1,0 +1,8 @@
+name: c629-cel-error-texts-expect
+effects:
+  - type: tool
+    name: result
+    provider: json
+    params: {mode: parse, input: "[1, 2, 3]"}
+    expect: {mode: cel, expr: "value[5] == 1"}
+    on_error: continue

@@ -32,12 +32,12 @@
 //! `--dump-ir` under `run` -- it has no `cof run` equivalent, and stays
 //! reachable through the legacy form only. A missing orchestration
 //! positional under `run` is `Action::MissingOrchestration` (exit 1,
-//! cof's own text on stdout), not `Action::UsageError` (exit 2): cof's
-//! own positional is `Optional[str]` to let `--last` (not implemented
-//! here, #727's scope) stand in for it, so Click never raises a usage
-//! error for its absence either.
+//! cof's own text on stdout) only when `--last` is also absent, not
+//! `Action::UsageError` (exit 2): cof's own positional is `Optional[str]`
+//! precisely so `--last` (issue #760) can stand in for it, so Click never
+//! raises a usage error for its absence either.
 
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -46,20 +46,22 @@ use electricity::run::{RunRequest, RunResult, Signal};
 
 mod user_env;
 
-const USAGE: &str = "\
+const USAGE_PREAMBLE: &str = "\
 Usage: electricity <config.json> <orchestration.yml> [-e key=value]... [--out state.json]
                     [--pretty] [--live-state state.json] [--events events.jsonl]
                     [--profile <path>]
        electricity <config.json> <orchestration.yml> --dump-ir [-e key=value]...
-       electricity run <orchestration.yml> [-e key=value]... [--config config.json]
+       electricity run [orchestration.yml] [-e key=value]... [--config config.json]
                     [--out state.json] [--live-state state.json] [--events events.jsonl]
                     [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]
                     [--pretty] [--profile <path>] [--state state.json] [--resume MODE] [--force]
+                    [--last]
+       electricity man [run] [--roff]
 
 electricity is a preview: it runs tool/dynamic/if/finally/loop/use/yield/prompt/reflector documents
 only (persistence and runtime plugins are refused with a
 preview marker; use `cof run` for those). A prompt effect's model is
-reached for real through a document's own `adapter:` or a prompt's own
+reached for real through a document's `adapter:` or a prompt's
 `provider:`, including `ollama`, the OpenAI-compatible family, `openai`,
 `anthropic`, `replicate`, `watsonx`, `cyberdiner`, `claude_code`, `pi`, and
 the `scripted` adapter; `litellm` has no electricity builder and is
@@ -73,72 +75,79 @@ legacy `electricity <config.json> <doc>` form (config always explicit,
 never discovered) keeps working as an alias; --profile/--pretty/--dump-ir
 are electricity-only additions, available under either form.
 
-Options:
-  -V, --version       Print the version and exit. Legacy form only -- `cof
-                      run` has no `-V`/`--version` of its own, so neither
-                      does `electricity run` (an unrecognized option there,
-                      same as cof's).
-  -h, --help          Print this message and exit. Legacy form only, same
-                      as -V/--version above -- under `run`, use the long
-                      --help below (cof run's own `-h` is likewise
-                      unrecognized; only --help is).
-  --help              Print this message and exit. Works under both forms.
-  -e key=value        Pass an orchestration input, checked against its
-                      declared interface.inputs the same way `cof run -e`
-                      does. Repeatable; a later -e for the same key wins.
-  --config <path>, -c `run` only: path to config JSON (or CIRCUITRY_CONFIG,
-                      or discovery -- see above). The legacy form's first
-                      positional is this value, always explicit; --config/-c
-                      is rejected there as redundant.
-  --out <path>, -o    Write the final state to <path> instead of stdout.
-                      The -o alias is `run` only, matching cof's own.
-  --pretty            Sort state keys and indent by 2 spaces -- the final
-                      state, whether printed to stdout (no --out) or
-                      written to --out's own file.
-  --live-state <path> Mirror the running state to <path> as it changes.
-  --events <path>     Write a JSONL event stream to <path>.
-  --allow-capabilities cap,cap
-                      Comma-separated capabilities to pre-approve for this
-                      run (cof's own --allow-capabilities meaning and
-                      escape hatch). Available under either form.
-  --adapter <name>    This run's default adapter, beating a loaded
-                      --profile, the orchestration and the config.
-                      Available under either form.
-  --label <text>      `run` only: literal text for this run's label --
-                      beats the document's own top-level label: template.
-                      Never rendered. Cleaned the same way either way:
-                      whitespace collapsed to one space, control
-                      characters and escape sequences dropped, trimmed,
-                      cut at 64 characters; empty after cleaning means no
-                      label.
-  --quiet             Suppress non-essential output (accepted for parity;
-                      electricity prints no such output today). Available
-                      under either form.
-  --profile <path>    Load a profile (adapter/model/inputs/persistence
-                      overrides, routing pins and provider denials) from
-                      an explicit path -- no name discovery.
-  --dump-ir           Print the compiled IR as JSON and exit. Unstable: this
-                      format is a debugging aid and can change in any release.
-                      Legacy form only -- no `cof run` equivalent.
-  --state <path>, -s  `run` only: resume from this saved state file --
-                      every top-level key it carries, not just `input`.
-                      A named effect whose saved node already finished
-                      without error is skipped and reused only when
-                      --resume is also given; named alone, --state
-                      still seeds the whole run from the file, with no
-                      skip. The -s alias is `run` only, matching cof's.
-  --resume <mode>     `run` only, combined with --state <file>: engages
-                      the skip-and-continue behaviour above. cof's own
-                      'last'/a run-id mode (looked up via its own --last
-                      stash or a runtime.persistence backend) is not
-                      supported -- --resume always needs --state <file>
-                      naming the saved state directly. Refuses a
-                      document that changed since the saved run unless
-                      --force.
-  --force             `run` only: with --resume, continue even though
-                      the orchestration's content changed since the
-                      saved run (or it carries no recorded digest at
-                      all).";
+`electricity man [run]` shows the electricity(1) or electricity-run(1)
+man page through `man` on a terminal, or prints its roff when piped or
+given --roff.";
+
+/// *scope*'s own plain-text annotation for the combined `--help` listing
+/// (issue #764) -- a man page never needs this (`render_options_section`
+/// already filters by scope), but `--help` lists every flag together, so
+/// a `run`-only or legacy-only one says so.
+fn scope_note(scope: Scope) -> &'static str {
+    match scope {
+        Scope::Both => "",
+        Scope::Legacy => " Legacy form only.",
+        Scope::Run => " `run` only.",
+    }
+}
+
+/// Word-wraps a `--help` OPTIONS row the way the old hand-written
+/// `Options:` block did: *header* (flags, plus `<metavar>` if any) at
+/// column 2, its help text starting at column `COL` -- on the same line
+/// if *header* is short enough, its own line otherwise.
+fn render_help_row(header: &str, body: &str) -> String {
+    const COL: usize = 22;
+    const WIDTH: usize = 78;
+    let mut out = String::new();
+    let header_len = header.chars().count();
+    if header_len + 2 <= COL {
+        out.push_str(header);
+        out.push_str(&" ".repeat(COL - header_len));
+    } else {
+        out.push_str(header);
+        out.push('\n');
+        out.push_str(&" ".repeat(COL));
+    }
+    let wrapped = wrap_width(body, WIDTH - COL);
+    let mut lines = wrapped.lines();
+    if let Some(first) = lines.next() {
+        out.push_str(first);
+    }
+    for line in lines {
+        out.push('\n');
+        out.push_str(&" ".repeat(COL));
+        out.push_str(line);
+    }
+    out.push('\n');
+    out
+}
+
+/// [`OPTION_TABLE`] rendered as `--help`'s own combined `Options:`
+/// listing (issue #764) -- both forms' flags together, each annotated
+/// with [`scope_note`] when it isn't `Scope::Both` -- so `--help` and
+/// `electricity man`'s own OPTIONS section can never disagree about
+/// what a flag does: there is only the one table behind both.
+fn render_help_options() -> String {
+    let mut out = String::new();
+    for row in OPTION_TABLE {
+        let header = match row.metavar {
+            Some(metavar) => format!("  {} <{metavar}>", row.flags),
+            None => format!("  {}", row.flags),
+        };
+        let body = format!("{}{}", row.help, scope_note(row.scope));
+        out.push_str(&render_help_row(&header, &body));
+    }
+    out
+}
+
+/// The full `--help`/usage-error text (issue #764): [`USAGE_PREAMBLE`]'s
+/// own usage lines and description, followed by an `Options:` block
+/// generated from [`OPTION_TABLE`] -- never a second, hand-written copy
+/// of the same options that could quietly drift from the man page's own
+/// OPTIONS section.
+fn usage() -> String {
+    format!("{}\n\nOptions:\n{}", USAGE_PREAMBLE, render_help_options())
+}
 
 /// A successfully parsed run request -- every flag [`USAGE`] lists that
 /// isn't `--dump-ir`/`--version`/`--help`, from either
@@ -182,6 +191,11 @@ struct RunArgs {
     resume: Option<String>,
     /// `--force` (issue #727, `run` only).
     force: bool,
+    /// `--last` (issue #760, `run` only) -- replay the most recently
+    /// stashed run's own arguments, overwriting every other field this
+    /// struct holds (`run_action`'s own `if run_args.last` block),
+    /// exactly as `cof run`'s own `if last:` block does.
+    last: bool,
     /// Whether this came from `electricity run <doc> ...` rather than
     /// the legacy `electricity <config.json> <doc> ...` form -- the one
     /// thing [`run_action`]'s own later usage-error site (a malformed
@@ -202,11 +216,11 @@ enum Action {
     Help,
     Run(RunArgs),
     /// `electricity run` with no orchestration positional and no
-    /// `--last` (which electricity does not implement at all -- #727's
-    /// own scope) -- `cof run`'s own missing-orchestration check,
-    /// which is not a usage error there either (the positional is
-    /// `Optional[str]`, to support `--last`), so this is a distinct
-    /// exit-1 outcome from [`Action::UsageError`]'s exit 2.
+    /// `--last` either (issue #760) -- `cof run`'s own
+    /// missing-orchestration check, which is not a usage error there
+    /// either (the positional is `Optional[str]`, to support `--last`),
+    /// so this is a distinct exit-1 outcome from
+    /// [`Action::UsageError`]'s exit 2.
     MissingOrchestration,
     DumpIr(String, String, Vec<String>),
     UsageError(String),
@@ -219,6 +233,665 @@ enum Action {
     /// dependent wrapping -- DESIGN.md's own row) that this plain
     /// frame approximates rather than reproduces byte for byte.
     RunUsageError(String),
+    /// `electricity man [run] [--roff]` (issue #764): shows the named
+    /// page (legacy form, or `run`) through `man` on a terminal,
+    /// prints its roff when piped or given `--roff`.
+    Man {
+        page: ManPage,
+        roff: bool,
+    },
+    /// `electricity man <anything else>` -- exit 2, listing the pages
+    /// `electricity man` actually has.
+    ManUsageError(String),
+    /// Hidden, generator-only: `electricity --dump-option-table`
+    /// prints [`OPTION_TABLE`] as tab-separated lines, so
+    /// `scripts/generate-man-pages.py` builds the OPTIONS section of
+    /// `electricity(1)`/`electricity-run(1)` from the same table
+    /// `USAGE`'s own Options list is checked against (see
+    /// `option_table_names_match_usage_flags` below) -- never shown
+    /// in `--help`.
+    DumpOptionTable,
+}
+
+/// The two electricity pages `electricity man` knows (issue #764).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ManPage {
+    Electricity,
+    ElectricityRun,
+}
+
+/// `OPTION_TABLE`'s own *scope*: which of electricity's two forms an
+/// option applies to -- the same split [`KNOWN_FLAGS`] (legacy) and
+/// [`RUN_FLAGS`] (`run`) already make.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Scope {
+    Legacy,
+    Run,
+    Both,
+}
+
+/// One row of electricity's own option table (issue #764) -- the
+/// structured source `electricity man`'s OPTIONS sections are built
+/// from. Kept in sync with [`USAGE`]'s own hand-wrapped Options list by
+/// `option_table_names_match_usage_flags` (a test, not a shared
+/// renderer: `USAGE`'s column alignment predates this table and the
+/// two are not literally the same string), and with
+/// [`KNOWN_FLAGS`]/[`RUN_FLAGS`] by `option_table_covers_every_known_flag`.
+struct OptionRow {
+    flags: &'static str,
+    metavar: Option<&'static str>,
+    scope: Scope,
+    help: &'static str,
+}
+
+const OPTION_TABLE: &[OptionRow] = &[
+    OptionRow {
+        flags: "-V, --version",
+        metavar: None,
+        scope: Scope::Legacy,
+        help: "Print the version and exit.",
+    },
+    OptionRow {
+        flags: "-h",
+        metavar: None,
+        scope: Scope::Legacy,
+        help: "Print this message and exit; use the long --help under run.",
+    },
+    OptionRow {
+        flags: "--help",
+        metavar: None,
+        scope: Scope::Both,
+        help: "Print this message and exit.",
+    },
+    OptionRow {
+        flags: "-e",
+        metavar: Some("key=value"),
+        scope: Scope::Both,
+        help: "Pass an orchestration input, checked against its declared interface.inputs. \
+               Repeatable; a later -e for the same key wins.",
+    },
+    OptionRow {
+        flags: "--config, -c",
+        metavar: Some("path"),
+        scope: Scope::Run,
+        help: "Path to config JSON, or CIRCUITRY_CONFIG, or the same discovery cof run uses. \
+               The legacy form's first positional is this value, always explicit; --config/-c \
+               is rejected there as redundant.",
+    },
+    OptionRow {
+        flags: "--out, -o",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Write the final state to <path> instead of stdout. The -o alias is run only.",
+    },
+    OptionRow {
+        flags: "--pretty",
+        metavar: None,
+        scope: Scope::Both,
+        help: "Sort state keys and indent by 2 spaces in the final state, whether printed \
+               to stdout or written to --out.",
+    },
+    OptionRow {
+        flags: "--live-state",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Mirror the running state to <path> as it changes.",
+    },
+    OptionRow {
+        flags: "--events",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Write a JSONL event stream to <path>.",
+    },
+    OptionRow {
+        flags: "--allow-capabilities",
+        metavar: Some("cap,cap"),
+        scope: Scope::Both,
+        help: "Comma-separated capabilities to pre-approve for this run.",
+    },
+    OptionRow {
+        flags: "--adapter",
+        metavar: Some("name"),
+        scope: Scope::Both,
+        help: "This run's default adapter, beating a loaded --profile, the orchestration \
+               and the config.",
+    },
+    OptionRow {
+        flags: "--label",
+        metavar: Some("text"),
+        scope: Scope::Run,
+        help: "Literal text for this run's label, beating the document's top-level \
+               label: template. Never rendered. Cleaned the same way either way: \
+               whitespace collapsed to one space, control characters and escape \
+               sequences dropped, trimmed, cut at 64 characters; empty after cleaning \
+               means no label.",
+    },
+    OptionRow {
+        flags: "--quiet",
+        metavar: None,
+        scope: Scope::Both,
+        help: "Suppress non-essential output (accepted for parity).",
+    },
+    OptionRow {
+        flags: "--profile",
+        metavar: Some("path"),
+        scope: Scope::Both,
+        help: "Load a profile (adapter/model/inputs/persistence overrides, routing pins \
+               and provider denials) from an explicit path -- no name discovery.",
+    },
+    OptionRow {
+        flags: "--dump-ir",
+        metavar: None,
+        scope: Scope::Legacy,
+        help: "Print the compiled IR as JSON and exit. Unstable: a debugging aid that can \
+               change in any release.",
+    },
+    OptionRow {
+        flags: "--state, -s",
+        metavar: Some("path"),
+        scope: Scope::Run,
+        help: "Resume from this saved state file -- every top-level key it carries, not \
+               just input. A named effect whose saved node already finished without error \
+               is skipped and reused only when --resume is also given; named alone, \
+               --state still seeds the whole run from the file, with no skip.",
+    },
+    OptionRow {
+        flags: "--resume",
+        metavar: Some("mode"),
+        scope: Scope::Run,
+        help: "'last' resumes from the most recent run's own --out, through the same \
+               --last stash cof run keeps. Any other value, given with --state <file>, skips \
+               a named effect whose saved node already finished without error. A bare run id \
+               (looked up through a persistence backend) is not supported. Refuses a document \
+               that changed since the saved run unless --force.",
+    },
+    OptionRow {
+        flags: "--force",
+        metavar: None,
+        scope: Scope::Run,
+        help: "With --resume, continue even though the orchestration's content changed \
+               since the saved run (or it carries no recorded digest at all).",
+    },
+    OptionRow {
+        flags: "--last",
+        metavar: None,
+        scope: Scope::Run,
+        help: "Replay the most recent run's own arguments from the stash cof run --last \
+               uses (same file, keys and redaction). Every other flag on the line is \
+               replaced from the stash, including the orchestration, which may then be \
+               omitted. Can't be combined with --resume.",
+    },
+];
+
+/// [`OPTION_TABLE`] as tab-separated lines (`scope\tflags\tmetavar\thelp`,
+/// metavar empty when there isn't one) -- `--dump-option-table`'s own
+/// output, and `scripts/generate-man-pages.py`'s only electricity-
+/// specific parsing.
+fn dump_option_table() -> String {
+    let mut out = String::new();
+    for row in OPTION_TABLE {
+        let scope = match row.scope {
+            Scope::Legacy => "legacy",
+            Scope::Run => "run",
+            Scope::Both => "both",
+        };
+        out.push_str(scope);
+        out.push('\t');
+        out.push_str(row.flags);
+        out.push('\t');
+        out.push_str(row.metavar.unwrap_or(""));
+        out.push('\t');
+        out.push_str(row.help);
+        out.push('\n');
+    }
+    out
+}
+
+/// The hand-written portion of [`USAGE`]'s own text -- everything
+/// between the usage lines and `Options:` -- reused verbatim as both
+/// pages' own DESCRIPTION (issue #764): it already describes what
+/// electricity runs/refuses and how `run`'s config discovery works,
+/// so repeating it by hand in a second place could only drift from
+/// `--help`'s own copy.
+fn usage_description() -> &'static str {
+    let (_first_paragraph, rest) = USAGE_PREAMBLE
+        .split_once("\n\n")
+        .expect("USAGE_PREAMBLE's usage lines are followed by a blank line");
+    rest.trim_end()
+}
+
+/// [`USAGE_PREAMBLE`]'s own usage-lines paragraph (issue #764) -- every
+/// form `electricity` accepts, reused verbatim as `electricity(1)`'s own
+/// SYNOPSIS. Every line drops the same 7 leading characters (`"Usage: "`'s
+/// own width) that the first line's prefix occupies, so the continuation
+/// lines -- originally aligned under where `electricity` starts on line
+/// one -- stay aligned once that prefix is gone, instead of sitting 7
+/// columns too far right.
+fn usage_synopsis() -> String {
+    let block = USAGE_PREAMBLE
+        .split("\n\n")
+        .next()
+        .expect("USAGE_PREAMBLE starts with its usage lines");
+    block
+        .lines()
+        .map(|line| line.get("Usage: ".len()..).unwrap_or(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Just the `electricity run ...` lines of [`usage_synopsis`] (issue
+/// #764) -- `electricity-run(1)`'s own SYNOPSIS, a subset of the same
+/// text rather than a second copy of it.
+fn run_usage_synopsis() -> String {
+    usage_synopsis()
+        .lines()
+        .skip_while(|line| !line.trim_start().starts_with("electricity run"))
+        .take_while(|line| !line.trim_start().starts_with("electricity man"))
+        .map(|line| line.trim_start().to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Word-wraps *text* to at most *width* columns (issue #764): roff
+/// fills text itself when rendered, but `mandoc -Tlint`/`groff -ww`
+/// also lint the *source* file's own line lengths, so every rendered
+/// body needs wrapping before it reaches the page, not just the
+/// terminal.
+fn wrap_width(text: &str, width: usize) -> String {
+    let mut out = String::new();
+    let mut line_len = 0usize;
+    for word in text.split_whitespace() {
+        let word_len = word.chars().count();
+        if line_len == 0 {
+            out.push_str(word);
+            line_len = word_len;
+        } else if line_len + 1 + word_len > width {
+            out.push('\n');
+            out.push_str(word);
+            line_len = word_len;
+        } else {
+            out.push(' ');
+            out.push_str(word);
+            line_len += 1 + word_len;
+        }
+    }
+    out
+}
+
+/// Guards every line [`wrap_width`] produced against starting with a
+/// roff request mid-paragraph: `\&` is a zero-width roff escape that
+/// neutralizes a leading `.`/`'` without changing how the line prints.
+/// Man-page rendering only -- a plain `--help` listing is never roff.
+fn guard_wrapped_lines(wrapped: &str) -> String {
+    wrapped
+        .lines()
+        .map(|line| {
+            if line.starts_with('.') || line.starts_with('\'') {
+                format!("\\&{line}")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Wraps each `\n\n`-separated paragraph of *text* independently
+/// (issue #764), rejoining them with `.PP` -- `-man`'s own paragraph
+/// break, since a blank input line alone is not one.
+fn wrap_paragraphs(text: &str, width: usize) -> String {
+    text.split("\n\n")
+        .map(|p| guard_wrapped_lines(&wrap_width(p, width)))
+        .collect::<Vec<_>>()
+        .join("\n.PP\n")
+}
+
+/// Turns a markdown code span (`` `foo` ``) into roff bold (`\fBfoo\fR`)
+/// (issue #764) -- [`USAGE_PREAMBLE`]'s own prose uses backticks for an
+/// option/path/adapter name; on a man page a literal backtick would
+/// otherwise render as itself instead of as emphasis.
+fn code_spans_to_bold(text: &str) -> String {
+    let mut out = String::new();
+    let mut in_code = false;
+    for part in text.split('`') {
+        if in_code {
+            out.push_str("\\fB");
+            out.push_str(part);
+            out.push_str("\\fR");
+        } else {
+            out.push_str(part);
+        }
+        in_code = !in_code;
+    }
+    out
+}
+
+const MAN_WIDTH: usize = 78;
+
+/// A fixed `.TH` date (issue #764): never the build date, so
+/// `electricity man`'s output -- and `man/man1/electricity*.1` --
+/// don't change on every build. Bumped only when a page's own content
+/// changes enough to want a newer date shown.
+const MAN_PAGE_DATE: &str = "2026-11-13";
+
+/// Renders [`OPTION_TABLE`] as a `.TP`-tagged OPTIONS section (issue
+/// #764), keeping only the rows *scope_ok* allows -- `electricity(1)`
+/// wants legacy-or-both; `electricity-run(1)` wants run-or-both.
+/// Escapes a roff-unsafe non-ASCII character (issue #764): plain `groff
+/// -man -Tutf8` (no `-k`/preconv) reads raw UTF-8 bytes as invalid
+/// input, so an em dash or similar needs roff's own escape (`\(em`, or
+/// `\[uXXXX]` for anything without a named glyph) instead of the literal
+/// character. Man-page rendering only -- `--help`'s own plain-text
+/// listing keeps the literal character for a real terminal.
+fn escape_non_ascii(text: &str) -> String {
+    let mut out = String::new();
+    for ch in text.chars() {
+        if ch == '\u{2014}' {
+            out.push_str("\\(em");
+        } else if (ch as u32) > 127 {
+            out.push_str(&format!("\\[u{:04X}]", ch as u32));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn render_options_section(scope_ok: fn(Scope) -> bool) -> String {
+    let mut out = String::new();
+    for row in OPTION_TABLE {
+        if !scope_ok(row.scope) {
+            continue;
+        }
+        out.push_str(".TP\n.B ");
+        out.push_str(row.flags);
+        out.push('\n');
+        let body = match row.metavar {
+            Some(metavar) => format!("\\fI{metavar}\\fR {}", row.help),
+            None => row.help.to_string(),
+        };
+        out.push_str(&guard_wrapped_lines(&wrap_width(
+            &escape_non_ascii(&body),
+            MAN_WIDTH,
+        )));
+        out.push('\n');
+    }
+    out
+}
+
+/// Renders a `.TP` section from (heading, body) rows (issue #764):
+/// *bold_heading* picks `.B` (a flag/exit code/env var) over `.I` (a
+/// file path).
+fn render_tp_section(rows: &[(&str, &str)], bold_heading: bool) -> String {
+    let macro_ = if bold_heading { ".B" } else { ".I" };
+    let mut out = String::new();
+    for (heading, body) in rows {
+        out.push_str(".TP\n");
+        out.push_str(macro_);
+        out.push(' ');
+        out.push_str(heading);
+        out.push('\n');
+        out.push_str(&guard_wrapped_lines(&wrap_width(
+            &escape_non_ascii(body),
+            MAN_WIDTH,
+        )));
+        out.push('\n');
+    }
+    out
+}
+
+const ELECTRICITY_EXAMPLES: &[(&str, &str)] = &[
+    (
+        "electricity config.json orchestration.yml -e name=world --pretty",
+        "Runs a document directly, with one input, and a sorted/indented final \
+         state on stdout.",
+    ),
+    (
+        "electricity run orchestration.yml --out state.json",
+        "Runs a document through the same config discovery and options cof run \
+         uses, writing the final state to a file instead of stdout.",
+    ),
+    (
+        "electricity run orchestration.yml --state state.json --resume continue",
+        "Resumes a previous run from its saved state, skipping any named effect \
+         that already finished without error.",
+    ),
+];
+
+const ELECTRICITY_ENVIRONMENT: &[(&str, &str)] = &[
+    (
+        "CIRCUITRY_CONFIG",
+        "An explicit config JSON path, for electricity run's discovery (same as \
+         --config; when set, replaces the global config and any project config \
+         entirely, rather than layering on top of them). The legacy form's first \
+         positional is always explicit and never consults this variable.",
+    ),
+    (
+        "CIRCUITRY_MODEL",
+        "Overrides the resolved config's default_model.",
+    ),
+    (
+        "CIRCUITRY_ADAPTER",
+        "Overrides the resolved config's default_adapter.",
+    ),
+    (
+        "CIRCUITRY_ADAPTER_URL",
+        "Overrides the resolved default adapter's base_url.",
+    ),
+    (
+        "CIRCUITRY_COMFYUI_URL",
+        "Overrides the comfyui plugin's base_url.",
+    ),
+    (
+        "CIRCUITRY_SYSTEMONE_URL",
+        "Overrides the systemone plugin's base_url.",
+    ),
+    (
+        "CIRCUITRY_ENABLED_ADAPTERS",
+        "Comma-separated allowlist, narrowing (never widening) the resolved \
+         config's enabled_adapters.",
+    ),
+    (
+        "CIRCUITRY_ENABLED_PLUGINS",
+        "Comma-separated allowlist, narrowing (never widening) the resolved \
+         config's enabled_plugins.",
+    ),
+    (
+        "CIRCUITRY_ENABLED_TOOLS",
+        "Comma-separated allowlist, narrowing (never widening) the resolved \
+         config's enabled_tools.",
+    ),
+    (
+        "CIRCUITRY_ENVIRONMENT",
+        "Overrides the resolved config's environment (dev, prod, or test).",
+    ),
+    (
+        "CIRCUITRY_TRUST_PROJECT_CONFIG",
+        "Trusts a project config in the current directory without running cof \
+         trust first.",
+    ),
+];
+
+const ELECTRICITY_FILES: &[(&str, &str)] = &[
+    (
+        "~/.config/circuitry/config.json",
+        "The global config, applied first; a trusted project config layers on \
+         top of it.",
+    ),
+    (
+        "~/.config/circuitry/.env",
+        "Private environment variables, loaded before config resolution (the \
+         same file cof setup writes).",
+    ),
+    (
+        "~/.config/circuitry/trusted.json",
+        "Project configs trusted by cof trust; electricity run's discovery \
+         consults it the same way cof run does.",
+    ),
+    (
+        "./circuitry.config.json, ./config.json",
+        "A project config in the working directory, layered on top of the \
+         global config once trusted.",
+    ),
+];
+
+const ELECTRICITY_EXIT_STATUS: &[(&str, &str)] = &[
+    ("0", "Success."),
+    (
+        "1",
+        "The run failed, the orchestration was not found, or the config could \
+         not be read.",
+    ),
+    (
+        "2",
+        "A usage error -- an unrecognized option, a missing required argument, \
+         or an unknown electricity man page.",
+    ),
+    ("129", "The run was interrupted by SIGHUP."),
+    ("130", "The run was interrupted by SIGINT (Ctrl-C)."),
+    ("143", "The run was interrupted by SIGTERM."),
+];
+
+const ELECTRICITY_SEE_ALSO: &str = r".BR electricity (1),
+.BR electricity\-run (1),
+.BR cof (1),
+.BR cof\-run (1),
+.BR osi (1)
+";
+
+/// Assembles a full roff man page (issue #764) from [`USAGE`]'s own
+/// text (NAME/SYNOPSIS/DESCRIPTION) and [`OPTION_TABLE`] (OPTIONS),
+/// plus the hand-written sections above -- the same content
+/// `scripts/generate-man-pages.py` writes to `man/man1/electricity.1`/
+/// `electricity-run.1`, computed here directly so `electricity man`
+/// can never show a page the generator wouldn't also produce.
+fn build_man_page(page: ManPage) -> String {
+    let version = env!("CARGO_PKG_VERSION");
+    let (title, name_line, synopsis, options) = match page {
+        ManPage::Electricity => (
+            "ELECTRICITY",
+            "electricity \\- run a Circuitry orchestration directly, without cof (preview)",
+            usage_synopsis(),
+            render_options_section(|s| matches!(s, Scope::Legacy | Scope::Both)),
+        ),
+        ManPage::ElectricityRun => (
+            "ELECTRICITY-RUN",
+            "electricity-run \\- run a Circuitry orchestration the way cof run does (preview)",
+            run_usage_synopsis(),
+            render_options_section(|s| matches!(s, Scope::Run | Scope::Both)),
+        ),
+    };
+    format!(
+        ".TH {title} 1 \"{date}\" \"electricity {version}\" \"User Commands\"\n\
+         .SH NAME\n{name_line}\n\
+         .SH SYNOPSIS\n.nf\n{synopsis}\n.fi\n\
+         .SH DESCRIPTION\n{description}\n\
+         .SH OPTIONS\n{options}\
+         .SH EXAMPLES\n{examples}\
+         .SH ENVIRONMENT\n{environment}\
+         .SH FILES\n{files}\
+         .SH EXIT STATUS\n{exit_status}\
+         .SH SEE ALSO\n{see_also}",
+        date = MAN_PAGE_DATE,
+        description = wrap_paragraphs(
+            &code_spans_to_bold(&escape_non_ascii(usage_description())),
+            MAN_WIDTH
+        ),
+        examples = render_tp_section(ELECTRICITY_EXAMPLES, true),
+        environment = render_tp_section(ELECTRICITY_ENVIRONMENT, true),
+        files = render_tp_section(ELECTRICITY_FILES, false),
+        exit_status = render_tp_section(ELECTRICITY_EXIT_STATUS, true),
+        see_also = ELECTRICITY_SEE_ALSO,
+    )
+}
+
+/// `electricity man [run] [--roff]` (issue #764) -- *args* is
+/// everything after the literal `man` token.
+fn classify_man(args: &[String]) -> Action {
+    let mut roff = false;
+    let mut page = ManPage::Electricity;
+    let mut saw_page = false;
+    for arg in args {
+        match arg.as_str() {
+            "--roff" => roff = true,
+            "run" if !saw_page => {
+                page = ManPage::ElectricityRun;
+                saw_page = true;
+            }
+            other => {
+                return Action::ManUsageError(format!("no such page: {other}"));
+            }
+        }
+    }
+    Action::Man { page, roff }
+}
+
+/// Shows *page* through `man` on a terminal (`--roff` and false
+/// otherwise); prints its roff when piped, or when `--roff` is given
+/// (issue #764). The roff is written to a temporary file and removed
+/// afterwards -- `man <path>` works on both macOS and Linux, unlike a
+/// hidden `man --roff` path into a pager.
+/// Creates *name*'s own temp roff file with an unpredictable name,
+/// atomically (`create_new`) so a symlink planted ahead of time at a
+/// guessed path can't be written through -- unlike a plain
+/// `{name}.{pid}.1` path, a process id is not a secret.
+fn create_temp_man_file(name: &str, text: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    let dir = std::env::temp_dir();
+    for attempt in 0..100u32 {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let unique = nanos ^ u128::from(std::process::id()) ^ u128::from(attempt);
+        let path = dir.join(format!("{name}.{unique:x}.1"));
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(mut file) => {
+                file.write_all(text.as_bytes())?;
+                return Ok(path);
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a temp man file",
+    ))
+}
+
+fn show_man_page(page: ManPage, roff: bool) -> ExitCode {
+    let name = match page {
+        ManPage::Electricity => "electricity",
+        ManPage::ElectricityRun => "electricity-run",
+    };
+    let text = build_man_page(page);
+    let text = text.as_str();
+    if roff || !std::io::stdout().is_terminal() {
+        print!("{text}");
+        return ExitCode::SUCCESS;
+    }
+    let path = match create_temp_man_file(name, text) {
+        Ok(path) => path,
+        Err(_) => {
+            print!("{text}");
+            return ExitCode::SUCCESS;
+        }
+    };
+    let status = std::process::Command::new("man").arg(&path).status();
+    let _ = std::fs::remove_file(&path);
+    match status {
+        Ok(s) if s.success() => ExitCode::SUCCESS,
+        Ok(s) => ExitCode::from(s.code().unwrap_or(1) as u8),
+        Err(_) => {
+            print!("{text}");
+            ExitCode::SUCCESS
+        }
+    }
 }
 
 /// One recognized flag's own arity -- whether [`parse_flags`] consumes a
@@ -282,7 +955,184 @@ const RUN_FLAGS: &[(&str, Arity)] = &[
     ("-s", Arity::Value),
     ("--resume", Arity::Value),
     ("--force", Arity::Boolean),
+    ("--last", Arity::Boolean),
 ];
+
+/// `PathBuf` -> `String` for a stash field (issue #760): the stash
+/// itself stores every path as a plain JSON string (`str(path)`,
+/// `cli/app.py::_save_last_run`'s own shape), so a path read back out
+/// of one is always re-stringified before landing in a [`RunArgs`]
+/// field, which holds the *unparsed* CLI value either way.
+fn path_to_string(path: PathBuf) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// `str(pathlib.Path(s))`'s own normalisation for a POSIX path string --
+/// drop a `.` component, collapse repeated `/`, and drop a trailing `/`
+/// (verified directly: `Path('./a//b/')` stringifies to `'a/b'`). Never
+/// resolves `..` or touches the filesystem; a lone `//` prefix is kept
+/// (POSIX's own implementation-defined two-slash root, `Path('//a')` ->
+/// `'//a'`). `cof run` gets this for free the moment a CLI path flag is
+/// typed `Path` (Typer's own conversion, before `_save_last_run`/
+/// `_resolve_resume_state` ever see it); `electricity run`'s own flags
+/// stay plain `String`s, so a path headed for the stash or the
+/// `--resume last` orchestration comparison is normalised here instead
+/// (issue #760) -- otherwise `./doc.yml` and `doc.yml` stash and compare
+/// as different orchestrations when `cof run` would treat them the same.
+fn normalize_path_str(raw: &str) -> String {
+    let double_slash_prefix = raw.starts_with("//") && !raw.starts_with("///");
+    let is_absolute = raw.starts_with('/');
+    let joined = raw
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect::<Vec<_>>()
+        .join("/");
+    match (is_absolute, double_slash_prefix, joined.is_empty()) {
+        (true, true, true) => "//".to_string(),
+        (true, true, false) => format!("//{joined}"),
+        (true, false, true) => "/".to_string(),
+        (true, false, false) => format!("/{joined}"),
+        (false, _, true) => ".".to_string(),
+        (false, _, false) => joined,
+    }
+}
+
+/// `cli/app.py::_save_last_run`'s own dict literal, in the exact same
+/// key order (issue #760) -- a stash either engine wrote must read back
+/// the same in the other, and `electricity-config::last_run::LastRun`'s
+/// own accessors are keyed by name, not position, so this is purely for
+/// a byte-for-byte-readable file, not a functional requirement. Every
+/// key `cof run` writes that electricity's own CLI has no flag for
+/// (`print_state`/`dry_run`/`verbose`/`tail`/`skip_preflight`/
+/// `profile_from_state`/`model`/`explain_routing`/`decompose_out`/
+/// `scoring`/`routing`/`decompose`/`split`) is written as the value an
+/// invocation that never passed the reference's own equivalent flag
+/// would stash -- `false`/`null` either way; `json_out` is the one
+/// exception (see *piped*'s own call-site comment below). `trust_document`
+/// is always `true` and `remote_library_source` always `false`:
+/// electricity's own positional orchestration argument is always a
+/// literal path, never a library name (this module's own earlier doc
+/// comment).
+fn last_run_stash_args(
+    run_args: &RunArgs,
+    resume_default_out_path: Option<&Path>,
+    piped: bool,
+) -> electricity_value::Dict {
+    use electricity_value::{Dict, Value};
+
+    fn opt_str(value: Option<&String>) -> Value {
+        match value {
+            Some(s) => Value::Str(s.clone()),
+            None => Value::None,
+        }
+    }
+
+    fn opt_path_str(value: Option<&String>) -> Value {
+        match value {
+            Some(s) => Value::Str(normalize_path_str(s)),
+            None => Value::None,
+        }
+    }
+
+    let mut args = Dict::new();
+    args.insert(
+        Value::Str("orchestration".to_string()),
+        Value::Str(normalize_path_str(&run_args.orchestration)),
+    );
+    args.insert(
+        Value::Str("config".to_string()),
+        opt_path_str(run_args.config.as_ref()),
+    );
+    args.insert(
+        Value::Str("state".to_string()),
+        opt_path_str(run_args.state.as_ref()),
+    );
+    let out_value = run_args
+        .out
+        .clone()
+        .or_else(|| resume_default_out_path.map(|p| path_to_string(p.to_path_buf())));
+    args.insert(
+        Value::Str("out".to_string()),
+        opt_path_str(out_value.as_ref()),
+    );
+    args.insert(
+        Value::Str("pretty".to_string()),
+        Value::Bool(run_args.pretty),
+    );
+    args.insert(Value::Str("print_state".to_string()), Value::Bool(false));
+    args.insert(Value::Str("dry_run".to_string()), Value::Bool(false));
+    // `cli/app.py::run_cmd`'s own auto-pipe detection (`if not sys.
+    // stdout.isatty(): json_out = True; quiet = True`, run ahead of
+    // everything else and unconditional on any flag) -- electricity has
+    // no `--tail` of its own for that check's `and not tail` half to
+    // ever matter, and no `--json` flag either, so *piped* alone decides
+    // both fields here the way it decides both of cof's.
+    args.insert(Value::Str("json_out".to_string()), Value::Bool(piped));
+    args.insert(
+        Value::Str("quiet".to_string()),
+        Value::Bool(run_args.quiet || piped),
+    );
+    args.insert(Value::Str("verbose".to_string()), Value::Bool(false));
+    args.insert(
+        Value::Str("live_state".to_string()),
+        opt_path_str(run_args.live_state.as_ref()),
+    );
+    args.insert(
+        Value::Str("events".to_string()),
+        opt_path_str(run_args.events.as_ref()),
+    );
+    args.insert(
+        Value::Str("env_vars".to_string()),
+        // `None` with no `-e` at all, matching Typer's own multi-option
+        // default -- `cli/redaction.py::redact_env_pairs(None)` returns
+        // `None` too, so `cof run` with no `-e` stashes `null`, never `[]`.
+        if run_args.inputs.is_empty() {
+            Value::None
+        } else {
+            Value::List(
+                electricity_config::redacted_env_pairs(&run_args.inputs)
+                    .into_iter()
+                    .map(Value::Str)
+                    .collect(),
+            )
+        },
+    );
+    args.insert(
+        Value::Str("label".to_string()),
+        opt_str(run_args.label.as_ref()),
+    );
+    args.insert(Value::Str("tail".to_string()), Value::Bool(false));
+    args.insert(Value::Str("skip_preflight".to_string()), Value::Bool(false));
+    args.insert(
+        Value::Str("allow_capabilities".to_string()),
+        opt_str(run_args.allow_capabilities.as_ref()),
+    );
+    args.insert(
+        Value::Str("profile".to_string()),
+        opt_str(run_args.profile.as_ref()),
+    );
+    args.insert(Value::Str("profile_from_state".to_string()), Value::None);
+    args.insert(
+        Value::Str("adapter".to_string()),
+        opt_str(run_args.adapter.as_ref()),
+    );
+    args.insert(Value::Str("model".to_string()), Value::None);
+    args.insert(
+        Value::Str("explain_routing".to_string()),
+        Value::Bool(false),
+    );
+    args.insert(Value::Str("decompose_out".to_string()), Value::None);
+    args.insert(Value::Str("scoring".to_string()), Value::None);
+    args.insert(Value::Str("routing".to_string()), Value::None);
+    args.insert(Value::Str("decompose".to_string()), Value::None);
+    args.insert(Value::Str("split".to_string()), Value::None);
+    args.insert(Value::Str("trust_document".to_string()), Value::Bool(true));
+    args.insert(
+        Value::Str("remote_library_source".to_string()),
+        Value::Bool(false),
+    );
+    args
+}
 
 fn flag_arity<'a>(flags: &'a [(&'static str, Arity)], flag: &str) -> Option<&'a Arity> {
     flags
@@ -323,6 +1173,7 @@ struct ParsedFlags {
     state: Option<String>,
     resume: Option<String>,
     force: bool,
+    last: bool,
     positionals: Vec<String>,
 }
 
@@ -348,6 +1199,7 @@ fn parse_flags(
         state: None,
         resume: None,
         force: false,
+        last: false,
         positionals: Vec::new(),
     };
     let mut i = 0;
@@ -391,6 +1243,7 @@ fn parse_flags(
                     "--pretty" => parsed.pretty = true,
                     "--quiet" => parsed.quiet = true,
                     "--force" => parsed.force = true,
+                    "--last" => parsed.last = true,
                     _ => unreachable!("every Arity::Boolean flag is handled above"),
                 }
                 i += 1;
@@ -443,6 +1296,18 @@ fn classify(args: &[String]) -> Action {
     // `--help` is honoured.
     if args.first().map(String::as_str) == Some("run") {
         return classify_run(&args[1..]);
+    }
+
+    // `electricity man [run] [--roff]` (issue #764), same reserved-
+    // first-token dispatch as `run` above.
+    if args.first().map(String::as_str) == Some("man") {
+        return classify_man(&args[1..]);
+    }
+
+    // Hidden, generator-only (issue #764): never documented in --help,
+    // only ever invoked by `scripts/generate-man-pages.py`.
+    if args == ["--dump-option-table".to_string()] {
+        return Action::DumpOptionTable;
     }
 
     // `-V`/`--version` and `-h`/`--help` win over everything, including a
@@ -512,6 +1377,7 @@ fn classify(args: &[String]) -> Action {
             state: None,
             resume: None,
             force: false,
+            last: false,
             via_run: false,
         }),
         _ => Action::UsageError("no config file or orchestration given".to_string()),
@@ -540,9 +1406,40 @@ fn classify_run(args: &[String]) -> Action {
         );
     }
     match parsed.positionals.as_slice() {
-        [] => Action::MissingOrchestration,
+        // `cof run`'s own positional is `Optional[str]` precisely so
+        // `--last` can stand in for it (issue #760) -- a bare `electricity
+        // run --last` is `Action::Run` with an empty `orchestration`,
+        // overwritten from the stash inside `run_action` before anything
+        // reads it; only an *absent* `--last` still reaches
+        // `MissingOrchestration`.
+        [] if !parsed.last => Action::MissingOrchestration,
+        [] => Action::Run(RunArgs {
+            config: parsed.config,
+            orchestration: String::new(),
+            inputs: parsed.inputs,
+            out: parsed.out,
+            pretty: parsed.pretty,
+            live_state: parsed.live_state,
+            events: parsed.events,
+            profile: parsed.profile,
+            allow_capabilities: parsed.allow_capabilities,
+            adapter: parsed.adapter,
+            label: parsed.label,
+            quiet: parsed.quiet,
+            state: parsed.state,
+            resume: parsed.resume,
+            force: parsed.force,
+            last: true,
+            via_run: true,
+        }),
         [orchestration] => Action::Run(RunArgs {
             config: parsed.config,
+            // `cof run bogus.yml --last` ignores `bogus.yml` outright
+            // (confirmed directly) -- `run_action`'s own `if
+            // run_args.last` block overwrites this with the stash's own
+            // value before anything reads it, same as the `[]` arm above,
+            // so a positional given alongside `--last` here is harmless,
+            // never validated against.
             orchestration: orchestration.clone(),
             inputs: parsed.inputs,
             out: parsed.out,
@@ -557,6 +1454,7 @@ fn classify_run(args: &[String]) -> Action {
             state: parsed.state,
             resume: parsed.resume,
             force: parsed.force,
+            last: parsed.last,
             via_run: true,
         }),
         // `click.exceptions.UsageError`'s own literal template keeps
@@ -972,7 +1870,107 @@ fn parse_allow_capabilities(value: Option<&str>) -> Vec<String> {
         .collect()
 }
 
-fn run_action(run_args: RunArgs) -> ExitCode {
+fn run_action(mut run_args: RunArgs) -> ExitCode {
+    // `cof run`'s own very first check in `run_cmd`, before anything
+    // else -- including config/orchestration resolution, both of which
+    // `--last`'s own stash load below needs to run first (issue #760).
+    if run_args.resume.is_some() && run_args.last {
+        write_stdout("Error: --resume and --last are mutually exclusive.\n");
+        return ExitCode::from(1);
+    }
+
+    // `--last` (issue #760): replay the most recent stashed run's own
+    // arguments, the same file/keys `cof run` reads
+    // (`cli/last_run.py::read_last_run`) -- before config/orchestration
+    // resolution, since the stash itself names both (`cli/app.py::
+    // run_cmd`'s own `if last:` block runs first, at ~:1124).
+    if run_args.last {
+        let home = std::env::home_dir();
+        let stash = home
+            .as_deref()
+            .map(electricity_config::last_run_path)
+            .and_then(|path| electricity_config::read_last_run(&path));
+        let stash = match stash {
+            Some(stash) => stash,
+            None => {
+                // `cof run --last` with no stash at all raises a bare
+                // `typer.BadParameter` that nothing in `run_cmd` catches --
+                // Click's own top-level handler renders it as a usage
+                // error (exit 2), not the exit-1 `console.print`-plus-
+                // `typer.Exit` shape every *other* refusal in this
+                // function uses (confirmed directly against a real
+                // `cof run --last`).
+                print_run_usage_error(
+                    "Invalid value: No previous run found. Run an orchestration first.",
+                );
+                return ExitCode::from(2);
+            }
+        };
+        if !stash.ok() {
+            // `cof run --last`'s own `_load_last_run` has no graceful
+            // handling at all for a present-but-unreadable/malformed
+            // stash (an uncaught `JSONDecodeError`/`KeyError`, a Python
+            // traceback on stderr, exit 1) -- not one of issue #760's
+            // own listed refusals (that list is `--resume last`'s,
+            // which *does* read the stash gracefully), so this reports
+            // it cleanly instead of reproducing a traceback.
+            write_stdout(&format!("Error: {}\n", stash.error));
+            return ExitCode::from(1);
+        }
+        if stash.has_redacted_secrets() {
+            write_stdout("Error: previous run included redacted secrets in -e values.\n");
+            write_stdout(
+                "Re-run explicitly with the secret supplied via env var or config file \
+                 (recommended), or via -e for this invocation.\n",
+            );
+            return ExitCode::from(1);
+        }
+        // A stash either engine wrote must read back the same -- except
+        // for a setting `cof run` has a flag for and electricity's own
+        // CLI doesn't (`--dry-run`, `--skip-preflight`, `--model`,
+        // `--profile-from-state`, `--scoring`/`--routing`/`--decompose`/
+        // `--split`, `--decompose-out`, a service profile), or a run
+        // `cof run`'s own library-name resolution produced (a bare
+        // library name, or `cof run-library`'s remote source) that
+        // electricity's own positional orchestration argument -- always a
+        // literal path -- has no equivalent for. Replaying any of those
+        // silently would drop the setting the original run actually used,
+        // so this refuses instead of guessing.
+        if let Some(setting) = stash.unreplayable_setting() {
+            write_stdout(&format!(
+                "Error: the last run used {setting}, which electricity's --last cannot \
+                 replay \u{2014} run `cof run --last` instead.\n",
+            ));
+            return ExitCode::from(1);
+        }
+        // `cof run`'s own `if last:` block overwrites every one of these
+        // unconditionally from the stash -- including `orchestration`,
+        // silently ignoring whatever positional this invocation itself
+        // gave (confirmed directly: `cof run bogus.yml --last` replays
+        // the stash, never refusing on `bogus.yml` not existing).
+        run_args.orchestration = stash.orchestration();
+        run_args.config = stash.config_path().map(path_to_string);
+        run_args.state = stash.state_path().map(path_to_string);
+        run_args.inputs = stash.env_pairs();
+        run_args.out = stash.out_path().map(path_to_string);
+        run_args.pretty = stash.pretty();
+        run_args.live_state = stash.live_state_path().map(path_to_string);
+        run_args.events = stash.events_path().map(path_to_string);
+        run_args.label = stash.label();
+        run_args.quiet = stash.quiet();
+        // `cli/app.py::run_cmd`'s own `stashed.get("allow_capabilities")
+        // or allow_capabilities` -- the stash's own value wins when it has
+        // one, but a stash with none (`cof run`'s own `run-library`
+        // one-time grant is never persisted) leaves this invocation's own
+        // `--allow-capabilities` alone rather than overwriting it with
+        // nothing.
+        run_args.allow_capabilities = stash
+            .allow_capabilities()
+            .or_else(|| run_args.allow_capabilities.clone());
+        run_args.profile = stash.profile();
+        run_args.adapter = stash.adapter();
+    }
+
     // Armed *before* config load (issue
     // #431's own step 1), on a dedicated OS thread with its own Tokio
     // runtime -- responsive to a signal even while this thread is deep
@@ -1065,7 +2063,8 @@ fn run_action(run_args: RunArgs) -> ExitCode {
                 // matches `_parse_env_vars`'s own text word for word.
                 print_run_usage_error(&format!("Invalid value: {message}"));
             } else {
-                write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+                let usage = usage();
+                write_stderr(&format!("electricity: {message}\n{usage}\n"));
             }
             return ExitCode::from(2);
         }
@@ -1080,52 +2079,98 @@ fn run_action(run_args: RunArgs) -> ExitCode {
     // `electricity` (lib)'s own effective-settings resolution, at that
     // tier, not folded into this CLI-level `out_path` (which ranks
     // above a profile unconditionally).
-    let out_path = run_args.out.map(PathBuf::from);
+    let out_path = run_args.out.clone().map(PathBuf::from);
 
-    // `--resume` (issue #727): only the `--state <file>` form is in
-    // scope. `cof run`'s own two other sources both fail inside
-    // `cli/app.py::_resolve_resume_state` with a `typer.BadParameter`
-    // the caller re-raises as `typer.Exit(code=1)` -- a pre-run
-    // refusal that writes no state at all, not a raw CLI usage error
-    // (DESIGN.md §6.9's own exit-code table), so this is refused the
-    // same way `--resume`'s document-hash checks are: through the
-    // ordinary `RunResult`/`exit_code_for` path, exit 1, nothing
-    // written -- never `ExitCode::from(2)`.
-    if run_args.resume.is_some() && run_args.state.is_none() {
-        signal_guard.disarm();
-        let message = if run_args.resume.as_deref() == Some("last") {
-            // `cof run --resume last` reads its own `--last` stash
-            // (`last-run.json`); electricity keeps none (issue #760
-            // tracks adding one).
-            "--resume last needs cof's own --last stash, which electricity does not keep \
-             (issue #760) -- pass --state <file> naming a saved state directly instead."
-                .to_string()
+    // `--resume` (issue #727, extended by #760): `--state <file>` names
+    // the saved state to resume from directly; `--resume last` resolves
+    // it through the same `--last` stash `--last` itself reads
+    // (`cli/last_run.py::read_last_run`) -- the prior run's own `--out`.
+    // A bare run-id (`cof run`'s own `runtime.persistence` lookup) stays
+    // refused. Every refusal below fails the same way `cof run`'s own
+    // `_resolve_resume_state` does for all three sources -- a pre-run
+    // `typer.BadParameter` the caller re-raises as `typer.Exit(code=1)`,
+    // writing no state at all (DESIGN.md §6.9's own exit-code table) --
+    // through the ordinary `RunResult`/`exit_code_for` path, exit 1,
+    // never `ExitCode::from(2)`.
+    let mut resume_state_path = run_args.state.clone().map(PathBuf::from);
+    let mut resume_default_out_path: Option<PathBuf> = None;
+    if run_args.resume.is_some() {
+        let refusal = if run_args.state.is_some() {
+            resume_default_out_path = run_args.state.clone().map(PathBuf::from);
+            None
+        } else if run_args.resume.as_deref() == Some("last") {
+            let home = std::env::home_dir();
+            let stash = home
+                .as_deref()
+                .map(electricity_config::last_run_path)
+                .and_then(|path| electricity_config::read_last_run(&path));
+            match &stash {
+                None => Some("No previous run found \u{2014} nothing to resume from.".to_string()),
+                Some(stash) if !stash.ok() => {
+                    Some(format!("{} Nothing to resume from.", stash.error))
+                }
+                Some(stash) => {
+                    let stashed_orchestration = stash.orchestration();
+                    let normalized_orchestration = normalize_path_str(&run_args.orchestration);
+                    if stashed_orchestration != normalized_orchestration {
+                        Some(format!(
+                            "The last run was '{stashed_orchestration}', not {} \u{2014} run \
+                             that orchestration again, or pass --state <file> to resume a \
+                             specific saved state instead of 'last'.",
+                            normalized_orchestration
+                        ))
+                    } else {
+                        match stash.out_path() {
+                            None => Some(
+                                "The last run did not use --out, so it saved no state to \
+                                 resume from."
+                                    .to_string(),
+                            ),
+                            Some(stash_out_path) if !stash_out_path.exists() => Some(format!(
+                                "The last run's --out file is gone: state file not found: {}",
+                                stash_out_path.display()
+                            )),
+                            Some(stash_out_path) => {
+                                resume_state_path = Some(stash_out_path.clone());
+                                resume_default_out_path = Some(stash_out_path);
+                                None
+                            }
+                        }
+                    }
+                }
+            }
         } else {
             // `cof run --resume <run-id>` needs the orchestration's own
             // `runtime.persistence` backend, which stays refused on
             // electricity.
-            "--resume <run-id> needs this orchestration's runtime.persistence backend, which \
-             stays refused on electricity -- pass --state <file> naming a saved state directly \
-             instead."
-                .to_string()
+            Some(
+                "--resume <run-id> needs this orchestration's runtime.persistence backend, \
+                 which stays refused on electricity -- pass --state <file> naming a saved \
+                 state directly, or --resume last, instead."
+                    .to_string(),
+            )
         };
-        let result = RunResult {
-            ok: false,
-            out_path: None,
-            state: None,
-            error: Some(message),
-            warnings: config_warnings.clone(),
-            signal: None,
-        };
-        if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
+        if let Some(message) = refusal {
+            signal_guard.disarm();
+            let result = RunResult {
+                ok: false,
+                out_path: None,
+                state: None,
+                error: Some(message),
+                warnings: config_warnings.clone(),
+                signal: None,
+                resume_refused: true,
+            };
+            if let Err(err) = print_stdout_contract(&result, None, run_args.pretty) {
+                print_stderr_contract(&result);
+                write_stderr(&format!(
+                    "electricity: could not serialize run state: {err}\n"
+                ));
+                return ExitCode::from(1);
+            }
             print_stderr_contract(&result);
-            write_stderr(&format!(
-                "electricity: could not serialize run state: {err}\n"
-            ));
-            return ExitCode::from(1);
+            return exit_code_for(&result);
         }
-        print_stderr_contract(&result);
-        return exit_code_for(&result);
     }
 
     let req = RunRequest {
@@ -1134,21 +2179,17 @@ fn run_action(run_args: RunArgs) -> ExitCode {
         inputs,
         out_path: out_path.clone(),
         pretty: run_args.pretty,
-        live_state_path: run_args.live_state.map(PathBuf::from),
-        events_path: run_args.events.map(PathBuf::from),
-        profile_path: run_args.profile.map(PathBuf::from),
+        live_state_path: run_args.live_state.clone().map(PathBuf::from),
+        events_path: run_args.events.clone().map(PathBuf::from),
+        profile_path: run_args.profile.clone().map(PathBuf::from),
         allow_capabilities: parse_allow_capabilities(run_args.allow_capabilities.as_deref()),
         config_warnings,
         adapter_override: run_args.adapter.clone(),
         label_override: run_args.label.clone(),
         armed: true,
-        state_path: run_args.state.clone().map(PathBuf::from),
+        state_path: resume_state_path,
         resume: run_args.resume.is_some(),
-        resume_default_out: if run_args.resume.is_some() {
-            run_args.state.clone().map(PathBuf::from)
-        } else {
-            None
-        },
+        resume_default_out: resume_default_out_path.clone(),
         force: run_args.force,
     };
     let runtime = tokio::runtime::Builder::new_current_thread()
@@ -1183,6 +2224,34 @@ fn run_action(run_args: RunArgs) -> ExitCode {
                 ));
                 return ExitCode::from(1);
             }
+        }
+    }
+
+    // Stash for `--last`/`--resume last` (issue #760) -- success or
+    // failure, same as `cof run`'s own `_save_last_run` (`cli/app.py`'s
+    // own comment: "a failed run must leave a stash too, or `--resume
+    // last` would have no record to find its --out through"), skipped
+    // only when this run itself replayed one via `--last` (`cli/app.py`'s
+    // own `if not last:` guard) -- a replay must never overwrite the
+    // stash it just read, confirmed directly against a real `cof run
+    // --last` -- or when `result.resume_refused`: `cli/app.py::
+    // _resolve_resume_state`'s own document-hash refusal raises entirely
+    // in the CLI layer, before `cof run`'s own `run()` (and so
+    // `_save_last_run`) is ever reached, so a refused resume must leave
+    // the stash exactly as it found it too. Best-effort:
+    // `electricity_config::write_last_run` already swallows a write
+    // failure silently, exactly as the reference does.
+    if !run_args.last && !result.resume_refused {
+        let home = std::env::home_dir();
+        if let Some(path) = home.as_deref().map(electricity_config::last_run_path) {
+            electricity_config::write_last_run(
+                &path,
+                last_run_stash_args(
+                    &run_args,
+                    resume_default_out_path.as_deref(),
+                    !std::io::stdout().is_terminal(),
+                ),
+            );
         }
     }
 
@@ -1271,7 +2340,10 @@ fn main() -> ExitCode {
     // thread or the Tokio runtime [`run_action`] goes on to create,
     // the one place in this binary's lifetime mutating the process
     // environment from a single thread is always sound.
-    if !matches!(action, Action::Version | Action::Help) {
+    if !matches!(
+        action,
+        Action::Version | Action::Help | Action::Man { .. } | Action::DumpOptionTable
+    ) {
         user_env::load_user_env();
     }
     let exit_code = match action {
@@ -1280,7 +2352,8 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Action::Help => {
-            write_stdout(&format!("{USAGE}\n"));
+            let usage = usage();
+            write_stdout(&format!("{usage}\n"));
             ExitCode::SUCCESS
         }
         Action::Run(run_args) => run_action(run_args),
@@ -1314,18 +2387,31 @@ fn main() -> ExitCode {
                     }
                 },
                 Err(message) => {
-                    write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+                    let usage = usage();
+                    write_stderr(&format!("electricity: {message}\n{usage}\n"));
                     ExitCode::from(2)
                 }
             }
         }
         Action::UsageError(message) => {
-            write_stderr(&format!("electricity: {message}\n{USAGE}\n"));
+            let usage = usage();
+            write_stderr(&format!("electricity: {message}\n{usage}\n"));
             ExitCode::from(2)
         }
         Action::RunUsageError(message) => {
             print_run_usage_error(&message);
             ExitCode::from(2)
+        }
+        Action::Man { page, roff } => show_man_page(page, roff),
+        Action::ManUsageError(message) => {
+            write_stderr(&format!(
+                "electricity man: {message}\nPages: electricity, run\n"
+            ));
+            ExitCode::from(2)
+        }
+        Action::DumpOptionTable => {
+            write_stdout(&dump_option_table());
+            ExitCode::SUCCESS
         }
     };
     // The leftover-replies export (electricity/docs/spec/scripted-
@@ -1405,19 +2491,19 @@ mod unit_tests {
     /// two lists, matching whichever side its own flag says.
     #[test]
     fn usage_text_matches_supported_current_for_every_gated_effect_type() {
-        let supported_list = USAGE
+        let supported_list = USAGE_PREAMBLE
             .split("it runs ")
             .nth(1)
-            .expect("USAGE names what it runs")
+            .expect("USAGE_PREAMBLE names what it runs")
             .split(" documents")
             .next()
-            .expect("USAGE's own \"documents only\" phrase")
+            .expect("USAGE_PREAMBLE's own \"documents only\" phrase")
             .split('/')
             .collect::<Vec<_>>();
-        let refused_list = USAGE
+        let refused_list = USAGE_PREAMBLE
             .split('(')
             .nth(1)
-            .expect("USAGE names what it refuses, parenthesized")
+            .expect("USAGE_PREAMBLE names what it refuses, parenthesized")
             .split(',')
             .next()
             .expect("USAGE's own refused-list prefix, before the first comma")
@@ -1842,6 +2928,45 @@ mod unit_tests {
     }
 
     #[test]
+    fn run_subcommand_last_flag_with_no_positional_is_a_run_request() {
+        match classify(&["run".to_string(), "--last".to_string()]) {
+            Action::Run(run_args) => {
+                assert!(run_args.last);
+                assert_eq!(run_args.orchestration, "");
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_subcommand_last_flag_with_a_positional_still_sets_last() {
+        // `cof run bogus.yml --last` ignores `bogus.yml` outright
+        // (confirmed directly against a real `cof run`) -- `run_action`
+        // overwrites `orchestration` from the stash before anything
+        // reads it, so the positional is merely parsed here, never
+        // validated against.
+        match classify(&[
+            "run".to_string(),
+            "bogus.yml".to_string(),
+            "--last".to_string(),
+        ]) {
+            Action::Run(run_args) => {
+                assert!(run_args.last);
+                assert_eq!(run_args.orchestration, "bogus.yml");
+            }
+            _ => panic!("expected Run"),
+        }
+    }
+
+    #[test]
+    fn run_subcommand_without_last_and_no_positional_is_still_missing_orchestration() {
+        assert!(matches!(
+            classify(&["run".to_string()]),
+            Action::MissingOrchestration
+        ));
+    }
+
+    #[test]
     fn run_subcommand_with_two_positionals_is_a_usage_error() {
         assert!(matches!(
             classify(&["run".to_string(), "a.yml".to_string(), "b.yml".to_string()]),
@@ -1953,15 +3078,168 @@ mod unit_tests {
     }
 
     /// Every flag [`KNOWN_FLAGS`]/[`RUN_FLAGS`] recognizes is actually
-    /// named in [`USAGE`]'s own Options list -- unlike `tests/cli.rs`'s
+    /// named in [`usage`]'s own Options list -- unlike `tests/cli.rs`'s
     /// own `--help`-output assertion (an external, binary-level check,
     /// kept as a second line of defense), this is tied directly to the
     /// parser's own source of truth, so a new flag added to either
-    /// table without updating USAGE fails this immediately.
+    /// table without updating [`OPTION_TABLE`] fails this immediately.
     #[test]
     fn usage_text_names_every_known_and_run_flag() {
+        let text = usage();
         for (flag, _) in KNOWN_FLAGS.iter().chain(RUN_FLAGS.iter()) {
-            assert!(USAGE.contains(flag), "USAGE never mentions {flag}");
+            assert!(text.contains(flag), "usage() never mentions {flag}");
+        }
+    }
+
+    /// [`OPTION_TABLE`] (`electricity man`'s own structured OPTIONS
+    /// source, issue #764) names every flag [`usage`]'s own Options
+    /// list does, so the two can't quietly disagree about what
+    /// electricity accepts -- true by construction now that both are
+    /// rendered from the same table, but kept as a regression guard.
+    #[test]
+    fn option_table_names_match_usage_flags() {
+        let text = usage();
+        for row in OPTION_TABLE {
+            for flag in row.flags.split(", ") {
+                assert!(
+                    text.contains(flag),
+                    "OPTION_TABLE names {flag} but usage() does not"
+                );
+            }
+        }
+    }
+
+    /// Every flag [`KNOWN_FLAGS`]/[`RUN_FLAGS`] recognizes appears in
+    /// [`OPTION_TABLE`] too (issue #764) -- a flag added to one
+    /// without the other fails this immediately, the same guarantee
+    /// `usage_text_names_every_known_and_run_flag` gives `USAGE`.
+    #[test]
+    fn option_table_covers_every_known_flag() {
+        let table_flags: Vec<&str> = OPTION_TABLE
+            .iter()
+            .flat_map(|row| row.flags.split(", "))
+            .collect();
+        for (flag, _) in KNOWN_FLAGS.iter().chain(RUN_FLAGS.iter()) {
+            assert!(
+                table_flags.contains(flag),
+                "OPTION_TABLE never mentions {flag}"
+            );
+        }
+    }
+
+    #[test]
+    fn man_with_no_page_shows_electricity() {
+        assert!(matches!(
+            classify_man(&[]),
+            Action::Man {
+                page: ManPage::Electricity,
+                roff: false
+            }
+        ));
+    }
+
+    #[test]
+    fn man_run_shows_electricity_run() {
+        assert!(matches!(
+            classify_man(&["run".to_string()]),
+            Action::Man {
+                page: ManPage::ElectricityRun,
+                roff: false
+            }
+        ));
+    }
+
+    #[test]
+    fn man_roff_flag_is_recognized_either_order() {
+        assert!(matches!(
+            classify_man(&["--roff".to_string()]),
+            Action::Man { roff: true, .. }
+        ));
+        assert!(matches!(
+            classify_man(&["run".to_string(), "--roff".to_string()]),
+            Action::Man {
+                page: ManPage::ElectricityRun,
+                roff: true
+            }
+        ));
+    }
+
+    #[test]
+    fn man_unknown_page_is_a_usage_error() {
+        assert!(matches!(
+            classify_man(&["bogus".to_string()]),
+            Action::ManUsageError(_)
+        ));
+    }
+
+    #[test]
+    fn dump_option_table_names_every_flag_and_scope() {
+        let dumped = dump_option_table();
+        for row in OPTION_TABLE {
+            assert!(dumped.contains(row.flags), "dump missing {}", row.flags);
+        }
+        assert!(dumped.lines().count() == OPTION_TABLE.len());
+        for line in dumped.lines() {
+            let mut fields = line.split('\t');
+            let scope = fields.next().unwrap();
+            assert!(matches!(scope, "legacy" | "run" | "both"));
+        }
+    }
+
+    /// `man/man1/electricity.1`/`electricity-run.1` (issue #764) are
+    /// committed snapshots of exactly what [`build_man_page`] computes
+    /// -- the same guarantee `scripts/generate-man-pages.py --check`
+    /// gives from the Python side, run here too since `cargo test` is
+    /// the gate every electricity change already needs green.
+    #[test]
+    fn committed_man_pages_match_build_man_page() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../man/man1")
+            .canonicalize()
+            .expect("man/man1 exists at the repo root");
+        for (page, filename) in [
+            (ManPage::Electricity, "electricity.1"),
+            (ManPage::ElectricityRun, "electricity-run.1"),
+        ] {
+            let committed = std::fs::read_to_string(repo_root.join(filename))
+                .unwrap_or_else(|e| panic!("reading man/man1/{filename}: {e}"));
+            assert_eq!(
+                committed,
+                build_man_page(page),
+                "man/man1/{filename} is stale -- run scripts/generate-man-pages.py"
+            );
+        }
+    }
+
+    /// Help text is documentation too (issue #764): no issue numbers or
+    /// design-doc section references, in either page or in `--help`
+    /// itself.
+    #[test]
+    fn pages_and_help_cite_no_issue_numbers_or_design_docs() {
+        let digit_re = |text: &str| {
+            text.split('#')
+                .skip(1)
+                .any(|rest| rest.chars().next().is_some_and(|c| c.is_ascii_digit()))
+        };
+        for text in [
+            usage(),
+            build_man_page(ManPage::Electricity),
+            build_man_page(ManPage::ElectricityRun),
+        ] {
+            assert!(!digit_re(&text), "cites an issue number: {text}");
+            assert!(!text.contains("DESIGN.md"), "cites a design doc: {text}");
+        }
+    }
+
+    /// No literal backtick reaches a page (issue #764): a markdown code
+    /// span is turned into roff bold instead.
+    #[test]
+    fn pages_have_no_literal_backtick() {
+        for text in [
+            build_man_page(ManPage::Electricity),
+            build_man_page(ManPage::ElectricityRun),
+        ] {
+            assert!(!text.contains('`'), "page has a literal backtick: {text}");
         }
     }
 }

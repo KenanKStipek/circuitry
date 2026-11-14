@@ -1,0 +1,16 @@
+name: c669-api-key-env-override
+effects:
+  - type: prompt
+    name: p_default
+    model: default-model
+    template: "default"
+  - type: prompt
+    name: p_team
+    provider: groq_team
+    model: team-model
+    template: "team"
+  - type: prompt
+    name: p_gateway
+    provider: gateway
+    model: gateway-model
+    template: "gateway"

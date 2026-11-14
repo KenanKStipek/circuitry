@@ -2,7 +2,9 @@
 //! API, over [`crate::transport`]: system-turn hoisting, image blocks
 //! ahead of text, and `stop_reason`'s own truncation signal.
 
-use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url, stream_flag};
+use crate::config::{
+    cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url, stream_flag,
+};
 use crate::curl_text::{classify_curl_outcome, curl_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl, run_curl_streaming};
 use async_trait::async_trait;
@@ -728,6 +730,7 @@ pub struct AnthropicAdapter {
     /// Whether this instance sends `stream: true`; the instance-level
     /// override for `runtime.adapters.<name>.stream: false`.
     pub streams: bool,
+    pub api_key_env: String,
 }
 
 #[async_trait(?Send)]
@@ -748,13 +751,14 @@ impl Adapter for AnthropicAdapter {
         } else {
             model
         };
-        let api_key = std::env::var("ANTHROPIC_API_KEY").unwrap_or_default();
+        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
         if api_key.is_empty() {
             return Err(AdapterError {
-                message: "Anthropic API key not found. Set ANTHROPIC_API_KEY in the \
-                          environment (recommended: ~/.config/circuitry/.env). Run `cof \
-                          doctor` to verify."
-                    .to_string(),
+                message: format!(
+                    "Anthropic API key not found. Set {} in the environment (recommended: \
+                     ~/.config/circuitry/.env). Run `cof doctor` to verify.",
+                    self.api_key_env
+                ),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
@@ -802,11 +806,11 @@ impl Adapter for AnthropicAdapter {
 
     async fn check(&self) -> CheckResult {
         let mut missing = Vec::new();
-        if std::env::var("ANTHROPIC_API_KEY")
+        if std::env::var(&self.api_key_env)
             .unwrap_or_default()
             .is_empty()
         {
-            missing.push("env:ANTHROPIC_API_KEY".to_string());
+            missing.push(format!("env:{}", self.api_key_env));
         }
         CheckResult {
             ok: missing.is_empty(),
@@ -842,6 +846,7 @@ pub fn build_anthropic(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         default_model: cfg_str_or(cfg, "default_model", "claude-sonnet-5"),
         max_tokens,
         streams: stream_flag(cfg, name)?,
+        api_key_env: resolve_required_api_key_env(cfg, "ANTHROPIC_API_KEY", name)?,
     }))
 }
 
@@ -1183,6 +1188,7 @@ mod tests {
             default_model: "claude-sonnet-5".to_string(),
             max_tokens: 4096,
             streams: true,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();
@@ -1229,6 +1235,7 @@ mod tests {
             default_model: "claude-sonnet-5".to_string(),
             max_tokens: 4096,
             streams: true,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();
@@ -1289,6 +1296,7 @@ mod tests {
             default_model: "claude-sonnet-5".to_string(),
             max_tokens: 4096,
             streams: true,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();
@@ -1326,6 +1334,7 @@ mod tests {
             default_model: "claude-sonnet-5".to_string(),
             max_tokens: 4096,
             streams: true,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();
@@ -1372,6 +1381,7 @@ mod tests {
             default_model: "claude-sonnet-5".to_string(),
             max_tokens: 4096,
             streams: true,
+            api_key_env: "ANTHROPIC_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();

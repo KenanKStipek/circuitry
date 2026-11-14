@@ -1,8 +1,18 @@
 {
   "spec_case": "issue #674: a mid-stream disconnect retries like any other dropped connection",
-  "description": "The mock server closes the connection after two NDJSON deltas, before the `done: true` line; the attempt fails (curl's premature-EOF exit, classified retryable the same as a dropped connection) and the retry's fresh request gets a complete reply.",
+  "description": "The mock server closes the connection after two NDJSON deltas, before the `done: true` line; the attempt fails (curl's premature-EOF exit, classified retryable the same as a dropped connection) and the retry's fresh request gets a complete reply. Curl's own text (the exact byte count read before the drop) never reaches the final state outside `meta.attempts`, where the first (failed) attempt's own text is matched by pattern (third_party_text), not byte-for-byte.",
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
-  "mock_http_fixture": "mock-http.yaml"
+  "mock_http_fixture": "mock-http.yaml",
+  "third_party_text": [
+    {
+      "location": "prime.greeting.meta.attempts.0.error",
+      "pattern": "ollama request failed \\(curl exit 18\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(18\\) transfer closed with 95 bytes remaining to read.*"
+    },
+    {
+      "location": "prime.greeting.meta.attempts.0.fallback_attempts.0.error",
+      "pattern": "ollama request failed \\(curl exit 18\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(18\\) transfer closed with 95 bytes remaining to read.*"
+    }
+  ]
 }

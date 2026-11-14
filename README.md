@@ -23,6 +23,8 @@ cof list                            # the bundled library: learn, utilities, pat
 cof tui                             # or do all of it in the terminal UI
 ```
 
+`man cof` (or `cof man [COMMAND]`, which works even where `MANPATH` doesn't reach the installed pages) has the full reference: every command's own page, with its options, environment variables, files, exit status, and examples.
+
 Hosted providers read their keys from the environment (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, …); `cof doctor` shows what is reachable. [`config.example.json`](src/circuitry/bundled/examples/config.example.json) shows the documented config keys, and [`.env.example`](src/circuitry/bundled/examples/.env.example) lists every hosted adapter's and tool plugin's credential env var, with placeholder values, if you'd rather write the files by hand than run `cof setup`. Storage and observability runtime plugins (Postgres, Datadog, Sentry, …) have their own env vars, documented per plugin in [`docs/runtime-plugins.md`](docs/runtime-plugins.md).
 
 ## Your first orchestration

@@ -831,15 +831,15 @@ impl RunObserver for Observer<'_> {
         }
     }
 
-    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+    fn register_child_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.graft_child_write(node_path, snapshot);
+            mirror.register_child_graft(node_path, child_root);
         }
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
+    fn clear_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.clear_graft(node_path);
+            mirror.clear_graft(node_path, child_root);
         }
     }
 
@@ -853,15 +853,6 @@ impl RunObserver for Observer<'_> {
         if let Some(mirror) = self.live_state {
             mirror.clear_tree_branches(node_path, branches);
         }
-    }
-
-    // R4's own refinement on PR #472's review: `graft_child_write`
-    // above is a no-op without a mirror, so a caller that would
-    // otherwise snapshot a child store purely to call it should never
-    // do so either -- true exactly when a `--live-state` mirror is
-    // actually running.
-    fn wants_child_snapshots(&self) -> bool {
-        self.live_state.is_some()
     }
 
     // A report never fires effect_start/effect_complete, so it never
@@ -1146,6 +1137,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
             ),
             warnings: Vec::new(),
             signal: None,
+            resume_refused: false,
         };
     };
     match electricity_config::resolve_config(config_path, &env_vars) {
@@ -1157,6 +1149,7 @@ pub async fn run_orchestration(req: &RunRequest, token: &CancellationToken) -> R
             error: Some(err.0),
             warnings: Vec::new(),
             signal: None,
+            resume_refused: false,
         },
     }
 }
@@ -1202,6 +1195,7 @@ pub async fn run_orchestration_with_config(
                         error: Some(format!("state file not found: {}", state_path.display())),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 }
             };
@@ -1217,6 +1211,7 @@ pub async fn run_orchestration_with_config(
                         ),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 }
                 Err(err) => {
@@ -1227,6 +1222,7 @@ pub async fn run_orchestration_with_config(
                         error: Some(format!("{}: {err}", state_path.display())),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 }
             };
@@ -1280,6 +1276,7 @@ pub async fn run_orchestration_with_config(
                 error: Some(error),
                 warnings,
                 signal,
+                resume_refused: false,
             };
         }};
     }
@@ -1305,6 +1302,7 @@ pub async fn run_orchestration_with_config(
                 error: Some(error),
                 warnings,
                 signal,
+                resume_refused: true,
             };
         }};
     }
@@ -1649,6 +1647,21 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
+    // Every `runtime.adapters.<name>.api_key_env` is validated up front
+    // here too, built-in or alias, whether or not any effect selects it
+    // (#669), identical text to `cof`'s.
+    let api_key_env_errors = adapters.adapter_api_key_env_errors(&alias_check_runtime);
+    if !api_key_env_errors.is_empty() {
+        fail!(format!(
+            "Invalid adapter api_key_env:\n{}",
+            api_key_env_errors
+                .iter()
+                .map(|e| format!("  - {e}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
     // Profile routing pins and provider denials (issue #495, lane R):
     // run only when `profile.effects` is non-empty, after concurrency
     // and persistence validation (`pre_input_checks` bundles complexity,
@@ -1702,6 +1715,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_config_refusal("runtime.persistence")),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
     if !effective.plugins.is_empty() {
@@ -1718,6 +1732,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_config_refusal(&format!("runtime plugins ({names})"))),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2077,6 +2092,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_refusal(&refusal)),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2101,6 +2117,7 @@ pub async fn run_orchestration_with_config(
             error: Some(refusal),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2135,6 +2152,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_permanent_adapter_refusal(&name)),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2156,6 +2174,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_config_refusal(&format!("tool provider '{name}'"))),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2180,6 +2199,7 @@ pub async fn run_orchestration_with_config(
             error: Some(format_permanent_adapter_refusal(&name)),
             warnings,
             signal: None,
+            resume_refused: false,
         };
     }
 
@@ -2303,6 +2323,7 @@ pub async fn run_orchestration_with_config(
                         error: Some(format_permanent_adapter_refusal(&normalized)),
                         warnings,
                         signal: None,
+                        resume_refused: false,
                     };
                 } else if known_but_unbuildable {
                     // Reachable only when a `use` effect alone
@@ -2515,6 +2536,7 @@ pub async fn run_orchestration_with_config(
         error,
         warnings,
         signal,
+        resume_refused: false,
     }
 }
 

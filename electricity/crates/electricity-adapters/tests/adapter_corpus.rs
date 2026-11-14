@@ -406,11 +406,12 @@ fn openai_compat_request_building_matches_circuitry() {
             get(case, "data").as_str().unwrap(),
             "spec={spec:?}"
         );
-        // `LMStudioAdapter` carries no `api_key_env`, so every case
-        // here sends only the one static header -- compared against
-        // `openai_compat::request_headers`, the same function
-        // `chat_completion()` itself calls, plus
-        // the fixed URL every case here was recorded against.
+        // None of these recorded cases set `api_key_env` on
+        // `LMStudioAdapter` (its own default is `""`, no key at all),
+        // so every case here sends only the one static header --
+        // compared against `openai_compat::request_headers`, the same
+        // function `chat_completion()` itself calls, plus the fixed
+        // URL every case here was recorded against.
         assert_headers_match_expected(
             &openai_compat::request_headers("", &[]),
             case,

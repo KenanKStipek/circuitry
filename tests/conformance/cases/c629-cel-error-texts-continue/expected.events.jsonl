@@ -1,0 +1,20 @@
+{"v":1,"seq":0,"ts":"2026-11-13T19:47:33.165Z","ev":"run_start","run_id":"5379dc04-61b9-4b03-b4d5-ebf226a62259","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":78442}
+{"v":1,"seq":1,"ts":"2026-11-13T19:47:33.169Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-13T19:47:33.169Z","ev":"start","id":1,"path":"prime.missing_string_key"}
+{"v":1,"seq":3,"ts":"2026-11-13T19:47:33.169Z","ev":"end","id":1,"path":"prime.missing_string_key","ok":false,"ms":0,"error":"CEL evaluation failed for \"{'a': 1, 'b': [1, 2]}['zz'] == 1\": no such key: 'zz'"}
+{"v":1,"seq":4,"ts":"2026-11-13T19:47:33.169Z","ev":"start","id":2,"path":"prime.missing_int_key"}
+{"v":1,"seq":5,"ts":"2026-11-13T19:47:33.169Z","ev":"end","id":2,"path":"prime.missing_int_key","ok":false,"ms":0,"error":"CEL evaluation failed for \"{'a': 1, 'b': [1, 2]}[7] == 1\": no such key: 7"}
+{"v":1,"seq":6,"ts":"2026-11-13T19:47:33.169Z","ev":"start","id":3,"path":"prime.list_index_out_of_range"}
+{"v":1,"seq":7,"ts":"2026-11-13T19:47:33.170Z","ev":"end","id":3,"path":"prime.list_index_out_of_range","ok":false,"ms":0,"error":"CEL evaluation failed for '[1, 2, 3][5] == 1': list index out of range: 5"}
+{"v":1,"seq":8,"ts":"2026-11-13T19:47:33.170Z","ev":"start","id":4,"path":"prime.list_indexed_by_a_string"}
+{"v":1,"seq":9,"ts":"2026-11-13T19:47:33.170Z","ev":"end","id":4,"path":"prime.list_indexed_by_a_string","ok":false,"ms":0,"error":"CEL evaluation failed for \"[1, 2, 3]['a'] == 1\": cannot index a list with a string"}
+{"v":1,"seq":10,"ts":"2026-11-13T19:47:33.170Z","ev":"start","id":5,"path":"prime.int_indexed_by_an_int"}
+{"v":1,"seq":11,"ts":"2026-11-13T19:47:33.170Z","ev":"end","id":5,"path":"prime.int_indexed_by_an_int","ok":false,"ms":0,"error":"CEL evaluation failed for '5[0] == 1': cannot index an int with an int"}
+{"v":1,"seq":12,"ts":"2026-11-13T19:47:33.170Z","ev":"start","id":6,"path":"prime.division_by_zero"}
+{"v":1,"seq":13,"ts":"2026-11-13T19:47:33.170Z","ev":"end","id":6,"path":"prime.division_by_zero","ok":false,"ms":0,"error":"CEL evaluation failed for '1 / 0 == 1': division by zero"}
+{"v":1,"seq":14,"ts":"2026-11-13T19:47:33.170Z","ev":"start","id":7,"path":"prime.modulus_by_zero"}
+{"v":1,"seq":15,"ts":"2026-11-13T19:47:33.170Z","ev":"end","id":7,"path":"prime.modulus_by_zero","ok":false,"ms":0,"error":"CEL evaluation failed for '1 % 0 == 1': modulus by zero"}
+{"v":1,"seq":16,"ts":"2026-11-13T19:47:33.171Z","ev":"start","id":8,"path":"prime.marker"}
+{"v":1,"seq":17,"ts":"2026-11-13T19:47:33.171Z","ev":"end","id":8,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":18,"ts":"2026-11-13T19:47:33.171Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2}
+{"v":1,"seq":19,"ts":"2026-11-13T19:47:33.171Z","ev":"run_end","ok":true}

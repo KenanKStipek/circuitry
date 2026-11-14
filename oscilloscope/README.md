@@ -823,6 +823,10 @@ depends on `electricity`'s `electricity-compiler` and `electricity-bytecode`
 crates by path, to compile a document into the plan tree it displays, on
 either engine.
 
+`osi man [watch]` shows osi(1)/osi-watch(1) through `man` on a terminal, or prints
+its roff when piped or given `--roff` -- it works even where `MANPATH` doesn't
+reach the release archive's own `man/man1/`.
+
 ## Build and test
 
 From the repository root:

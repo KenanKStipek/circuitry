@@ -26,13 +26,14 @@ class OpenRouterAdapter:
     name: str = "openrouter"
     base_url: str = "https://openrouter.ai/api/v1"
     default_model: str = "openai/gpt-4o-mini"
+    api_key_env: str = "OPENROUTER_API_KEY"
 
     streams: bool = True
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="OPENROUTER_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
             streams=self.streams,
         )

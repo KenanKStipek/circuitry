@@ -717,21 +717,24 @@ effects:
     );
 }
 
-/// Ruling R4 on PR #472's review: without a `--live-state`
-/// mirror (`RunObserver::wants_child_snapshots` default `false`), a
-/// `use` child's own writes must never trigger a snapshot-and-graft
-/// pair at all -- not even once. A multi-step child (several leaf
-/// writes) proves this isn't merely "throttled down to one"; zero
-/// `Event::Graft` calls land regardless of how many times the child
-/// itself writes.
+/// Issue #662: the child's own live root is registered
+/// ([`RunObserver::register_child_graft`]) exactly once, before the
+/// child's own execution starts; a later write inside the child only
+/// ever marks a change pending (`Event::Write`), never a second
+/// `Event::Graft` call -- the #472 bound this must keep: a long loop
+/// inside a `use` child must not pay a snapshot per leaf write. A
+/// multi-step child (several leaf writes) proves this isn't merely
+/// "throttled down to one register call still happens per write";
+/// exactly one `Event::Graft` call lands regardless of how many times
+/// the child itself writes.
 #[tokio::test]
-async fn without_a_live_state_mirror_a_use_child_never_snapshots_for_a_graft() {
+async fn a_use_childs_write_never_triggers_a_second_graft_registration() {
     let store = Store::new();
     let token = CancellationToken::new();
     let registry = json_registry();
     let limiter = Limiter::new();
     let ctx = run_ctx(&registry, &limiter);
-    let observer = RecordingObserver::new().with_child_snapshots(false);
+    let observer = RecordingObserver::new();
 
     let inline_yaml = "\
 effects:
@@ -778,18 +781,83 @@ effects:
     result.expect("a child with several ordinary steps must succeed");
 
     let events = observer.events();
-    assert!(
-        !events.iter().any(|e| matches!(e, Event::Graft(_, _))),
-        "no Event::Graft may ever appear when the parent observer doesn't want child \
-         snapshots, however many times the child itself wrote: {events:?}"
+    let grafts = events
+        .iter()
+        .filter(|e| matches!(e, Event::Graft(p, _) if p == "prime.step"))
+        .count();
+    assert_eq!(
+        grafts, 1,
+        "the child's own root is registered exactly once, however many times it writes: \
+         {events:?}"
     );
-    // `clear_graft` is still fine to call unconditionally (a no-op for
-    // a path that was never grafted) -- this isn't gated on the same
-    // capability, only the snapshot-taking `write()` hook is.
+    let writes = events.iter().filter(|e| matches!(e, Event::Write)).count();
+    assert!(
+        writes >= 3,
+        "each of the child's own three tool writes must still mark a change pending: {events:?}"
+    );
     assert!(
         events
             .iter()
             .any(|e| matches!(e, Event::ClearGraft(p) if p == "prime.step")),
+        "got {events:?}"
+    );
+}
+
+/// Issue #662: a `use` effect nested inside a `use` child
+/// registers its own live root, forwarded unchanged through the outer
+/// child's own `ChildObserver` -- both grafts land at their own,
+/// correctly nested paths, and both clear once their own child
+/// finishes.
+#[tokio::test]
+async fn a_nested_use_child_registers_its_own_graft_at_its_own_nested_path() {
+    let supported = electricity_bytecode::Supported {
+        use_: true,
+        ..electricity_bytecode::Supported::m0(&[])
+    };
+    let inline_yaml = "\
+effects:
+  - type: use
+    name: inner
+    inline: |
+      effects:
+        - type: tool
+          name: leaf
+          provider: json
+          params: {mode: stringify, input: 1}
+";
+    let use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    let (_store, observer, result) =
+        run_use_with_supported(use_op, OnError::Fail, &Value::None, supported).await;
+    result.expect("a use effect nested inside a use child must succeed");
+
+    let events = observer.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Graft(p, _) if p == "prime.step")),
+        "the outer child's own root must be registered at prime.step: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Graft(p, _) if p == "prime.step.inner")),
+        "the inner child's own root must be registered at its own nested path, forwarded \
+         unchanged through the outer child's own ChildObserver: {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ClearGraft(p) if p == "prime.step")),
+        "got {events:?}"
+    );
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::ClearGraft(p) if p == "prime.step.inner")),
         "got {events:?}"
     );
 }

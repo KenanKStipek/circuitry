@@ -1,0 +1,10 @@
+name: prompt-attempts-retried-mock
+adapter: lmstudio
+model: m
+effects:
+  - type: prompt
+    name: task
+    template: "hi"
+    prompt_type: json
+    schema: {type: object, required: [ok]}
+    retries: {max_attempts: 3, backoff_ms: 1}
