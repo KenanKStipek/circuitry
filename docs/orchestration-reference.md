@@ -2359,9 +2359,8 @@ CEL evaluation failed for '[1, 2].zz == 1': cannot select field 'zz' on a list
 CEL evaluation failed for '5 in 5': cannot apply 'in' to an int and an int
 ```
 
-`+` is likewise defined between two lists only — a list plus anything else
-fails the same way, never silently appending the other operand's iterated
-items (a map's keys, a string's characters):
+`+` is likewise defined between two lists only; a list plus anything else
+fails the same way:
 
 ```
 CEL evaluation failed for "[1] + {'a': 2} == [1]": cannot apply '+' to a list and a map

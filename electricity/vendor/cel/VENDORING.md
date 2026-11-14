@@ -42,9 +42,8 @@ and its constructor.
 
 `DefaultList`'s `Adder` (`common/types/list.rs`) accepted any
 [`Iterable`] on the right of `+`, so `[1] + {'a': 2}` appended the map's
-iterated keys and `[1] + 'x'` appended the string's characters --
-neither is a `list`, and the CEL spec only defines `+` between two lists
-(issue #783). `add` now requires the right-hand side to downcast to
+iterated keys. A map is the only other iterable type here, and it isn't a
+`list`; the CEL spec only defines `+` between two lists (issue #783). `add` now requires the right-hand side to downcast to
 `DefaultList` too, raising the usual `UnsupportedBinaryOperator` error
 otherwise, same as every other `Adder` in this crate already does for a
 mismatched type. Nothing else in this copy differs from the published
