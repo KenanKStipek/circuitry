@@ -351,7 +351,7 @@ doesn't lose the 249 frames it already rendered. `cof run frames.yml --state
 run.json --resume x` picks up at frame 250, and the adapter/tool calls for
 frames 0–249 never happen again.
 
-A `-e`/`--state` value that differs from the run being resumed can still
+A `-e` value that differs from the run being resumed can still
 change its outcome: a finished `use` whose inputs, resolved against the
 resumed run's own inputs, no longer match what it ran with reruns — and so
 does everything after it in the same chain — instead of being skipped

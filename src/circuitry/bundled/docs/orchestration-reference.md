@@ -2667,17 +2667,20 @@ the usual positional rule, the same as a `use` that never finished. The
 comparison is exact: resolved the same way the child's own `meta.inputs`
 was recorded, then compared as JSON values — a declared default filled in
 or a declared type coerced counts as unchanged if the resolved value
-ends up the same either way. Unaffected: a tree-flow branch (below), and
-a `use` whose own saved node didn't finish (continuing inside its child,
-above, follows #567's rules regardless of its inputs). A resume whose own
-run inputs differ from the saved run's — any `-e`/`--state` value, not
-only one a changed `use` input came from — prints one `WARNING:` line
-naming each changed input as `name: <old> -> <new>` (Python `repr`), in
-the interface's declared order and then any undeclared ones sorted,
-and says that every other finished effect keeps its saved results; a
-resume whose run inputs are unchanged prints nothing new. One that didn't
-finish reruns its child from the start, in a fresh
-state, unless the saved state holds the child's record
+ends up the same either way. A finished `use` with no recorded
+`meta.inputs` at all — a dry-run record, or a state saved before this
+check existed — has nothing to compare against, so it always reruns this
+way, even with no `-e` given at all. Unaffected: a tree-flow branch
+(below), and a `use` whose own saved node didn't finish (continuing
+inside its child, above, follows #567's rules regardless of its inputs).
+A resume whose own run inputs differ from the saved run's — any `-e`
+value, not only one a changed `use` input came from — prints one
+`WARNING:` line naming each changed input as `name: <old> -> <new>`
+(Python `repr`), in the interface's declared order and then any
+undeclared ones sorted, and says that every other finished effect keeps
+its saved results; a resume whose run inputs are unchanged prints
+nothing new. A `use` that didn't finish reruns its child from the start,
+in a fresh state, unless the saved state holds the child's record
 ([`runtime.state.record_children: true`](#complete-record-opt-in)). With
 the record, `--resume` continues *inside* the child by the same rules as
 at the top level: the child's finished effects are reused, its first
