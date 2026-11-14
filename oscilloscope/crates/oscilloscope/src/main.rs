@@ -2020,6 +2020,8 @@ fn build_signal_screen_if_active(
         app.signal_cursor_col,
         app.selected_path.as_deref(),
         now,
+        app.fold_enabled,
+        &app.expanded_quick_steps,
     ))
 }
 
@@ -4914,6 +4916,13 @@ struct AllRunSlot {
     events_tailer: EventsTailer,
     differ: Differ,
     last_state: Option<serde_json::Value>,
+    /// This slot's own history (issue #712), the same `HistoryHandle`
+    /// a single-run attach builds -- `None` until the run's own
+    /// document is known (same timing `plan` already follows), and
+    /// regardless of that whenever `--no-history`/`OSI_HISTORY=off`
+    /// resolves no directory at all, in which case every lookup
+    /// through it is already a no-op on its own.
+    history: Option<history_io::HistoryHandle>,
 }
 
 fn path_basename(path: &str) -> String {
@@ -5059,14 +5068,14 @@ mod all_run_slot_tests {
             started_at: None,
             label: None,
         };
-        let mut slot = AllRunSlot::new(found_bare);
+        let mut slot = AllRunSlot::new(found_bare, None);
         assert_eq!(slot.document_label, "—");
         assert!(!slot.plan.has_plan(), "an empty plan has nothing yet");
         let now_named = oscilloscope_core::discovery::DiscoveredRun {
             orchestration: Some(doc.to_str().unwrap().to_string()),
             ..slot.run.clone()
         };
-        slot.update_run(now_named);
+        slot.update_run(now_named, None);
         assert_eq!(slot.document_label, "do.yml");
         assert!(
             slot.plan.has_plan(),
@@ -5092,9 +5101,9 @@ mod all_run_slot_tests {
             started_at: None,
             label: None,
         };
-        let mut slot = AllRunSlot::new(run.clone());
+        let mut slot = AllRunSlot::new(run.clone(), None);
         let plan_ptr_before = std::ptr::addr_of!(slot.plan);
-        slot.update_run(run);
+        slot.update_run(run, None);
         // Same `plan` field, never rebuilt: comparing the address is
         // enough since `update_run` only ever reassigns it wholesale
         // on a real change, never mutates it in place.
@@ -5117,9 +5126,9 @@ mod all_run_slot_tests {
             label: None,
         };
         let mut slots = vec![
-            AllRunSlot::new(run("/a/triage.yml")),
-            AllRunSlot::new(run("/b/triage.yml")),
-            AllRunSlot::new(run("/c/digest.yml")),
+            AllRunSlot::new(run("/a/triage.yml"), None),
+            AllRunSlot::new(run("/b/triage.yml"), None),
+            AllRunSlot::new(run("/c/digest.yml"), None),
         ];
         disambiguate_tile_labels(&mut slots);
         assert_eq!(slots[0].document_label, "a/triage.yml");
@@ -5132,7 +5141,7 @@ mod all_run_slot_tests {
 }
 
 impl AllRunSlot {
-    fn new(run: oscilloscope_core::discovery::DiscoveredRun) -> Self {
+    fn new(run: oscilloscope_core::discovery::DiscoveredRun, history_dir: Option<PathBuf>) -> Self {
         let run_dir = run.run_dir.clone().unwrap_or_else(|| PathBuf::from("."));
         let events_path = run
             .events
@@ -5143,6 +5152,7 @@ impl AllRunSlot {
             .clone()
             .unwrap_or_else(|| run_dir.join("state.live.json"));
         let (document_label, config_label, plan) = Self::resolve_document_config_plan(&run);
+        let history = Self::build_history_handle(&run, history_dir);
         AllRunSlot {
             run,
             document_label,
@@ -5154,6 +5164,7 @@ impl AllRunSlot {
             events_tailer: EventsTailer::new(events_path),
             differ: Differ::new(),
             last_state: None,
+            history,
         }
     }
 
@@ -5188,21 +5199,54 @@ impl AllRunSlot {
         (document_label, config_label, plan)
     }
 
+    /// This run's own [`history_io::HistoryHandle`] (issue #712),
+    /// keyed the same way a single-run attach's own is -- `for_
+    /// watch`, which prefers the state's own absolute `runtime.
+    /// last_run.orchestration_path` over the discovered
+    /// orchestration path (`attach_discovered_run` builds its own
+    /// the same way). A process-scanned run's own `orchestration`
+    /// is whatever its own argv named, resolved against *that*
+    /// process's cwd, not osi's -- `for_run`'s plain `resolve_run_
+    /// document_path` would key such a run to the wrong file, or to
+    /// a same-named document in osi's own directory. `None` until
+    /// the document is known at all, same timing [`Self::resolve_
+    /// document_config_plan`]'s own plan already follows.
+    fn build_history_handle(
+        run: &oscilloscope_core::discovery::DiscoveredRun,
+        history_dir: Option<PathBuf>,
+    ) -> Option<history_io::HistoryHandle> {
+        let orchestration = run.orchestration.as_deref()?;
+        Some(history_io::HistoryHandle::for_watch(
+            history_dir,
+            Some(PathBuf::from(orchestration)),
+            run.config.clone(),
+            run.run_dir
+                .as_deref()
+                .map(|p| history_io::absolute_path(p).to_string_lossy().into_owned()),
+        ))
+    }
+
     /// Matches a refreshed [`DiscoveredRun`] to this already-live
     /// slot (`main.rs`'s own refresh loop, every [`SELECT_REFRESH_
-    /// INTERVAL`]): the document label, config label and plan are
-    /// only ever recomputed when the orchestration or config path
-    /// has actually changed since the last refresh -- most commonly
-    /// never, but always true the first time a run first found with
-    /// neither (the live-state-in-cwd source) finally has one, which
-    /// a plain `self.run = run` would otherwise leave stuck at `—`
-    /// with no rows ahead for the rest of the run.
-    fn update_run(&mut self, run: oscilloscope_core::discovery::DiscoveredRun) {
+    /// INTERVAL`]): the document label, config label, plan and
+    /// history handle are only ever recomputed when the
+    /// orchestration or config path has actually changed since the
+    /// last refresh -- most commonly never, but always true the
+    /// first time a run first found with neither (the
+    /// live-state-in-cwd source) finally has one, which a plain
+    /// `self.run = run` would otherwise leave stuck at `—`, an empty
+    /// plan and no history for the rest of the run.
+    fn update_run(
+        &mut self,
+        run: oscilloscope_core::discovery::DiscoveredRun,
+        history_dir: Option<PathBuf>,
+    ) {
         if run.orchestration != self.run.orchestration || run.config != self.run.config {
             let (document_label, config_label, plan) = Self::resolve_document_config_plan(&run);
             self.document_label = document_label;
             self.config_label = config_label;
             self.plan = plan;
+            self.history = Self::build_history_handle(&run, history_dir);
         }
         self.run = run;
     }
@@ -5227,6 +5271,20 @@ impl AllRunSlot {
         run_index: usize,
     ) -> tui::AllTile {
         let engine_label = self.run.engine.clone().unwrap_or_else(|| "cof".to_string());
+        // Issue #712: resolved fresh every redraw, the same way a
+        // single-run attach's own `apply_history_eta` already is,
+        // right after this run's own `build_folded` -- `None` with
+        // no history handle at all (the document isn't known yet),
+        // or whenever `eta_with_stats` itself has nothing (history
+        // off, or not enough runs).
+        let history_stats = self.history.as_ref().and_then(|history| {
+            history.eta_with_stats(
+                self.last_state.as_ref(),
+                &self.plan,
+                self.model.run_start_ts(),
+                now,
+            )
+        });
         let render = oscilloscope_core::multi::build_tile(
             &self.document_label,
             &engine_label,
@@ -5236,6 +5294,7 @@ impl AllRunSlot {
             screen,
             &LocalZone,
             now,
+            history_stats.as_ref().map(|(eta, stats)| (eta, stats)),
         );
         tui::AllTile {
             document_label: self.document_label.clone(),
@@ -5453,12 +5512,12 @@ fn disambiguate_tile_labels(slots: &mut [AllRunSlot]) {
 /// time this needs a fresh one at all (the real screen underneath
 /// otherwise still carries this same loop's own last frame).
 ///
-/// `no_history` is accepted, not read: a tile's own "usual"/ETA
-/// figures (unlike a single-run attach's own `apply_history_eta`)
-/// aren't wired to history yet -- every tile reads `ETA — · no
-/// history yet` regardless, same as a run with none at all.
+/// `no_history` (issue #712) resolves the one history directory
+/// every slot's own [`AllRunSlot::build_history_handle`] is keyed
+/// off, read once here the same way a single-run attach's own
+/// `history_io::resolve_history_dir` call is.
 fn run_all_grid_screen(
-    _no_history: bool,
+    no_history: bool,
     mut theme_name: theme::ThemeName,
     event_rx: EventReader,
     all_state: &mut keys::AllState,
@@ -5476,8 +5535,13 @@ fn run_all_grid_screen(
     let mut theme = resolved_theme.theme;
     let mut theme_banner_until: Option<Instant> = None;
 
+    let history_dir = history_io::resolve_history_dir(no_history);
     let mut runs = discover_running();
-    let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    let mut slots: Vec<AllRunSlot> = runs
+        .iter()
+        .cloned()
+        .map(|run| AllRunSlot::new(run, history_dir.clone()))
+        .collect();
     disambiguate_tile_labels(&mut slots);
     let mut last_refresh = Instant::now();
     let mut signals = SignalWatcher::new().ok();
@@ -5502,10 +5566,10 @@ fn run_all_grid_screen(
             for (run, matched) in runs.iter().zip(matches) {
                 match matched.and_then(|i| existing[i].take()) {
                     Some(mut slot) => {
-                        slot.update_run(run.clone());
+                        slot.update_run(run.clone(), history_dir.clone());
                         new_slots.push(slot);
                     }
-                    None => new_slots.push(AllRunSlot::new(run.clone())),
+                    None => new_slots.push(AllRunSlot::new(run.clone(), history_dir.clone())),
                 }
             }
             slots = new_slots;
@@ -5707,7 +5771,15 @@ fn run_combined_signal_leg(
     let mut theme_banner_until: Option<Instant> = None;
 
     let mut runs = discover_running();
-    let mut slots: Vec<AllRunSlot> = runs.iter().cloned().map(AllRunSlot::new).collect();
+    // The Combined Signal never calls `AllRunSlot::build` (it reads
+    // `build_combined_slot_data` instead, which has no history of
+    // its own, issue #712), so no history directory is resolved
+    // here at all -- every slot's own `history` stays `None`.
+    let mut slots: Vec<AllRunSlot> = runs
+        .iter()
+        .cloned()
+        .map(|run| AllRunSlot::new(run, None))
+        .collect();
     disambiguate_tile_labels(&mut slots);
     let mut combined_state = keys::CombinedState::new();
     let mut last_refresh = Instant::now();
@@ -5735,10 +5807,10 @@ fn run_combined_signal_leg(
             for (run, matched) in runs.iter().zip(matches) {
                 match matched.and_then(|i| existing[i].take()) {
                     Some(mut slot) => {
-                        slot.update_run(run.clone());
+                        slot.update_run(run.clone(), None);
                         new_slots.push(slot);
                     }
-                    None => new_slots.push(AllRunSlot::new(run.clone())),
+                    None => new_slots.push(AllRunSlot::new(run.clone(), None)),
                 }
             }
             slots = new_slots;
@@ -6204,6 +6276,8 @@ mod tests {
             None,
             None,
             "2026-01-01T00:00:01Z",
+            true,
+            &Default::default(),
         );
         let kinds: std::collections::BTreeMap<String, oscilloscope_core::render::RowKind> =
             rendered

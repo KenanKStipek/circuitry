@@ -180,12 +180,14 @@ prime.<name>.meta.tokens_received_total # failed, retried and fallen-back-from a
 prime.<container>.meta.error          # "investigate.cause: …" — a breadcrumb into the child
 prime.<name>.meta.http_status         # a prompt only, from the attempt that ended it
 prime.<name>.meta.error_code          # the provider's own code; both absent when unknown
-prime.<name>.meta.attempts            # use only: one entry per attempt, oldest first
+prime.<name>.meta.attempts            # one entry per attempt, oldest first (prompt, tool, use)
 ```
 
 A container that fails closes its own node with `value: false` and a `meta.error` that names the failing child's path (`context.search: …`), in `chain` and `tree` flow alike. The child's own node keeps its `meta.error` too, so from the root down you can follow the errors to the leaf. `inspect_divergence_paths(state)` in the SDK does the walk for you and returns every errored node in path order.
 
 Two things never happen. A failure never leaves a *partial* value: a `use` child whose run failed discards its scratch state, and nothing lands at the parent's `value`. (With `runtime.state.record_children: true`, the child's partial record is kept beside that `value` for the audit trail. It is a record, not something downstream reads. A retried `use`'s `meta.attempts` is the same kind of record: each entry keeps what that attempt mapped, even one `on_error: skip`/`continue` discarded.) And a failure never goes unrecorded: even `on_error: skip` writes the error into `meta`, and the per-effect `on_effect_complete` hook fires for the failed node as it does for a successful one, carrying the error. That includes a failure the child absorbed: when an effect inside a `use` child skipped its own failure, the `use` node lists it in `meta.child_errors` as `{path, error}`, so a composed run that went green still says what it lost.
+
+A retried `prompt` or `tool` keeps the same kind of record a `use` effect does: `meta.attempts` holds every attempt, oldest first, present exactly when `meta.retries_used` is. A tool's own entry adds `expect`, `exit_code` and `status_code` (each only when the provider sets it); a prompt's adds that attempt's own `fallback_attempts` (with its own `error_code`/`http_status` nested inside, same as the top-level field), `tokens_sent` and `tokens_received` — a prompt has no `expect` of its own. Neither changes what a run's own totals count: a prompt's `tokens_sent_total`/`tokens_received_total` already summed every attempt before `meta.attempts` existed to make that spend readable per attempt, and a tool's `expect: {mode: model}` check still spends tokens an earlier, retried attempt's own entry is the only record of.
 
 ## Designing for degradation
 

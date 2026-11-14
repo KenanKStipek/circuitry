@@ -3,10 +3,11 @@
 electricity-run \- run a Circuitry orchestration the way cof run does (preview)
 .SH SYNOPSIS
 .nf
-electricity run <orchestration.yml> [-e key=value]... [--config config.json]
+electricity run [orchestration.yml] [-e key=value]... [--config config.json]
 [--out state.json] [--live-state state.json] [--events events.jsonl]
 [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]
 [--pretty] [--profile <path>] [--state state.json] [--resume MODE] [--force]
+[--last]
 .fi
 .SH DESCRIPTION
 electricity is a preview: it runs
@@ -81,17 +82,25 @@ pins and provider denials) from an explicit path -- no name discovery.
 .B --state, -s
 \fIpath\fR Resume from this saved state file -- every top-level key it
 carries, not just input. A named effect whose saved node already finished
-without error is skipped and reused only when --resume is also given.
+without error is skipped and reused only when --resume is also given; named
+alone, --state still seeds the whole run from the file, with no skip.
 .TP
 .B --resume
-\fImode\fR Combined with --state <file>: skip a named effect whose saved node
-already finished without error. cof run's 'last'/a run-id mode is not
-supported -- --resume always needs --state <file> naming the saved state
-directly. Refuses a document that changed since the saved run unless --force.
+\fImode\fR 'last' resumes from the most recent run's own --out, through the
+same --last stash cof run keeps. Any other value, given with --state <file>,
+skips a named effect whose saved node already finished without error. A bare
+run id (looked up through a persistence backend) is not supported. Refuses a
+document that changed since the saved run unless --force.
 .TP
 .B --force
 With --resume, continue even though the orchestration's content changed since
 the saved run (or it carries no recorded digest at all).
+.TP
+.B --last
+Replay the most recent run's own arguments from the stash cof run --last uses
+(same file, keys and redaction). Every other flag on the line is replaced from
+the stash, including the orchestration, which may then be omitted. Can't be
+combined with --resume.
 .SH EXAMPLES
 .TP
 .B electricity config.json orchestration.yml -e name=world --pretty

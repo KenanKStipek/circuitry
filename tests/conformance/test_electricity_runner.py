@@ -1,17 +1,18 @@
-"""Runs the `electricity` binary (built from `electricity/` with cargo when
-available) on each conformance case applicable to it and compares the same
-way the Python runner does (electricity/DESIGN.md §12). A case only ever
-skips through the preview refusal when it declares `case.json`'s own
-`electricity_preview_ok: true` -- content the preview genuinely doesn't
-support yet, on either a success or a failure case. Any other preview
-refusal fails the test loudly, never a silent skip: a case electricity
-wrongly refuses this way is a real regression.
+"""Runs the `electricity` binary (from `ELECTRICITY_BINARY` when set, else
+built from `electricity/` with cargo when available -- see
+`harness.resolve_electricity_binary`) on each conformance case applicable
+to it and compares the same way the Python runner does
+(electricity/DESIGN.md §12). A case only ever skips through the preview
+refusal when it declares `case.json`'s own `electricity_preview_ok: true`
+-- content the preview genuinely doesn't support yet, on either a success
+or a failure case. Any other preview refusal fails the test loudly, never
+a silent skip: a case electricity wrongly refuses this way is a real
+regression.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -33,7 +34,6 @@ from .normalize import (
 )
 
 CASE_DIRS = harness.list_case_dirs()
-ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 #: The stable substring every electricity preview refusal carries
 #: (issue #476), matched in lockstep by `electricity_bytecode::
 #: PREVIEW_MARKER` and osi's own e2e test -- only a case that opts in
@@ -108,34 +108,74 @@ def _no_binary() -> NoReturn:
     pytest.skip("electricity binary unavailable: see the build failure reported earlier")
 
 
+#: Re-exported for this module's own unit tests below -- every other
+#: conformance/CLI-parity module resolves its own `electricity_binary`
+#: fixture through `harness.resolve_electricity_binary` the same way (#775).
+ELECTRICITY_BINARY_ENV_VAR = harness.ELECTRICITY_BINARY_ENV_VAR
+
+
 @pytest.fixture(scope="session")
 def electricity_binary() -> Path | None:
-    """Build the `electricity` binary once per test session. Returns
-    `None` (every case skips) when `cargo` isn't on `PATH` — the ordinary
-    pytest gate (`quality.yml`) also builds this crate (GitHub's
-    `ubuntu-latest` ships `cargo`); this only degrades, rather than
-    failing, on a contributor machine that genuinely has none."""
-    if shutil.which("cargo") is None:
-        return None
-    proc = subprocess.run(
-        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
-        cwd=ELECTRICITY_DIR,
-        env=harness.cargo_env(),
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-    )
-    if proc.returncode != 0:
+    """Resolve the `electricity` binary once per test session -- see
+    `harness.resolve_electricity_binary`."""
+    binary, failure = harness.resolve_electricity_binary()
+    if failure is not None:
         global _BUILD_FAILURE
-        _BUILD_FAILURE = (
-            "cargo build -p electricity-cli failed (if rustup reports no toolchain, set "
-            f"RUSTUP_HOME/CARGO_HOME):\n{proc.stdout}\n{proc.stderr}"
-        )
-        return None
-    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
-    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
+        _BUILD_FAILURE = failure
     return binary
+
+
+def test_resolve_electricity_binary_uses_prebuilt_binary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    prebuilt = tmp_path / "electricity"
+    prebuilt.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    prebuilt.chmod(0o755)
+    monkeypatch.setenv(ELECTRICITY_BINARY_ENV_VAR, str(prebuilt))
+
+    binary, failure = harness.resolve_electricity_binary()
+
+    assert binary == prebuilt
+    assert failure is None
+
+
+def test_resolve_electricity_binary_fails_when_prebuilt_path_is_unusable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(ELECTRICITY_BINARY_ENV_VAR, str(tmp_path / "does-not-exist"))
+
+    binary, failure = harness.resolve_electricity_binary()
+
+    assert binary is None
+    assert failure is not None and "does not point to an executable file" in failure
+
+
+def test_resolve_electricity_binary_fails_in_ci_with_no_binary_and_no_cargo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #775's acceptance criterion: a missing/unusable binary FAILS
+    the electricity runner in CI instead of silently skipping every case."""
+    monkeypatch.delenv(ELECTRICITY_BINARY_ENV_VAR, raising=False)
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setattr(harness.shutil, "which", lambda _name: None)
+
+    binary, failure = harness.resolve_electricity_binary()
+
+    assert binary is None
+    assert failure is not None and "CI is set" in failure
+
+
+def test_resolve_electricity_binary_skips_outside_ci_with_no_binary_and_no_cargo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv(ELECTRICITY_BINARY_ENV_VAR, raising=False)
+    monkeypatch.delenv("CI", raising=False)
+    monkeypatch.setattr(harness.shutil, "which", lambda _name: None)
+
+    binary, failure = harness.resolve_electricity_binary()
+
+    assert binary is None
+    assert failure is None
 
 
 def _run_electricity(

@@ -1,0 +1,10 @@
+name: c669-api-key-env-document-ignored
+model: m
+runtime:
+  adapters:
+    local:
+      api_key_env: ATTACKER_CHOSEN_KEY
+effects:
+  - type: prompt
+    name: ask
+    template: "hi"

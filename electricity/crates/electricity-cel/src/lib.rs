@@ -337,13 +337,15 @@ fn check_length(expr: &str) -> Result<(), CelError> {
 /// evaluation never happens once the unset-path check already decided
 /// the condition is `false`.
 ///
-/// The accessor case is worded the bare way Circuitry's own uncaught
-/// `RecursionError` is (`nesting.rs`'s module docs), matching
-/// [`validate_syntax`]'s own [`CelSyntaxError::TooDeeplyNestedAccessor`]
-/// text exactly, for a caller reaching [`evaluate_condition`]/
-/// [`evaluate_expect`] directly rather than through a compiled
-/// document (`evaluate_cel` hits the same bare exception that way in
-/// Circuitry too).
+/// The accessor case is worded the way `core/cel_eval.py`'s own
+/// `_compile` now words its own caught `RecursionError`
+/// (`nesting.rs`'s module docs), matching [`validate_syntax`]'s own
+/// [`CelSyntaxError::TooDeeplyNestedAccessor`] text exactly for a
+/// caller reaching [`evaluate_condition`]/[`evaluate_expect`] directly
+/// rather than through a compiled document -- wrapped the same way
+/// every other genuine evaluation failure is, matching
+/// `core/cel_eval.py::evaluate_cel`'s own wrap of that same
+/// `RecursionError` when called that way.
 fn check_stack_safety(expr: &str) -> Result<(), CelError> {
     let depths = nesting::max_nesting_depths(expr);
     if depths.accessor > MAX_ACCESSOR_NESTING_DEPTH {
@@ -354,7 +356,13 @@ fn check_stack_safety(expr: &str) -> Result<(), CelError> {
                 depth: depths.accessor,
                 max: MAX_ACCESSOR_NESTING_DEPTH,
             }),
-            ..CelError::new(expr, "maximum recursion depth exceeded".to_string())
+            ..CelError::new(
+                expr,
+                format!(
+                    "CEL evaluation failed for {}: expression is nested too deeply",
+                    py_repr(expr)
+                ),
+            )
         });
     }
     if depths.raw_combined > nesting::MAX_SAFETY_CHAIN_DEPTH {
@@ -455,11 +463,55 @@ fn check_parity_nesting(expr: &str) -> Result<(), CelError> {
     }
 }
 
+/// Whether *msg* is the `cel` crate's own parser hitting its internal
+/// recursion limit (`vendor/cel/src/parser/parser.rs`'s `RecursionListener`,
+/// a fixed depth over every recursive grammar rule at once -- parens,
+/// calls, list/map literals, unary/binary chains -- lower than any one
+/// of `nesting.rs`'s own shape-specific caps or its `MAX_SAFETY_CHAIN_DEPTH`
+/// backstop, so an expression nested almost entirely in one shape this
+/// crate does check (a deep chain of parens around a short accessor,
+/// issue #629) reaches the parser's own limit before any of ours would
+/// reject it). Detected by message text, the only thing `cel::parser::ParseError`
+/// exposes here, rather than a distinct error variant -- the crate has none.
+/// Checked against *msg*'s own first line only (before the first
+/// ``"\n| "``, where `cel::parser::ParseError`'s own `Display` appends
+/// the offending source line and a caret) -- an expression whose actual
+/// syntax error happens to fail on a line containing this exact phrase
+/// inside a string literal must not be misread as hitting the limit
+/// itself. The phrase only needs to appear somewhere on that line, not
+/// be the whole of it: the top-level `ParseError` this crate actually
+/// sees for this failure wraps the parser's own inner `ANTLRError` with
+/// a `Debug` dump (`"Syntax error: OtherError(ParseError { ... msg:
+/// \"Recursion limit of 96 exceeded\" ... })"`), so the digits and
+/// " exceeded" are followed by more of that dump, not the end of the
+/// line.
+fn is_parser_recursion_limit(msg: &str) -> bool {
+    let first_line = msg.split("\n| ").next().unwrap_or(msg);
+    let Some((_, rest)) = first_line.split_once("Recursion limit of ") else {
+        return false;
+    };
+    let digit_count = rest.bytes().take_while(u8::is_ascii_digit).count();
+    digit_count > 0 && rest[digit_count..].starts_with(" exceeded")
+}
+
 fn compile(env: &Env, expr: &str) -> Result<cel::Program, CelError> {
     env.compile(expr).map_err(|e| {
+        let text = e.to_string();
+        if is_parser_recursion_limit(&text) {
+            return CelError {
+                too_deeply_nested: true,
+                ..CelError::new(
+                    expr,
+                    format!(
+                        "CEL evaluation failed for {}: expression is nested too deeply",
+                        py_repr(expr)
+                    ),
+                )
+            };
+        }
         CelError::new(
             expr,
-            format!("CEL evaluation failed for {}: {e}", py_repr(expr)),
+            format!("CEL evaluation failed for {}: {text}", py_repr(expr)),
         )
     })
 }
@@ -492,20 +544,260 @@ fn reserved_call_message(original: &cel::common::ast::IdedExpr) -> Option<String
     Some(format!("undeclared reference to '{name}'"))
 }
 
+/// `value`'s CEL type name (`int uint double string bytes bool null
+/// list map`, `core/cel_eval.py::_cel_type_name`'s own vocabulary) --
+/// never a Rust `Debug` dump of its contents.
+fn cel_type_name(value: &cel::Value) -> &'static str {
+    match value {
+        cel::Value::Bool(_) => "bool",
+        cel::Value::Bytes(_) => "bytes",
+        cel::Value::Float(_) => "double",
+        cel::Value::Int(_) => "int",
+        cel::Value::List(_) => "list",
+        cel::Value::Map(_) => "map",
+        cel::Value::Null => "null",
+        cel::Value::String(_) => "string",
+        cel::Value::UInt(_) => "uint",
+        cel::Value::Duration(_) => "duration",
+        cel::Value::Timestamp(_) => "timestamp",
+        cel::Value::Struct(_) => "struct",
+        cel::Value::Opaque(_) => "opaque",
+        cel::Value::Function(..) => "function",
+    }
+}
+
+/// *value*'s CEL type name with its indefinite article, e.g. `"an int"`
+/// (`core/cel_eval.py::_cel_type_phrase`) -- "uint" takes "a", matching
+/// "a user", not the vowel-letter spelling. Also used by `equality`'s
+/// own `in`-mismatch text.
+pub(crate) fn cel_type_phrase(value: &cel::Value) -> String {
+    type_name_phrase(cel_type_name(value))
+}
+
+/// A CEL type *name* (`int uint double string bytes bool null list
+/// map`, [`cel_type_name`]'s own vocabulary -- `cel::common::types::Type::name()`
+/// already speaks it too, `"null_type"` included) with its indefinite
+/// article -- the part of [`cel_type_phrase`] that doesn't need a
+/// `cel::Value` to look the name up from, for a caller that already
+/// has the name itself (`cel::ExecutionError::UnsupportedFieldSelect`'s
+/// own target-type field, carried as a name rather than a value so the
+/// target's own contents never need to survive past the point of
+/// failure).
+fn type_name_phrase(name: &str) -> String {
+    let name = if name == "null_type" { "null" } else { name };
+    let article = if name == "int" { "an" } else { "a" };
+    format!("{article} {name}")
+}
+
+/// *value* the way a key or index belongs in an error: a string in
+/// single quotes, every other CEL scalar bare (`core/cel_eval.py::_repr_key`)
+/// -- never a container's own `Debug` dump, which [`cel_type_phrase`]
+/// names only by type.
+fn repr_key(value: &cel::Value) -> String {
+    match value {
+        cel::Value::String(s) => py_repr(s),
+        cel::Value::Bool(b) => b.to_string(),
+        cel::Value::Int(n) => n.to_string(),
+        cel::Value::UInt(n) => n.to_string(),
+        cel::Value::Float(f) => f.to_string(),
+        other => cel_type_phrase(other),
+    }
+}
+
+fn is_valid_map_key(index: &cel::Value) -> bool {
+    matches!(
+        index,
+        cel::Value::Int(_) | cel::Value::UInt(_) | cel::Value::String(_) | cel::Value::Bool(_)
+    )
+}
+
+fn is_valid_sequence_index(index: &cel::Value) -> bool {
+    matches!(
+        index,
+        cel::Value::Int(_) | cel::Value::UInt(_) | cel::Value::Bool(_)
+    )
+}
+
+/// *value*'s numeric value if it is an `int`, `uint` or `bool`
+/// (`true`/`false` being `1`/`0`) -- `None` for a `string`, which never
+/// collides with any of them. Shared ground between `index` and a
+/// map's own keys for [`map_key_type_mismatch`]: celpy's own
+/// `IntType`/`UintType.__eq__` are `@type_matched`, so looking a `map`
+/// up by one integer-family type when it holds the entry under
+/// another raises rather than just missing -- but only when a probe
+/// this way actually finds a same-valued entry; a value absent
+/// regardless of type is still `None` (issue #629).
+fn numeric_key_value(value: &cel::Value) -> Option<i128> {
+    match value {
+        cel::Value::Int(n) => Some(i128::from(*n)),
+        cel::Value::UInt(n) => Some(i128::from(*n)),
+        cel::Value::Bool(b) => Some(i128::from(*b)),
+        _ => None,
+    }
+}
+
+/// Whether *map* holds a key with the same numeric value as *index* but
+/// a different exact type -- `index` missing *map* only because of
+/// that mismatch, matching cof's own `TypeError` for the same lookup,
+/// rather than genuinely being absent ([`numeric_key_value`]'s own
+/// docs).
+fn map_key_type_mismatch(map: &cel::objects::Map, index: &cel::Value) -> bool {
+    let Some(probe) = numeric_key_value(index) else {
+        return false;
+    };
+    map.map.keys().any(|key| {
+        let value = match key {
+            cel::objects::Key::Int(n) => i128::from(*n),
+            cel::objects::Key::Uint(n) => i128::from(*n),
+            cel::objects::Key::Bool(b) => i128::from(*b),
+            cel::objects::Key::String(_) => return false,
+        };
+        value == probe
+    })
+}
+
+/// `cel::ExecutionError::UnsupportedIndex(index, container)` in
+/// Circuitry's own words -- this crate's own [`indexing`] module raises
+/// it for every indexing failure regardless of cause (missing key, out
+/// of range, wrong key type, a non-container target), so the exact
+/// text is derived from *container*/*index*'s own types the same way
+/// `core/cel_eval.py`'s own `member_index` override picks between
+/// `KeyError`/`IndexError`/`TypeError`: never *container*'s own
+/// contents, which `cel`'s own `Display` for this variant shows in
+/// full (issue #629).
+fn indexing_error_text(index: &cel::Value, container: &cel::Value) -> String {
+    match container {
+        cel::Value::Map(map) if is_valid_map_key(index) => {
+            if map_key_type_mismatch(map, index) {
+                // `index`'s own exact type doesn't match any entry,
+                // but its numeric value does -- cof's own dict lookup
+                // hashes and compares that entry against `index`
+                // regardless (`int`/`uint`/`bool` share one numeric
+                // hash), and the comparison itself raises rather than
+                // reporting a miss (issue #629).
+                format!(
+                    "cannot index {} with {}",
+                    cel_type_phrase(container),
+                    cel_type_phrase(index)
+                )
+            } else {
+                format!("no such key: {}", repr_key(index))
+            }
+        }
+        cel::Value::List(_) if is_valid_sequence_index(index) => {
+            format!("list index out of range: {}", repr_key(index))
+        }
+        cel::Value::String(_) if is_valid_sequence_index(index) => {
+            format!("string index out of range: {}", repr_key(index))
+        }
+        cel::Value::Bytes(_) if is_valid_sequence_index(index) => {
+            format!("bytes index out of range: {}", repr_key(index))
+        }
+        _ => format!(
+            "cannot index {} with {}",
+            cel_type_phrase(container),
+            cel_type_phrase(index)
+        ),
+    }
+}
+
 /// `message` in Circuitry's own words for *err*, lowercase
 /// (`core/cel_eval.py::_error_text`): an undeclared identifier,
 /// function or method (`ExecutionError::UndeclaredReference`, raised by
 /// `cel::Value::resolve` itself -- never a direct call to one of this
 /// crate's own reserved names, which [`reserved_call_message`] already
 /// catches earlier) becomes one line naming it, never `cel`'s own
-/// `Display`, which capitalizes "Undeclared". Every other failure keeps
-/// `cel`'s own text.
+/// `Display`, which capitalizes "Undeclared". A handful of other
+/// variants carry a Rust `Debug` dump of one or both operands in
+/// `cel`'s own `Display` -- a full container's contents, in a
+/// nondeterministic `HashMap` order, for a `Value::Map`/`Value::List`
+/// operand (issue #629) -- so those are reworded here too, by type
+/// alone, in the same style as [`indexing_error_text`]. Every other
+/// failure keeps `cel`'s own text.
 fn evaluation_error_text(err: &cel::ExecutionError) -> String {
     match err {
         cel::ExecutionError::UndeclaredReference(name) => {
             format!("undeclared reference to '{name}'")
         }
+        cel::ExecutionError::UnsupportedIndex(index, container) => {
+            indexing_error_text(index, container)
+        }
+        // Field selection (`value.missing_key`), not `[...]` indexing --
+        // a different `cel` crate variant from `UnsupportedIndex` for the
+        // same missing-map-key failure, worded the same way
+        // `_StateEvaluator::member_dot`'s own `MapType` branch is.
+        cel::ExecutionError::NoSuchKey(key) => {
+            format!("no such key: {}", py_repr(key))
+        }
+        cel::ExecutionError::DivisionByZero(_) => "division by zero".to_string(),
+        cel::ExecutionError::RemainderByZero(_) => "modulus by zero".to_string(),
+        cel::ExecutionError::UnsupportedKeyType(value) => {
+            format!("cannot use {} as a key", cel_type_phrase(value))
+        }
+        cel::ExecutionError::ValuesNotComparable(a, b) => {
+            format!(
+                "cannot compare {} to {}",
+                cel_type_phrase(a),
+                cel_type_phrase(b)
+            )
+        }
+        cel::ExecutionError::UnsupportedBinaryOperator(op, a, b) => {
+            format!(
+                "cannot apply '{}' to {} and {}",
+                binary_operator_symbol(op),
+                cel_type_phrase(a),
+                cel_type_phrase(b)
+            )
+        }
+        cel::ExecutionError::NotSupportedAsMethod { method, target } => {
+            format!("cannot call '{method}' on {}", cel_type_phrase(target))
+        }
+        cel::ExecutionError::UnsupportedTargetType { target } => {
+            format!("cannot use {} this way", cel_type_phrase(target))
+        }
+        cel::ExecutionError::DuplicateKey(value) => {
+            format!("duplicate key: {}", repr_key(value))
+        }
+        cel::ExecutionError::UnsupportedFieldSelect(field, target_type_name) => {
+            format!(
+                "cannot select field {} on {}",
+                repr_key(field),
+                type_name_phrase(target_type_name)
+            )
+        }
+        // `a op b` overflowing CEL's 64-bit `int`/`uint` -- cof's own
+        // text for the same failure (`celpy`'s `OverflowError`/
+        // `ValueError`, caught by `_StateEvaluator::multiplication`
+        // and the `_+_`/`_-_` overrides alike) names neither the
+        // operator nor the operands, so this doesn't either.
+        cel::ExecutionError::Overflow(..) => "return error for overflow".to_string(),
+        // `in`'s own two mismatch errors (`equality::strict_in_fn`),
+        // carried as this function's own `FunctionError` specifically
+        // so they surface verbatim here rather than through `cel`'s
+        // generic `"Error executing function '...': ..."` wrapping.
+        cel::ExecutionError::FunctionError { function, message }
+            if function == equality::STRICT_IN =>
+        {
+            message.clone()
+        }
         other => other.to_string(),
+    }
+}
+
+/// The `cel` crate's own internal operator name
+/// (`vendor/cel/src/common/types/int.rs`'s own `unsupported_binary_operator`
+/// call sites) as the CEL operator text, matching
+/// `core/cel_eval.py::_CEL_RULE_SYMBOLS`'s own vocabulary -- never the
+/// crate's own internal name, which names its own implementation, not
+/// CEL's syntax.
+fn binary_operator_symbol(op: &str) -> &str {
+    match op {
+        "add" => "+",
+        "sub" => "-",
+        "mul" => "*",
+        "div" => "/",
+        "rem" => "%",
+        other => other,
     }
 }
 
@@ -883,13 +1175,24 @@ pub enum CelSyntaxError {
     /// running (`nesting.rs`'s module docs), so this crate matches the
     /// phase as well as the boundary: checked only here, at compile
     /// time, never by [`check_parity_nesting`]. Its own `Display` is
-    /// deliberately the bare text Circuitry's own uncaught exception
-    /// shows (`nesting.rs`'s module docs), not the usual
+    /// the one line `core/cel_eval.py::_compile` itself now raises for
+    /// its own caught `RecursionError`, not the usual
     /// `"CEL evaluation failed for ..."` wrapper -- see
     /// [`CelSyntaxError::is_parse_error`], which this variant does *not*
-    /// match, and `electricity-compiler`'s own `state_ns::validate_cel_syntax`,
-    /// which skips its usual effect-path prefix for this one variant too.
+    /// match. `electricity-compiler`'s own `state_ns::validate_cel_syntax`
+    /// wraps it with the usual effect-path prefix like any other
+    /// located check error, matching `core/cel_eval.py::validate_cel_syntax`.
     TooDeeplyNestedAccessor(usize),
+    /// The `cel` crate's own parser hit its internal recursion limit
+    /// ([`is_parser_recursion_limit`]) before [`TooDeeplyNestedAccessor`]
+    /// or [`TooDeeplyNestedForSafety`] below ever would -- a chain of
+    /// parens, calls or list/map literals deep enough on its own, with
+    /// no long accessor chain to trip the former or enough raw links to
+    /// trip the latter's much higher cap (issue #629). Worded and
+    /// wrapped exactly like [`TooDeeplyNestedAccessor`]: the depth at
+    /// which each shape, and each engine, gives up differs, but the
+    /// text naming it does not.
+    TooDeeplyNestedToParse,
     /// Not reachable from `core/cel_eval.py` parity at all -- a Rust-only
     /// safety backstop ([`nesting::MAX_SAFETY_CHAIN_DEPTH`]'s own module
     /// docs) so a compile-time syntax check can't itself stack-overflow
@@ -916,6 +1219,17 @@ impl CelSyntaxError {
     }
 }
 
+impl CelSyntaxError {
+    fn from_compile_error(e: impl std::fmt::Display) -> CelSyntaxError {
+        let text = e.to_string();
+        if is_parser_recursion_limit(&text) {
+            CelSyntaxError::TooDeeplyNestedToParse
+        } else {
+            CelSyntaxError::Parse(text)
+        }
+    }
+}
+
 impl fmt::Display for CelSyntaxError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -924,8 +1238,8 @@ impl fmt::Display for CelSyntaxError {
                 f,
                 "expression is too long ({len} chars, max {MAX_EXPR_LENGTH})."
             ),
-            CelSyntaxError::TooDeeplyNestedAccessor(_depth) => {
-                write!(f, "maximum recursion depth exceeded")
+            CelSyntaxError::TooDeeplyNestedAccessor(_) | CelSyntaxError::TooDeeplyNestedToParse => {
+                write!(f, "expression is nested too deeply")
             }
             CelSyntaxError::TooDeeplyNestedForSafety(depth) => write!(
                 f,
@@ -982,7 +1296,7 @@ pub fn validate_syntax(expr: &str) -> Result<(), CelSyntaxError> {
     }
     let env = stdlib_env();
     env.compile(expr)
-        .map_err(|e| CelSyntaxError::Parse(e.to_string()))?;
+        .map_err(CelSyntaxError::from_compile_error)?;
     Ok(())
 }
 
@@ -1599,6 +1913,232 @@ mod tests {
         assert!(evaluate_condition("state.l[0.0] == 1", &state, false).is_err());
     }
 
+    fn index_error_test_state() -> Value {
+        dict(vec![
+            (
+                "m",
+                dict(vec![
+                    ("a", Value::from(1_i64)),
+                    (
+                        "b",
+                        Value::List(vec![Value::from(1_i64), Value::from(2_i64)]),
+                    ),
+                ]),
+            ),
+            (
+                "l",
+                Value::List(vec![
+                    Value::from(1_i64),
+                    Value::from(2_i64),
+                    Value::from(3_i64),
+                ]),
+            ),
+            ("n", Value::from(5_i64)),
+        ])
+    }
+
+    #[test]
+    fn missing_string_key_names_the_key_not_the_map() {
+        let state = index_error_test_state();
+        let err = evaluate_condition(r#"state.m['zz'] == 1"#, &state, true).unwrap_err();
+        assert!(err.to_string().ends_with("no such key: 'zz'"));
+    }
+
+    #[test]
+    fn missing_int_key_names_the_key_not_the_map() {
+        let state = index_error_test_state();
+        let err = evaluate_condition("state.m[7] == 1", &state, true).unwrap_err();
+        assert!(err.to_string().ends_with("no such key: 7"));
+    }
+
+    #[test]
+    fn dot_access_missing_key_is_worded_the_same_as_bracket_indexing() {
+        let value = dict(vec![("present", Value::from(1_i64))]);
+        let err = evaluate_expect(
+            "value.missing_key == 1",
+            &value,
+            &Value::Dict(Dict::new()),
+            &Value::Dict(Dict::new()),
+        )
+        .unwrap_err();
+        assert!(err.to_string().ends_with("no such key: 'missing_key'"));
+    }
+
+    #[test]
+    fn list_index_out_of_range_names_the_index_not_the_list() {
+        let state = index_error_test_state();
+        let err = evaluate_condition("state.l[5] == 1", &state, true).unwrap_err();
+        assert!(err.to_string().ends_with("list index out of range: 5"));
+    }
+
+    #[test]
+    fn list_indexed_by_a_string_names_both_types() {
+        let state = index_error_test_state();
+        let err = evaluate_condition(r#"state.l['a'] == 1"#, &state, true).unwrap_err();
+        assert!(
+            err.to_string()
+                .ends_with("cannot index a list with a string")
+        );
+    }
+
+    #[test]
+    fn int_indexed_by_an_int_names_both_types() {
+        let state = index_error_test_state();
+        let err = evaluate_condition("state.n[0] == 1", &state, true).unwrap_err();
+        assert!(err.to_string().ends_with("cannot index an int with an int"));
+    }
+
+    #[test]
+    fn division_by_zero_is_one_word_not_a_value_dump() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("1 / 0 == 1", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("division by zero"));
+    }
+
+    #[test]
+    fn modulus_by_zero_is_one_word_not_a_value_dump() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("1 % 0 == 1", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("modulus by zero"));
+    }
+
+    #[test]
+    fn no_index_key_or_division_error_text_contains_a_container_dump() {
+        let state = index_error_test_state();
+        let exprs = [
+            r#"state.m['zz'] == 1"#,
+            "state.m[7] == 1",
+            "state.l[5] == 1",
+            r#"state.l['a'] == 1"#,
+            "state.n[0] == 1",
+            "1 / 0 == 1",
+            "1 % 0 == 1",
+        ];
+        for expr in exprs {
+            let err = evaluate_condition(expr, &state, true).unwrap_err();
+            let text = err.to_string();
+            assert!(!text.contains("Map("), "{expr}: {text}");
+            assert!(!text.contains("List("), "{expr}: {text}");
+            assert!(!text.contains("String("), "{expr}: {text}");
+            assert!(!text.contains("Int("), "{expr}: {text}");
+        }
+    }
+
+    #[test]
+    fn negative_index_is_unaffected() {
+        let state = index_error_test_state();
+        assert_eq!(
+            evaluate_value("state.l[-1]", &state, true),
+            Ok(Value::from(3_i64))
+        );
+    }
+
+    #[test]
+    fn float_division_by_zero_is_unaffected() {
+        let state = Value::Dict(Dict::new());
+        assert_eq!(
+            evaluate_condition("1.0 / 0.0 == 1.0", &state, false),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn int_overflow_is_return_error_for_overflow() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("9223372036854775807 + 1 == 1", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("return error for overflow"));
+    }
+
+    #[test]
+    fn int_multiplication_overflow_is_return_error_for_overflow() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("9223372036854775807 * 2 == 1", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("return error for overflow"));
+    }
+
+    #[test]
+    fn uint_overflow_is_return_error_for_overflow() {
+        let state = Value::Dict(Dict::new());
+        let err =
+            evaluate_condition("18446744073709551615u + 1u == 1u", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("return error for overflow"));
+    }
+
+    #[test]
+    fn uint_multiplication_overflow_is_return_error_for_overflow() {
+        let state = Value::Dict(Dict::new());
+        let err =
+            evaluate_condition("18446744073709551615u * 2u == 1u", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("return error for overflow"));
+    }
+
+    #[test]
+    fn duplicate_map_literal_key_names_the_key() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("{'a': 1, 'a': 2}.a == 1", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("duplicate key: 'a'"));
+    }
+
+    #[test]
+    fn invalid_map_literal_key_type_names_the_type_not_the_contents() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("{[1]: 2} == {}", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("cannot use a list as a key"));
+    }
+
+    #[test]
+    fn field_selection_on_a_non_map_names_the_field_and_the_type() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("[1, 2].zz == 1", &state, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .ends_with("cannot select field 'zz' on a list")
+        );
+    }
+
+    #[test]
+    fn in_with_a_non_iterable_container_names_the_operator_and_the_types() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("5 in 5", &state, false).unwrap_err();
+        assert!(
+            err.to_string()
+                .ends_with("cannot apply 'in' to an int and an int")
+        );
+    }
+
+    #[test]
+    fn in_with_a_mismatched_element_type_keeps_cofs_own_bare_text() {
+        let state = Value::Dict(Dict::new());
+        let err = evaluate_condition("1 in [1.0]", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("no such overload"));
+    }
+
+    #[test]
+    fn map_key_of_a_mismatched_integer_type_names_the_type_not_a_miss() {
+        // A map whose own key is an `int`, not a `string` -- `dict`'s
+        // own helper always builds string keys, so this one is built
+        // directly against the real `Dict`/`Value` types instead.
+        let mut inner = electricity_value::Dict::new();
+        inner.insert(Value::from(1_i64), Value::from(1_i64));
+        let state = dict(vec![("m", Value::Dict(inner))]);
+        let uint_err = evaluate_condition("state.m[1u] == 1", &state, true).unwrap_err();
+        assert!(
+            uint_err
+                .to_string()
+                .ends_with("cannot index a map with a uint")
+        );
+        let bool_err = evaluate_condition("state.m[true] == 1", &state, true).unwrap_err();
+        assert!(
+            bool_err
+                .to_string()
+                .ends_with("cannot index a map with a bool")
+        );
+        // An absent numeric value, with no exact-type collision at all,
+        // is still a plain miss.
+        let miss_err = evaluate_condition("state.m[5u] == 1", &state, true).unwrap_err();
+        assert!(miss_err.to_string().ends_with("no such key: 5"));
+    }
+
     #[test]
     fn validate_syntax_accepts_a_well_formed_expression() {
         assert_eq!(validate_syntax("state.input.ok == true"), Ok(()));
@@ -1636,8 +2176,46 @@ mod tests {
         let expr = format!("state{}", ".a".repeat(MAX_ACCESSOR_NESTING_DEPTH + 1));
         let err = validate_syntax(&expr).unwrap_err();
         assert!(matches!(err, CelSyntaxError::TooDeeplyNestedAccessor(_)));
-        assert_eq!(err.to_string(), "maximum recursion depth exceeded");
+        assert_eq!(err.to_string(), "expression is nested too deeply");
         assert!(!err.is_parse_error());
+    }
+
+    #[test]
+    fn validate_syntax_rejects_deep_paren_nesting_around_a_short_accessor_the_same_way() {
+        // Issue #629's own example: 150 pairs of parens around a short
+        // accessor trips `cel`'s own parser recursion limit (96) long
+        // before `MAX_ACCESSOR_NESTING_DEPTH`/`MAX_SAFETY_CHAIN_DEPTH`
+        // would -- worded exactly the same as the accessor case above,
+        // never the raw parser dump or the whole expression quoted back.
+        let expr = format!("{}state.input.missing{}", "(".repeat(150), ")".repeat(150));
+        let err = validate_syntax(&expr).unwrap_err();
+        assert_eq!(err, CelSyntaxError::TooDeeplyNestedToParse);
+        assert_eq!(err.to_string(), "expression is nested too deeply");
+        assert!(!err.is_parse_error());
+    }
+
+    #[test]
+    fn evaluate_condition_rejects_deep_paren_nesting_the_same_clean_way() {
+        let state = Value::Dict(Dict::new());
+        let expr = format!("{}state.input.missing{}", "(".repeat(150), ")".repeat(150));
+        let err = evaluate_condition(&expr, &state, false).unwrap_err();
+        assert!(err.is_too_deeply_nested());
+        assert!(err.to_string().ends_with("expression is nested too deeply"));
+        assert!(!err.to_string().contains("Recursion limit"));
+    }
+
+    #[test]
+    fn validate_syntax_does_not_mistake_the_phrase_in_a_string_literal_for_the_limit() {
+        // A genuine syntax error (a trailing `+` with nothing after
+        // it) whose source happens to contain this exact phrase, in a
+        // string literal `cel`'s own parser echoes back verbatim in
+        // its snippet line -- never misread as hitting the parser's
+        // own recursion limit itself, which only ever names it in the
+        // error's own header, before that snippet (issue #629).
+        let expr = "'Recursion limit of 5 exceeded' +";
+        let err = validate_syntax(expr).unwrap_err();
+        assert!(err.is_parse_error());
+        assert_ne!(err, CelSyntaxError::TooDeeplyNestedToParse);
     }
 
     #[test]
@@ -1901,5 +2479,24 @@ mod evaluate_value_tests {
             "CEL expression \"b'x'\" has no JSON value: bytes have no JSON form; \
              convert them with string()"
         );
+    }
+
+    #[test]
+    fn evaluate_value_shares_the_table_rows_with_evaluate_condition() {
+        // The `cel` tool's own entry point (#735) shares this
+        // evaluator, so its error texts follow the same table
+        // (issue #629).
+        let state = dict(vec![(
+            "l",
+            Value::List(vec![
+                Value::from(1_i64),
+                Value::from(2_i64),
+                Value::from(3_i64),
+            ]),
+        )]);
+        let err = evaluate_value("state.l[5]", &state, true).unwrap_err();
+        assert!(err.to_string().ends_with("list index out of range: 5"));
+        let err = evaluate_value("1 / 0", &state, false).unwrap_err();
+        assert!(err.to_string().ends_with("division by zero"));
     }
 }

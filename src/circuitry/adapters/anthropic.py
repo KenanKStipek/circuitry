@@ -247,6 +247,8 @@ class AnthropicAdapter:
       - base_url: API base URL (defaults to https://api.anthropic.com)
       - default_model: Default model if not specified (defaults to claude-sonnet-5)
       - max_tokens: Maximum tokens to generate (defaults to 4096)
+      - api_key_env: Name of the environment variable to read the key from
+        (defaults to ANTHROPIC_API_KEY)
     """
 
     #: Current model aliases, most capable first. Static on purpose: the
@@ -264,6 +266,7 @@ class AnthropicAdapter:
     base_url: str = "https://api.anthropic.com"
     default_model: str = "claude-sonnet-5"
     max_tokens: int = 4096
+    api_key_env: str = "ANTHROPIC_API_KEY"
     #: Whether this instance sends ``stream: true``; the instance-level
     #: override for ``runtime.adapters.<name>.stream: false``.
     streams: bool = True
@@ -281,11 +284,11 @@ class AnthropicAdapter:
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
         model = model or self.default_model
-        api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+        api_key = os.environ.get(self.api_key_env, "")
 
         if not api_key:
             raise RuntimeError(
-                "Anthropic API key not found. Set ANTHROPIC_API_KEY in the environment "
+                f"Anthropic API key not found. Set {self.api_key_env} in the environment "
                 "(recommended: ~/.config/circuitry/.env). Run `cof doctor` to verify."
             )
 
@@ -449,8 +452,8 @@ class AnthropicAdapter:
 
     def check(self) -> CheckResult:
         missing: list[str] = []
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            missing.append("env:ANTHROPIC_API_KEY")
+        if not os.environ.get(self.api_key_env):
+            missing.append(f"env:{self.api_key_env}")
         if shutil.which("curl") is None:
             missing.append("binary:curl")
         return CheckResult(ok=not missing, missing=missing)

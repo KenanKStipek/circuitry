@@ -40,6 +40,14 @@ trust a `ruff`/`mypy` already on `PATH`. Tool versions are pinned there
 specifically so "green locally" means "green in CI"; a stray unpinned
 install can pass or fail on findings CI won't reproduce.
 
+To bump one of `requirements-dev.txt`'s own pins: change the version there,
+reinstall (`pip install -e ".[tools]" && pip install -r requirements-dev.txt`),
+and run the gate above. `requirements-dev.txt` pins the dev *tools*
+(pytest, mypy, ruff, textual, mongomock, opentelemetry-*) — never the
+reference libraries electricity's generated-files job compares `cof`'s
+behaviour against (jsonschema, PyYAML, chevron, cel-python, ...), which are
+`electricity/scripts/generator-constraints.txt`'s own job.
+
 The suite is hermetic to your machine's `~/.config/circuitry/config.json` —
 an autouse fixture in `tests/conftest.py` redirects global-config discovery
 to a per-test temp dir, so a real global config (e.g. a restrictive
@@ -111,11 +119,11 @@ See `changelog.d/README.md`.
 
 ## Agent workflow
 Work is managed via GitHub issues and done in local agent sessions (Pi).
-The GitHub-hosted agent loop is off: the `dispatch`, `claude`, `finalize` and
-`claude-code-review` workflows (vendored from agent-loop) are disabled in
-Actions, so nothing on GitHub picks up issues, answers `@claude`, or reviews
-PRs. `gh workflow enable <file>` turns one back on. `accept.yml` (a `/accept`
-comment or the `accepted` label merges a green PR) and `rollup.yml` still run.
+There is no GitHub-hosted agent loop: nothing on GitHub picks up issues, answers
+`@claude`, or reviews PRs. Its workflows (`dispatch`, `claude`, `finalize` and
+`claude-code-review`) were removed and remain in the git history. `accept.yml`
+(a `/accept` comment or the `accepted` label merges a green PR) and `rollup.yml`
+still run.
 
 Labels:
 - `ready-for-review` — the issue's PR is done; the owner's turn

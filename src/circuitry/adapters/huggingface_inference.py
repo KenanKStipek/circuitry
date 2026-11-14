@@ -27,13 +27,14 @@ class HuggingFaceInferenceAdapter:
     name: str = "huggingface-inference"
     base_url: str = "https://router.huggingface.co/v1"
     default_model: str = "meta-llama/Llama-3.3-70B-Instruct"
+    api_key_env: str = "HF_TOKEN"
 
     streams: bool = True
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="HF_TOKEN",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
             streams=self.streams,
         )

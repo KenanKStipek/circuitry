@@ -146,6 +146,17 @@ pub struct RunResult {
     /// `--events`'s own `run_end.signal` and the process exit code
     /// (130/143/129) both come from this.
     pub signal: Option<Signal>,
+    /// `true` only for `--resume`'s own document-hash refusal (no
+    /// recorded hash, or the document changed) -- `cli/app.py::
+    /// _resolve_resume_state` raises that one entirely in the CLI layer,
+    /// before `cof run`'s own `run()` is ever called, so it never reaches
+    /// `_save_last_run` either (issue #760); every other refusal here,
+    /// `fail!` included, happens *inside* the equivalent of `run()` on
+    /// both engines and is stashed on both the same way.
+    /// `electricity-cli`'s own `--last`/`--resume last` stash write
+    /// checks this and skips, matching that -- a refused resume must
+    /// never overwrite the stash it just read.
+    pub resume_refused: bool,
 }
 
 /// The three signals `cof run`/`electricity` treat specially (DESIGN

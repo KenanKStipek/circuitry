@@ -710,7 +710,12 @@ with a `type`, so the fallback matters in practice, not just for symmetry with `
 below (whose bodies carry only `type`, never `code`, at all).
 
 **Providers in this family and their env var names** (`adapters/factory.py` `_build_*`
-functions, `api_key_env=` in each adapter file):
+functions, `api_key_env=` in each adapter file). Every row's own default is overridable from its
+own `runtime.adapters.<name>` block's `api_key_env` (issue #669) — a string matching
+`[A-Za-z_][A-Za-z0-9_]*`, or, for a self-hosted member whose default is already `""`
+(`vllm`/`llamacpp`/`lmstudio`/`tgi`/`nvidia-nim`), `""` too, an explicit "no key" that disables
+the `Authorization` header entirely; a non-self-hosted member sending `""` is a config error
+(§3.14):
 
 | adapter name | `api_key_env` | default `base_url` |
 |---|---|---|
@@ -721,19 +726,19 @@ functions, `api_key_env=` in each adapter file):
 | `deepseek` | `DEEPSEEK_API_KEY` | `https://api.deepseek.com/v1` |
 | `together` | `TOGETHER_API_KEY` | `https://api.together.xyz/v1` |
 | `fireworks` | `FIREWORKS_API_KEY` | `https://api.fireworks.ai/inference/v1` |
-| `nvidia-nim` | `NIM_API_KEY` (configurable key *name* via `api_key_env` cfg) | `https://integrate.api.nvidia.com/v1` |
+| `nvidia-nim` | `NIM_API_KEY` | `https://integrate.api.nvidia.com/v1` |
 | `vllm` | `""` (no auth) | `http://localhost:8000/v1` |
 | `llamacpp` | `""` (no auth) | `http://localhost:8080/v1` |
 | `lmstudio` | `""` (no auth) | `http://localhost:1234/v1` |
 | `mistral` | `MISTRAL_API_KEY` | `https://api.mistral.ai/v1` |
 | `ai21` | `AI21_API_KEY` | `https://api.ai21.com/studio/v1` |
 | `huggingface-inference` | `HF_TOKEN` | `https://router.huggingface.co/v1` |
-| `tgi` | `""` by default, configurable | `http://localhost:3000/v1` |
+| `tgi` | `""` (no auth) | `http://localhost:3000/v1` |
 | `qwen-dashscope` | `DASHSCOPE_API_KEY` | `https://dashscope-intl.aliyuncs.com/compatible-mode/v1` |
 | `cohere` | `COHERE_API_KEY` | `https://api.cohere.com` |
 | `cloudflare-workers-ai` | `CF_API_TOKEN` | (requires `account_id`; `check()` also requires `CF_ACCOUNT_ID`) |
 | `gemini` | `GOOGLE_API_KEY` | `https://generativelanguage.googleapis.com/v1beta/openai` |
-| `azure-openai` | `""` (uses `api-key` header via `extra_headers`, not Bearer) | `AZURE_OPENAI_ENDPOINT` env or `endpoint` cfg |
+| `azure-openai` | `AZURE_OPENAI_API_KEY` (not `""`: always sends one, via the `api-key` header, never Bearer) | `AZURE_OPENAI_ENDPOINT` env or `endpoint` cfg |
 | `databricks` | `DATABRICKS_TOKEN` | `DATABRICKS_HOST` env (no static default — per-workspace) or `base_url` cfg |
 
 electricity (M1-F2, issue #503) builds every row in this table plus `openai`/`anthropic`/`ollama`
@@ -750,10 +755,11 @@ further here since it's an implementation detail, not a wire-format one.
 
 ### 3.5 `anthropic`
 
-`src/circuitry/adapters/anthropic.py`. `ANTHROPIC_API_KEY` env var (`:121-127`). Config
+`src/circuitry/adapters/anthropic.py`. `ANTHROPIC_API_KEY` env var (`:121-127`), overridable via
+`api_key_env` (issue #669; `""` is a config error — this adapter always sends one). Config
 (`runtime.adapters.anthropic`): `base_url` (default `https://api.anthropic.com`),
-`default_model` (default `"claude-sonnet-5"`), `max_tokens` (default 4096). `accepts_images =
-True`. `KNOWN_MODELS` (`:96-100`, for `list_models()` — no network call, no API key needed):
+`default_model` (default `"claude-sonnet-5"`), `max_tokens` (default 4096), `api_key_env`.
+`accepts_images = True`. `KNOWN_MODELS` (`:96-100`, for `list_models()` — no network call, no API key needed):
 `("claude-opus-5", "claude-sonnet-5", "claude-haiku-4-5")`.
 
 Wire shape (`_request_body`, `:28-76`): Anthropic's Messages API (`POST /v1/messages`), headers
@@ -773,10 +779,11 @@ Response: `text` is the concatenation of every `content[i].text` where `type == 
 ### 3.6 `openai`
 
 `src/circuitry/adapters/openai.py`. Not built on `_openai_compat` — hand-rolled with the same
-shape (duplicated, not shared, in the reference implementation). `OPENAI_API_KEY`. `base_url`
-default `https://api.openai.com/v1`, `default_model` default `"gpt-4o-mini"`. `accepts_images =
-True`. Uses `max_completion_tokens`, not `max_tokens` (reasoning-model compatibility, `:61`).
-`Authorization: Bearer <key>`.
+shape (duplicated, not shared, in the reference implementation). `OPENAI_API_KEY`, overridable
+via `api_key_env` (issue #669; `""` is a config error — this adapter always sends one).
+`base_url` default `https://api.openai.com/v1`, `default_model` default `"gpt-4o-mini"`.
+`accepts_images = True`. Uses `max_completion_tokens`, not `max_tokens` (reasoning-model
+compatibility, `:61`). `Authorization: Bearer <key>`.
 
 ### 3.7 `ollama`
 
@@ -1174,6 +1181,86 @@ settings left behind). `c579-cli-alias-config-errors` is replaced by `c656-alias
 (its own `{"adapter": "openai"}` entry is valid now); the other four original `c579-*` alias
 cases (two `claude_code` aliases, a `pi` alias and both bases in one run, a default-adapter
 alias, an alias's missing binary hard and soft) are unchanged.
+
+### 3.15 Per-adapter `api_key_env`
+
+`adapters/factory.py::resolve_api_key_env`/`adapter_api_key_env_errors`,
+`electricity_adapters::config::resolve_api_key_env`, `electricity_vm::adapter::AdapterRegistry::
+adapter_api_key_env_errors` (issue #669). Any keyed adapter's own `runtime.adapters.<name>` block
+— built-in or an alias's own (3.14) — accepts `api_key_env`, naming the environment variable it
+reads its credential from in place of the provider's own default: `OpenAiAdapter`,
+`AnthropicAdapter`, `ReplicateAdapter`, `WatsonXAdapter` and every `OpenAiCompatibleConfig`-backed
+adapter (`ai21`, `azure-openai` via its own `extra_key_env` field — kept apart from
+`api_key_env`, which stays empty there so `chat_completion`'s own Bearer path never fires —
+`cloudflare-workers-ai`, `cohere`, `databricks`, `deepseek`, `fireworks`, `gemini`, `groq`,
+`huggingface-inference`, `llamacpp`, `lmstudio`, `mistral`, `nvidia-nim`, `openrouter`,
+`perplexity`, `qwen-dashscope`, `tgi`, `together`, `vllm`, `xai`) carry an `api_key_env` field
+now, resolved at build time and read at both `generate()` and `check()` in place of the literal
+name each used before. A keyless OpenAI-compatible adapter (`lmstudio`, `vllm`, `llamacpp`, ...)
+sends `Authorization: Bearer <value>` once its own `api_key_env` is set to a non-empty name;
+unset, it behaves exactly as before.
+
+**Resolution.** `resolve_api_key_env(cfg, default, adapter_name)`: absent key → *default*;
+present and `""` → `""` (an explicit "no key", same meaning the keyless adapters' own default
+already has); present, a string matching `[A-Za-z_][A-Za-z0-9_]*` → that string; anything else
+(a non-string, or a string matching neither) → a `ValueError`/`AdapterError`
+(`PyExc::ValueError`) reading `runtime.adapters.<name>.api_key_env must be an environment
+variable name, got <repr>`, identical text in both engines (Rust's `Value::py_repr()` matches
+Python's `repr()` for a string, an int, `None`, a bool and a list/dict the same way the rest of
+this codebase's error texts do). The missing-variable report at `check()`/preflight names the
+configured variable, not the provider's default: `missing ['env:<NAME>']`.
+
+`OpenAiAdapter`, `AnthropicAdapter`, `ReplicateAdapter`, `WatsonXAdapter` and `azure-openai`
+always send a credential — none of them has a keyless endpoint the way a self-hosted
+OpenAI-compatible member does — so for these five, `""` is rejected too, with the identical
+`ValueError`/`AdapterError` text (`got ''`): `adapters/factory.py::resolve_api_key_env`'s own
+`allow_empty=False` at each of their five call sites, `electricity_adapters::config::
+resolve_required_api_key_env` (a thin wrapper over `resolve_api_key_env` that rejects an empty
+result) at theirs. `adapter_api_key_env_errors`/`AdapterRegistry::adapter_api_key_env_errors`
+apply the same rule to an entry it did not build itself, by resolving the target first (the
+entry's own `adapter` key when it is an alias, else the entry's own name) and checking that
+target against the same five-name set.
+
+**Validated up front**, the same way as 3.14's aliases: every `runtime.adapters.<name>
+.api_key_env` present in the run's merged runtime is checked — built-in or alias, whether or not
+any effect selects it — by `adapter_api_key_env_errors`/`AdapterRegistry::
+adapter_api_key_env_errors`, in name order. Checked *after* `alias_config_errors`
+(`electricity::lib`'s own run wiring and `cli/runtime_shim.py::run` agree on the order): an
+alias whose own `api_key_env` is malformed fails while the alias itself is being built, so it
+surfaces under `Invalid adapter aliases:` already and the separate `api_key_env`-only check never
+reruns it; a *built-in* adapter's malformed `api_key_env` is the only thing the dedicated check
+ever actually reports, under its own `Invalid adapter api_key_env:` block plus one `  - ` line per
+bad entry, identical text to `cof`'s. `cof check` surfaces the same errors list-first, the same
+way it does for aliases.
+
+**Config-only, unconditionally.** `electricity-config::effective_settings_with_profile`'s own
+`strip_document_api_key_env`, and `electricity-compiler::pipeline`'s own
+`strip_document_api_key_env_for_notice` (for the "Applied host settings" line electricity prints
+for a document electricity treats as trusted without ever merging its runtime), both drop a
+document's `adapters.<name>.api_key_env` before anything downstream ever sees it —
+unconditionally, not gated on `enabled_adapters` the way 3.14's alias-retarget strip is, and not
+restored for a trusted document either: unlike an alias retarget, there is no document trust
+level at which this key applies. Dropping it emits `runtime.adapters.<name>.api_key_env from
+<document> ignored: only config chooses which environment variable an adapter's key comes from`,
+identical text to `cli/effective_settings.py::_strip_document_api_key_env`'s. Other keys in the
+same block (a `base_url` override, say) still apply; if dropping `api_key_env` leaves the block
+empty, the whole `adapters.<name>` entry is dropped too, the same cleanup 3.14's strip does. See
+`docs/threat-model.md` for the reasoning: a document run by path can already set `base_url`, so a
+document that could also choose `api_key_env` could send any environment variable the host
+process can read to a URL it names, not just that provider's own key.
+
+**Masking.** The resolved value is a credential like any other: never echoed in a curl failure
+message (`curl_failure_message`/`AdapterError`'s own masking already takes the actual key value,
+not its variable name, so this needed no change), never written to saved state, an event or an
+error — only the variable *name* ever appears, in `missing`, in the config-error text above, and
+in the ignored-document warning.
+
+Ported with `c669-*` conformance cases (both engines, through the mock HTTP server): an override
+on a built-in and on two aliases (one of them normally keyless) each sending its own variable's
+value, the config error's exact text for a bad name on two built-in blocks, a document's own
+`api_key_env` ignored with the warning while the host's own variable's value still goes out, and
+the missing-variable preflight report naming the configured variable rather than the provider's
+default (hard and soft).
 
 ---
 

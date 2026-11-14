@@ -38,6 +38,7 @@ jobs:
   version:
     name: Read workspace version
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     outputs:
@@ -68,6 +69,7 @@ jobs:
             runner: macos-latest
             zigbuild: false
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -131,6 +133,7 @@ jobs:
     if: inputs.build-image
     needs: [version, build-archives]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:

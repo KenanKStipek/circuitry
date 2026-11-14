@@ -1,0 +1,2 @@
+ERROR: CEL evaluation failed for expr '[1, 2, 3][5]': list index out of range: 5
+ERROR: CEL evaluation failed for expr '1 / 0': division by zero

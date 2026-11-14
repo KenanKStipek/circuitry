@@ -70,9 +70,11 @@ Decisions" instead of citing an external project file repeatedly:
 - Error-message parity is explicitly two-tier: text Circuitry's own code writes (the dynamic-wrapped
   `"<path>: <message>"` format, `expect failed: ...`, `use` cycle messages, loop-bounds errors, and
   every other message quoted verbatim in the specification this design implements) must match
-  **word for word**; text that originates in a third-party library (a CEL evaluation error, a YAML
-  parse error, a JSON Schema message) only has to **fail in the same place** — the conformance
-  suite normalizes that text rather than diffing it byte-for-byte.
+  **word for word**; text that originates in a third-party library (a YAML parse error, a JSON
+  Schema message) only has to **fail in the same place** — the conformance suite normalizes that
+  text rather than diffing it byte-for-byte. A CEL evaluation error used to be in this second tier
+  too, but issue #629 moved every case the table in §7.2 maps into the first one: Circuitry's own
+  wording now, in both engines, compared exactly.
 - v1 must ship: run records with `--resume`, observability (OTel, live state, progress, totals), an
   embeddable Rust library crate, and release builds (static Linux x86_64/arm64, macOS arm64, a
   container image).
@@ -113,8 +115,8 @@ Decisions" instead of citing an external project file repeatedly:
 models (or scripted fakes, for conformance testing), produce a final state identical to what
 `cof run` would have produced for the same inputs.
 
-**Scope (v1).** A CLI binary (`electricity run <orchestration.yml> [-e key=value]... [--config
-config.json] [--out state.json] [--state <file>] [--resume <id>|last] [--force] [--pretty]
+**Scope (v1).** A CLI binary (`electricity run [orchestration.yml] [-e key=value]... [--config
+config.json] [--out state.json] [--state <file>] [--resume <id>|last] [--force] [--last] [--pretty]
 [--live-state <path>] [--profile <path>] [--allow-capabilities cap,cap] [--adapter name]
 [--label TEXT] [--quiet] [--dump-ir]`, and the legacy `electricity <config.json> <orchestration.yml> ...` form
 as an alias) plus an embeddable library crate exposing the same run
@@ -124,10 +126,15 @@ binary). Both surfaces share one workspace of language, VM, tool, adapter, and p
 own `electricity run` ships every other flag in this synopsis first, with those three still
 unrecognized options until #727 lands (`electricity/README.md`'s own CLI bullet states this
 current-state subset; this bullet is the full v1 target).
-`--resume last` reads the most recently written `--out` file for this orchestration path, tracked
-in a small CLI-only stash file (`$XDG_STATE_HOME/electricity/last_run.json` on Linux, the platform
-equivalent elsewhere — this location is an electricity-only convenience and carries no parity
-requirement of its own, unlike the `--out` state format it points at).
+`--last` and `--resume last` (issue #760) share `cof run`'s own stash file, `~/.config/circuitry/
+last-run.json`, not an electricity-only path of its own: every run (success or failure) writes it
+with the same keys, key order and JSON formatting `cof run`'s own `_save_last_run` does, so a
+stash either engine wrote replays on the other, and in the TUI's own Runs view. `--last` replays
+the stashed run's own arguments in full; `--resume last` resumes from that run's own `--out` file
+instead (§6.8), with the same refusals and messages as the reference. §13's own rows for issue
+#760 record the few places this still diverges (a stashed setting electricity's own CLI has no
+flag for refuses the replay outright, rather than dropping it; the surrounding stdout frame for a
+`--resume last` refusal).
 
 **Non-goals — deliberately not built, and why:**
 
@@ -924,10 +931,11 @@ interactive shell.
 **Error text.** `meta.error` is always `str(exception)`-equivalent text, never a structured
 object. Per the Decisions above: messages Circuitry itself writes (the dynamic-wrapped
 `"<path>: <message>"` format, `expect failed: ...`, answer-parse failures, `use` cycle messages,
-loop bounds errors — all cited verbatim in runtime-semantics §6.2) must match **word for word**;
-text that originates in a third-party library (a CEL evaluation error, a YAML parse error, a
-JSON Schema message) only needs to **fail in the same place**, with the conformance suite
-normalizing that text rather than diffing it byte-for-byte.
+loop bounds errors — all cited verbatim in runtime-semantics §6.2) must match **word for word**,
+and issue #629 moved every CEL evaluation error §7.2's own table maps into this tier too; text
+that still originates in a third-party library otherwise (a YAML parse error, a JSON Schema
+message) only needs to **fail in the same place**, with the conformance suite normalizing that
+text rather than diffing it byte-for-byte.
 
 `finally:` failure interaction (runtime-semantics §6.4): if the body failed and `finally:` also
 fails, the body's error is what's reported at `meta.error`; the `finally:` failure rides along
@@ -1003,11 +1011,11 @@ No VM-frame snapshot is ever serialized (§6.5) — resume works exactly like th
 by re-running from the top and skipping whatever the loaded state says already finished
 (runtime-semantics §8.5):
 
-`--state`/`--resume`/`--force` ship in issue #727, `--state <file>` only (never `--resume last`/a
-bare run-id, both of which need `runtime.persistence`/a `--last` stash electricity doesn't have —
-§13's own scope row); the rest of this section otherwise describes the full reference behavior,
-including the parts (persistence auto-load, a bare run-id's input re-pass rule) electricity
-doesn't reach yet:
+`--state`/`--resume`/`--force` ship in issue #727; `--resume last` ships in issue #760, reading
+the same `--last` stash `--last` itself reads (this section's own preamble, §1). A bare run-id still
+needs `runtime.persistence`, which electricity doesn't have (§13's own scope row); the rest of
+this section otherwise describes the full reference behavior, including the parts (persistence
+auto-load, a bare run-id's input re-pass rule) electricity doesn't reach yet:
 
 - an effect is resumable iff `meta.completed_at` is truthy **and** `meta.error` is falsy; a
   **successful `reflector` never writes `meta.completed_at` at all** (its own `meta` stays
@@ -1069,7 +1077,8 @@ reference's own message and failure point word for word (the Decisions above).
 | Interrupted by SIGTERM | `143` |
 | Interrupted by SIGHUP (the terminal closed), unless SIGHUP was ignored at start (`nohup`) | `129` |
 | A malformed `-e` value (`KEY=VALUE` parsing failure) — the one pre-run usage error the reference's own CLI never explicitly catches, left to Typer/Click's default `BadParameter` handling | `2` |
-| Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path, `run`'s own missing-orchestration-positional check (issue #728: not one of the enumerated usage errors either, since the positional stands in for `--last`) | `1` |
+| `--last` with no previous run at all (issue #760) — `cof run`'s own `_load_last_run` raises a bare `typer.BadParameter` too, never caught by `run_cmd` either, the same uncaught-`BadParameter` shape as a malformed `-e` | `2` |
+| Every other pre-run usage problem the reference's own CLI explicitly catches and re-raises as `typer.Exit(code=1)` — a `--resume` safety check failing without `--force`, an orchestration path that doesn't resolve, an unreadable config path, `run`'s own missing-orchestration-positional check (issue #728: not one of the enumerated usage errors either, since the positional stands in for `--last`), `--resume last`'s own refusals and `--last`'s own stashed-secret/unsupported-setting refusals (issue #760) | `1` |
 
 All three interrupted cases still write `--out` exactly like an ordinary failure (runtime-semantics
 §6.5, §8.4) — the exit code alone distinguishes them; resumability is identical across all
@@ -1129,10 +1138,7 @@ synchronous and unconditionally fatal in both engines (run-wiring step 16 above)
 reference's own retry-then-warn-twice behaviour for that specific case (it still attempts, and logs,
 one more write through `close()` in its own `finally:`, even though the run is already failing) would
 need restructuring `run_action`'s early-return paths for a case this preview cannot otherwise
-construct (no filesystem-mutating tool exists to fail a *later* write instead); `core/cel_eval.py`'s
-own `logger.error` for a genuine CEL evaluation exception (not a compile/path error — division by
-zero, say) embeds the underlying Python exception's own `repr`, which has no Rust equivalent to
-reproduce byte for byte, so that one `ERROR:` line is not ported; and a dynamic interrupted mid-body
+construct (no filesystem-mutating tool exists to fail a *later* write instead); and a dynamic interrupted mid-body
 whose `finally:` then also fails logs `meta.error`'s own "Interrupted (...)" wording on this warning line
 (`exec/dynamic.rs::error_text`), where the reference logs the interrupting exception's raw `str()`
 instead — `''` for a real signal caught in the main thread (`KeyboardInterrupt`/`SigTermInterrupt`),
@@ -1386,7 +1392,12 @@ for how the file itself is located:
 - **No discovery.** The reference resolves a bare `--profile <name>` by searching
   `<orchestration_dir>/profiles/<name>.yml` then `<cwd>/profiles/<name>.yml` (and the `.yaml`
   variant of each, `discover_profile_path`). electricity has no such search: `--profile <path>`
-  names the file directly, explicit only, same as the orchestration file (§1). A path that doesn't resolve to a readable file is **not** one of §6.9's enumerated
+  names the file directly, explicit only, same as the orchestration file (§1). The `--last`/
+  `--resume last` stash's own `profile` key (issue #760) carries whichever shape the run that
+  wrote it used — a bare name for the reference, an explicit path for electricity — and each
+  engine's own `--profile` reads it back the same way it would have written it; a stash either
+  engine wrote still resumes on the other for every *other* key, but `profile` itself only ever
+  round-trips through the engine that wrote it. A path that doesn't resolve to a readable file is **not** one of §6.9's enumerated
   pre-run usage errors: the reference's own `load_profile` runs inside the run's single
   top-level try block, *after* state/orchestration loading, the allowlist check, and capability
   consent, but still before `interface.inputs` checking (`runtime_shim.run`'s own call order) —
@@ -1671,10 +1682,12 @@ regardless of which underlying crate is used:
   look at more than one element to decide so. That conversion is paid even when the error itself
   is thrown away immediately — inside `has()`, or the short-circuiting side of `||` — so
   `state.items.filter(i, has(state.index[i.id]))` still costs the whole `state.index` on every
-  iteration where the key is missing, not just the one lookup. Left as is here because the error
-  text itself is built from those same two `Value`s; changing what gets converted would change
-  what the error says. Issue #629 tracks changing that text (and, with it, removing this
-  conversion).
+  iteration where the key is missing, not just the one lookup. Still left as is: issue #629's own
+  fix (`electricity-cel::evaluation_error_text`) needs this `Value`, not just its type — a `map`
+  container's own keys decide whether a wrong-type index is a plain miss or a type mismatch (a
+  `uint`/`bool` probe that collides, by numeric value, with an existing `int` key, matching
+  cel-python's own `@type_matched` key equality) — so trimming this conversion down to a bare
+  type name, for the shapes that would allow it, stays a follow-up.
 - **The absent-path convention** (runtime-semantics §4.4): reading an unset `state.` path is
   **not** an evaluation error inside `if`/`while` CEL — but only if that read decides the whole
   expression's result. Each unguarded `state.` occurrence is marked, against the state this
@@ -1735,12 +1748,15 @@ regardless of which underlying crate is used:
   `while`) — narrow enough that electricity uses one fixed number, the tightest of the three, and
   documents it as such rather than as a genuinely unstable range. The one exception is the
   member-access shape (with no method call in it), where the three contexts disagree by more
-  (610-613) *and* the failure itself is Circuitry's own bare, uncaught `RecursionError` rather
-  than a caught `CelEvaluationError` — confirmed directly: `cof check` on the same file fails
-  identically, so the document never runs at all, and the visible text has neither the usual
-  `"CEL evaluation failed for ..."` wording nor the failing effect's own path, just Python's own
-  exception text, which itself varies with which further recursion the exception's own
-  formatting triggers while escaping. `MAX_ACCESSOR_NESTING_DEPTH` (610) is the tightest of the
+  (610-613) *and* the failure itself was Circuitry's own bare, uncaught `RecursionError` rather
+  than a caught `CelEvaluationError` — confirmed directly: `cof check` on the same file failed
+  identically, so the document never ran at all. Before issue #629, the visible text had neither
+  the usual `"CEL evaluation failed for ..."` wording nor the failing effect's own path, just
+  Python's own exception text, which itself varied with which further recursion the exception's
+  own formatting triggered while escaping; `core/cel_eval.py::_compile` now catches this one
+  `RecursionError` and raises the same one line every other CEL check error uses, framed with the
+  failing effect's own path (`"<location>: expression is nested too deeply"`).
+  `MAX_ACCESSOR_NESTING_DEPTH` (610) is the tightest of the
   three contexts, chosen because that range is real variation, not measurement noise — confirmed
   unchanged when re-measured against a chain that resolves to real data at every level rather
   than an absent/empty one, since the failing mechanism (below) runs before any value is ever
@@ -1754,8 +1770,11 @@ regardless of which underlying crate is used:
   electricity-cel matches the *phase* as well as the boundary for the plain member-access shape:
   a chain with no method call past `MAX_ACCESSOR_NESTING_DEPTH` is rejected at compile time
   (`validate_syntax`, called from `electricity-compiler`'s own document-compile pass), with the
-  bare `"maximum recursion depth exceeded"` text and no effect-path framing — matching the
-  simpler of Circuitry's own two forms, from a top-level `if`. A document using any of the other
+  same one line and the same effect-path framing as cof's own (above) now that both catch it
+  cleanly (issue #629; before it, electricity's own text was the bare `"maximum recursion depth
+  exceeded"` with no effect-path framing at all, and cof's own escaped uncaught) — the depth each
+  engine gives up at still differs (610 here, Python's own recursion limit for cof), only the text
+  naming it does not. A document using any of the other
   five shapes this deep (including a method-call chain, despite failing by the third mechanism
   above) still compiles and starts running in Circuitry, only failing once the effect actually
   evaluates (a runtime `CelEvaluationError`, which `on_error:` can catch) — so those five are
@@ -1783,7 +1802,12 @@ regardless of which underlying crate is used:
   hard-coded internal recursion guard (`max_recursion_depth`, 96) for bracket-type grammar rules,
   which rejects *gracefully* from 96 through at least 50,000 levels, never a crash — so bracket
   nesting in this crate never risks a real stack overflow at all, independent of either pre-scan
-  cap; `0+1+1+...`/`state[0][0]...` chains overflow the same stack, in both debug and `--release`,
+  cap. This guard trips on a shape neither pre-scan cap measures — a long run of grouping parens
+  or calls around a short accessor, say — well before either would reject it; `validate_syntax`
+  and the shared `compile()` helper both recognize its own "Recursion limit of N exceeded"
+  message and reword it the same clean, one-line way as the accessor cap above (issue #629),
+  never the raw parser dump or the whole (deeply nested) expression quoted back.
+  `0+1+1+...`/`state[0][0]...` chains overflow the same stack, in both debug and `--release`,
   between 1,620 and 1,640 terms — a wide margin over `MAX_CHAIN_NESTING_DEPTH` (241) and over
   `MAX_SAFETY_CHAIN_DEPTH` (1,000) alike. Chained unary `!`/`-` and a long `&&`/`||` chain cost
   nothing on electricity's own side, because `cel`'s own grammar collects a run of either into one
@@ -2759,10 +2783,11 @@ the ground truth; normalization only narrows what's compared):
 - durations (`elapsed_s`/`eta_s`/wall-clock totals) — compared for presence and plausibility
   bounds, not exact value;
 - run ids (`run_id`, UUID v4 fields) — compared for well-formedness, not exact value;
-- third-party-library error text (CEL evaluation errors, YAML/JSON parse errors, JSON Schema
-  messages) — compared for "failed in the same place, with a non-empty message," per the
-  Decisions above — never byte-for-byte; Circuitry's **own** error text (everything cited
-  verbatim in runtime-semantics §6.2) is compared byte-for-byte, with **no** normalization;
+- third-party-library error text (YAML/JSON parse errors, JSON Schema messages) — compared for
+  "failed in the same place, with a non-empty message," per the Decisions above — never
+  byte-for-byte; Circuitry's **own** error text (everything cited verbatim in runtime-semantics
+  §6.2, and, since issue #629, every CEL evaluation error §7.2's own table maps) is compared
+  byte-for-byte, with **no** normalization;
 - the `{path}` segment inside a profile's schema-failure message (§6.11) — compared
   structurally (both sides name a path to the same physical file), not byte-for-byte, since
   electricity's path is the operator-given one rather than the reference's own discovered name.
@@ -2850,8 +2875,11 @@ divergence.
 | — | **A write failure immediately after a successful connect** (a TCP `RST` between `connect()` succeeding and the request actually being written): `urllib.request.AbstractHTTPHandler.do_open` wraps `h.request(...)` (connect *and* send) in one `except OSError: raise URLError`, but `h.getresponse()` (waiting for the reply) is outside that wrap — the reference's own code draws this line at "connect-and-send" versus "wait for reply," not at "connect" versus everything after. `hyper::client::conn::http1`'s own `send_request()` future spans *both* writing the request and reading the response head in one step, with no API seam at that exact boundary. | **Classify the whole post-connect `send_request()` failure as the *unwrapped* "waiting for the status line" shape** (`SendError::Timeout`/`RemoteDisconnected`), not the wrapped `URLError` text — the dominant real-world case (the connection drops while waiting for a reply) is classified correctly; only a write failing in the narrow window right after a successful connect, before any byte of the request is even on the wire, would diverge from the reference's own wrapped text. Both shapes still carry `ErrorCause::NoReply` (retryable) either way, so a run's own retry behavior never diverges, only the failure text would, in that one narrow window. | No — accepted; a race window too narrow to matter outside pathological test setups. |
 | — | **A connection reset (`RST`) versus a graceful close (`FIN`) while waiting for a reply**: whether a peer's kernel still has unread bytes sitting in its own receive buffer when it closes is a real timing race on any TCP stack, Circuitry's own `urlopen()` included — a `FIN` surfaces in CPython as `http.client.RemoteDisconnected` (this lane's own pinned text), an `RST` as a raw `ConnectionResetError` with the OS's own errno text, and *which* happens for the exact same server-side code path isn't deterministic. | **Fold both into [`electricity_tools::http_client::SendError::RemoteDisconnected`]** rather than exposing the OS-level reset text separately — both map to `ErrorCause::NoReply` in Circuitry's own `_classify_cause_chain` regardless (`ConnectionError`'s whole class is retryable), so the retry behavior is identical either way; only the literal failure text can differ from a real `cof run` hitting the `RST` side of the same race. | No — accepted; the reference itself isn't deterministic here either. |
 | — | **Credentials in config.json**: the reference reads the `cyberdiner` adapter's token (§9.4) from config only (no env-var form exists for it at all), the `surrealdb` runtime plugin's token/user/password (§10.2) from config as a fallback after the matching env var, and an `mcp` server's `headers`/`env` (§8.1) from config by design. | **Settled 2026-10-06**: follow the reference exactly for all three — config credentials are redacted in state and config.json is already operator-chosen/trusted, so the real rule is "provider API keys from env only; every other service credential from wherever `cof` reads it; no credential on argv or in state" (§1, §14). | No — settled; listed here as the record of the decision. |
-| — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Not applicable to electricity** (issue #727): electricity has no `--resume <run-id>`/`--resume last` of its own at all (the row below), so this check — which only ever guards a bare run-id resume with no single state file of its own — never has anything to apply to. | No — see the scope row below. |
-| — | **electricity's own `--resume` is `--state <file>` only** (issue #727): `cof run --resume last` (the `--last` stash, `last-run.json`) and `cof run --resume <run-id>` (a `runtime.persistence` backend lookup) are both out of scope — `runtime.persistence` stays refused on electricity (§13's own persistence row), and electricity's CLI keeps no `--last` stash of its own either (issue #760 tracks adding one). `--resume` given without `--state <file>` is refused the same way cof's own `_resolve_resume_state` refuses it — before anything runs, writing no state, exit 1, naming `--state <file>` as the only form electricity accepts — rather than attempting a lookup it can't perform. | **Accept, documented** — a client on the state-file path sees full parity; a client relying on `--resume last`/a run-id needs `cof run` until `runtime.persistence`/a `--last` stash (#760) are ported. | No — `--state`'s own resume path is issue #727's whole scope. |
+| — | **`--resume <run-id>` input re-pass rule**: every key the loaded state's `input` namespace has must be re-supplied via `-e`, not just one. | **Not applicable to electricity** (issues #727/#760): electricity has no `--resume <run-id>` of its own at all (the row below), so this check — which only ever guards a bare run-id resume with no single state file of its own — never has anything to apply to; `--state <file>` and `--resume last` both already carry their own resolved `input.*`, same as the reference. | No — see the scope row below. |
+| — | **electricity's own `--resume <run-id>` stays unsupported** (issue #727, narrowed by #760): `runtime.persistence` stays refused on electricity (§13's own persistence row), so a bare run-id has no backend to look itself up in. `--state <file>` and `--resume last` (issue #760: the same `--last` stash, `last-run.json`, either engine writes and reads, with the same checks and messages — no previous run, an unreadable stash, a different orchestration, no `--out`, a gone `--out` file) are both fully supported, matching the reference. `--resume <run-id>` given, with neither `--state` nor `last`, is refused the same way cof's own `_resolve_resume_state` refuses it — before anything runs, writing no state, exit 1 — naming `--state <file>`/`--resume last` as the forms electricity accepts, rather than attempting a lookup it can't perform. | **Accept, documented** — a client on the state-file or `--last`-stash path sees full parity; a client relying on a bare run-id still needs `cof run` until `runtime.persistence` is ported. | No — `runtime.persistence` support is a separate, larger piece of work. |
+| — | **A pre-run `--resume last` refusal's own framing on stdout** (issue #727, widened by #760): the reference raises each of these — no previous run, an unreadable stash, a different orchestration, no `--out`, a gone `--out` file, the document-hash mismatch, a bare run-id — as a bare `typer.BadParameter`, caught by `run_cmd` itself and printed as plain `Error: <message>` text via `console.print`, unconditionally — never the `{"ok": false, ...}` JSON payload a run failure's own non-TTY stdout contract uses, even when stdout is piped. electricity reports the identical message text through the ordinary `RunResult`/`print_stdout_contract` path instead (the document-hash check runs inside the same function `run()` itself does, unlike the reference's own CLI-layer check — [`electricity::run::RunResult::resume_refused`]'s own doc comment), so it always wraps it in that JSON payload. Plain `--last`'s own refusals (mutual exclusion with `--resume`, no stash at all, an unreadable stash, a redacted secret, or a stashed setting electricity cannot replay — the row below) are a separate code path entirely and print the identical plain `Error:` text with no JSON wrapper, matching the reference exactly; this row is about `--resume last` only. | **Accept, documented** — the message text and exit code match exactly; only the surrounding frame (plain line vs. JSON object) differs. | No — reusing the existing `RunResult` path keeps every `--resume last` refusal framed the same way, rather than adding a second, bespoke plain-text code path just for it. |
+| — | **A present-but-unreadable `--last` stash** (issue #760): `cof run`'s own `_load_last_run` has no graceful handling at all for a stash that exists but isn't valid JSON/a JSON object — an uncaught `JSONDecodeError`/`KeyError`, a Python traceback on stderr, exit 1. `--resume last` reads the same stash gracefully (one of issue #760's own listed refusals); plain `--last` does not. | **Report it cleanly instead**: a plain `Error: <message>` line on stdout, exit 1, the same text `read_last_run` already produces for `--resume last`'s own unreadable-stash refusal — never a reproduced traceback, which Rust has no equivalent of here anyway. | Yes — a real text divergence (no traceback), accepted since reproducing one serves no purpose. |
+| — | **`--last` refuses to replay a stashed setting electricity has no flag for** (issue #760): `cof run`'s own stash can carry `trust_document: false`/`remote_library_source: true` (a library-name or `run-library` run), a `service_profile`, or any of `--dry-run`/`--skip-preflight`/`--model`/`--profile-from-state`/`--scoring`/`--routing`/`--decompose`/`--split`/`--decompose-out` — none of which electricity's own CLI has a flag for, and silently dropping one would replay a materially different run. | **Refuse before anything runs** (`electricity_config::last_run::LastRun::unreplayable_setting`), naming the one setting found, in a fixed check order, rather than attempting a partial replay — exit 1, a plain `Error: the last run used <setting>, which electricity's --last cannot replay — run \`cof run --last\` instead.` line, written on stdout before config/orchestration resolution, the same position the redacted-secret refusal already checks at. The reference has no equivalent refusal: every one of these settings is a flag `cof run` itself understands, so its own `--last` replays all of them without issue. | No — a new refusal rather than a gap: `cof run --last` remains the only way to replay one of these stashes exactly. |
 | — | **`--resume`'s own `effective_settings.sources["out"]` label**: cof's own `"resume"` value (DESIGN.md §6.8, "writes back to the file it resumed from") versus the plain `"cli"` value an explicit `--out` gets. electricity's CLI does default `--out` to `--state`'s own file when `--resume` is given and `--out` isn't (§6.8's own rule, functionally implemented), but records that default the same way an explicit `--out` would (`"cli"`), not as a third, distinct `"resume"` string. | **Accept, documented** — the file actually written is correct; only the redacted `effective_settings.sources.out` string this one combination would read differs from cof's own. | No — narrow; revisit if a conformance case starts comparing `sources.out` text for this exact combination. |
 | — | **CLI usage-error exit code `2`**: not one of the four codes in an earlier draft's CLI-surface assumption. | **Settled 2026-10-06** (`0`/`1`/`130`/`143` plus `2` for usage errors, as `cof`/click; `129` for SIGHUP since Circuitry #357) — §6.9 now also maps which specific pre-run failures get `1` versus `2`, matching the reference's own case-by-case `BadParameter` handling rather than grouping every usage error under one code. | No — settled; listed here as the record of the decision. |
 | — | **`electricity-template`'s confirmed chevron divergences** (§3.3): a falsy root `{{.}}`, bytes iterated in a section, `int()` leniency, `\x1c`-`\x1f` counted as whitespace, and a same-key inverted section inside a list section — full description of each in the crate's own module docs (`electricity-template/src/lib.rs`), not duplicated here. | **Copy by output everywhere reachable; leave these as-is** — none is reachable by an ordinary orchestration template (state is always a dict; values come from YAML/JSON/tool output). | No — each judged unreachable in production documents; re-scan if a future document shape needs one. |
@@ -3160,8 +3188,8 @@ electricity against a frozen `cof` snapshot.
 - **`--resume last` and stashed `-e` values — a review claim not adopted.** A re-review of an
   earlier draft asserted `--resume last` replays the `-e` values stashed from the run it resumes.
   Reading the reference's own `_resolve_resume_state` shows the opposite for that specific flag:
-  its own docstring states plainly that, unlike the separate, out-of-scope bare `--last` flag
-  (which replays an entire prior invocation, not just its state), `--resume last` does **not**
+  its own docstring states plainly that, unlike the separate bare `--last` flag (issue #760,
+  which replays an entire prior invocation, not just its state), `--resume last` does **not**
   replay anything from the stash — the loaded `--out` file already carries its own resolved
   `input.*`, and `_resolve_resume_state`'s `replay_env_vars` return value is unconditionally empty
   for both the `--state <file>` and `--resume last` branches. Not adopted here, since it does not

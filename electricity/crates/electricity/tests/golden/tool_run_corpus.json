@@ -1102,7 +1102,45 @@
                 "expr": "value == 2",
                 "result": false
               },
-              "retries_used": 2
+              "retries_used": 2,
+              "attempts": [
+                {
+                  "created_at": "<TIMESTAMP>",
+                  "completed_at": "<TIMESTAMP>",
+                  "value": 1,
+                  "error": "expect failed: value == 2",
+                  "expect": {
+                    "mode": "cel",
+                    "expr": "value == 2",
+                    "result": false
+                  },
+                  "exit_code": null
+                },
+                {
+                  "created_at": "<TIMESTAMP>",
+                  "completed_at": "<TIMESTAMP>",
+                  "value": 1,
+                  "error": "expect failed: value == 2",
+                  "expect": {
+                    "mode": "cel",
+                    "expr": "value == 2",
+                    "result": false
+                  },
+                  "exit_code": null
+                },
+                {
+                  "created_at": "<TIMESTAMP>",
+                  "completed_at": "<TIMESTAMP>",
+                  "value": 1,
+                  "error": "expect failed: value == 2",
+                  "expect": {
+                    "mode": "cel",
+                    "expr": "value == 2",
+                    "result": false
+                  },
+                  "exit_code": null
+                }
+              ]
             }
           }
         }
@@ -1277,7 +1315,45 @@
                 "expr": "value == 2",
                 "result": false
               },
-              "retries_used": 2
+              "retries_used": 2,
+              "attempts": [
+                {
+                  "created_at": "<TIMESTAMP>",
+                  "completed_at": "<TIMESTAMP>",
+                  "value": 1,
+                  "error": "expect failed: value == 2",
+                  "expect": {
+                    "mode": "cel",
+                    "expr": "value == 2",
+                    "result": false
+                  },
+                  "exit_code": null
+                },
+                {
+                  "created_at": "<TIMESTAMP>",
+                  "completed_at": "<TIMESTAMP>",
+                  "value": 1,
+                  "error": "expect failed: value == 2",
+                  "expect": {
+                    "mode": "cel",
+                    "expr": "value == 2",
+                    "result": false
+                  },
+                  "exit_code": null
+                },
+                {
+                  "created_at": "<TIMESTAMP>",
+                  "completed_at": "<TIMESTAMP>",
+                  "value": 1,
+                  "error": "expect failed: value == 2",
+                  "expect": {
+                    "mode": "cel",
+                    "expr": "value == 2",
+                    "result": false
+                  },
+                  "exit_code": null
+                }
+              ]
             }
           }
         }
@@ -1699,7 +1775,7 @@
               "expect": {
                 "mode": "cel",
                 "expr": "value.missing == 1",
-                "error": "CEL evaluation failed for 'value.missing == 1': (\"no such member in mapping: 'missing'\", <class 'KeyError'>, None)",
+                "error": "CEL evaluation failed for 'value.missing == 1': no such key: 'missing'",
                 "result": false
               }
             }
@@ -1874,7 +1950,7 @@
               "expect": {
                 "mode": "cel",
                 "expr": "value.missing == 1",
-                "error": "CEL evaluation failed for 'value.missing == 1': (\"no such member in mapping: 'missing'\", <class 'KeyError'>, None)",
+                "error": "CEL evaluation failed for 'value.missing == 1': no such key: 'missing'",
                 "result": false
               }
             }
