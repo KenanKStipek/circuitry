@@ -1,0 +1,8 @@
+name: c669-api-key-env-missing-soft
+adapter: groq
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"
+    on_error: skip

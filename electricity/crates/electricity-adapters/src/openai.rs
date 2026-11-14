@@ -4,7 +4,9 @@
 //! the generic OpenAI-compatible shape doesn't cover (the `seed`
 //! placement, `max_completion_tokens`, and a looser `usage` coercion).
 
-use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url, stream_flag};
+use crate::config::{
+    cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url, stream_flag,
+};
 use crate::curl_text::{
     classify_curl_outcome_with_error_code, curl_error_code, curl_failure_message,
 };
@@ -343,6 +345,7 @@ pub struct OpenAiAdapter {
     pub base_url: Value,
     pub default_model: String,
     pub streams: bool,
+    pub api_key_env: String,
 }
 
 #[async_trait(?Send)]
@@ -363,12 +366,14 @@ impl Adapter for OpenAiAdapter {
         } else {
             model
         };
-        let api_key = std::env::var("OPENAI_API_KEY").unwrap_or_default();
+        let api_key = std::env::var(&self.api_key_env).unwrap_or_default();
         if api_key.is_empty() {
             return Err(AdapterError {
-                message: "OpenAI API key not found. Set OPENAI_API_KEY in the environment \
-                          (recommended: ~/.config/circuitry/.env). Run `cof doctor` to verify."
-                    .to_string(),
+                message: format!(
+                    "OpenAI API key not found. Set {} in the environment (recommended: \
+                     ~/.config/circuitry/.env). Run `cof doctor` to verify.",
+                    self.api_key_env
+                ),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
@@ -415,11 +420,11 @@ impl Adapter for OpenAiAdapter {
 
     async fn check(&self) -> CheckResult {
         let mut missing = Vec::new();
-        if std::env::var("OPENAI_API_KEY")
+        if std::env::var(&self.api_key_env)
             .unwrap_or_default()
             .is_empty()
         {
-            missing.push("env:OPENAI_API_KEY".to_string());
+            missing.push(format!("env:{}", self.api_key_env));
         }
         CheckResult {
             ok: missing.is_empty(),
@@ -440,6 +445,7 @@ pub fn build_openai(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adapter
         base_url: cfg_value_or(cfg, "base_url", "https://api.openai.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "gpt-4o-mini"),
         streams: stream_flag(cfg, name)?,
+        api_key_env: resolve_required_api_key_env(cfg, "OPENAI_API_KEY", name)?,
     }))
 }
 
@@ -631,6 +637,7 @@ mod tests {
             base_url: Value::Str(format!("http://{addr}")),
             default_model: "gpt-4o-mini".to_string(),
             streams: true,
+            api_key_env: "OPENAI_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();
@@ -690,6 +697,7 @@ mod tests {
             base_url: Value::Str(format!("http://{addr}")),
             default_model: "gpt-4o-mini".to_string(),
             streams: true,
+            api_key_env: "OPENAI_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();
@@ -726,6 +734,7 @@ mod tests {
             base_url: Value::Str(format!("http://{addr}")),
             default_model: "gpt-4o-mini".to_string(),
             streams: true,
+            api_key_env: "OPENAI_API_KEY".to_string(),
         };
         let path = electricity_bytecode::EffectPath::root();
         let token = electricity_value::CancellationToken::new();

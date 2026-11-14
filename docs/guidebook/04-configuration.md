@@ -206,7 +206,24 @@ An alias's target is not limited to `claude_code`/`pi` — it can be any adapter
 }
 ```
 
-`provider: desktop_a` and `provider: desktop_b` then each hit their own endpoint; neither needs a credential, since `lmstudio` itself doesn't. An alias of a provider that does need one (`groq`, say) reads that provider's own credential env var (`GROQ_API_KEY`), not a per-alias one. Every alias in the merged config is checked up front: `cof check` lists a broken one even if nothing uses it, and `cof run` fails the same way before the first effect, with an `Invalid adapter aliases:` block.
+`provider: desktop_a` and `provider: desktop_b` then each hit their own endpoint; neither needs a credential, since `lmstudio` itself doesn't. An alias of a provider that does need one (`groq`, say) reads that provider's own credential env var (`GROQ_API_KEY`) by default, but any keyed adapter — built-in or alias — can set its own `api_key_env` to read a different one instead:
+
+```json
+{
+  "runtime": {
+    "adapters": {
+      "groq_team": { "adapter": "groq", "api_key_env": "GROQ_TEAM_KEY" },
+      "gateway": {
+        "adapter": "vllm",
+        "base_url": "https://gateway.example/v1",
+        "api_key_env": "GATEWAY_TOKEN"
+      }
+    }
+  }
+}
+```
+
+So two accounts of the same provider, or a gateway with its own token, can live in one config without clashing. `api_key_env` must be an environment-variable name, or, for an adapter that doesn't always send a credential (a self-hosted OpenAI-compatible one), the empty string for an explicit "no key"; `openai`, `anthropic`, `replicate`, `watsonx` and `azure-openai` always send one, so `""` is rejected for them too. `api_key_env` is honoured only from config — never from an orchestration document's own `runtime:` block, even a trusted one; a document's attempt is ignored with a warning (see [the threat model](../threat-model.md)). Every alias in the merged config is checked up front: `cof check` lists a broken one even if nothing uses it, and `cof run` fails the same way before the first effect — under an `Invalid adapter aliases:` block when the malformed `api_key_env` is on the alias's own block, or `Invalid adapter api_key_env:` when it's on a built-in adapter's own block.
 
 The [Orchestration Reference](../orchestration-reference.md#coding-agent-cli-adapters-pi-and-claude_code) has the exact commands and every key, and [Adapter aliases](../orchestration-reference.md#adapter-aliases) the general rules.
 

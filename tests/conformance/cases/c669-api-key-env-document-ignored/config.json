@@ -1,0 +1,13 @@
+{
+  "default_adapter": "local",
+  "runtime": {
+    "adapters": {
+      "local": {
+        "adapter": "lmstudio",
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/a/v1",
+        "api_key_env": "HOST_CHOSEN_KEY",
+        "stream": false
+      }
+    }
+  }
+}

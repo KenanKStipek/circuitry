@@ -1,6 +1,6 @@
 {
   "spec_case": "C15",
-  "description": "A `json` tool's `expect: {mode: cel, expr: \"value.missing_key == 1\"}` against a dict that lacks `missing_key`: the CEL error counts as a failed expectation (`meta.error`: \"expect failed: ...\") and is retried like any other -- `retries: {max_attempts: 2}` and `on_error: continue` both apply. `meta.expect.error` is Circuitry's own one-line wording ('no such key: ...', issue #629), identical in both engines, never cel-python's or the `cel` crate's own text.",
+  "description": "A `json` tool's `expect: {mode: cel, expr: \"value.missing_key == 1\"}` against a dict that lacks `missing_key`: the CEL error counts as a failed expectation (`meta.error`: \"expect failed: ...\") and is retried like any other -- `retries: {max_attempts: 2}` and `on_error: continue` both apply. `meta.expect.error` is Circuitry's own one-line wording ('no such key: ...', issue #629), identical in both engines, never cel-python's or the `cel` crate's own text; each of `meta.attempts`' own `expect.error` repeats it.",
   "engines": ["python", "electricity"],
   "expect": "success"
 }

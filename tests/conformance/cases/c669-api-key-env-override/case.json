@@ -1,0 +1,13 @@
+{
+  "spec_case": "issue #669: a per-adapter api_key_env",
+  "description": "A built-in groq reads its default GROQ_API_KEY; an alias of it (groq_team) names a different variable via api_key_env, and a keyless lmstudio alias sends the named variable as a Bearer token too. Each request carries its own variable's value.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "fake_credentials": {
+    "GROQ_API_KEY": "circuitry-test-fake-groq-default-key",
+    "GROQ_TEAM_KEY": "circuitry-test-fake-groq-team-key",
+    "LOCAL_GATEWAY_TOKEN": "circuitry-test-fake-gateway-token"
+  }
+}

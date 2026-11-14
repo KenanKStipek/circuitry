@@ -219,17 +219,31 @@ def test_created_at_is_the_first_attempts_start_on_success_and_on_failure(
     whichever attempt finally decided the outcome — same rule as `tool`."""
     from circuitry.core import prompt as prompt_mod
 
-    success_timestamps = iter(["S0", "S1"])
-    monkeypatch.setattr(prompt_mod, "_now_iso", lambda: next(success_timestamps))
+    # Captures every call (each attempt's own meta.attempts timestamp calls
+    # `_now_iso` too, #668) rather than pinning an exact count: created_at
+    # is always the first call this pass makes, completed_at always the
+    # last, whatever else happens between them.
+    success_timestamps: list[str] = []
+
+    def _next_success_ts() -> str:
+        success_timestamps.append(f"S{len(success_timestamps)}")
+        return success_timestamps[-1]
+
+    monkeypatch.setattr(prompt_mod, "_now_iso", _next_success_ts)
     root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")
     adapter = ScriptedRetryAdapter(failures=[RetryInfo(retryable=True, status=429)])
     store = Store({})
     DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
-    assert store.get("prime.task.meta.created_at") == "S0"
-    assert store.get("prime.task.meta.completed_at") == "S1"
+    assert store.get("prime.task.meta.created_at") == success_timestamps[0]
+    assert store.get("prime.task.meta.completed_at") == success_timestamps[-1]
 
-    failure_timestamps = iter(["F0", "F1"])
-    monkeypatch.setattr(prompt_mod, "_now_iso", lambda: next(failure_timestamps))
+    failure_timestamps: list[str] = []
+
+    def _next_failure_ts() -> str:
+        failure_timestamps.append(f"F{len(failure_timestamps)}")
+        return failure_timestamps[-1]
+
+    monkeypatch.setattr(prompt_mod, "_now_iso", _next_failure_ts)
     root = compile_orchestration(orch=_retries_orch(max_attempts=2), root_name="prime")
     adapter = ScriptedRetryAdapter(
         failures=[
@@ -240,8 +254,8 @@ def test_created_at_is_the_first_attempts_start_on_success_and_on_failure(
     store = Store({})
     with pytest.raises(RuntimeError):
         DynamicRuntime(root, adapter=adapter, model="m").execute(store=store)
-    assert store.get("prime.task.meta.created_at") == "F0"
-    assert store.get("prime.task.meta.completed_at") == "F1"
+    assert store.get("prime.task.meta.created_at") == failure_timestamps[0]
+    assert store.get("prime.task.meta.completed_at") == failure_timestamps[-1]
 
 
 def test_an_unclassified_error_is_not_retried() -> None:

@@ -1,0 +1,30 @@
+- request:
+    method: POST
+    path: /groq/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-default"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+- request:
+    method: POST
+    path: /team/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-team"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
+- request:
+    method: POST
+    path: /gateway/v1/chat/completions
+  response:
+    status: 200
+    headers:
+      Content-Type: application/json
+    body: >-
+      {"choices": [{"message": {"content": "reply-gateway"}, "finish_reason": "stop"}],
+      "usage": {"prompt_tokens": 1, "completion_tokens": 1}}
