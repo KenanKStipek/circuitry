@@ -452,11 +452,22 @@ def _scenario(name: str) -> _Scenario:
         '            args: ["-c", "[ -f proceed ] || { touch started; exec sleep 60; }"]\n'
         '            allowed_commands: ["bash"]\n'
     )
+    # The generated plan's own `step` needs `allowed_commands: ["bash"]`
+    # (#772): a generated shell effect can never widen the ceiling
+    # itself, so `plan_it`'s own literal `grant` -- inside its `effects:`
+    # (run every planning iteration, alongside `propose_steps`, never
+    # independently skippable on resume since an unfinished reflector
+    # always reruns every one of its own iterations from scratch) --
+    # gives the document that allowance via its own literal
+    # allowed_commands, without adding anything the resumed run's own
+    # event stream could skip that the baseline's wouldn't.
     return _Scenario(
         orchestration=(
             'adapter: scripted\nmodel: test\n'
             "effects:\n  - type: reflector\n    name: plan_it\n"
-            '    prime_template: "Plan it."\n    effects:\n'
+            '    prime_template: "Plan it."\n    allow_tools: [shell]\n    effects:\n'
+            "      - type: tool\n        name: grant\n        provider: shell\n"
+            '        params: {command: bash, args: ["-c", "true"], allowed_commands: ["bash"]}\n'
             "      - type: prompt\n        name: propose_steps\n"
             '        template: "propose steps"\n'
         ),
