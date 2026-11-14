@@ -174,6 +174,14 @@ pub fn format_cached_suffix(cached_in: Option<u64>) -> Option<String> {
     Some(format!("({} cached)", format_tokens(n)))
 }
 
+/// A standalone `Cached` field's own value (issue #627/#780), for a
+/// key/value pane that shows it on its own line right under its
+/// Tokens field rather than as [`format_cached_suffix`]'s own
+/// parenthetical -- `None` for `None` or `Some(0)`, same rule.
+pub fn format_cached_value(cached_in: Option<u64>) -> Option<String> {
+    cached_in.filter(|&n| n > 0).map(format_tokens)
+}
+
 /// The arrows' own unit-less form (issue #715, `design/tui-design.md`
 /// §3.5's "Arrows carry no unit"): `212`, `1.2k`, `35.4M`, `1.2G` --
 /// the same scale and rounding as [`format_tokens`], just without
@@ -380,6 +388,20 @@ mod tests {
         assert_eq!(
             format_cached_suffix(Some(24_600_000)),
             Some("(24.6 Mt cached)".to_string())
+        );
+    }
+
+    #[test]
+    fn cached_value_reads_none_for_none_or_zero() {
+        assert_eq!(format_cached_value(None), None);
+        assert_eq!(format_cached_value(Some(0)), None);
+    }
+
+    #[test]
+    fn cached_value_formats_through_format_tokens() {
+        assert_eq!(
+            format_cached_value(Some(24_600_000)),
+            Some("24.6 Mt".to_string())
         );
     }
 

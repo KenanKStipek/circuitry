@@ -3065,8 +3065,12 @@ fn draw_totals_row(
         Style::default().fg(ctx.theme.fg_muted),
     ));
     if let Some(suffix) = oscilloscope_core::format::format_cached_suffix(header.tokens_cached_in) {
+        // `used` stops at the "Cost " label above, one space and the
+        // trailing dash (Cost's own unknown-value fallback, pushed
+        // below) still to come -- both counted here, or the suffix
+        // can fit a width that then clips that dash.
         let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-        if used + 1 + suffix.chars().count() <= area.width as usize {
+        if used + 1 + suffix.chars().count() < area.width as usize {
             spans.insert(
                 cached_splice_at,
                 Span::styled(
@@ -3729,49 +3733,18 @@ fn detail_key_width_for_step(step: &oscilloscope_core::screens::FocusedStep) -> 
     }
 }
 
-/// [`detail_field_lines`]'s own value column width for `step`'s own
-/// field key width -- the width a Tokens line's own cached-input
-/// parenthetical (issue #627/#780) is measured against, since
-/// `detail_field_lines` itself wraps a value that doesn't fit rather
-/// than cutting it, and the drop-first rule needs to decide *before*
-/// that happens, never after.
-fn detail_value_width_for_step(
-    step: &oscilloscope_core::screens::FocusedStep,
-    width: usize,
-) -> usize {
-    width
-        .saturating_sub(detail_key_width_for_step(step) + 2)
-        .max(1)
-}
-
-/// A Tokens line's own spans (issue #627/#780): `↑SENT ↓RECEIVED ·
-/// TOTAL`, with a muted `(CACHED cached)` parenthetical right after
-/// the sent figure wherever `cached_in` reports one -- dropped
-/// first, before anything wraps or cuts, once the whole line
-/// (parenthetical included) would not fit `value_width`; a figure's
-/// own digits are never cut.
+/// A Tokens line's own spans: `↑SENT ↓RECEIVED · TOTAL` -- cached
+/// input (issue #627/#780) is a separate `Cached` field right under
+/// this one, never folded into it, so this never needs to measure
+/// or drop anything of its own.
 fn tokens_line_spans(
     sent_text: &str,
     received_text: &str,
     total_text: &str,
-    cached_in: Option<u64>,
-    value_width: usize,
     default: Style,
     muted: Style,
 ) -> Vec<Span<'static>> {
-    let base_len = format!("↑{sent_text} ↓{received_text} · {total_text}")
-        .chars()
-        .count();
-    let cached_suffix = oscilloscope_core::format::format_cached_suffix(cached_in);
-    let show_cached = cached_suffix
-        .as_ref()
-        .is_some_and(|s| base_len + 1 + s.chars().count() <= value_width);
     let mut spans = vec![Span::styled(format!("↑{sent_text} "), default)];
-    if show_cached {
-        if let Some(suffix) = cached_suffix {
-            spans.push(Span::styled(format!("{suffix} "), muted));
-        }
-    }
     spans.push(Span::styled(format!("↓{received_text} "), default));
     spans.push(Span::styled("· ", muted));
     spans.push(Span::styled(
@@ -4120,6 +4093,7 @@ mod detail_renderer_tests {
             received: None,
             tokens: None,
             cost_usd: None,
+            tokens_cached_in: None,
             value_full: None,
             prompt_sent_full: None,
             params_rendered_full: None,
@@ -4301,6 +4275,45 @@ mod detail_renderer_tests {
         let text = terminal.backend().to_string();
         assert!(!text.contains("cached"), "{text}");
         assert!(text.contains("↑24.9M ↓125k"), "{text}");
+    }
+
+    /// At the narrowest width the cached parenthetical still fits,
+    /// Cost's own trailing dash -- pushed after the parenthetical is
+    /// decided, but not yet counted in the width check that decides
+    /// it -- must still have its own room, never clipped off the end
+    /// of the row.
+    #[test]
+    fn totals_row_never_clips_the_trailing_dash_when_cached_input_just_fits() {
+        let theme = Theme::for_name(ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let header = totals_row_header(Some(24_600_000));
+        let render_at = |width: u16| {
+            let mut terminal = Terminal::new(TestBackend::new(width, 1)).unwrap();
+            terminal
+                .draw(|f| {
+                    draw_totals_row(f, f.area(), &header, false, None, None, None, false, &ctx);
+                })
+                .unwrap();
+            terminal.backend().to_string()
+        };
+        let width = (40..=80u16)
+            .find(|&w| render_at(w).contains("cached"))
+            .expect("cached must fit somewhere in this range");
+        let text = render_at(width);
+        // `TestBackend`'s own `Display` (`buffer_view`) wraps each
+        // row in a literal `"..."`, so the real row content's own
+        // last character sits right before that closing quote.
+        assert!(
+            text.trim_end().trim_end_matches('"').ends_with('—'),
+            "the row's own trailing dash must never be clipped at the \
+             narrowest width cached still fits; got:\n{text:?}"
+        );
     }
 
     /// With nothing reported, the Totals row draws exactly as it did
@@ -4495,16 +4508,16 @@ fn tape_normal_detail_lines(
         let total_text = oscilloscope_core::format::format_tokens(total);
         fields.push((
             "Tokens",
-            tokens_line_spans(
-                &sent_text,
-                &received_text,
-                &total_text,
-                detail.tokens_cached_in,
-                detail_value_width_for_step(step, width),
-                default,
-                muted,
-            ),
+            tokens_line_spans(&sent_text, &received_text, &total_text, default, muted),
         ));
+        // Issue #627/#780: a separate line right under Tokens,
+        // rather than a parenthetical folded into it -- the Tape
+        // detail pane and its own full-screen reuse share this.
+        if let Some(cached_text) =
+            oscilloscope_core::format::format_cached_value(detail.tokens_cached_in)
+        {
+            fields.push(("Cached", vec![Span::styled(cached_text, muted)]));
+        }
     }
 
     if let Some((usual, count)) = screen.selected_usual {
@@ -10378,6 +10391,14 @@ fn focused_step_full_lines(
             spans.push(Span::styled(format!(" {pct}% of this run so far"), muted));
         }
         fields.push(("Tokens", spans));
+        // Issue #627/#780: a separate `Cached` line right under
+        // Tokens -- shared by the Signal's and the Store's own
+        // full-screen step view, same as the Tape detail pane's.
+        if let Some(cached_text) =
+            oscilloscope_core::format::format_cached_value(step.tokens_cached_in)
+        {
+            fields.push(("Cached", vec![Span::styled(cached_text, muted)]));
+        }
         if let Some((usual, count)) = step.usual_tokens {
             let dev = step
                 .tokens
@@ -16449,6 +16470,7 @@ mod golden_tests {
             received: None,
             tokens: None,
             cost_usd: None,
+            tokens_cached_in: None,
             value_full: None,
             prompt_sent_full: None,
             params_rendered_full: None,
@@ -16500,6 +16522,7 @@ mod golden_tests {
             received: None,
             tokens: None,
             cost_usd: None,
+            tokens_cached_in: None,
             value_full: None,
             prompt_sent_full: None,
             params_rendered_full: None,
@@ -16732,11 +16755,12 @@ mod golden_tests {
     }
 
     /// Issue #627/#780: a finished step whose node reported cached
-    /// input shows it right after the sent figure, as a muted
-    /// parenthetical -- the Tape detail pane and the Tape's own
-    /// full-screen step share this same renderer.
+    /// input shows it on its own `Cached` line right under Tokens,
+    /// at the real 120x30 detail-pane width (`design/tui-design.md`
+    /// §2.1's own 44 columns) -- the Tape detail pane and the Tape's
+    /// own full-screen step share this same renderer.
     #[test]
-    fn tape_normal_detail_lines_shows_cached_input_after_the_sent_figure() {
+    fn tape_normal_detail_lines_shows_a_cached_line_under_tokens() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
         let zone = test_zone();
         let ctx = DrawCtx {
@@ -16754,22 +16778,24 @@ mod golden_tests {
         });
         let text = agent_block_lines_text(&tape_normal_detail_lines(
             &screen,
-            80,
+            44,
             40,
             None,
             "2026-01-01T00:01:54Z",
             false,
             &ctx,
         ));
-        assert!(text.contains("↑24.9M (24.6 Mt cached) ↓125k"), "{text}");
+        assert!(text.contains("↑24.9M ↓125k"), "{text}");
+        assert!(!text.contains("cached)"), "{text}");
+        assert!(
+            text.contains("Cached") && text.contains("24.6 Mt"),
+            "{text}"
+        );
     }
 
-    /// The same cached-input figure as above, but at a width too
-    /// narrow for the whole line -- the parenthetical drops first,
-    /// and the sent/received figures keep every one of their own
-    /// digits (issue #627/#780's drop-first rule).
+    /// With no cached input reported at all, no `Cached` line draws.
     #[test]
-    fn tape_normal_detail_lines_drops_cached_input_at_a_narrow_width() {
+    fn tape_normal_detail_lines_has_no_cached_line_with_no_cached_input() {
         let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
         let zone = test_zone();
         let ctx = DrawCtx {
@@ -16782,20 +16808,19 @@ mod golden_tests {
         screen.selected_detail = Some(oscilloscope_core::screens::TapeSelectedDetail {
             tokens_sent: Some(24_900_000),
             tokens_received: Some(125_000),
-            tokens_cached_in: Some(24_600_000),
+            tokens_cached_in: None,
             ..Default::default()
         });
         let text = agent_block_lines_text(&tape_normal_detail_lines(
             &screen,
-            34,
+            44,
             40,
             None,
             "2026-01-01T00:01:54Z",
             false,
             &ctx,
         ));
-        assert!(!text.contains("cached"), "{text}");
-        assert!(text.contains("↑24.9M ↓125k"), "{text}");
+        assert!(!text.contains("Cached"), "{text}");
     }
 
     /// Issue #716: a repeated word drops from the Type field --
@@ -17515,6 +17540,7 @@ mod golden_tests {
             received: None,
             tokens: Some(33),
             cost_usd: None,
+            tokens_cached_in: None,
             value_full: None,
             prompt_sent_full: None,
             params_rendered_full: None,
@@ -17711,6 +17737,61 @@ mod golden_tests {
         assert!(text.contains(&format!("{start} → {end}")), "{text}");
     }
 
+    /// Issue #627/#780: the full-screen step view, shared by the
+    /// Signal's and the Store's own (`focused_step_full_lines`'s
+    /// own doc comment), shows a finished step's own cached input
+    /// on its own `Cached` line right under Tokens.
+    #[test]
+    fn focused_step_full_lines_shows_a_cached_line_under_tokens() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut step = tool_focused_step(false);
+        step.tokens = Some(25_025_000);
+        step.tokens_cached_in = Some(24_600_000);
+        let text = agent_block_lines_text(&focused_step_full_lines(
+            &step,
+            None,
+            "2026-01-01T00:02:00Z",
+            false,
+            80,
+            &ctx,
+        ));
+        assert!(
+            text.contains("Cached") && text.contains("24.6 Mt"),
+            "{text}"
+        );
+    }
+
+    /// With no cached input reported at all, no `Cached` line draws.
+    #[test]
+    fn focused_step_full_lines_has_no_cached_line_with_no_cached_input() {
+        let theme = crate::theme::Theme::for_name(crate::theme::ThemeName::CatppuccinMocha);
+        let zone = test_zone();
+        let ctx = DrawCtx {
+            theme: &theme,
+            theme_banner: None,
+            zone: &zone,
+            no_animation: true,
+        };
+        let mut step = tool_focused_step(false);
+        step.tokens = Some(25_025_000);
+        let text = agent_block_lines_text(&focused_step_full_lines(
+            &step,
+            None,
+            "2026-01-01T00:02:00Z",
+            false,
+            80,
+            &ctx,
+        ));
+        assert!(!text.contains("Cached"), "{text}");
+    }
+
     /// Issue #704 rule 4's own Loop section, against the recorded
     /// each_tree_loop_concurrency fixture: a finished loop's own
     /// full-screen step lists every pass, in plan order.
@@ -17845,6 +17926,7 @@ mod golden_tests {
             received: None,
             tokens: None,
             cost_usd: None,
+            tokens_cached_in: None,
             value_full: None,
             prompt_sent_full: None,
             params_rendered_full: None,

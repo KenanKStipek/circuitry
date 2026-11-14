@@ -611,6 +611,11 @@ pub struct FocusedStep {
     /// [`crate::flow::FlowRow::tokens`] uses.
     pub tokens: Option<u64>,
     pub cost_usd: Option<f64>,
+    /// Issue #627/#780's cached input, already part of `Self::
+    /// tokens` -- `crate::model::node_cached_tokens`'s own `None`,
+    /// never a false `0`, for whichever a finished node didn't
+    /// report.
+    pub tokens_cached_in: Option<u64>,
     /// A step's own usual busy time from history (issue #649's
     /// now-pane bar, issue #716's tool detail: `1m54s · usual
     /// 30.2s`) -- `None` below the 3-run threshold.
@@ -815,6 +820,7 @@ pub(crate) fn build_focused_step(
     let cost_usd = node
         .and_then(|n| n.meta.get("cost_usd"))
         .and_then(Value::as_f64);
+    let tokens_cached_in = node.and_then(|n| crate::model::node_cached_tokens(&n.meta).0);
     let attempts = node.map(|n| attempts_for(&n.meta)).unwrap_or_default();
     let retries_used = node
         .and_then(|n| n.meta.get("retries_used"))
@@ -838,7 +844,13 @@ pub(crate) fn build_focused_step(
     let history_usual = history_key
         .as_ref()
         .and_then(|key| header.history_step_usual.get(key));
-    let usual_tokens = history_usual.and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+    // A step with no token field at all (a tool, a decision, a bare
+    // loop container) still gets a `StepStats` entry whose own `tokens_
+    // p50` is a literal `0`, never a real usual to show (`tape_row_
+    // usual_tokens`'s own rule, shared here).
+    let usual_tokens = history_usual
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)))
+        .filter(|(t, _)| *t > 0);
     // Issue #716: a running tool's own elapsed time against its
     // usual busy time (`1m54s · usual 30.2s`) -- the same history
     // `usual_tokens` above already reads, now for a step's own
@@ -883,6 +895,7 @@ pub(crate) fn build_focused_step(
         share_pct,
         tokens,
         cost_usd,
+        tokens_cached_in,
         attempts,
         retries_used,
         meta_extra,
@@ -3430,10 +3443,14 @@ pub fn build_tape(
         )
     });
 
+    // Same rule as `tape_row_usual_tokens`/`usual_tokens` above: a
+    // tool/decision/container's own literal `0` is never a real
+    // usual to show.
     let selected_usual = selected_path
         .and_then(|p| crate::history::display_key(p, plan))
         .and_then(|key| header.history_step_usual.get(&key))
-        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)));
+        .and_then(|s| s.tokens_p50.map(|t| (t, s.count)))
+        .filter(|(t, _)| *t > 0);
 
     // Issue #702's rule 4 ("a share never exceeds 100%"): a running
     // agent's own live tokens (unlike a running prompt's, always

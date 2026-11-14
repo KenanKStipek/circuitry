@@ -1298,6 +1298,16 @@ pub struct RunModel {
     /// in again -- `recorded_state_intervals` for the state-sourced
     /// half, `id` uniqueness for the events-sourced half.
     step_intervals: Vec<StepInterval>,
+    /// `step_intervals` indices, by path, still waiting for
+    /// `push_state_interval`'s own backfill (issue #780): pushed
+    /// alongside an events-sourced interval with no tokens of its
+    /// own, popped once filled -- so the backfill is an O(1) lookup
+    /// rather than a linear scan of the whole log on every finished
+    /// node, every redraw (issues #649/#650's own per-frame bound).
+    /// Never holds a state-sourced interval's own index, since that
+    /// kind is never backfilled (it already carries its tokens from
+    /// the moment it's pushed).
+    unfilled_token_intervals: BTreeMap<String, Vec<usize>>,
     /// `(path, created_at)` pairs already turned into a
     /// `step_intervals` entry by `observe`'s own state-based capture
     /// -- the dedup key for that half of the log.
@@ -1459,6 +1469,7 @@ impl RunModel {
             start_ts_by_id: BTreeMap::new(),
             paths_with_id_events: BTreeSet::new(),
             step_intervals: Vec::new(),
+            unfilled_token_intervals: BTreeMap::new(),
             recorded_state_intervals: BTreeSet::new(),
             overflowed_minute_counts: BTreeMap::new(),
             overflowed_total_passes: 0,
@@ -1891,7 +1902,13 @@ impl RunModel {
             .map(|ms| ms as f64 / 1000.0)
     }
 
-    /// Pushes an events-sourced interval (an id-paired `start`/`end`).
+    /// Pushes an events-sourced interval (an id-paired `start`/`end`),
+    /// or a state-sourced one that already carries its own tokens.
+    /// An events-sourced interval has no tokens yet (`tokens_sent`
+    /// `None`) -- its own index is recorded in `unfilled_token_
+    /// intervals` so `push_state_interval`'s own backfill (issue
+    /// #780) can find it in one lookup, never a scan of the whole
+    /// log.
     fn push_step_interval(&mut self, interval: StepInterval) {
         if self.step_intervals.len() >= MAX_STEP_INTERVALS {
             self.overflowed_total_passes += 1;
@@ -1899,7 +1916,16 @@ impl RunModel {
             self.bump_overflowed_minute(&interval.end_ts);
             return;
         }
+        let unfilled = interval.tokens_sent.is_none();
+        let path = interval.path.clone();
+        let index = self.step_intervals.len();
         self.step_intervals.push(interval);
+        if unfilled {
+            self.unfilled_token_intervals
+                .entry(path)
+                .or_default()
+                .push(index);
+        }
     }
 
     /// Counts one dropped interval's own start or end event into its
@@ -1930,17 +1956,18 @@ impl RunModel {
         if self.paths_with_id_events.contains(path) {
             // The matching `end` event already pushed this pass's own
             // `StepInterval` with its timing and no tokens (`None`);
-            // found by searching from the end, since an unnamed path
+            // `unfilled_token_intervals` names it directly, rather
+            // than a scan, popped from the end since an unnamed path
             // reused by concurrent instances can have more than one
             // entry still waiting for its own figures, and the most
             // recently started one is the most likely match for the
             // instance that just finished in state.
-            if let Some(interval) = self
-                .step_intervals
-                .iter_mut()
-                .rev()
-                .find(|interval| interval.path == path && interval.tokens_sent.is_none())
+            if let Some(index) = self
+                .unfilled_token_intervals
+                .get_mut(path)
+                .and_then(Vec::pop)
             {
+                let interval = &mut self.step_intervals[index];
                 interval.tokens_sent = Some(tokens_sent);
                 interval.tokens_received = Some(tokens_received);
                 interval.cost_usd = cost_usd;
@@ -2197,6 +2224,35 @@ impl RunModel {
                 .or_insert((0, 0));
             p.0 += remainder_sent;
             p.1 += remainder_received;
+        }
+    }
+
+    /// Backfills every finished node's own tokens and cost (issue
+    /// #780) straight from `state`, without `observe`'s own row-
+    /// building work -- for every caller that writes history
+    /// without ever running the TUI's own redraw loop (`--log`,
+    /// `--glance` off a terminal, plain `osi watch`), none of which
+    /// ever calls `observe` with state at all, and so would
+    /// otherwise write every step with no tokens of its own. Called
+    /// right before `HistoryHandle::write`; a no-op with no final
+    /// state at all (an abort with nothing to write).
+    pub fn backfill_from_final_state(&mut self, state: Option<&Value>, plan: &PlanTree) {
+        let Some(state) = state else {
+            return;
+        };
+        let flat = flatten_state(state);
+        for (path, node) in &flat {
+            if plan.is_report_path(path)
+                || (path != "prime" && self.is_report_event_path(path, plan, &node.value))
+            {
+                continue;
+            }
+            if node.is_running() {
+                continue;
+            }
+            if let (Some(created_at), Some(completed_at)) = (&node.created_at, &node.completed_at) {
+                self.push_state_interval(path, created_at, completed_at, node);
+            }
         }
     }
 
@@ -4608,6 +4664,79 @@ mod tests {
         assert_eq!(intervals[0].tokens_sent, Some(348));
         assert_eq!(intervals[0].tokens_received, Some(41));
         assert_eq!(intervals[0].cost_usd, Some(0.012));
+    }
+
+    /// Issue #780: two concurrently open passes at the same unnamed
+    /// path (`unfilled_token_intervals`'s own doc comment: "an
+    /// unnamed path reused by concurrent instances") each keep
+    /// their own id-paired interval waiting for tokens -- the
+    /// backfill matches by path alone, most recently started first
+    /// (the same best-effort order a reverse scan used before
+    /// `unfilled_token_intervals` replaced it with a direct lookup),
+    /// and each state observation fills exactly one of the two.
+    #[test]
+    fn step_intervals_backfill_matches_the_most_recently_started_open_pass_first() {
+        let mut model = RunModel::new();
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&Event::Start {
+            ts: "2026-01-01T00:00:01Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+        });
+        model.observe_event(&Event::End {
+            ts: "2026-01-01T00:00:05Z".to_string(),
+            id: Some(1),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5000),
+            error: None,
+        });
+        model.observe_event(&Event::End {
+            ts: "2026-01-01T00:00:06Z".to_string(),
+            id: Some(2),
+            path: "prime.u_nap".to_string(),
+            ok: true,
+            ms: Some(5000),
+            error: None,
+        });
+        let intervals = model.step_intervals();
+        assert_eq!(intervals.len(), 2);
+        assert!(intervals.iter().all(|i| i.tokens_sent.is_none()));
+
+        let first_finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "u_nap": {"value": "n0", "meta": {
+                "created_at": "2026-01-01T00:00:00Z",
+                "completed_at": "2026-01-01T00:00:05Z",
+                "error": null,
+                "tokens_sent": 10,
+                "tokens_received": 1
+            }}
+        }});
+        model.observe(&first_finished, &PlanTree::empty(), ProcessState::Running);
+        let intervals = model.step_intervals();
+        // Matched the most recently started open pass (id 2's own
+        // interval, started last), not id 1's own, same as the
+        // reverse scan this replaced would have.
+        assert_eq!(intervals[0].tokens_sent, None);
+        assert_eq!(intervals[1].tokens_sent, Some(10));
+
+        let second_finished = json!({"prime": {"value": null, "meta": {"completed_at": null},
+            "u_nap": {"value": "n1", "meta": {
+                "created_at": "2026-01-01T00:00:01Z",
+                "completed_at": "2026-01-01T00:00:06Z",
+                "error": null,
+                "tokens_sent": 20,
+                "tokens_received": 2
+            }}
+        }});
+        model.observe(&second_finished, &PlanTree::empty(), ProcessState::Running);
+        let intervals = model.step_intervals();
+        assert_eq!(intervals[0].tokens_sent, Some(20));
+        assert_eq!(intervals[1].tokens_sent, Some(10));
     }
 
     /// Without `--events`, an unnamed loop's finished pass is only

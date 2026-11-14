@@ -3188,10 +3188,19 @@ fn history_across_four_runs_shows_usual_tokens_and_a_deviation() {
 
     send_bytes(&mut master, b"t");
     {
+        // Checked on the `ask` row itself, not merely anywhere on
+        // screen: the Totals row already shows its own `+20%` (180
+        // actual against a 150-token usual-so-far) before `t` is
+        // even pressed, so a bare `screen.contains("+20%")` would
+        // pass whether or not the `t` view's own per-step deviation
+        // ever drew at all.
         let screen = wait_for_screen_text(&captured_buf, "+20%", Duration::from_secs(10));
+        let ask_row_has_deviation = screen
+            .lines()
+            .any(|line| line.contains("ask") && line.contains("+20%"));
         assert!(
-            screen.contains("+20%"),
-            "expected the finished `ask` row to show a real +20% deviation from its own usual, not —; got:\n{screen}"
+            ask_row_has_deviation,
+            "expected the finished `ask` row itself to show a real +20% deviation from its own usual, not —; got:\n{screen}"
         );
     }
 
