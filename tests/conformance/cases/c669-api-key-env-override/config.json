@@ -1,0 +1,23 @@
+{
+  "default_adapter": "groq",
+  "runtime": {
+    "adapters": {
+      "groq": {
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/groq/v1",
+        "stream": false
+      },
+      "groq_team": {
+        "adapter": "groq",
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/team/v1",
+        "api_key_env": "GROQ_TEAM_KEY",
+        "stream": false
+      },
+      "gateway": {
+        "adapter": "lmstudio",
+        "base_url": "http://127.0.0.1:__MOCK_HTTP_PORT__/gateway/v1",
+        "api_key_env": "LOCAL_GATEWAY_TOKEN",
+        "stream": false
+      }
+    }
+  }
+}

@@ -62,7 +62,6 @@ use crate::params::{
     ParamsCtx, RenderParamsError, RenderParamsJsonError, deep_merge_params, render_params,
     render_params_json,
 };
-#[cfg(test)]
 use crate::store::Slot;
 use crate::{CancellationToken, Frame, RunContext, RunObserver, VmError};
 use electricity_bytecode::{ExpectCondition, OnError, Op, ParamNode, ToolOp};
@@ -647,6 +646,66 @@ fn set_leaf(store: &crate::Store, node: &crate::NodeRef, key: &str, value: Value
     store.set_leaf(node, Value::Str(key.to_string()), value);
 }
 
+/// *node*'s own *key*, materialized (`Value::None` when absent) --
+/// `core/tool.py`'s own plain `meta.get(key)` reads, for building a
+/// `meta.attempts` entry -- `exec::use_::read_key`'s own counterpart.
+fn read_key(store: &crate::Store, node: &crate::NodeRef, key: &str) -> Value {
+    let slot = node.borrow().get(&Value::Str(key.to_string())).cloned();
+    match slot {
+        None => Value::None,
+        Some(Slot::Value(v)) => v,
+        Some(Slot::Node(child)) => store.snapshot(&child),
+    }
+}
+
+fn has_key(node: &crate::NodeRef, key: &str) -> bool {
+    node.borrow().contains_key(&Value::Str(key.to_string()))
+}
+
+/// One `meta.attempts` entry for a tool -- `core/tool.py::_attempt_entry`'s
+/// counterpart. `exit_code`/`status_code` are included only when this
+/// attempt's own `meta` carries them -- today, every tool sets
+/// `exit_code` (`None` for a non-process plugin) and only the
+/// HTTP-family plugins ever set `status_code`.
+fn attempt_entry(
+    store: &crate::Store,
+    meta_node: &crate::NodeRef,
+    created_at: Value,
+    completed_at: Value,
+    value: Value,
+    error: Option<String>,
+) -> Value {
+    let mut entry = Dict::new();
+    entry.insert(Value::from("created_at"), created_at);
+    entry.insert(Value::from("completed_at"), completed_at);
+    entry.insert(Value::from("value"), value);
+    entry.insert(
+        Value::from("error"),
+        error.map(Value::Str).unwrap_or(Value::None),
+    );
+    entry.insert(Value::from("expect"), read_key(store, meta_node, "expect"));
+    if has_key(meta_node, "exit_code") {
+        entry.insert(
+            Value::from("exit_code"),
+            read_key(store, meta_node, "exit_code"),
+        );
+    }
+    if has_key(meta_node, "status_code") {
+        entry.insert(
+            Value::from("status_code"),
+            read_key(store, meta_node, "status_code"),
+        );
+    }
+    Value::Dict(entry)
+}
+
+/// `core/tool.py::_write_attempts` -- `meta.attempts`, always written as
+/// `meta`'s last key -- same contract as `exec::use_::write_attempts`.
+fn write_attempts(store: &crate::Store, meta_node: &crate::NodeRef, attempts: &[Value]) {
+    pop_leaf(meta_node, "attempts");
+    set_leaf(store, meta_node, "attempts", Value::List(attempts.to_vec()));
+}
+
 /// Everything rendering a tool's `params`/`params_json`/top-level
 /// `prompt`/`model` (`core/tool.py::ToolRuntime.execute`'s own render
 /// block, up to and including `rendered = {**top_level, **params}`) can
@@ -991,6 +1050,10 @@ pub async fn execute_tool<R: ParamsCtx>(
     let meta_node = store
         .ensure_dict(&effect_node, Value::Str("meta".to_string()))
         .map_err(|err| VmError::tool(err.to_string()))?;
+    // Cleared here, once per pass, not per attempt -- a pass that ends
+    // up making only one attempt must not keep a reused node's earlier
+    // pass's meta.attempts around (#668).
+    pop_leaf(&meta_node, "attempts");
 
     // `store.fire_effect_start(self.defn.name, node)` -- before
     // `require_tool`, so a denial below leaves this call's own
@@ -1015,6 +1078,10 @@ pub async fn execute_tool<R: ParamsCtx>(
     // `command` secret twice.
     let mut dispatch_secrets = electricity_tools::secrets::SecretValues::new();
     let mut next_delay_ms = base_backoff_ms;
+    // Every attempt this pass makes, oldest first (#668) -- written to
+    // meta.attempts only once more than one attempt has run, exactly
+    // when meta.retries_used is also set.
+    let mut retry_attempts: Vec<Value> = Vec::new();
     // `core/tool.py`'s own `total_tokens_sent`/`total_tokens_received`
     // locals (issue #724): accumulated across every attempt of this
     // pass, written to `meta.tokens_sent_total`/`.tokens_received_total`
@@ -1045,8 +1112,9 @@ pub async fn execute_tool<R: ParamsCtx>(
         // The per-attempt `meta` reset, in Python's own order. `created_at`
         // is set only on this pass's first attempt (#421): the start of a
         // retried tool's final attempt is not when it started.
+        let attempt_started_at = now_iso();
         if attempt_index == 0 {
-            set_leaf(store, &meta_node, "created_at", now_iso());
+            set_leaf(store, &meta_node, "created_at", attempt_started_at.clone());
         }
         set_leaf(store, &meta_node, "completed_at", Value::None);
         set_leaf(
@@ -1124,6 +1192,12 @@ pub async fn execute_tool<R: ParamsCtx>(
         // `timeout_ms: {from: ...}` with no usable value is never
         // retried -- a retry reads the same state.
         let mut timeout_unresolved = false;
+        // This attempt's own `meta.attempts` entry value (#668): `None`
+        // unless dispatch actually reached a result -- the effect
+        // node's own `value` leaf isn't reset per attempt, so reading
+        // it back here on an early failure could show a reused node's
+        // earlier pass.
+        let mut entry_value = Value::None;
         // `core/tool.py`'s own `secret_unresolved` (issue #725): a
         // secret that failed to resolve, or a header that looks like a
         // reference but isn't the document's own literal one, is never
@@ -1617,6 +1691,7 @@ pub async fn execute_tool<R: ParamsCtx>(
                                             scrub_result(&dispatch_secrets, result)
                                         };
                                         let value_for_expect = result.value.clone();
+                                        entry_value = value_for_expect.clone();
                                         set_leaf(store, &effect_node, "value", result.value);
                                         match result.stdout {
                                             // `runtime.state.parsed_stdout: drop`
@@ -1954,7 +2029,8 @@ pub async fn execute_tool<R: ParamsCtx>(
             }
         }
 
-        set_leaf(store, &meta_node, "completed_at", now_iso());
+        let completed_at = now_iso();
+        set_leaf(store, &meta_node, "completed_at", completed_at.clone());
 
         if let Some(failure) = failure {
             // Issue #725: a raised failure echoing a secret (its own
@@ -1976,6 +2052,14 @@ pub async fn execute_tool<R: ParamsCtx>(
                 "error",
                 Value::Str(failure.message.clone()),
             );
+            retry_attempts.push(attempt_entry(
+                store,
+                &meta_node,
+                attempt_started_at.clone(),
+                completed_at.clone(),
+                entry_value.clone(),
+                Some(failure.message.clone()),
+            ));
             let is_last_attempt = attempt_index + 1 >= max_attempts;
             // `core/tool.py::ToolRuntime._is_retryable_failure` -- every
             // non-HTTP-family provider (every provider this crate can
@@ -2012,20 +2096,11 @@ pub async fn execute_tool<R: ParamsCtx>(
                     attempt_index,
                     base_backoff_ms,
                 );
+                // The finished attempts, readable (and on --live-state)
+                // before the next one starts (#668).
+                write_attempts(store, &meta_node, &retry_attempts);
+                observer.write();
                 continue;
-            }
-            // Set on failure too (#421), same as success below -- absent,
-            // not 0, when the first attempt is also the last.
-            if attempt_index > 0 {
-                set_leaf(
-                    store,
-                    &meta_node,
-                    "retries_used",
-                    Value::from(i64::from(attempt_index)),
-                );
-            }
-            if matches!(op.on_error, OnError::Skip | OnError::Continue) {
-                set_leaf(store, &effect_node, "value", Value::None);
             }
             // `core/tool.py`'s own exception-handler rewrite (`tool.py:
             // 1104-1111`): a raised failure (or a result that failed
@@ -2033,8 +2108,9 @@ pub async fn execute_tool<R: ParamsCtx>(
             // branch above, so the per-attempt reset at the top of this
             // loop already popped `tokens_sent_total`/`.received_total`
             // from `meta` -- carried forward from an earlier attempt that
-            // did report usage, they are written back here so the final
-            // failure still shows the pass's own total, same as cof.
+            // did report usage, they are written back here, before
+            // `retries_used`/`meta.attempts` below, so `attempts` stays
+            // the last key of `meta`, same order cof keeps.
             if let Some(sent) = total_tokens_sent {
                 set_leaf(store, &meta_node, "tokens_sent_total", Value::from(sent));
             }
@@ -2048,6 +2124,20 @@ pub async fn execute_tool<R: ParamsCtx>(
             }
             if total_tokens_sent.is_some() || total_tokens_received.is_some() {
                 observer.record_totals(&store.snapshot(&meta_node));
+            }
+            // Set on failure too (#421), same as success below -- absent,
+            // not 0, when the first attempt is also the last.
+            if attempt_index > 0 {
+                set_leaf(
+                    store,
+                    &meta_node,
+                    "retries_used",
+                    Value::from(i64::from(attempt_index)),
+                );
+                write_attempts(store, &meta_node, &retry_attempts);
+            }
+            if matches!(op.on_error, OnError::Skip | OnError::Continue) {
+                set_leaf(store, &effect_node, "value", Value::None);
             }
             observer.effect_complete(
                 &effect_path,
@@ -2067,6 +2157,14 @@ pub async fn execute_tool<R: ParamsCtx>(
             return Ok(());
         }
 
+        retry_attempts.push(attempt_entry(
+            store,
+            &meta_node,
+            attempt_started_at,
+            completed_at,
+            entry_value,
+            None,
+        ));
         if attempt_index > 0 {
             set_leaf(
                 store,
@@ -2097,6 +2195,12 @@ pub async fn execute_tool<R: ParamsCtx>(
         }
         if reported_tokens {
             observer.record_totals(&store.snapshot(&meta_node));
+        }
+        // `meta.attempts` is written last of all (#668), after
+        // `tokens_sent`/`tokens_received`/`cost_usd` above -- same order
+        // `core/tool.py`'s own success path keeps.
+        if attempt_index > 0 {
+            write_attempts(store, &meta_node, &retry_attempts);
         }
         observer.effect_complete(
             &effect_path,
@@ -4223,6 +4327,10 @@ mod tests {
         }
     }
 
+    /// Issue #668: the token totals an earlier, token-reporting attempt
+    /// left behind are restored before `retries_used`/`meta.attempts`
+    /// are written, not after -- `attempts` must stay the last key of
+    /// `meta` on this path too, same as on the success path.
     #[tokio::test]
     async fn a_raised_failure_after_an_earlier_successful_attempt_still_carries_its_tokens_total() {
         let mut tool = tool_op(IndexMap::new());
@@ -4278,6 +4386,7 @@ mod tests {
             meta.get(&Value::from("tokens_received_total")),
             Some(&Value::from(7))
         );
+        assert_eq!(meta.keys().last(), Some(&Value::from("attempts")));
     }
 
     #[tokio::test]
@@ -5230,5 +5339,339 @@ mod tests {
                 "cel: the result does not match params.schema: (root): 'not a number' is not of type 'number'"
             ))
         );
+    }
+
+    /// A test-only [`electricity_tools::ToolPlugin`] whose own `value`
+    /// grows by one `"x"` character each call (`core/tool.py`'s own
+    /// test suite's `fs` counter fake, in-process): a provider whose
+    /// result actually differs attempt to attempt, the way `meta.
+    /// attempts` (#668) needs to prove more than one entry ever gets
+    /// recorded. `exit_codes` lets a test drive a retry off `meta.
+    /// exit_code` instead of the tally itself -- `ok` always stays
+    /// `true` regardless, the same contract `shell`'s own `allow_nonzero`
+    /// gives a nonzero exit in `core/tool.py`.
+    struct CountingTool {
+        calls: std::cell::Cell<u32>,
+        exit_codes: Vec<i32>,
+    }
+
+    #[async_trait::async_trait(?Send)]
+    impl electricity_tools::ToolPlugin for CountingTool {
+        fn name(&self) -> &str {
+            "counting"
+        }
+
+        async fn execute(
+            &self,
+            _params: Value,
+            _call: &electricity_tools::ToolCall<'_>,
+        ) -> Result<electricity_tools::ToolResult, electricity_tools::ToolError> {
+            let call = self.calls.get() as usize;
+            self.calls.set(self.calls.get() + 1);
+            let mut result = electricity_tools::ToolResult::new(
+                Value::from("x".repeat(call + 1)),
+                Value::Dict(Dict::new()),
+            );
+            result.exit_code = self.exit_codes.get(call).copied();
+            Ok(result)
+        }
+
+        fn check(&self) -> electricity_tools::CheckResult {
+            electricity_tools::CheckResult {
+                ok: true,
+                missing: Vec::new(),
+                message: None,
+            }
+        }
+    }
+
+    fn counting_registry(exit_codes: Vec<i32>) -> ToolRegistry {
+        let mut registry = ToolRegistry::new();
+        registry.register(Box::new(CountingTool {
+            calls: std::cell::Cell::new(0),
+            exit_codes,
+        }));
+        registry
+    }
+
+    async fn run_counting_tool(
+        tool: &mut ToolOp,
+        registry: &ToolRegistry,
+        store: &crate::Store,
+    ) -> Result<(), VmError> {
+        tool.provider = "counting".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        execute_tool(
+            &op,
+            tool,
+            store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+    }
+
+    fn fetch_meta(store: &crate::Store) -> Dict {
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone();
+        node.get(&Value::from("meta"))
+            .unwrap()
+            .as_dict()
+            .unwrap()
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn attempts_absent_when_only_one_attempt_ran() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'x'".to_string(),
+        });
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(meta.get(&Value::from("attempts")), None);
+        assert_eq!(meta.get(&Value::from("retries_used")), None);
+    }
+
+    #[tokio::test]
+    async fn attempts_tool_passes_on_third_attempt_expect_driven() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'xxx'".to_string(),
+        });
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(2i64))
+        );
+        let keys: Vec<&Value> = meta.keys().collect();
+        assert_eq!(keys.last(), Some(&&Value::from("attempts")));
+
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(attempts.len(), 3);
+        assert_eq!(
+            attempts[0].as_dict().unwrap().get(&Value::from("value")),
+            Some(&Value::from("x"))
+        );
+        assert_eq!(
+            attempts[2].as_dict().unwrap().get(&Value::from("value")),
+            Some(&Value::from("xxx"))
+        );
+        assert_eq!(
+            attempts[2].as_dict().unwrap().get(&Value::from("error")),
+            Some(&Value::None)
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_tool_passes_on_third_attempt_exit_code_driven() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "meta.exit_code == 0".to_string(),
+        });
+        let registry = counting_registry(vec![1, 1, 0]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(2i64))
+        );
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(attempts.len(), 3);
+        let exit_codes: Vec<&Value> = attempts
+            .iter()
+            .map(|a| a.as_dict().unwrap().get(&Value::from("exit_code")).unwrap())
+            .collect();
+        assert_eq!(
+            exit_codes,
+            vec![&Value::from(1i64), &Value::from(1i64), &Value::from(0i64)]
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_entry_key_order() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'xx'".to_string(),
+        });
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        for entry in attempts {
+            let keys: Vec<&Value> = entry.as_dict().unwrap().keys().collect();
+            assert_eq!(
+                keys,
+                vec![
+                    &Value::from("created_at"),
+                    &Value::from("completed_at"),
+                    &Value::from("value"),
+                    &Value::from("error"),
+                    &Value::from("expect"),
+                    &Value::from("exit_code"),
+                ]
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn attempts_on_error_continue_keeps_every_attempt() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 2,
+            backoff_ms: 0,
+        };
+        // Never satisfiable -- both attempts fail the same way.
+        tool.expect = Some(ExpectCondition::Cel {
+            expr: "value == 'never matches'".to_string(),
+        });
+        tool.provider = "counting".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let meta = fetch_meta(&store);
+        let attempts = meta
+            .get(&Value::from("attempts"))
+            .unwrap()
+            .as_list()
+            .unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert!(
+            attempts
+                .iter()
+                .all(|a| { a.as_dict().unwrap().get(&Value::from("error")) != Some(&Value::None) })
+        );
+        assert_eq!(
+            meta.get(&Value::from("retries_used")),
+            Some(&Value::from(1i64))
+        );
+    }
+
+    #[tokio::test]
+    async fn attempts_is_reset_on_a_reused_node() {
+        let mut tool = tool_op(IndexMap::new());
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        let registry = counting_registry(vec![]);
+        let store = crate::Store::new();
+
+        // A previous pass left a stale meta.attempts/retries_used on this
+        // same node -- an unnamed loop's own next pass reuses it exactly
+        // this way.
+        let effect_node = store
+            .ensure_dict(&store.root, Value::from("fetch"))
+            .unwrap();
+        let meta_node = store
+            .ensure_dict(&effect_node, Value::from("meta"))
+            .unwrap();
+        set_leaf(&store, &meta_node, "retries_used", Value::from(2i64));
+        let mut stale_entry = Dict::new();
+        stale_entry.insert(Value::from("created_at"), Value::from("T"));
+        stale_entry.insert(Value::from("completed_at"), Value::from("T"));
+        stale_entry.insert(Value::from("value"), Value::None);
+        stale_entry.insert(Value::from("error"), Value::from("boom"));
+        stale_entry.insert(Value::from("expect"), Value::None);
+        stale_entry.insert(Value::from("exit_code"), Value::None);
+        write_attempts(&store, &meta_node, &[Value::Dict(stale_entry)]);
+
+        run_counting_tool(&mut tool, &registry, &store)
+            .await
+            .unwrap();
+
+        let meta = fetch_meta(&store);
+        assert_eq!(meta.get(&Value::from("attempts")), None);
+        assert_eq!(meta.get(&Value::from("retries_used")), None);
     }
 }

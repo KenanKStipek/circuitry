@@ -100,7 +100,10 @@ use std::sync::Arc;
 
 const STRICT_EQ: &str = "__electricity_strict_eq";
 const STRICT_NE: &str = "__electricity_strict_ne";
-const STRICT_IN: &str = "__electricity_strict_in";
+/// Also read by [`crate::evaluation_error_text`], to recognize *this*
+/// function's own two mismatch errors and unwrap them instead of
+/// falling through to `cel`'s generic `FunctionError` wrapping.
+pub(crate) const STRICT_IN: &str = "__electricity_strict_in";
 
 /// The registered function name standing in for *func_name* if it is
 /// `cel`'s own `==`, `!=` or `in`, else `None`.
@@ -405,12 +408,38 @@ fn strict_in_fn(ftx: &FunctionContext) -> Result<Value, ExecutionError> {
             }
         }
     } else {
+        // `in`'s own container-type mismatch (`5 in 5`) -- cof's own
+        // `operator_in` reports this one with the operator itself
+        // named, unlike a relational comparison's own mismatch, which
+        // keeps the generic "cannot compare ..." wording
+        // (`ExecutionError::ValuesNotComparable`'s usual text, raised
+        // by `ordering.rs` instead -- never by this function, so
+        // reusing that variant here would blur the two). Wrapped as
+        // this function's own `FunctionError` so
+        // `crate::evaluation_error_text` can unwrap it verbatim rather
+        // than falling through to `cel`'s own `"Error executing
+        // function '...': ..."` wrapping.
         let container = Value::try_from(container_ref)?;
-        return Err(ExecutionError::ValuesNotComparable(item, container));
+        return Err(ExecutionError::function_error(
+            STRICT_IN,
+            format!(
+                "cannot apply 'in' to {} and {}",
+                crate::cel_type_phrase(&item),
+                crate::cel_type_phrase(&container)
+            ),
+        ));
     }
     if had_error {
-        let container = Value::try_from(container_ref)?;
-        Err(ExecutionError::ValuesNotComparable(item, container))
+        // An element whose type genuinely can't compare to `item`
+        // (`1 in [1.0]`) -- cof's own text for this one path is this
+        // bare phrase, untouched by its own cleanup (`_error_text`
+        // only rewords a "found no matching overload for ..." shape,
+        // which celpy's `operator_in` doesn't raise here), so this
+        // matches that exactly rather than naming the operands.
+        Err(ExecutionError::function_error(
+            STRICT_IN,
+            "no such overload",
+        ))
     } else {
         Ok(Value::Bool(false))
     }
@@ -532,14 +561,15 @@ mod tests {
 
     #[test]
     fn in_raises_with_a_pinned_error_text() {
-        // The exact operand rendering this crate's own error text
-        // carries, not just whether it raised -- this is a Rust
-        // ExecutionError's own Debug-based Display, not celpy's,
-        // which the differential corpus never pins the text of either
-        // (DESIGN.md §1/§12, the third-party-library carve-out).
+        // This is this function's own `FunctionError`, built with cof's
+        // own bare text for this exact case (issue #629) -- never the
+        // operands themselves, unlike a relational comparison's own
+        // `ValuesNotComparable`, whose raw Debug-based Display the
+        // differential corpus still never pins (DESIGN.md §1/§12, the
+        // third-party-library carve-out).
         assert_eq!(
             eval("1 in [1.0]"),
-            Err("Int(1) can not be compared to List([Float(1.0)])".to_string())
+            Err("Error executing function '__electricity_strict_in': no such overload".to_string())
         );
     }
 

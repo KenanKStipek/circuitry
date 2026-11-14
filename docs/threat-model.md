@@ -211,6 +211,24 @@ all, even one already on the allowlist: without that rule, a trusted
 document could point an allowlisted alias at an adapter the allowlist
 doesn't list, such as `openai` with its own credential.
 
+**`api_key_env` is config-only, regardless of `enabled_adapters`.** Any
+keyed adapter's own block — built-in or alias — accepts an
+`api_key_env`, naming the environment variable it reads its credential
+from in place of the provider's default (`runtime.adapters.<name>
+.api_key_env`). This is honoured only from config: a document's own
+attempt to set it is always ignored, with a warning, whether or not
+`enabled_adapters` is set, and whether or not the document is otherwise
+trusted — unlike the alias-retarget rule above, there is no case in
+which a document chooses it. The reason is narrower than the alias rule
+but just as direct: a document run by path can already set `base_url`,
+pointing a request at any host it names; if it could also choose
+`api_key_env`, it could send any environment variable the host
+process can read — a GitHub token, a cloud credential, anything, not
+just that provider's own key — as the Bearer value to a URL the
+document itself controls. Keeping the choice of *which* variable a
+config-only decision means a document can at most misuse a key the
+host already intended that adapter to send.
+
 **Mitigation — error masking.** Every curl failure raises through
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py)'s
 `curl_failure_message()`, which never echoes the curl command line — the

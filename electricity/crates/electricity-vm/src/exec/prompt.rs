@@ -841,6 +841,74 @@ fn accumulate_tokens(totals: &mut (Option<i64>, Option<i64>), attempts_meta: &[V
     }
 }
 
+/// One `meta.attempts` entry for a prompt -- `core/prompt.py::_attempt_entry`'s
+/// counterpart, same field order. A prompt has no `expect` to carry,
+/// unlike `exec::tool`/`exec::use_`'s own entries.
+#[allow(clippy::too_many_arguments)]
+fn attempt_entry(
+    created_at: Value,
+    completed_at: Value,
+    value: Value,
+    error: Option<String>,
+    fallback_attempts: Vec<Value>,
+    tokens_sent: Value,
+    tokens_received: Value,
+) -> Value {
+    let mut entry = Dict::new();
+    entry.insert(key("created_at"), created_at);
+    entry.insert(key("completed_at"), completed_at);
+    entry.insert(key("value"), value);
+    entry.insert(key("error"), error.map(Value::Str).unwrap_or(Value::None));
+    entry.insert(key("fallback_attempts"), Value::List(fallback_attempts));
+    entry.insert(key("tokens_sent"), tokens_sent);
+    entry.insert(key("tokens_received"), tokens_received);
+    Value::Dict(entry)
+}
+
+/// `core/prompt.py::_write_attempts` -- `meta.attempts`, always written as
+/// `meta`'s last key -- same contract as `exec::use_::write_attempts`.
+fn write_attempts(store: &Store, meta_node: &NodeRef, attempts: &[Value]) {
+    pop_leaf(meta_node, "attempts");
+    set_leaf(store, meta_node, "attempts", Value::List(attempts.to_vec()));
+}
+
+/// The last entry of `fallback_attempts`'s own `tokens_sent`/`tokens_received`
+/// -- `None` when the chain never ran (always present otherwise, since
+/// `generate_with_fallbacks` tries at least one provider).
+fn last_fallback_tokens(attempts_meta: &[Value]) -> (Value, Value) {
+    attempts_meta
+        .last()
+        .and_then(Value::as_dict)
+        .map(|dict| {
+            (
+                dict.get(&key("tokens_sent"))
+                    .cloned()
+                    .unwrap_or(Value::None),
+                dict.get(&key("tokens_received"))
+                    .cloned()
+                    .unwrap_or(Value::None),
+            )
+        })
+        .unwrap_or((Value::None, Value::None))
+}
+
+/// `core/prompt.py`'s own per-attempt entry `error` for an ordinary
+/// (non-decode/schema) chain failure: `str(generation_error)`, already
+/// the same text as the chain's own last fallback entry (`last_error`
+/// there is the same exception that entry's own `error` field redacted).
+/// Reading it back off `attempts_meta`'s own last entry, already
+/// redacted at the point it was recorded, is that same value -- never
+/// `"All adapter attempts failed: ..."`, which `core/prompt.py` only
+/// ever raises once the whole retry loop gives up, not per attempt.
+fn last_fallback_error(attempts_meta: &[Value]) -> Option<String> {
+    attempts_meta
+        .last()
+        .and_then(Value::as_dict)
+        .and_then(|dict| dict.get(&key("error")))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn finish_failure(
     store: &Store,
@@ -850,12 +918,14 @@ fn finish_failure(
     effect_path: &EffectPath,
     instance: InstanceId,
     observer: &dyn RunObserver,
+    attempt_started_at: Value,
     attempts_meta: Vec<Value>,
     attempt_index: u32,
     message: String,
     py_class: electricity_tools::PyExc,
     cause: electricity_tools::ErrorCause,
     from_last_attempt: bool,
+    mut recorded_attempts: Vec<Value>,
 ) -> Result<(), VmError> {
     // Issue #660: the top-level fields come from the attempt whose
     // error ended the effect -- the last entry of this pass's own
@@ -864,7 +934,9 @@ fn finish_failure(
     // every other call site's `attempts_meta` is either empty (no
     // attempt ever ran) or a stale earlier pass's chain (a
     // timeout-resolve, limiter, or allowlist failure on a retry pass),
-    // and that pass's error is not an attempt failure at all.
+    // and that pass's error is not an attempt failure at all -- the
+    // same reason this attempt gets no fallback_attempts of its own
+    // below (#668).
     let final_fields = if from_last_attempt {
         attempts_meta.last().and_then(Value::as_dict).map(|dict| {
             (
@@ -879,7 +951,11 @@ fn finish_failure(
         store,
         meta_node,
         "fallback_attempts",
-        Value::List(attempts_meta),
+        Value::List(if from_last_attempt {
+            attempts_meta
+        } else {
+            Vec::new()
+        }),
     );
     set_leaf(store, meta_node, "fallback_recovered", Value::Bool(false));
     let redacted = redact_str(&message);
@@ -892,7 +968,8 @@ fn finish_failure(
             set_leaf(store, meta_node, "http_status", http_status);
         }
     }
-    set_leaf(store, meta_node, "completed_at", now_iso());
+    let completed_at = now_iso();
+    set_leaf(store, meta_node, "completed_at", completed_at.clone());
     if attempt_index > 0 {
         set_leaf(
             store,
@@ -900,6 +977,38 @@ fn finish_failure(
             "retries_used",
             Value::from(i64::from(attempt_index)),
         );
+        if from_last_attempt {
+            // Resynced to the node's own deciding fields, which land a
+            // little later than what the failing attempt recorded for
+            // itself in the loop (#668): completed_at, and error -- a
+            // chain-exhaustion failure's entry held only that attempt's
+            // own last fallback error, not the wrapped "All adapter
+            // attempts failed: ..." text `message` wraps it in. Tokens
+            // follow meta's own null-on-failure fields, not the last
+            // fallback try's usage, still readable inside this entry's
+            // own fallback_attempts.
+            if let Some(last) = recorded_attempts.last_mut().and_then(Value::as_dict_mut) {
+                last.insert(key("completed_at"), completed_at);
+                last.insert(key("error"), Value::Str(redacted.clone()));
+                last.insert(key("tokens_sent"), Value::None);
+                last.insert(key("tokens_received"), Value::None);
+            }
+        } else {
+            // This attempt never reached its own fallback chain (an
+            // unresolved timeout_ms reference, a limiter error, or an
+            // allowlist denial between attempts) -- it gets an entry of
+            // its own rather than re-dating an earlier attempt's.
+            recorded_attempts.push(attempt_entry(
+                attempt_started_at,
+                completed_at,
+                Value::None,
+                Some(redacted.clone()),
+                Vec::new(),
+                Value::None,
+                Value::None,
+            ));
+        }
+        write_attempts(store, meta_node, &recorded_attempts);
     }
     if matches!(op.on_error, OnError::Skip | OnError::Continue) {
         set_leaf(store, effect_node, "value", Value::None);
@@ -1087,6 +1196,10 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "retries_used");
     pop_leaf(&meta_node, "decomposition");
     pop_leaf(&meta_node, "answer");
+    // Cleared here, once per pass, not per attempt -- a pass that ends
+    // up making only one attempt must not keep a reused node's earlier
+    // pass's meta.attempts around (#668).
+    pop_leaf(&meta_node, "attempts");
     pop_leaf(&meta_node, "finish_reason");
     pop_leaf(&meta_node, "warnings");
     pop_leaf(&meta_node, "assets");
@@ -1206,12 +1319,14 @@ pub(crate) async fn execute_prompt(
                 &effect_path,
                 instance,
                 observer,
+                Value::None,
                 Vec::new(),
                 0,
                 message,
                 py_class,
                 cause,
                 false,
+                Vec::new(),
             );
         }
         Err(err) => return Err(err),
@@ -1261,12 +1376,14 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    Value::None,
                     Vec::new(),
                     0,
                     crate::decompose::failure_text(name, reason, &error),
                     electricity_tools::PyExc::DecompositionError,
                     electricity_tools::ErrorCause::None,
                     false,
+                    Vec::new(),
                 );
             }
             crate::decompose::Posture::Dispatch { fallback_model } => {
@@ -1294,12 +1411,14 @@ pub(crate) async fn execute_prompt(
                 &effect_path,
                 instance,
                 observer,
+                Value::None,
                 Vec::new(),
                 0,
                 message,
                 electricity_tools::PyExc::ValueError,
                 electricity_tools::ErrorCause::None,
                 false,
+                Vec::new(),
             );
         }
     };
@@ -1324,12 +1443,14 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    Value::None,
                     Vec::new(),
                     0,
                     err.to_string(),
                     electricity_tools::PyExc::TemplateError,
                     electricity_tools::ErrorCause::None,
                     false,
+                    Vec::new(),
                 );
             }
         };
@@ -1350,12 +1471,14 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    Value::None,
                     Vec::new(),
                     0,
                     message,
                     electricity_tools::PyExc::ValueError,
                     electricity_tools::ErrorCause::None,
                     false,
+                    Vec::new(),
                 );
             }
         }
@@ -1382,6 +1505,10 @@ pub(crate) async fn execute_prompt(
     let call_path = effect_path.clone();
 
     let mut attempts_meta_outer: Vec<Value> = Vec::new();
+    // Every attempt this pass makes, oldest first (#668) -- written to
+    // meta.attempts only once more than one attempt has run, exactly
+    // when meta.retries_used is also set.
+    let mut retry_attempts: Vec<Value> = Vec::new();
     let mut totals: (Option<i64>, Option<i64>) = (None, None);
     let mut next_delay_ms = backoff_ms;
     // `meta.live.attempt` (#674/#676): numbered across every
@@ -1399,6 +1526,8 @@ pub(crate) async fn execute_prompt(
                 () = token.cancelled() => return Err(VmError::Cancelled),
             }
         }
+
+        let attempt_started_at = now_iso();
 
         // Per attempt, from the state this attempt sees (issue #564). A
         // reference that can't resolve fails the effect outright instead
@@ -1418,12 +1547,14 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    attempt_started_at,
                     attempts_meta_outer,
                     attempt_index,
                     message,
                     electricity_tools::PyExc::ValueError,
                     electricity_tools::ErrorCause::None,
                     false,
+                    retry_attempts.clone(),
                 );
             }
         };
@@ -1461,12 +1592,14 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    attempt_started_at,
                     attempts_meta_outer,
                     attempt_index,
                     limiter_err.to_string(),
                     electricity_tools::PyExc::RuntimeError,
                     electricity_tools::ErrorCause::None,
                     false,
+                    retry_attempts.clone(),
                 );
             }
             Some(Ok(guard)) => guard,
@@ -1507,12 +1640,14 @@ pub(crate) async fn execute_prompt(
                     &effect_path,
                     instance,
                     observer,
+                    attempt_started_at,
                     attempts_meta_outer,
                     attempt_index,
                     message,
                     electricity_tools::PyExc::AllowlistError,
                     electricity_tools::ErrorCause::None,
                     false,
+                    retry_attempts.clone(),
                 );
             }
             Ok(PassOutcome::Success {
@@ -1537,6 +1672,7 @@ pub(crate) async fn execute_prompt(
                     "tokens_received_total",
                     totals.1.map(Value::from).unwrap_or(Value::None),
                 );
+                let value_for_entry = value.clone();
                 set_leaf(store, &effect_node, "value", value);
                 set_leaf(
                     store,
@@ -1554,6 +1690,7 @@ pub(crate) async fn execute_prompt(
                     set_leaf(store, &meta_node, "cost_usd", Value::from(cost_usd));
                 }
                 let recovered = attempts_meta.len() > 1;
+                let fallback_attempts_for_entry = attempts_meta.clone();
                 set_leaf(
                     store,
                     &meta_node,
@@ -1566,7 +1703,8 @@ pub(crate) async fn execute_prompt(
                     "fallback_recovered",
                     Value::Bool(recovered),
                 );
-                set_leaf(store, &meta_node, "completed_at", now_iso());
+                let completed_at = now_iso();
+                set_leaf(store, &meta_node, "completed_at", completed_at.clone());
                 set_leaf(store, &meta_node, "adapter", Value::Str(winner_adapter));
                 set_leaf(store, &meta_node, "model", Value::Str(winner_model));
                 if attempt_index > 0 {
@@ -1576,6 +1714,18 @@ pub(crate) async fn execute_prompt(
                         "retries_used",
                         Value::from(i64::from(attempt_index)),
                     );
+                }
+                retry_attempts.push(attempt_entry(
+                    attempt_started_at,
+                    completed_at,
+                    value_for_entry,
+                    None,
+                    fallback_attempts_for_entry,
+                    tokens_sent.map(Value::from).unwrap_or(Value::None),
+                    tokens_received.map(Value::from).unwrap_or(Value::None),
+                ));
+                if attempt_index > 0 {
+                    write_attempts(store, &meta_node, &retry_attempts);
                 }
                 observer.record_totals(&store.snapshot(&meta_node));
                 observer.effect_complete(
@@ -1606,19 +1756,44 @@ pub(crate) async fn execute_prompt(
                 );
                 attempts_meta_outer = attempts_meta;
 
+                let cause = failure.cause.clone();
+                // This attempt's own entry carries the chain's last
+                // failure as-is -- `core/prompt.py`'s own `str(
+                // generation_error)` -- never the generic
+                // "All adapter attempts failed: ..." text `message`
+                // below wraps it in, which only ever becomes this
+                // pass's own `meta.error` once every attempt is spent
+                // (the `finish_failure` call below, past the retry
+                // check). Computed before `failure.bare` moves into
+                // `message` just below.
+                let entry_error = match &failure.bare {
+                    Some((_, message)) => redact_str(message),
+                    None => last_fallback_error(&attempts_meta_outer).unwrap_or_default(),
+                };
+                let (message, py_class) = match failure.bare {
+                    Some((py_class, message)) => (message, py_class),
+                    None => {
+                        let repr = Value::List(attempts_meta_outer.clone()).py_repr();
+                        (
+                            format!("All adapter attempts failed: {repr}"),
+                            electricity_tools::PyExc::RuntimeError,
+                        )
+                    }
+                };
+                let (entry_tokens_sent, entry_tokens_received) =
+                    last_fallback_tokens(&attempts_meta_outer);
+                retry_attempts.push(attempt_entry(
+                    attempt_started_at,
+                    now_iso(),
+                    Value::None,
+                    Some(entry_error),
+                    attempts_meta_outer.clone(),
+                    entry_tokens_sent,
+                    entry_tokens_received,
+                ));
+
                 let is_last_attempt = attempt_index + 1 >= max_attempts;
                 if !failure.retry.retryable || is_last_attempt {
-                    let cause = failure.cause.clone();
-                    let (message, py_class) = match failure.bare {
-                        Some((py_class, message)) => (message, py_class),
-                        None => {
-                            let repr = Value::List(attempts_meta_outer.clone()).py_repr();
-                            (
-                                format!("All adapter attempts failed: {repr}"),
-                                electricity_tools::PyExc::RuntimeError,
-                            )
-                        }
-                    };
                     return finish_failure(
                         store,
                         &meta_node,
@@ -1627,14 +1802,22 @@ pub(crate) async fn execute_prompt(
                         &effect_path,
                         instance,
                         observer,
+                        // Unused: from_last_attempt (true) only ever
+                        // resyncs the entry recorded_attempts already
+                        // carries for this attempt, never appends one.
+                        Value::None,
                         attempts_meta_outer,
                         attempt_index,
                         message,
                         py_class,
                         cause,
                         true,
+                        retry_attempts,
                     );
                 }
+                // The finished attempts, readable (and on --live-state)
+                // before the next one starts (#668).
+                write_attempts(store, &meta_node, &retry_attempts);
                 next_delay_ms =
                     crate::retry::next_backoff_delay_ms(&failure.retry, attempt_index, backoff_ms);
                 observer.write();
@@ -2089,18 +2272,51 @@ mod tests {
             &EffectPath::root(),
             0,
             &NullObserver,
+            Value::Str("attempt-1-start".to_string()),
             vec![stale_attempt.clone()],
             1,
             "timeout_ms reference vanished".to_string(),
             electricity_tools::PyExc::ValueError,
             electricity_tools::ErrorCause::None,
             false,
+            vec![
+                AttemptEntry {
+                    adapter: "scripted".to_string(),
+                    model: "m".to_string(),
+                    status: "failed",
+                    error: Some("pass 0 failure".to_string()),
+                    tokens_sent: None,
+                    tokens_received: None,
+                    error_code: None,
+                    http_status: None,
+                    raw_reply: None,
+                }
+                .into_value(),
+            ],
         )
         .unwrap();
         let meta = store.snapshot(&meta_node);
         let dict = meta.as_dict().unwrap();
         assert_eq!(dict.get(&key("error_code")), None);
         assert_eq!(dict.get(&key("http_status")), None);
+        // Not the attempts-exhausted call site, so no chain of its own --
+        // this attempt (index 1) gets its own entry appended, not the
+        // earlier attempt's (index 0) re-dated (#668).
+        let attempts = dict.get(&key("attempts")).and_then(Value::as_list).unwrap();
+        assert_eq!(attempts.len(), 2);
+        let second = attempts[1].as_dict().unwrap();
+        assert_eq!(
+            second.get(&key("created_at")),
+            Some(&Value::Str("attempt-1-start".to_string()))
+        );
+        assert_eq!(
+            second.get(&key("error")),
+            Some(&Value::Str("timeout_ms reference vanished".to_string()))
+        );
+        assert_eq!(
+            second.get(&key("fallback_attempts")),
+            Some(&Value::List(Vec::new()))
+        );
 
         // The attempts-exhausted call site: the same chain, now read as
         // this pass's own attempts that actually ended the effect.
@@ -2115,12 +2331,14 @@ mod tests {
             &EffectPath::root(),
             0,
             &NullObserver,
+            Value::None,
             vec![stale_attempt],
             0,
             "All adapter attempts failed".to_string(),
             electricity_tools::PyExc::RuntimeError,
             electricity_tools::ErrorCause::None,
             true,
+            Vec::new(),
         )
         .unwrap();
         let meta = store.snapshot(&meta_node);

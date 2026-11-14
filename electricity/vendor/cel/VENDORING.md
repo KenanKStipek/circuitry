@@ -24,13 +24,25 @@ order-insensitive (two maps compare equal regardless of order, the same
 contract `HashMap` had), so CEL's `==`/`in` are unchanged.
 
 Touched: `src/objects.rs`, `src/common/types/map.rs`, `Cargo.toml` (added
-an `indexmap` dependency). Nothing else in this copy differs from the
-published crate.
+an `indexmap` dependency).
+
+### Field selection reports the field's own name
+
+`left.field` failing because `left` has no field access of any kind (a
+non-container, or a container with no string key -- a list, say) used to
+report the generic `NoSuchOverload` error, which carries the operand
+types' names but not the field name itself (issue #629). A new variant,
+`ExecutionError::UnsupportedFieldSelect(field, target_type_name)`, carries
+the field's own name plus the target's type name only (never the target's
+own value); `objects.rs`'s `select_field`/`index_into` raise it instead of
+`NoSuchOverload` for this one case, and `src/lib.rs` declares the variant
+and its constructor. Nothing else in this copy differs from the published
+crate.
 
 ## Keeping this in sync
 
 If `cel` publishes a new version electricity wants, re-vendor by copying
 the new version's source over this directory (preserving this file,
-`LICENSE`, and the `indexmap` dependency) and re-applying the same two
+`LICENSE`, and the `indexmap` dependency) and re-applying the same
 source changes against the new version's `objects.rs`/
-`common/types/map.rs`.
+`common/types/map.rs`/`src/lib.rs`.

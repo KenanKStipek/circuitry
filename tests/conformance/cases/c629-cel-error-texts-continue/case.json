@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #629",
+  "description": "Every row of the error-text table: a missing map key (string and int), a list index out of range, a list indexed by a string, an int indexed by an int, division by zero, and modulus by zero, each an `if` condition with `on_error: continue`. Circuitry's own one-line text, identical in both engines, never a container's contents, a Python tuple repr or a Rust Debug repr.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -888,6 +888,302 @@
                     "t": "int",
                     "v": "2"
                   }
+                ],
+                [
+                  {
+                    "t": "str",
+                    "v": "attempts"
+                  },
+                  {
+                    "t": "list",
+                    "v": [
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: value == 2"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value == 2"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "exit_code"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: value == 2"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value == 2"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "exit_code"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ]
+                        ]
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "created_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "completed_at"
+                            },
+                            {
+                              "t": "str",
+                              "v": "<TIMESTAMP>"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "value"
+                            },
+                            {
+                              "t": "int",
+                              "v": "1"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "error"
+                            },
+                            {
+                              "t": "str",
+                              "v": "expect failed: value == 2"
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "expect"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "mode"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "cel"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "expr"
+                                  },
+                                  {
+                                    "t": "str",
+                                    "v": "value == 2"
+                                  }
+                                ],
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "result"
+                                  },
+                                  {
+                                    "t": "bool",
+                                    "v": false
+                                  }
+                                ]
+                              ]
+                            }
+                          ],
+                          [
+                            {
+                              "t": "str",
+                              "v": "exit_code"
+                            },
+                            {
+                              "t": "none"
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  }
                 ]
               ]
             }
@@ -3037,7 +3333,7 @@
                         },
                         {
                           "t": "str",
-                          "v": "CEL evaluation failed for 'value.missing == 1': (\"no such member in mapping: 'missing'\", <class 'KeyError'>, None)"
+                          "v": "CEL evaluation failed for 'value.missing == 1': no such key: 'missing'"
                         }
                       ],
                       [

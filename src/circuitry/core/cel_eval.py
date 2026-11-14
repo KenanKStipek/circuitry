@@ -63,6 +63,7 @@ import datetime
 import logging
 import math
 import operator
+import re
 import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -93,9 +94,17 @@ _CACHE_MAX_ENTRIES = 512
 class CelError(Exception):
     """Base class for CEL parse, validation and evaluation errors."""
 
-    def __init__(self, message: str, *, expression: str) -> None:
+    def __init__(
+        self, message: str, *, expression: str, too_deeply_nested: bool = False
+    ) -> None:
         super().__init__(message)
         self.expression = expression
+        #: Set only by :func:`_compile`'s own ``RecursionError`` catch --
+        #: lets :func:`validate_cel_syntax` report the one-line "nested
+        #: too deeply" text instead of wrapping it as a generic parse
+        #: failure (which would repeat the whole, deeply nested
+        #: expression back in the message).
+        self.too_deeply_nested = too_deeply_nested
 
 
 class CelValidationError(CelError, ValueError):
@@ -138,7 +147,27 @@ class _UnsetRead(CELEvalError):
 
 
 def _error_text(exc: CELEvalError) -> str:
-    """*exc* in Circuitry's own words, never cel-python's activation repr.
+    """*exc* in Circuitry's own words, never cel-python's activation repr,
+    a Python exception's args tuple, or a bare Python type repr.
+
+    cel-python's own ``CELEvalError`` carries its message as ``args[0]``
+    and, for most of its own raise sites, appends the Python exception
+    class and *its* ``args`` as two more positional arguments — harmless
+    until something ``str()``s the exception, which for a multi-arg
+    ``Exception`` is ``repr(args)``, not ``args[0]``. That is where every
+    one of this function's cases actually originates: an index/key
+    lookup's or an arithmetic operator's own ``args[0]`` is already the
+    final text (``_StateEvaluator`` builds those directly, elsewhere in
+    this module); every other binary or unary operator type mismatch
+    (``<``, ``in``, ``+``, unary ``!``/``-``, ...) is left to cel-python's
+    base ``Evaluator``, whose ``args[0]`` names the operator and the
+    *types* involved as Python class reprs (never a value), while the
+    *trailing* positional arguments are the wrapped Python exception's own
+    ``args`` — which, for a relational comparison, is cel-python's own
+    ``no such overload: <left repr> <type> != <right repr> <type>``,
+    carrying the operands themselves. Taking only ``args[0]`` drops that
+    unconditionally; the regex below then turns its Python class reprs
+    into CEL type names.
 
     cel-python words an undeclared identifier, function or method as
     ``"undeclared reference to '<name>' (in activation '<repr>')"``, with
@@ -146,20 +175,178 @@ def _error_text(exc: CELEvalError) -> str:
     the three raised it. The activation repr holds the whole
     ``google.protobuf`` annotation tree, every registered function, and —
     for :func:`evaluate_cel_expect` — the converted run state, so it is
-    never included. Every other evaluation failure keeps cel-python's own
-    message.
+    never included.
     """
     args = exc.args
+    message = args[0] if args and isinstance(args[0], str) else str(exc)
     if (
-        args
-        and isinstance(args[0], str)
-        and args[0].startswith("undeclared reference to ")
+        message.startswith("undeclared reference to ")
         and len(args) > 2
         and isinstance(args[2], tuple)
         and args[2]
     ):
         return f"undeclared reference to {args[2][0]!r}"
-    return str(exc)
+    overload = _OVERLOAD_RE.fullmatch(message)
+    if overload:
+        symbol = _overload_symbol(overload["op"])
+        phrases = [
+            _class_repr_to_phrase(m) for m in _CLASS_REPR_RE.finditer(overload["types"])
+        ]
+        if symbol in _COMPARISON_SYMBOLS and len(phrases) == 2:
+            # Matches `electricity-cel`'s own wording for the same
+            # failure (its `cel::ExecutionError::ValuesNotComparable`,
+            # raised by the same four operators) exactly.
+            return f"cannot compare {phrases[0]} to {phrases[1]}"
+        return f"cannot apply {symbol!r} to {_join_phrases(phrases)}"
+    return message
+
+
+#: The four operators whose type mismatch is a comparison, not a
+#: generic overload failure -- worded like one ("cannot compare a map
+#: to an int"), matching `electricity-cel`'s own wording for the same
+#: `cel` crate failure (`ExecutionError::ValuesNotComparable`) exactly,
+#: never the generic "cannot apply '<' to ..." template every other
+#: operator here gets.
+_COMPARISON_SYMBOLS = frozenset({"<", "<=", ">", ">="})
+
+
+def _join_phrases(phrases: list[str]) -> str:
+    """*phrases* as an English list: ``"a, b and c"``, never an
+    ``(a, b, c)`` tuple."""
+    if len(phrases) <= 1:
+        return ", ".join(phrases)
+    return f"{', '.join(phrases[:-1])} and {phrases[-1]}"
+
+
+#: cel-python's own grammar-rule names (a binary or unary operator
+#: node's ``tree.data``, which its base ``Evaluator`` methods -- never
+#: overridden here, since they raise only on a type mismatch rather than
+#: a container/key error -- report via ``!r}`` on the parsed lark Token,
+#: printing as ``Token('RULE', '<name>')``) to the CEL operator text.
+_CEL_RULE_SYMBOLS: dict[str, str] = {
+    "relation_lt": "<",
+    "relation_le": "<=",
+    "relation_gt": ">",
+    "relation_ge": ">=",
+    "relation_eq": "==",
+    "relation_ne": "!=",
+    "relation_in": "in",
+    "addition_add": "+",
+    "addition_sub": "-",
+    "multiplication_mul": "*",
+    "multiplication_div": "/",
+    "multiplication_mod": "%",
+    "unary_not": "!",
+    "unary_neg": "-",
+}
+
+#: ``_StateEvaluator``'s own overload failures (``&&``/``||``/``?:``)
+#: spell cel-python's function name literally rather than via a Token's
+#: repr, so they need no un-reproing -- just the CEL spelling.
+_CEL_FUNCTION_SYMBOLS: dict[str, str] = {
+    "_||_": "||",
+    "_&&_": "&&",
+    "_?_:_": "?:",
+}
+
+_OVERLOAD_RE = re.compile(
+    r"found no matching overload for (?P<op>.+?) applied to '\((?P<types>.*)\)'"
+)
+_RULE_TOKEN_RE = re.compile(r"Token\('RULE', '(\w+)'\)")
+_CLASS_REPR_RE = re.compile(r"<class '(?:celpy\.celtypes\.)?(\w+)'>")
+
+
+def _overload_symbol(op: str) -> str:
+    """*op*, cel-python's own spelling of a failed overload's operator,
+    as the CEL operator text (never a lark Token repr or a bare function
+    name)."""
+    if op in _CEL_FUNCTION_SYMBOLS:
+        return _CEL_FUNCTION_SYMBOLS[op]
+    rule = _RULE_TOKEN_RE.fullmatch(op)
+    if rule:
+        return _CEL_RULE_SYMBOLS.get(rule[1], rule[1])
+    return op
+
+
+#: CEL's own type names (the ``type()``/conversion-function vocabulary
+#: cel-python's own ``evaluation.py`` already uses, ``null_type`` read as
+#: ``null`` per that vocabulary's own comment), keyed by the concrete
+#: ``celtypes`` class every value of that type is an instance of.
+_CEL_TYPE_NAMES: dict[type, str] = {
+    celtypes.BoolType: "bool",
+    celtypes.BytesType: "bytes",
+    celtypes.DoubleType: "double",
+    celtypes.DurationType: "duration",
+    celtypes.IntType: "int",
+    celtypes.ListType: "list",
+    celtypes.MapType: "map",
+    celtypes.NullType: "null",
+    celtypes.StringType: "string",
+    celtypes.TimestampType: "timestamp",
+    celtypes.UintType: "uint",
+    type(None): "null",
+}
+
+#: The indefinite article each CEL type name takes ("a map", "an int",
+#: "a uint" — "uint" starts with a vowel letter but a consonant sound,
+#: so it takes "a" the way "a user" does, not "an").
+_CEL_TYPE_ARTICLES: dict[str, str] = {
+    "bool": "a",
+    "bytes": "a",
+    "double": "a",
+    "duration": "a",
+    "int": "an",
+    "list": "a",
+    "map": "a",
+    "null": "a",
+    "string": "a",
+    "timestamp": "a",
+    "uint": "a",
+}
+
+
+def _cel_type_name(value: Any) -> str:
+    """*value*'s CEL type name, never a Python class name."""
+    return _CEL_TYPE_NAMES.get(type(value), type(value).__name__.lower())
+
+
+def _cel_type_phrase(value: Any) -> str:
+    """*value*'s CEL type name with its indefinite article, e.g. ``"an int"``."""
+    name = _cel_type_name(value)
+    return f"{_CEL_TYPE_ARTICLES.get(name, 'a')} {name}"
+
+
+#: ``_CEL_TYPE_NAMES`` keyed by the ``celtypes`` class's own name instead
+#: of the class itself -- what a Python class repr (``<class
+#: 'celpy.celtypes.IntType'>``) spells it as, for :func:`_class_repr_to_phrase`.
+_CEL_CLASS_NAME_TO_CEL: dict[str, str] = {
+    cls.__name__: name for cls, name in _CEL_TYPE_NAMES.items() if cls is not type(None)
+}
+
+
+def _class_repr_to_phrase(match: re.Match[str]) -> str:
+    """A ``<class 'celpy.celtypes.XxxType'>`` regex match as its CEL type
+    phrase, e.g. ``"an int"`` -- never the class repr itself, which names
+    cel-python's own implementation, not CEL's vocabulary."""
+    name = _CEL_CLASS_NAME_TO_CEL.get(match[1], match[1].lower())
+    return f"{_CEL_TYPE_ARTICLES.get(name, 'a')} {name}"
+
+
+def _repr_key(value: Any) -> str:
+    """*value* the way a key or index belongs in an error: a string in
+    single quotes, every other CEL scalar bare — never a container's
+    own repr, which :func:`_cel_type_phrase` names only by type."""
+    if isinstance(value, celtypes.StringType):
+        return repr(str(value))
+    if isinstance(value, celtypes.BytesType):
+        return repr(bytes(value))
+    if isinstance(value, celtypes.BoolType):
+        return "true" if value else "false"
+    if isinstance(value, (celtypes.IntType, celtypes.UintType)):
+        return str(int(value))
+    if isinstance(value, celtypes.DoubleType):
+        return repr(float(value))
+    return str(value)
 
 
 class _StateEvaluator(Evaluator):
@@ -198,21 +385,52 @@ class _StateEvaluator(Evaluator):
         if isinstance(member, NameContainer):
             if property_name in member:
                 return member[property_name].value
-            err = f"No {property_name!r} in bindings {sorted(member.keys())}"
-            return CELEvalError(err, KeyError, None, tree=tree)
+            err = f"no such name {property_name!r} in {sorted(member.keys())!r}"
+            return CELEvalError(err, tree=tree)
         if isinstance(member, celtypes.MessageType):
             return member.get(property_name)
         if isinstance(member, celtypes.MapType):
             try:
                 return member[property_name]
             except KeyError:
-                err = f"no such member in mapping: {property_name!r}"
-                return CELEvalError(err, KeyError, None, tree=tree)
-        err = (
-            f"{member!r} with type: '{type(member)}' does not support field "
-            "selection"
+                return CELEvalError(f"no such key: {property_name!r}", tree=tree)
+        return CELEvalError(
+            f"cannot select field {property_name!r} on {_cel_type_phrase(member)}",
+            tree=tree,
         )
-        return CELEvalError(err, TypeError, None, tree=tree)
+
+    def member_index(self, tree: lark.Tree) -> Any:
+        # ``visit_children`` (not two direct ``self.visit()`` calls),
+        # matching the base method's own frame count per nesting level
+        # -- see conditionalor's comment. ``func`` is ``_[_]``'s own
+        # registered function, wrapped by ``_propagate_first_error``
+        # (module level, near ``_FUNCTIONS``): either operand already
+        # being a ``CELEvalError`` (an unset read, or any other) is
+        # returned outright, before the real lookup ever runs, so the
+        # except clauses below only ever see a genuine lookup failure.
+        member, index = self.visit_children(tree)
+        func = self.activation.resolve_function("_[_]")
+        try:
+            return func(member, index)
+        except KeyError as ex:
+            value = CELEvalError(f"no such key: {_repr_key(index)}", tree=tree)
+            value.__cause__ = ex
+            return value
+        except IndexError as ex:
+            value = CELEvalError(
+                f"{_cel_type_name(member)} index out of range: {_repr_key(index)}",
+                tree=tree,
+            )
+            value.__cause__ = ex
+            return value
+        except TypeError as ex:
+            value = CELEvalError(
+                f"cannot index {_cel_type_phrase(member)} with "
+                f"{_cel_type_phrase(index)}",
+                tree=tree,
+            )
+            value.__cause__ = ex
+            return value
 
     def expr(self, tree: lark.Tree) -> Any:
         if len(tree.children) == 1:
@@ -317,6 +535,52 @@ class _StateEvaluator(Evaluator):
             column=tree.meta.column,
         )
 
+    def multiplication(self, tree: lark.Tree) -> Any:
+        if len(tree.children) == 1:
+            values = self.visit_children(tree)
+            return values[0]
+        if len(tree.children) == 2:
+            left_op = cast("lark.Tree", tree.children[0])
+            op_name = {
+                "multiplication_div": "_/_",
+                "multiplication_mul": "_*_",
+                "multiplication_mod": "_%_",
+            }[left_op.data]
+            func = self.activation.resolve_function(op_name)
+            # NOTE: values have the structure [[left], right] -- see
+            # conditionalor's comment: matching the base method's own
+            # access pattern, not a simplification of it, keeps the
+            # frame count per nesting level identical.
+            (left, *_), right = cast(
+                "tuple[list[Any], Any]", self.visit_children(tree)
+            )
+            try:
+                return func(left, right)
+            except TypeError as ex:
+                err = (
+                    f"found no matching overload for {left_op.data!r} "
+                    f"applied to '({type(left)}, {type(right)})'"
+                )
+                value = CELEvalError(err, ex.__class__, ex.args, tree=tree)
+                value.__cause__ = ex
+                return value
+            except ZeroDivisionError as ex:
+                text = "division by zero" if op_name == "_/_" else "modulus by zero"
+                value = CELEvalError(text, tree=tree)
+                value.__cause__ = ex
+                return value
+            except (ValueError, OverflowError) as ex:
+                value = CELEvalError(
+                    "return error for overflow", ex.__class__, ex.args, tree=tree
+                )
+                value.__cause__ = ex
+                return value
+        raise CELSyntaxError(
+            f"{tree.data} {tree.children}: bad multiplication node",
+            line=tree.meta.line,
+            column=tree.meta.column,
+        )
+
     def mapinits(self, tree: lark.Tree) -> Any:
         # ``visit_children`` (not a per-child ``self.visit()`` loop), to
         # match the base method's own frame count per nesting level — see
@@ -327,8 +591,14 @@ class _StateEvaluator(Evaluator):
                 return value
         result = celtypes.MapType()
         for key, value in zip(values[0::2], values[1::2], strict=True):
-            if key in result:
-                raise ValueError(f"Duplicate key {key!r}")
+            try:
+                duplicate = key in result
+            except TypeError as ex:
+                raise ValueError(
+                    f"cannot use {_cel_type_phrase(key)} as a key"
+                ) from ex
+            if duplicate:
+                raise ValueError(f"duplicate key: {_repr_key(key)}")
             result[cast(Any, key)] = cast(Any, value)
         return result
 
@@ -651,6 +921,10 @@ def validate_cel_syntax(
     try:
         _compile(expr)
     except CelError as exc:
+        if exc.too_deeply_nested:
+            raise CelValidationError(
+                f"{where}: expression is nested too deeply", expression=expr
+            ) from exc
         raise CelValidationError(
             f"{where}: expression does not parse ({exc}). Expression: {expr!r}",
             expression=expr,
@@ -685,10 +959,22 @@ def free_identifiers(expr: str) -> tuple[str, ...]:
     identifiers here; a message-construction type name (``Msg{f: 1}``) is,
     because it is read the same way any other bare name is.
 
-    Raises :class:`CelValidationError` if *expr* does not parse.
+    Raises :class:`CelValidationError` if *expr* does not parse, or is too
+    deeply nested for this walk's own recursion to finish -- a shape
+    :func:`_compile` can itself compile fine (its own ``RecursionError``
+    catch, around parsing and :func:`_collect_state_paths`, never runs),
+    since this walk is a second, separate recursive pass over the same
+    cached tree, paying its own frame per level independently.
     """
     out: list[str] = []
-    _walk_free_identifiers(_compile(expr).runner.ast, frozenset(), out)
+    try:
+        _walk_free_identifiers(_compile(expr).runner.ast, frozenset(), out)
+    except RecursionError:
+        raise CelValidationError(
+            "expression is nested too deeply",
+            expression=expr,
+            too_deeply_nested=True,
+        ) from None
     return tuple(out)
 
 
@@ -890,28 +1176,62 @@ _CACHE: dict[str, _Compiled] = {}
 
 def _compile(expr: str) -> _Compiled:
     """Parse *expr* once and memoise the runner and its state paths."""
+    too_deeply_nested = False
+    compiled: _Compiled | None = None
     with _LOCK:
         cached = _CACHE.get(expr)
         if cached is not None:
             return cached
         try:
             tree = _ENV.compile(expr)
+            found = _collect_state_paths(tree)
+            runner = _ENV.program(tree, functions=_FUNCTIONS)
+            # Inside the same try as the two walks above, not after it:
+            # this is a third independent recursive pass over the same
+            # tree, with its own frame cost per level, so it can overflow
+            # even when they didn't (observed on Python 3.12, a deeply
+            # nested expression neither of the other two failed on).
+            reads_whole_state = _count_state_idents(tree) != len(found)
+        except RecursionError:
+            # Walking the parse tree recurses per tree level the same way
+            # parsing itself does, so a pathologically nested expression
+            # (deep parenthesisation, a long accessor chain) can exhaust
+            # Python's recursion budget in any of the three walks above
+            # rather than in ``_ENV.compile`` itself. Only a flag is set
+            # here, never a raise: constructing and raising
+            # ``CelValidationError`` from inside this ``except`` clause,
+            # while ``with _LOCK`` is still on the stack, chains onto
+            # whatever's left of the ``RecursionError``'s own, already
+            # near-the-limit traceback -- close enough to cof's own floor
+            # for this shape that it could itself re-trigger a second
+            # ``RecursionError`` while unwinding. Raising below, after
+            # both the ``try``/``except`` and the ``with`` block have
+            # already exited and every one of their frames has unwound,
+            # costs this function nothing it wasn't going to pay anyway.
+            too_deeply_nested = True
         except Exception as exc:
             raise CelValidationError(str(exc).strip(), expression=expr) from exc
-        found = _collect_state_paths(tree)
-        paths = tuple((path, guarded) for _node, path, guarded in found)
-        compiled = _Compiled(
-            runner=_ENV.program(tree, functions=_FUNCTIONS),
-            paths=paths,
-            occurrences=tuple(
-                (node, path) for node, path, guarded in found if not guarded
-            ),
-            reads_whole_state=_count_state_idents(tree) != len(found),
+        else:
+            paths = tuple((path, guarded) for _node, path, guarded in found)
+            compiled = _Compiled(
+                runner=runner,
+                paths=paths,
+                occurrences=tuple(
+                    (node, path) for node, path, guarded in found if not guarded
+                ),
+                reads_whole_state=reads_whole_state,
+            )
+            if len(_CACHE) >= _CACHE_MAX_ENTRIES:
+                _CACHE.clear()
+            _CACHE[expr] = compiled
+    if too_deeply_nested:
+        raise CelValidationError(
+            "expression is nested too deeply",
+            expression=expr,
+            too_deeply_nested=True,
         )
-        if len(_CACHE) >= _CACHE_MAX_ENTRIES:
-            _CACHE.clear()
-        _CACHE[expr] = compiled
-        return compiled
+    assert compiled is not None
+    return compiled
 
 
 def clear_expression_cache() -> None:

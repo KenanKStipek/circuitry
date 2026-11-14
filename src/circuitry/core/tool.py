@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import dataclasses
 import json
 import logging
@@ -60,6 +61,41 @@ logger = logging.getLogger(__name__)
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _attempt_entry(
+    meta: dict[str, Any],
+    *,
+    created_at: str,
+    completed_at: str,
+    value: Any,
+    error: str | None,
+) -> dict[str, Any]:
+    """One ``meta.attempts`` entry for a tool: ``core.use._attempt_entry``'s
+    counterpart. ``exit_code``/``status_code`` are included only when this
+    attempt's own ``meta`` carries them -- today, every tool sets
+    ``exit_code`` (``None`` for a non-process plugin) and only the
+    HTTP-family plugins ever set ``status_code``.
+    """
+    entry: dict[str, Any] = {
+        "created_at": created_at,
+        "completed_at": completed_at,
+        "value": copy.deepcopy(value),
+        "error": error,
+        "expect": copy.deepcopy(meta.get("expect")),
+    }
+    if "exit_code" in meta:
+        entry["exit_code"] = meta["exit_code"]
+    if "status_code" in meta:
+        entry["status_code"] = meta["status_code"]
+    return entry
+
+
+def _write_attempts(meta: dict[str, Any], attempts: list[dict[str, Any]]) -> None:
+    """``meta.attempts``, always written as the last key of *meta* -- same
+    contract as ``core.use._write_attempts``."""
+    meta.pop("attempts", None)
+    meta["attempts"] = list(attempts)
 
 
 #: Providers whose raw["status"] is an HTTP status code, not some other
@@ -516,7 +552,7 @@ class ToolRuntime:
     Executes a ToolDefinition against a plugin + store.
     Writes:
       <name>.value
-      <name>.meta{created_at, completed_at, provider, params_rendered, stdout, stderr, exit_code, error, retries_used?}
+      <name>.meta{created_at, completed_at, provider, params_rendered, stdout, stderr, exit_code, error, retries_used?, attempts?}
 
       ``meta.created_at`` is the start of this pass's first attempt, not
       reset on a retry, so a reader can time the whole pass (including
@@ -524,6 +560,16 @@ class ToolRuntime:
       and a failed outcome, to the index of the attempt that decided the
       outcome; it's absent, not 0, when the first attempt is also the last
       (#421) — same rule as a prompt effect (core.prompt.PromptRuntime).
+
+      ``meta.attempts`` is present exactly when ``meta.retries_used`` is:
+      one entry per attempt this pass made, oldest first, the last entry
+      repeating the fields that decided the outcome. Each entry carries its
+      own ``created_at``, ``completed_at``, ``value``, ``error``, ``expect``
+      (this attempt's own ``meta.expect``, or ``None`` when the check never
+      ran), then ``exit_code`` and ``status_code`` -- each only when this
+      attempt's own ``meta`` carries it. It is cleared at the start of every
+      pass, so a reused node never shows an earlier pass's attempts, and it
+      is always the last key of ``meta`` (#668).
 
       ``meta.params_rendered`` is redacted (``cli.redaction.redact``) before
       storage; the plugin itself still receives the unredacted values (#238).
@@ -745,6 +791,10 @@ class ToolRuntime:
         if not isinstance(meta, dict):
             meta = {}
             node["meta"] = meta
+        # Cleared here, once per pass, not per attempt -- a pass that ends
+        # up making only one attempt must not keep a reused node's earlier
+        # pass's meta.attempts around (#668).
+        meta.pop("attempts", None)
 
         indent = "  " * self.depth
 
@@ -813,6 +863,10 @@ class ToolRuntime:
         # later attempt is the one that decides the outcome.
         total_tokens_sent: int | None = None
         total_tokens_received: int | None = None
+        # Every attempt this pass makes, oldest first (#668) -- written to
+        # meta.attempts only once more than one attempt has run, exactly
+        # when meta.retries_used is also set.
+        attempts: list[dict[str, Any]] = []
         for attempt_index in range(max_attempts):
             if attempt_index > 0:
                 # Cancellation-aware, not a bare time.sleep — see core.use's
@@ -830,6 +884,7 @@ class ToolRuntime:
 
             t0 = time.monotonic()
             mtag = ""
+            attempt_started_at = _now_iso()
 
             # Set once, on this pass's first attempt only — the start of a
             # retried tool's final attempt is not when it started (#421). A
@@ -837,7 +892,7 @@ class ToolRuntime:
             # value because attempt_index is 0 again at the top of that
             # pass's own loop.
             if attempt_index == 0:
-                meta["created_at"] = _now_iso()
+                meta["created_at"] = attempt_started_at
             meta["completed_at"] = None
             meta["provider"] = self.defn.provider
             meta["error"] = None
@@ -1202,7 +1257,20 @@ class ToolRuntime:
                         self.cb_error(line)
                     else:
                         _console.print(line)
+                attempts.append(
+                    _attempt_entry(
+                        meta,
+                        created_at=attempt_started_at,
+                        completed_at=meta["completed_at"],
+                        value=None,
+                        error=meta["error"],
+                    )
+                )
                 if retryable and not is_last_attempt:
+                    # The finished attempts, readable (and on --live-state)
+                    # before the next one starts (#668).
+                    _write_attempts(meta, attempts)
+                    store.publish()
                     next_delay_ms = next_backoff_delay_ms(
                         RetryInfo(retryable=True), attempt_index=attempt_index, base_ms=backoff_ms
                     )
@@ -1211,6 +1279,7 @@ class ToolRuntime:
                 # not 0, when the first attempt is also the last.
                 if attempt_index > 0:
                     meta["retries_used"] = attempt_index
+                    _write_attempts(meta, attempts)
                 if self.defn.on_error in ("skip", "continue"):
                     node["value"] = None
                 # Fires before the re-raise so the start/complete pair stays
@@ -1308,7 +1377,20 @@ class ToolRuntime:
                         self.cb_error(line)
                     else:
                         _console.print(line)
+                attempts.append(
+                    _attempt_entry(
+                        meta,
+                        created_at=attempt_started_at,
+                        completed_at=meta["completed_at"],
+                        value=node["value"],
+                        error=meta["error"],
+                    )
+                )
                 if retryable and not is_last_attempt:
+                    # The finished attempts, readable (and on --live-state)
+                    # before the next one starts (#668).
+                    _write_attempts(meta, attempts)
+                    store.publish()
                     next_delay_ms = next_backoff_delay_ms(
                         RetryInfo(retryable=True, retry_after=retry_after),
                         attempt_index=attempt_index,
@@ -1319,6 +1401,7 @@ class ToolRuntime:
                 # not 0, when the first attempt is also the last.
                 if attempt_index > 0:
                     meta["retries_used"] = attempt_index
+                    _write_attempts(meta, attempts)
                 if self.defn.on_error in ("skip", "continue"):
                     node["value"] = None
                 store.fire_effect_complete(self.defn.name, node)
@@ -1334,6 +1417,18 @@ class ToolRuntime:
                 meta["tokens_received"] = result.tokens_received
             if result.cost_usd is not None:
                 meta["cost_usd"] = result.cost_usd
+
+            attempts.append(
+                _attempt_entry(
+                    meta,
+                    created_at=attempt_started_at,
+                    completed_at=meta["completed_at"],
+                    value=node["value"],
+                    error=None,
+                )
+            )
+            if attempt_index > 0:
+                _write_attempts(meta, attempts)
 
             if self.verbose:
                 elapsed = time.monotonic() - t0

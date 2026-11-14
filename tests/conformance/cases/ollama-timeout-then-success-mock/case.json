@@ -1,8 +1,18 @@
 {
   "spec_case": "issue #503 (native Ollama, --max-time timeout is retried)",
-  "description": "The first response is delayed past timeout_ms, giving curl exit 28 (retryable); the second succeeds. Curl's own text never reaches the final state.",
+  "description": "The first response is delayed past timeout_ms, giving curl exit 28 (retryable); the second succeeds. Curl's own text never reaches the final state outside `meta.attempts`, where the first (failed) attempt's own text is matched by pattern (third_party_text), not byte-for-byte.",
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "success",
-  "mock_http_fixture": "mock-http.yaml"
+  "mock_http_fixture": "mock-http.yaml",
+  "third_party_text": [
+    {
+      "location": "prime.greeting.meta.attempts.0.error",
+      "pattern": "ollama request failed \\(curl exit 28\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(28\\) Operation timed out.*? The model didn't finish within 1s\\. Raise `runtime\\.adapters\\.ollama\\.timeout_seconds` in your config \\(a prompt's `timeout_ms` can only shorten it\\), or use a smaller/faster model\\."
+    },
+    {
+      "location": "prime.greeting.meta.attempts.0.fallback_attempts.0.error",
+      "pattern": "ollama request failed \\(curl exit 28\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(28\\) Operation timed out.*? The model didn't finish within 1s\\. Raise `runtime\\.adapters\\.ollama\\.timeout_seconds` in your config \\(a prompt's `timeout_ms` can only shorten it\\), or use a smaller/faster model\\."
+    }
+  ]
 }

@@ -1,0 +1,27 @@
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 503
+    reason: "Service Unavailable"
+    headers:
+      Content-Type: application/json
+    body: '{"error": {"message": "overloaded"}}'
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "{\"nope\": 1}"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 3, "completion_tokens": 4}}'
+- request:
+    method: POST
+    path: /chat/completions
+  response:
+    status: 200
+    reason: OK
+    headers:
+      Content-Type: application/json
+    body: '{"choices": [{"message": {"content": "{\"ok\": true}"}, "finish_reason": "stop"}], "usage": {"prompt_tokens": 3, "completion_tokens": 5}}'

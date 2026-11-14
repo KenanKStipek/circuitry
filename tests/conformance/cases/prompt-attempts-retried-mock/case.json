@@ -1,0 +1,8 @@
+{
+  "spec_case": "orchestration-reference.md, Every attempt (meta.attempts)",
+  "description": "A 503, then a 200 whose JSON body fails the effect's own schema, then a 200 that passes it: both failure modes are retryable, so `retries_used: 2` and `meta.attempts` holds all three attempts, each with its own `fallback_attempts` (carrying the #660 `http_status` for the 503) and token counts.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml"
+}

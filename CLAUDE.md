@@ -39,6 +39,14 @@ trust a `ruff`/`mypy` already on `PATH`. Tool versions are pinned there
 specifically so "green locally" means "green in CI"; a stray unpinned
 install can pass or fail on findings CI won't reproduce.
 
+To bump one of `requirements-dev.txt`'s own pins: change the version there,
+reinstall (`pip install -e ".[tools]" && pip install -r requirements-dev.txt`),
+and run the gate above. `requirements-dev.txt` pins the dev *tools*
+(pytest, mypy, ruff, textual, mongomock, opentelemetry-*) — never the
+reference libraries electricity's generated-files job compares `cof`'s
+behaviour against (jsonschema, PyYAML, chevron, cel-python, ...), which are
+`electricity/scripts/generator-constraints.txt`'s own job.
+
 The suite is hermetic to your machine's `~/.config/circuitry/config.json` —
 an autouse fixture in `tests/conftest.py` redirects global-config discovery
 to a per-test temp dir, so a real global config (e.g. a restrictive

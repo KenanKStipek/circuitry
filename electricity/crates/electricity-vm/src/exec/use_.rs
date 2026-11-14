@@ -24,24 +24,28 @@
 //! `_namespaced_effect_cb`, `None` for the child root specifically).
 //! [`ChildObserver`] drops exactly that one pair and forwards every
 //! other hook unchanged -- including a nested child's own
-//! `graft_child_write`/`clear_graft` calls, which already compose
+//! `register_child_graft`/`clear_graft` calls, which already compose
 //! correctly without any extra work here, since each nests at its own,
 //! deeper `Frame::effect_path`.
 //!
-//! The same wrapper also turns every `write()` signal from inside the
-//! child's own execution into a [`RunObserver::graft_child_write`]
-//! call against the *parent* observer, carrying the child's own
-//! current [`Store::saved`] snapshot -- `core/use.py::_child_on_write`/
-//! `_grafted_snapshot`'s own seam (#462's `graft_child_write`/
-//! `clear_graft` hooks) -- and clears that graft
-//! ([`RunObserver::clear_graft`]) the moment the child's own execution
-//! finishes, success or failure, before [`run_isolated`] ever returns
-//! to its caller -- so [`execute_use`]'s own merge write always lands
-//! after the graft is gone, never racing it. This is generic to *any*
-//! [`run_isolated`] caller (this lane's own `use`, and M1-L2's
-//! decomposition): both need the identical "a child root's own pair is
-//! a duplicate; the parent should see every child write" behaviour, so
-//! it lives here rather than being re-derived once per caller.
+//! [`run_isolated_inner`] registers the child's own live root with the
+//! *parent* observer exactly once, before the child's own execution
+//! ever starts ([`RunObserver::register_child_graft`]) -- `core/
+//! use.py::_child_on_write`/`_grafted_snapshot`'s own seam (#462's
+//! `graft_child_write`/`clear_graft` hooks, reshaped by issue #662 into
+//! a one-time registration rather than a per-write push), so a
+//! live-state mirror can read the child's own current content lazily,
+//! straight off that root, every time it actually publishes, rather
+//! than from a snapshot [`ChildObserver::write`] pushed up front. It
+//! clears that graft ([`RunObserver::clear_graft`]) the moment the
+//! child's own execution finishes, success or failure, before
+//! [`run_isolated`] ever returns to its caller -- so [`execute_use`]'s
+//! own merge write always lands after the graft is gone, never racing
+//! it. This is generic to *any* [`run_isolated`] caller (this lane's
+//! own `use`, and M1-L2's decomposition): both need the identical "a
+//! child root's own pair is a duplicate; the parent should see the
+//! child's own running state" behaviour, so it lives here rather than
+//! being re-derived once per caller.
 //!
 //! [`run_isolated_inner`] (not [`run_isolated`] itself) is what
 //! [`execute_use`] actually calls: it hands back the child [`Store`]
@@ -1908,14 +1912,22 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
 
 /// Wraps whatever [`RunObserver`] [`run_isolated_inner`] was handed:
 /// drops the child root's own `effect_start`/`effect_complete` pair
-/// (this module's own doc comment) and turns every `write()` signal
-/// into a [`RunObserver::graft_child_write`] call carrying the child's
-/// own current [`Store::saved`] snapshot. Every other hook forwards
-/// unchanged.
+/// (this module's own doc comment) and forwards every other hook
+/// unchanged, `write()` included -- a child's own write is just an
+/// ordinary store change as far as the parent's live-state mirror is
+/// concerned (issue #662). [`run_isolated_inner`] registers the
+/// child's own live root once, directly on *its own* `observer`
+/// argument (not through this wrapper), before this wrapper's first
+/// use; the mirror pulls the child's own current content lazily from
+/// that root every time it actually publishes, the same way it
+/// already does for a tree's own branches, so `write()` here never
+/// needs to take -- or throttle -- a snapshot of its own at all (the
+/// #472 bound: a long loop inside the child calling `write()` once per
+/// leaf write now costs this wrapper nothing beyond the one forwarded
+/// call).
 struct ChildObserver<'a> {
     parent: &'a dyn RunObserver,
     root_path: EffectPath,
-    child_store: &'a Store,
     /// Whether a `flow: tree` loop/dynamic inside this child forwards
     /// its own `dispatch` announcement to *parent* at all -- `true` for
     /// a `use` child (`core/use.py::UseRuntime.execute`'s own child
@@ -1925,25 +1937,7 @@ struct ChildObserver<'a> {
     /// issue #682): the one difference between the two child shapes
     /// this one shared wrapper otherwise treats identically.
     forward_dispatch: bool,
-    /// Throttles [`RunObserver::write`]'s own snapshot-and-graft pair
-    /// (PR #472): a long loop inside the child
-    /// calls `write()` once per leaf write, and a full [`Store::saved`]
-    /// snapshot is `O(size of the child tree so far)` -- taking one on
-    /// *every* call would make a child with an `N`-pass loop pay
-    /// `O(N^2)` overall, for live-state content nothing ever reads
-    /// faster than [`CHILD_GRAFT_INTERVAL`] anyway (the real mirror's
-    /// own flush is throttled the same way: `electricity`'s own
-    /// `LiveStateMirror::flush_if_due`). `None` until the first call,
-    /// which always grafts immediately.
-    last_graft: std::cell::Cell<Option<std::time::Instant>>,
 }
-
-/// [`ChildObserver::write`]'s own throttle window -- deliberately not
-/// shared with `electricity` (lib)'s own `LiveStateMirror::
-/// LIVE_STATE_INTERVAL` (that crate isn't a dependency of this one);
-/// a different, shorter value is fine, since both ends only promise
-/// "eventually catches up", never a fixed cadence of their own.
-const CHILD_GRAFT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 impl RunObserver for ChildObserver<'_> {
     fn effect_start(&self, path: &EffectPath) -> InstanceId {
@@ -1981,25 +1975,7 @@ impl RunObserver for ChildObserver<'_> {
     }
 
     fn write(&self) {
-        // Ruling R4 on PR #472's review: without a `--live-state`
-        // mirror (or any other caller that actually reads a graft),
-        // `graft_child_write` is a no-op, so the `Store::saved` snapshot
-        // below -- an `O(size of the child tree so far)` recursive
-        // clone -- is never worth taking at all, not even throttled.
-        if !self.parent.wants_child_snapshots() {
-            return;
-        }
-        let now = std::time::Instant::now();
-        let due = match self.last_graft.get() {
-            None => true,
-            Some(last) => now.duration_since(last) >= CHILD_GRAFT_INTERVAL,
-        };
-        if !due {
-            return;
-        }
-        self.last_graft.set(Some(now));
-        let snapshot = self.child_store.saved(&self.child_store.root);
-        self.parent.graft_child_write(&self.root_path, &snapshot);
+        self.parent.write();
     }
 
     fn warning(&self, message: &str) {
@@ -2023,23 +1999,24 @@ impl RunObserver for ChildObserver<'_> {
         self.parent.record_totals(meta);
     }
 
-    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
-        self.parent.graft_child_write(node_path, snapshot);
+    fn register_child_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
+        self.parent.register_child_graft(node_path, child_root);
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
-        self.parent.clear_graft(node_path);
+    fn clear_graft(&self, node_path: &EffectPath, child_root: &NodeRef) {
+        self.parent.clear_graft(node_path, child_root);
     }
 
     // Issue #465: a tree nested inside this `use` child registers its
     // own branches at its own, already-namespaced path (same reasoning
     // as `dispatch`, above) -- the branch `NodeRef`s themselves belong
-    // to `self.child_store`, not the parent run's store, but
+    // to the child's own `Store`, not the parent run's store, but
     // `RunObserver::register_tree_branches`'s own contract only ever
     // reads one lazily, through whichever `Store` the caller happens
     // to resolve it with (`Store::saved` doesn't depend on `self`),
     // so forwarding the `NodeRef`s unchanged is correct regardless of
-    // which store they came from.
+    // which store they came from -- the same reason `register_child_graft`
+    // above can forward *child_root* unchanged too.
     fn register_tree_branches(&self, node_path: &EffectPath, branches: &[NodeRef]) {
         self.parent.register_tree_branches(node_path, branches);
     }
@@ -2094,12 +2071,15 @@ async fn run_isolated_inner(
         );
     }
     let root_path = frame.effect_path(&EffectPath::root());
+    // Registered once, before the child could have written anything --
+    // a live-state mirror pulls this root's own current content lazily
+    // every time it publishes (issue #662), rather than this call
+    // pushing a snapshot of its own.
+    observer.register_child_graft(&root_path, &child_store.root);
     let wrapped = ChildObserver {
         parent: observer,
         root_path: root_path.clone(),
-        child_store: &child_store,
         forward_dispatch,
-        last_graft: std::cell::Cell::new(None),
     };
     let result = crate::exec::dynamic::execute_dynamic(
         &program.root,
@@ -2113,7 +2093,7 @@ async fn run_isolated_inner(
         resume_active,
     )
     .await;
-    observer.clear_graft(&root_path);
+    observer.clear_graft(&root_path, &child_store.root);
     (child_store, result)
 }
 

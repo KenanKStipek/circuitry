@@ -361,11 +361,11 @@ pub enum Event {
     Complete(String, Option<String>),
     Dispatch(String, usize, usize),
     Write,
-    /// [`RunObserver::graft_child_write`] -- the node path, and the
-    /// grafted snapshot rendered through its own `Debug` text (the
-    /// snapshot's exact shape is a child `Store::saved` tree, not
-    /// worth giving `Event` its own `Value`-carrying variant just for
-    /// the handful of tests that look at it at all).
+    /// [`RunObserver::register_child_graft`] -- the node path, and the
+    /// registered root's own current content, rendered through its
+    /// own `Debug` text (the shape is a child `Node` tree, not worth
+    /// giving `Event` its own `NodeRef`-carrying variant just for the
+    /// handful of tests that look at it at all).
     Graft(String, String),
     /// [`RunObserver::clear_graft`].
     ClearGraft(String),
@@ -392,12 +392,6 @@ pub enum Event {
 pub struct RecordingObserver {
     events: RefCell<Vec<Event>>,
     next_instance: std::cell::Cell<electricity_vm::observer::InstanceId>,
-    /// `true` by default -- every existing test here that asserts a
-    /// `Event::Graft`/`Event::ClearGraft` pair happened needs
-    /// `exec::use_::ChildObserver::write` to actually take one (R4 on
-    /// PR #472's review gates it on this). [`Self::with_child_snapshots`]
-    /// turns it off for a test that specifically checks the *opposite*.
-    wants_child_snapshots: std::cell::Cell<bool>,
 }
 
 impl Default for RecordingObserver {
@@ -405,7 +399,6 @@ impl Default for RecordingObserver {
         RecordingObserver {
             events: RefCell::new(Vec::new()),
             next_instance: std::cell::Cell::new(0),
-            wants_child_snapshots: std::cell::Cell::new(true),
         }
     }
 }
@@ -417,11 +410,6 @@ impl RecordingObserver {
 
     pub fn events(&self) -> Vec<Event> {
         self.events.borrow().clone()
-    }
-
-    pub fn with_child_snapshots(self, wants: bool) -> Self {
-        self.wants_child_snapshots.set(wants);
-        self
     }
 }
 
@@ -457,13 +445,14 @@ impl RunObserver for RecordingObserver {
         self.events.borrow_mut().push(Event::Write);
     }
 
-    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
-        self.events
-            .borrow_mut()
-            .push(Event::Graft(node_path.to_string(), format!("{snapshot:?}")));
+    fn register_child_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
+        self.events.borrow_mut().push(Event::Graft(
+            node_path.to_string(),
+            format!("{:?}", child_root.borrow()),
+        ));
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
+    fn clear_graft(&self, node_path: &EffectPath, _child_root: &electricity_vm::NodeRef) {
         self.events
             .borrow_mut()
             .push(Event::ClearGraft(node_path.to_string()));
@@ -505,10 +494,6 @@ impl RunObserver for RecordingObserver {
             message.to_string(),
             format!("{data:?}"),
         ));
-    }
-
-    fn wants_child_snapshots(&self) -> bool {
-        self.wants_child_snapshots.get()
     }
 }
 

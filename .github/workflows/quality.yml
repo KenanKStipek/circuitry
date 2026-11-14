@@ -8,8 +8,40 @@ on:
       - master
 
 jobs:
-  test:
+  # Builds the `electricity` binary once, with a Rust cache, and uploads it
+  # so every Python matrix job's conformance run downloads the same binary
+  # instead of each building its own copy from a cold cache (issue #775).
+  build-electricity:
+    name: build electricity (shared by the test matrix)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # v2.9.3
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          workspaces: electricity
+
+      - name: Build electricity binary
+        working-directory: electricity
+        run: cargo build -p electricity-cli --bin electricity
+
+      - name: Upload electricity binary
+        uses: actions/upload-artifact@v4
+        with:
+          name: electricity-binary
+          path: electricity/target/debug/electricity
+          if-no-files-found: error
+          retention-days: 1
+
+  test:
+    needs: build-electricity
+    runs-on: ubuntu-latest
+    timeout-minutes: 80
     strategy:
       fail-fast: false
       matrix:
@@ -35,7 +67,18 @@ jobs:
           pip install -e ".[tools]"
           pip install -r requirements-dev.txt
 
+      - name: Download electricity binary
+        uses: actions/download-artifact@v4
+        with:
+          name: electricity-binary
+          path: electricity-bin
+
+      - name: Make electricity binary executable
+        run: chmod +x electricity-bin/electricity
+
       - name: Run tests
+        env:
+          ELECTRICITY_BINARY: ${{ github.workspace }}/electricity-bin/electricity
         run: pytest -q -m 'not integration' --cov=circuitry --cov-report=term-missing --cov-report=xml:coverage.xml
 
       - name: Upload coverage artifact
@@ -47,6 +90,7 @@ jobs:
 
   lint-typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -70,6 +114,7 @@ jobs:
 
   smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4

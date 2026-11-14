@@ -42,6 +42,7 @@ mod config;
 pub mod config_trust;
 pub mod dotenv;
 mod effective_settings;
+mod last_run;
 mod merge;
 mod parsed_stdout;
 mod persistence;
@@ -76,6 +77,7 @@ pub use config::{
 pub use effective_settings::{
     EffectiveSettings, effective_settings, effective_settings_with_profile,
 };
+pub use last_run::{LastRun, last_run_path, read_last_run, redacted_env_pairs, write_last_run};
 pub use merge::merge_runtime;
 pub use parsed_stdout::{drops_parsed_stdout, parsed_stdout_errors};
 pub use persistence::persistence_enabled;

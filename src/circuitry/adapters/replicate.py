@@ -36,6 +36,7 @@ class ReplicateAdapter:
     name: str = "replicate"
     base_url: str = "https://api.replicate.com/v1"
     default_model: str = "meta/meta-llama-3-70b-instruct"
+    api_key_env: str = "REPLICATE_API_TOKEN"
 
     def generate(
         self,
@@ -45,11 +46,9 @@ class ReplicateAdapter:
         timeout_seconds: int = 120,
         options: GenerateOptions | None = None,
     ) -> GenerateResult:
-        api_token = os.environ.get("REPLICATE_API_TOKEN", "")
+        api_token = os.environ.get(self.api_key_env, "")
         if not api_token:
-            raise RuntimeError(
-                "replicate: REPLICATE_API_TOKEN not set."
-            )
+            raise RuntimeError(f"replicate: {self.api_key_env} not set.")
         target_model = (model or self.default_model).strip()
         if "/" not in target_model:
             raise ValueError(
@@ -126,8 +125,8 @@ class ReplicateAdapter:
 
     def check(self) -> CheckResult:
         missing: list[str] = []
-        if not os.environ.get("REPLICATE_API_TOKEN"):
-            missing.append("env:REPLICATE_API_TOKEN")
+        if not os.environ.get(self.api_key_env):
+            missing.append(f"env:{self.api_key_env}")
         if shutil.which("curl") is None:
             missing.append("binary:curl")
         return CheckResult(ok=not missing, missing=missing)

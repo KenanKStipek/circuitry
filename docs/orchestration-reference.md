@@ -107,7 +107,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
-| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the final pass's chain survives into `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier pass's own attempts, and its classification, are gone once a retry starts a fresh one |
+| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the deciding attempt's chain survives into the top-level `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier attempt's own chain and classification are kept in `meta.attempts` instead, never left on the node's own top-level fields; see [Every attempt](#every-attempt-metaattempts) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
 | `split` | object | no | — | `{enabled?: bool, budget_tokens?: int, max_parts?: int, separator?: string, merge?: {template: string}}` — the size trigger's per-effect overlay (see [Complexity Configuration](./complexity-config.md#splitting)). `budget_tokens` splits this effect even with `runtime.complexity.splitting.enabled: false`; `enabled: false` always opts it out. `merge.template` is required for any `prompt_type` other than `text` or an array (`array`, or `json` with an array schema), whose parts the runtime joins/concatenates natively |
@@ -307,8 +307,9 @@ A config can give an adapter a name of its own, with settings of its own: a diff
 }}}
 ```
 
-- **The target.** `adapter` names any adapter `cof list --extensions` shows, except `host_claude` (supplied at run time by `circuitry-mcp`, never built from config) — normalised with `.strip().lower()`. Every other key is one of the target's own settings (`base_url`, `default_model`, `timeout_seconds`, `stream`, and the target's specific keys — `max_tokens`, `api_key_env` where supported, `endpoint`/`api_version`, `account_id`, `api_base`, `replies_file`, cyberdiner's own keys, and the CLI keys above: `binary`, `thinking` for `pi`, `unset_env`, `extra_args`, `env`). An alias starts from nothing: it does not inherit the target's own `runtime.adapters.<target>` entry, and it never changes that entry or another alias's. Keys the target doesn't read are ignored, exactly as on the target's own block.
-- **Credentials.** An alias uses its target's credential: an alias of `groq` reads `GROQ_API_KEY`. A keyless target (`lmstudio`, `vllm`, `llamacpp`) needs none — several local OpenAI-compatible endpoints in one config need no key at all between them. `api_key_env` works only where the target already accepts it (`nvidia-nim`, `tgi`).
+- **The target.** `adapter` names any adapter `cof list --extensions` shows, except `host_claude` (supplied at run time by `circuitry-mcp`, never built from config) — normalised with `.strip().lower()`. Every other key is one of the target's own settings (`base_url`, `default_model`, `timeout_seconds`, `stream`, and the target's specific keys — `max_tokens`, `api_key_env` (every keyed adapter), `endpoint`/`api_version`, `account_id`, `api_base`, `replies_file`, cyberdiner's own keys, and the CLI keys above: `binary`, `thinking` for `pi`, `unset_env`, `extra_args`, `env`). An alias starts from nothing: it does not inherit the target's own `runtime.adapters.<target>` entry, and it never changes that entry or another alias's. Keys the target doesn't read are ignored, exactly as on the target's own block.
+- **Credentials.** An alias uses its target's credential by default: an alias of `groq` reads `GROQ_API_KEY`. A keyless target (`lmstudio`, `vllm`, `llamacpp`) needs none — several local OpenAI-compatible endpoints in one config need no key at all between them. Any keyed adapter, built-in or alias, accepts its own `api_key_env`, naming the environment variable to read the key from in place of the target's default — so two aliases of the same provider, or two endpoints behind different gateways, can each use their own key in one config. A keyless OpenAI-compatible target (`lmstudio`, `vllm`, `llamacpp`, ...) sends `Authorization: Bearer <value>` once `api_key_env` is set. `api_key_env` must be a string matching `[A-Za-z_][A-Za-z0-9_]*`; a target that doesn't always need a key (a self-hosted OpenAI-compatible one) also accepts the empty string (an explicit "no key", the default for a keyless target); a target that always sends one (`openai`, `anthropic`, `replicate`, `watsonx`, `azure-openai`) rejects `""` too. Anything else is a config error, listed the same way a broken alias is. The named variable is reported by preflight (`missing ['env:<NAME>']`) and masked like any other credential — it never appears in state, events, errors or preflight text.
+- **`api_key_env` is config-only.** Only `runtime.adapters.<name>.api_key_env` from config (user config, or a trusted project config) is honoured. An orchestration document's own attempt to set it — on an alias or a built-in adapter's block — is always ignored, with the warning `runtime.adapters.<name>.api_key_env from <document> ignored: only config chooses which environment variable an adapter's key comes from`; unlike the alias-retarget rule below, this holds whether or not `enabled_adapters` is set. See [the threat model](./threat-model.md) for why: a document run by path can already set `base_url`, and choosing `api_key_env` too would let it point an adapter's Bearer header at any variable in the host's environment, not just that provider's own key.
 - **Selecting it.** Anywhere an effect can name an adapter: `provider: claude_alt`, `provider: "claude_alt:claude-sonnet-4-5"`, `provider_fallbacks`, a document's `adapter:`, `default_adapter`, and a profile's `adapter:`/`provider:` overrides. `meta.adapter` and `fallback_attempts[].adapter` record the alias's own name. `enabled_adapters` lists an alias by its own name, like any adapter.
 - **The name it reports.** Warnings, the preflight label (`adapter:<alias>`, carrying the target's `check()` result, e.g. `missing ['env:GROQ_API_KEY']`), and `effective_settings.sources["adapters.<alias>.timeout_seconds"]` all name the alias. A hint that tells you which config key to set names the alias's own block (ollama's unreachable hint becomes `runtime.adapters.<alias>.base_url`). The wire-protocol label in a request failure stays the target's (`OpenAI-compatible request failed …`). A built-in adapter sees no change. For `pi`/`claude_code` specifically, the child's environment is, in order: the caller's environment, minus the always-removed parent-session variables, minus the alias's `unset_env`, then its `env`. Two aliases in one run each give their own child its own `env`; cof's own environment is never changed.
 - **Errors.** A config error names the alias, and never shows an `env` value:
@@ -323,7 +324,7 @@ A config can give an adapter a name of its own, with settings of its own: a diff
   | A malformed setting the target's own builder rejects (e.g. `max_tokens: "x"`) | the builder's own message, prefixed `runtime.adapters.<alias>: ` unless it already names the alias's own block (the `env`/`unset_env`/`extra_args` errors above always do) |
 
   A name that sets no `adapter` is not an alias, whatever else it sets.
-- **Validated up front.** Every alias in the run's merged runtime (config plus a by-path document's) is built up front, whether or not the document uses it. `cof check` lists one error per broken alias, in name order, even with `--skip-preflight`. `cof run` fails before the first effect with an `Invalid adapter aliases:` block, one line per broken alias, and writes `--out` like any other configuration error. Preflight never sees an invalid alias; `cof doctor` is unchanged (one row per alias).
+- **Validated up front.** Every alias in the run's merged runtime (config plus a by-path document's) is built up front, whether or not the document uses it. `cof check` lists one error per broken alias, in name order, even with `--skip-preflight`. `cof run` fails before the first effect with an `Invalid adapter aliases:` block, one line per broken alias, and writes `--out` like any other configuration error. Preflight never sees an invalid alias; `cof doctor` is unchanged (one row per alias). An `api_key_env` is checked the same way, for every adapter entry, built-in or alias, in name order, whether or not any effect selects it: a malformed one on an *alias's own* block fails while the alias itself is being built, so it already appears under `Invalid adapter aliases:` (building the alias raises the identical text below); a malformed one on a *built-in* adapter's own block has no such build step of its own, so it surfaces under a separate `Invalid adapter api_key_env:` block instead, with the text `runtime.adapters.<name>.api_key_env must be an environment variable name, got <repr>`. Either way the text names whichever block actually set it, never twice.
 - **`cof check` and `cof doctor`** check the alias's own dependencies — binary and login for `pi`/`claude_code`, credential env var otherwise — reported under the alias's own name.
 - **Secrecy.** `env` values are blanked in the `runtime.effective_settings` snapshot of the saved state (the variable names stay) and appear in no event, log, error message or "Applied host settings" line (which lists key paths, such as `runtime.adapters.claude_alt.env`, never values). Treat `env` as host configuration all the same: put a secret in a file the CLI reads, not in a value that config.json holds.
 - **Trust.** An alias is adapter configuration, so the trust boundary is unchanged. A document run by path may define aliases in its `runtime.adapters`, and they are listed in "Applied host settings"; a limited document's `runtime.adapters` is ignored, so an effect of it that names an alias only that document defines fails as an unknown adapter. With `enabled_adapters` set, though, a document — trusted or not — can no longer define or retarget an adapter alias at all: its own `runtime.adapters.<name>.adapter` key is ignored, with the warning `runtime.adapters.<name>.adapter from <document> ignored: with enabled_adapters set, only config defines adapter aliases`; other keys in the same block (a `base_url` override, say) still apply. Without `enabled_adapters`, a document keeps the power described above.
@@ -896,7 +897,7 @@ time.
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
 <a id="tool-retries"></a>
-**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's.
+**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts).
 
 <a id="tool-expect"></a>
 **`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?}`).
@@ -1530,41 +1531,75 @@ Every `use` node also records, whether or not the setting is on:
 
 #### Every attempt (meta.attempts)
 
-A `use` with `retries` only ever showed the attempt that decided the outcome: the earlier
-ones' proposals, errors and `expect` results were gone the moment the next attempt started,
-visible only in `--events` or an adapter's own log. `meta.attempts` keeps every attempt that
-ran, oldest first:
+A retried `use`, `tool` or `prompt` used to show only the attempt that decided the outcome:
+the earlier ones' proposals, errors, `expect` results and token spend were gone the moment
+the next attempt started, visible only in `--events` or an adapter's own log. `meta.attempts`
+keeps every attempt that ran, oldest first. Every entry starts with the same four keys,
+whatever the effect type:
 
 | Key | Value |
 |-----|-------|
 | `created_at` | When this attempt started |
 | `completed_at` | When it ended |
-| `value` | What this attempt mapped: the declared-outputs dict, or `null` in full-namespace mode or when the child failed |
+| `value` | What this attempt produced: a `use`'s declared-outputs dict (`null` in full-namespace mode or when the child failed), a tool's own `value`, or a prompt's decoded reply (`null` on failure) |
 | `error` | `null` if this attempt succeeded, otherwise the text `meta.error` would show for it |
-| `child_errors` | This attempt's own `meta.child_errors` |
-| `expect` | This attempt's own `meta.expect`, or `null` when the check didn't run |
-| `children` | Only with `runtime.state.record_children`: this attempt's own child effects, in the same shape the complete record keeps under the node |
+
+Then each effect type's own extra keys, in this order:
+
+- **`use`:** `child_errors` (this attempt's own `meta.child_errors`), `expect` (this attempt's
+  own `meta.expect`, or `null` when the check didn't run), and, only with
+  `runtime.state.record_children`, `children` — this attempt's own child effects, in the same
+  shape the complete record keeps under the node.
+- **`tool`:** `expect` (this attempt's own `meta.expect`, or `null` when the check didn't run),
+  then `exit_code` and `status_code`, each only for a provider that sets it on the node at all
+  (every tool sets `exit_code`, `null` for a non-process plugin; only the HTTP-family providers
+  ever set `status_code`).
+- **`prompt`:** `fallback_attempts` — that attempt's own provider tries (the
+  `provider`/`provider_fallbacks` chain tried within this one attempt), each entry carrying its
+  own `error_code`/`http_status` the same way the top-level field does — then `tokens_sent` and
+  `tokens_received`. A prompt has no `expect` of its own (unlike a `tool` or `use` effect), so
+  its entry skips straight from `error` to `fallback_attempts`.
 
 - **Present exactly when `meta.retries_used` is** — one attempt (a dry run, a failure before
   the first attempt) never gets an `attempts` list at all, not an empty one.
-- **The last entry is the deciding attempt.** Its `value`, `error`, `expect` and `child_errors`
-  equal the node's own; `meta.created_at`/`meta.completed_at` tie to its first/last entry.
-- **Each retry starts from a clean node.** From the second attempt on, the previous attempt's
-  child effects are removed from under the node — kept in its own `attempts` entry when
-  `record_children` is on — so the final node never mixes an earlier attempt's step (an `if`
-  branch it alone took) with the deciding one's, in either `record_children` or
-  full-namespace mode.
-- **Written as soon as an attempt ends**, before the backoff wait — so `--live-state`, and the
-  `use`'s own `expect` and `inputs`, can read the attempts before the current one:
+- **The last entry is the deciding attempt.** Its own fields equal the node's own top-level
+  ones (`value`, `error`, a `use`'s `expect`/`child_errors`, a tool's `expect`, a prompt's
+  `fallback_attempts`/`tokens_sent`/`tokens_received`); `meta.created_at`/`meta.completed_at`
+  tie to its first/last entry.
+- **A `use`'s own retry starts from a clean node.** From the second attempt on, the previous
+  attempt's child effects are removed from under the node — kept in its own `attempts` entry
+  when `record_children` is on — so the final node never mixes an earlier attempt's step (an
+  `if` branch it alone took) with the deciding one's, in either `record_children` or
+  full-namespace mode. A `tool` or `prompt` effect is a leaf and has no child effects to clean
+  up this way.
+- **Written as soon as an attempt ends**, before the backoff wait — so `--live-state`, and (for
+  a `use`) the effect's own `expect` and `inputs`, can read the attempts before the current
+  one:
   ```yaml
   inputs:
     earlier: {from: prime.theme.meta.attempts}  # null on the first attempt
   ```
 - After `on_error: skip`/`continue` absorbs an exhausted retry, the entries are a record of what
-  each attempt mapped — downstream still reads the node's own `value`, which is `null`.
+  each attempt produced — downstream still reads the node's own `value`, which is `null`.
 - Reset at the start of every pass, same as `expect` and `retries_used` — a reused node (an
   unnamed loop's next pass, `--state` carryover) never shows an earlier pass's attempts.
-- Tools and prompts do not record attempts yet; only `use` does.
+- **Doesn't change run totals.** A prompt's own `meta.tokens_sent_total`/`tokens_received_total`
+  already sum every attempt's spend, retried or not — the entries just make that spend readable
+  per attempt, they don't add to it. A tool's `expect: {mode: model}` check spends its own
+  tokens on every attempt, including one that is later retried; those never reach
+  `last_run.totals` on either engine. Each attempt's own `expect.tokens_sent`/`tokens_received`
+  is readable inside that attempt's own `meta.attempts` entry; the deciding attempt's is also
+  on the node's own `meta.expect`, which a `dynamic`'s own token sum (`core/dynamic.py`'s
+  `_sum_tokens`) does walk — so a parent `dynamic`'s total counts the deciding attempt's
+  `expect` spend but not an earlier, retried attempt's, which `meta.expect` no longer holds
+  once a later attempt overwrites it.
+- **No size cap.** A prompt's own entry repeats that attempt's whole decoded reply in `value`
+  (and, inside `fallback_attempts`, a losing attempt's `raw_reply`, already capped the way the
+  top-level field is) — a document sending many large prompts through a few retries keeps every
+  reply in state. [`runtime.state.prompt_sent`](#recording-the-prompt-text-runtimestateprompt_sent)
+  shapes only `meta.prompt_sent` itself (the text sent, set once per pass before the retry loop);
+  it has no effect on `meta.attempts`, whose entries never carry the prompt text at all, only
+  what came back.
 
 **Cycle detection:**
 
@@ -2331,6 +2366,54 @@ only fails here) is one line, never a dump of CEL's own internal state:
 CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'
 ```
 
+A missing map key, an out-of-range or wrong-type index, indexing a
+non-container, division by zero and modulus by zero are the same one line in
+both engines too — the key or index and the container's type, never the
+container's own contents:
+
+```
+CEL evaluation failed for "state.input.m['zz'] == 1": no such key: 'zz'
+CEL evaluation failed for 'state.input.l[5] == 1': list index out of range: 5
+CEL evaluation failed for 'state.input.n[0] == 1': cannot index an int with an int
+CEL evaluation failed for '1 / 0 == 1': division by zero
+CEL evaluation failed for '1 % 0 == 1': modulus by zero
+```
+
+The same holds for every other case where the underlying library would
+otherwise leak a Python/Rust implementation detail — an `int`/`uint`
+overflow, a map literal's duplicate or invalid key, selecting a field on
+something that has none, and `in` against a type it can't search:
+
+```
+CEL evaluation failed for '9223372036854775807 + 1 == 1': return error for overflow
+CEL evaluation failed for "{'a': 1, 'a': 2}.a == 1": duplicate key: 'a'
+CEL evaluation failed for '{[1]: 2} == {}': cannot use a list as a key
+CEL evaluation failed for '[1, 2].zz == 1': cannot select field 'zz' on a list
+CEL evaluation failed for '5 in 5': cannot apply 'in' to an int and an int
+```
+
+A map key of the wrong exact numeric type (an `int`-keyed map probed with a
+`uint` or a `bool` of the same value) is also one line naming the mismatch,
+not a silent miss — the two numeric types compare equal elsewhere in CEL,
+but a map's own key lookup does not cross between them:
+
+```
+CEL evaluation failed for 'state.input.m[1u] == 1': cannot index a map with a uint
+```
+
+An expression nested too deeply to parse — deep parenthesisation, a long
+accessor chain — is a compile-time rejection in both engines, named the same
+way as any other check error, never the parser's own dump or the whole
+expression quoted back:
+
+```
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply
+```
+
+The depth at which each engine gives up differs (Python's own recursion
+limit for cof, the `cel` crate's parser for electricity), but the text naming
+it does not.
+
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset read that decides the
 expression's result makes it `False` and logs a warning naming the path.
@@ -2570,16 +2653,18 @@ opt-in behavior from plain `--state`/persistence carryover (above and
 [Loop Iteration Paths](#loop-iteration-paths)), which only seeds a run's
 starting state and reruns every effect regardless of what already finished.
 
-`electricity run` has the same `--state <file> --resume <anything>` and
-`--force` flags, with this section's own skip-and-continue rules applied
-the same way (everything below, `resume: restart` included) — a state
-file either engine wrote resumes on the other. `--resume last`/a run-id
-(the other two rows of the table below) aren't supported: electricity has
-no `--last` stash and `runtime.persistence` stays refused on it, so
-`--resume` always needs `--state <file>` naming the saved state directly—
-given without it, electricity refuses the same way cof's own safety checks
-do (before anything runs, writing no state, exit 1). electricity's own
-`--last` stash is tracked separately (#760).
+`electricity run` has the same `--state <file> --resume <anything>`,
+`--resume last`, `--force` and `--last` flags, with this section's own
+skip-and-continue rules applied the same way (everything below,
+`resume: restart` included) — a state file either engine wrote resumes
+on the other, and `--last`/`--resume last` read the same stash either
+engine wrote (`~/.config/circuitry/last-run.json`), with the same checks
+and messages: no previous run, an unreadable stash, a different
+orchestration, no `--out`, a gone `--out` file, or a redacted `-e` value
+refusing `--last`. A bare run-id (the one remaining row of the table
+below) still isn't supported: `runtime.persistence` stays refused on
+electricity, so `--resume <run-id>` refuses the same way cof's own safety
+checks do (before anything runs, writing no state, exit 1).
 
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An
@@ -2706,7 +2791,7 @@ wrote:
 | `--resume` form | Source |
 |---|---|
 | `--state <file> --resume <anything>` | that file, read directly — the value after `--resume` is ignored |
-| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`); that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
+| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`), shared by cof and electricity; that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
 | `--resume <run-id>` | looked up in the orchestration's configured `runtime.persistence` backend, scoped to that same orchestration path — a run that *failed* is looked up and found here too, not only one that succeeded |
 
 A run interrupted by Ctrl-C/SIGINT, killed by SIGTERM (`kill <pid>`, a

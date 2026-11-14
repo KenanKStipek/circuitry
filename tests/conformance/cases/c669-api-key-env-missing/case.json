@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #669: a custom api_key_env reports the named variable when unset",
+  "description": "config.json redirects groq's credential lookup to GROQ_TEAM_KEY, which the sandboxed environment never sets: preflight's check() reports the custom variable by name, not GROQ_API_KEY, and the whole run is refused.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure"
+}

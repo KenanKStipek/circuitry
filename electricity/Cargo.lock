@@ -501,6 +501,7 @@ dependencies = [
  "chrono",
  "electricity-bytecode",
  "electricity-json",
+ "electricity-redaction",
  "electricity-value",
  "electricity-yaml",
  "indexmap",

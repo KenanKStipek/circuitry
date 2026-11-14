@@ -18,6 +18,7 @@ import contextlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from collections.abc import Iterator
@@ -38,6 +39,17 @@ from .normalize import (
 )
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
+
+#: The `electricity/` Cargo workspace, two levels up from this file
+#: (`tests/conformance/harness.py`) in every module that resolves the
+#: binary through [`resolve_electricity_binary`].
+ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
+
+#: Set by `quality.yml`'s shared `build-electricity` job, which builds the
+#: binary once and uploads it so every Python matrix job's conformance run
+#: downloads the same binary instead of each building its own copy from a
+#: cold cache (issue #775).
+ELECTRICITY_BINARY_ENV_VAR = "ELECTRICITY_BINARY"
 
 #: Substituted, verbatim, for the mock HTTP server's real ephemeral port
 #: wherever a case's own `config` file content or `cli_args` need to name
@@ -270,6 +282,28 @@ def _is_safe_case_env_key(key: str) -> bool:
     return key not in CREDENTIAL_ENV_VARS
 
 
+#: What a `fake_credentials` key must look like when it isn't one of
+#: `CREDENTIAL_ENV_VARS` -- a custom variable a case's `api_key_env`
+#: override names (issue #669), never seen anywhere else by this harness
+#: (the `env` key's `_is_safe_case_env_key` denylist is only exact names).
+_ENV_VAR_NAME_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _is_valid_fake_credential_key(key: str) -> bool:
+    """A `fake_credentials` key: one of `CREDENTIAL_ENV_VARS`, or any other
+    environment-variable-shaped name that is not a `CIRCUITRY_*` config
+    override -- a case giving a custom `api_key_env` target a fake value
+    (issue #669) is exactly as safe as giving a real provider's own
+    variable one; a `CIRCUITRY_*` name never is, since it changes
+    `effective_settings` rather than naming a credential.
+    """
+    if key in CREDENTIAL_ENV_VARS:
+        return True
+    if key.upper().startswith("CIRCUITRY_"):
+        return False
+    return bool(_ENV_VAR_NAME_RE.fullmatch(key))
+
+
 _VALID_EXPECT = frozenset({"success", "failure"})
 _VALID_ERROR_COMPARE = frozenset({"exact", "location"})
 _VALID_ENGINES = frozenset({"python", "electricity"})
@@ -365,11 +399,13 @@ def load_case(case_dir: Path) -> dict[str, Any]:
         raise ValueError(
             f"{case_dir.name}: case.json 'fake_credentials' must be a mapping of str to str"
         )
-    bad_names = sorted(k for k in fake_credentials if k not in CREDENTIAL_ENV_VARS)
+    bad_names = sorted(k for k in fake_credentials if not _is_valid_fake_credential_key(k))
     if bad_names:
         raise ValueError(
-            f"{case_dir.name}: case.json 'fake_credentials' key(s) {bad_names} are not in "
-            "CREDENTIAL_ENV_VARS -- only a real provider credential variable belongs here"
+            f"{case_dir.name}: case.json 'fake_credentials' key(s) {bad_names} must be a "
+            "real provider credential variable (CREDENTIAL_ENV_VARS) or a custom "
+            "environment-variable-shaped name (a per-adapter api_key_env override, "
+            "issue #669) -- never a CIRCUITRY_* name"
         )
     bad_values = sorted(
         k for k, v in fake_credentials.items() if not v.startswith(FAKE_CREDENTIAL_MARKER)
@@ -503,6 +539,59 @@ def cargo_env() -> dict[str, str]:
     return env
 
 
+def resolve_electricity_binary() -> tuple[Path | None, str | None]:
+    """The `electricity` binary to run against, for every pytest module
+    that needs one: `ELECTRICITY_BINARY` when set (the shared binary
+    `quality.yml`'s matrix jobs download), else a `cargo build` from this
+    checkout. The one place this resolution happens, so every conformance
+    module shares the uploaded binary instead of each building its own
+    copy from a cold cache (issue #775).
+
+    Returns `(binary, failure_message)`. `failure_message` is `None` on
+    success; otherwise it is always a hard failure when `ELECTRICITY_BINARY`
+    was set (a deliberate override that didn't produce a usable binary is
+    always a bug, never a reason to quietly skip), when `cargo` itself
+    fails to build it, and when `cargo` is missing while the `CI`
+    environment variable is set -- a CI run is expected to provide one or
+    the other, so a gate that would otherwise skip silently fails loudly
+    instead. Outside CI, with no override and no `cargo`, this degrades to
+    a skip: callers that want that behaviour check for `binary is None` and
+    `failure is None` together.
+    """
+    prebuilt = os.environ.get(ELECTRICITY_BINARY_ENV_VAR)
+    if prebuilt:
+        binary = Path(prebuilt)
+        if binary.is_file() and os.access(binary, os.X_OK):
+            return binary, None
+        return None, (
+            f"{ELECTRICITY_BINARY_ENV_VAR}={binary} does not point to an executable file"
+        )
+    if shutil.which("cargo") is None:
+        if os.environ.get("CI"):
+            return None, (
+                "CI is set but no electricity binary was provided "
+                f"({ELECTRICITY_BINARY_ENV_VAR}) and cargo is not available to build one"
+            )
+        return None, None
+    proc = subprocess.run(
+        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
+        cwd=ELECTRICITY_DIR,
+        env=cargo_env(),
+        capture_output=True,
+        text=True,
+        timeout=600,
+        check=False,
+    )
+    if proc.returncode != 0:
+        return None, (
+            "cargo build -p electricity-cli failed (if rustup reports no toolchain, set "
+            f"RUSTUP_HOME/CARGO_HOME):\n{proc.stdout}\n{proc.stderr}"
+        )
+    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
+    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
+    return binary, None
+
+
 def _sandboxed_env(
     case_dir: Path,
     home_dir: Path,
@@ -537,14 +626,18 @@ def _sandboxed_env(
     # by the time it gets here.
     if extra_env:
         env.update(extra_env)
-    # `case.json`'s own `fake_credentials` (issue #503): set after the
-    # credential filter above, same as `extra_env`, for both engines --
-    # `load_case` already rejected any name outside `CREDENTIAL_ENV_VARS`
-    # or any value not carrying `FAKE_CREDENTIAL_MARKER`, so this is
-    # already known-synthetic by the time it gets here. Without this, a
-    # case that needs `openai`/`anthropic`/... to actually see a key (a
-    # success case, or a 401) has no way to give it one at all, since the
-    # filter above drops every real `CREDENTIAL_ENV_VARS` name first.
+    # `case.json`'s own `fake_credentials` (issue #503; a custom
+    # `api_key_env` name too, issue #669): set after the credential
+    # filter above, same as `extra_env`, for both engines -- `load_case`
+    # already rejected any key that is neither a `CREDENTIAL_ENV_VARS`
+    # name nor an environment-variable-shaped name outside `CIRCUITRY_*`
+    # (`_is_valid_fake_credential_key`), and any value not carrying
+    # `FAKE_CREDENTIAL_MARKER`, so this is already known-synthetic by the
+    # time it gets here. Without this, a case that needs `openai`/
+    # `anthropic`/... (or a custom `api_key_env` target) to actually see
+    # a key (a success case, or a 401) has no way to give it one at all,
+    # since the filter above drops every real `CREDENTIAL_ENV_VARS` name
+    # first.
     if fake_credentials:
         env.update(fake_credentials)
     # Deliberately set *after* the CIRCUITRY_* filter above: a test-only
