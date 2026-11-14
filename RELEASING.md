@@ -188,12 +188,12 @@ input (default `true`). Dispatch it from any branch:
 
 ```bash
 gh workflow run release.yml --ref <branch>            # dry_run=true
-gh workflow run release.yml --ref <branch> -f dry_run=false
+gh workflow run release.yml --ref vX.Y.Z -f dry_run=false  # publishes for real
 ```
 
 A dry run (`dry_run=true`, the default) runs everything above except the
-last two steps: the PyPI upload, the image push and the GitHub Release are
-all skipped. It's the way to exercise the whole pipeline — the version
+three publishing steps: the PyPI upload, the image push and the GitHub
+Release are all skipped. It's the way to exercise the whole pipeline — the version
 checks, every build, and the full gate — before cutting a real tag.
 `dry_run=false` on a manual dispatch runs the real publish steps too,
 exactly like a tag push — but only when dispatched against an existing
