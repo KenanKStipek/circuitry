@@ -324,8 +324,11 @@ def test_interrupt_matches_across_engines(
     elif timing == "finally_interrupt":
         for ends in (cof_ends, elec_ends):
             assert cleanup_one_path not in ends or ends[cleanup_one_path]["ok"] is True, (
-                "cleanup_one's own shell command must succeed -- the signal "
-                "landed on the engine, not on this step", ends,
+                (
+                    "cleanup_one's own shell command must succeed -- the signal "
+                    "landed on the engine, not on this step"
+                ),
+                ends,
             )
             assert ends[cleanup_two_path]["ok"] is True
             for container in container_paths:
@@ -334,8 +337,10 @@ def test_interrupt_matches_across_engines(
         assert timing == "second_signal"
         for ends in (cof_ends, elec_ends):
             assert cleanup_one_path not in ends, (
-                "a second signal must kill cleanup_one before its own end "
-                "event -- no `--out` is written past this point either",
+                (
+                    "a second signal must kill cleanup_one before its own end "
+                    "event -- no `--out` is written past this point either"
+                ),
                 ends,
             )
             assert cleanup_two_path not in ends
