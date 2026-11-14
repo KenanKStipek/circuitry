@@ -6,15 +6,28 @@ name: release
 #     git tag v0.1.0
 #     git push origin v0.1.0
 #
-# The workflow runs the full test suite, builds the wheel + sdist,
-# publishes to PyPI via Trusted Publishing (OIDC — no secrets in this
-# repo), and creates a GitHub Release with auto-generated notes.
+# The workflow runs the full test matrix and the same lint/typecheck/smoke/
+# doc-sync/changelog/direct-reference gate ``quality.yml`` runs, refuses a
+# tag whose commit isn't on ``main``, builds the wheel + sdist, publishes to
+# PyPI via Trusted Publishing (OIDC — no secrets in this repo), and creates
+# a GitHub Release with auto-generated notes.
+#
+# ``workflow_dispatch`` runs the same pipeline with ``dry_run`` (default
+# true) skipping the PyPI upload, the image push and the GitHub Release —
+# everything else (tests, the gate, every build) still runs, so the
+# pipeline can be exercised on a branch before tagging.
 
 on:
   push:
     tags:
       - "v[0-9]+.[0-9]+.[0-9]+"
       - "v[0-9]+.[0-9]+.[0-9]+rc[0-9]+"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run the full pipeline but skip the PyPI upload, the image push and the GitHub Release"
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -48,35 +61,90 @@ jobs:
       version: ${{ steps.extract.outputs.version }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # need origin/main's history for the ancestor check below
+      - name: Refuse to publish from a commit that is not on main
+        # Always enforced for a tag push. A workflow_dispatch dry run may
+        # exercise the pipeline from any branch; only a non-dry-run dispatch
+        # (dry_run=false), which really publishes, needs the same check.
+        if: ${{ github.event_name == 'push' || !inputs.dry_run }}
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF's commit ($GITHUB_SHA) is not on origin/main — refusing to release"
+            exit 1
+          fi
       - id: extract
         name: Compare git tag to pyproject.toml, electricity/Cargo.toml and oscilloscope/Cargo.toml versions
         run: |
-          tag="${GITHUB_REF#refs/tags/v}"
+          # workflow_dispatch may run from a branch with no tag at all — in
+          # that case (a dry run) there is nothing to compare, so the
+          # version comes straight from pyproject.toml.
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            tag="${GITHUB_REF#refs/tags/v}"
+          else
+            tag=""
+          fi
           # tomllib lives in stdlib for Python 3.11+; the runner has
           # 3.x already so this is portable.
           py_version="$(python3 -c 'import tomllib, sys; print(tomllib.load(open("pyproject.toml","rb"))["project"]["version"])')"
-          echo "tag=$tag"
           echo "pyproject=$py_version"
-          if [[ "$tag" != "$py_version" ]]; then
-            echo "::error::tag $tag does not match pyproject.toml version $py_version"
-            exit 1
+          if [[ -n "$tag" ]]; then
+            echo "tag=$tag"
+            if [[ "$tag" != "$py_version" ]]; then
+              echo "::error::tag $tag does not match pyproject.toml version $py_version"
+              exit 1
+            fi
           fi
+          version="${tag:-$py_version}"
           # Cargo requires valid semver, so a pre-release tag's PEP 440 form
           # (X.Y.ZrcN) maps to Cargo's semver pre-release form (X.Y.Z-rc.N)
           # before comparing (see RELEASING.md's "Pre-releases" section).
-          cargo_expected="$tag"
-          if [[ "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
+          cargo_expected="$version"
+          if [[ "$version" =~ ^([0-9]+\.[0-9]+\.[0-9]+)rc([0-9]+)$ ]]; then
             cargo_expected="${BASH_REMATCH[1]}-rc.${BASH_REMATCH[2]}"
           fi
           for workspace in electricity oscilloscope; do
             cargo_version="$(grep -m1 '^version = ' "$workspace/Cargo.toml" | sed -E 's/version = "(.*)"/\1/')"
             echo "$workspace=$cargo_version"
             if [[ "$cargo_expected" != "$cargo_version" ]]; then
-              echo "::error::tag $tag expects $workspace/Cargo.toml workspace version $cargo_expected, found $cargo_version"
+              echo "::error::expected $workspace/Cargo.toml workspace version $cargo_expected, found $cargo_version"
               exit 1
             fi
           done
-          echo "version=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  gate:
+    name: Full quality gate before publishing
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[tools]"
+          pip install -r requirements-dev.txt
+      - name: Run lint
+        run: ruff check .
+      - name: Run type checks
+        run: mypy src
+      - name: Smoke-test bundled orchestrations (offline)
+        run: bash scripts/smoke-curation.sh
+      - name: Check bundled docs are in sync
+        run: python scripts/sync-bundled-docs.py --check
+      - name: Check changelog fragments
+        run: python scripts/build-changelog.py --check
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Check built dists for direct-URL dependencies
+        run: python scripts/check-direct-references.py dist/*.whl dist/*.tar.gz
 
   electricity-build:
     name: Build electricity (release)
@@ -128,19 +196,23 @@ jobs:
 
   publish-image:
     name: Publish electricity container image
+    # Dry runs skip this job entirely: its only purpose is the ghcr.io push,
+    # and electricity-build already validates the image builds (push: false,
+    # unconditionally) via rust-release-build.yml's own build-image job.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
     # Waits for both builds and for the PyPI upload: the image must not reach
     # ghcr.io before every artifact has built (#359), and the PyPI upload (which
-    # can never be repeated for the same version) goes first, so a failed upload
-    # leaves no image behind without a release.
+    # can never be repeated for the same version) goes first, so a failed
+    # upload leaves no image behind without a release.
     needs: [build, electricity-build, publish-pypi]
     permissions:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Download electricity musl archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: "electricity-*-unknown-linux-musl"
           path: electricity/dist
@@ -152,14 +224,14 @@ jobs:
           mkdir -p dist/linux/amd64 dist/linux/arm64
           tar xzf "dist/electricity-${version}-x86_64-unknown-linux-musl.tar.gz" -C dist/linux/amd64 --strip-components=1
           tar xzf "dist/electricity-${version}-aarch64-unknown-linux-musl.tar.gz" -C dist/linux/arm64 --strip-components=1
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/build-push-action@v6
+      - uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: electricity
           file: electricity/Dockerfile
@@ -169,8 +241,11 @@ jobs:
 
   publish-pypi:
     name: Publish to PyPI
+    # Dry runs skip this job entirely: a PyPI upload can never be repeated
+    # for the same version, so it must never run outside a real tag release.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
-    needs: [build, electricity-build, osi-build]
+    needs: [build, electricity-build, osi-build, gate]
     environment:
       name: pypi
       url: https://pypi.org/p/circuitry-cof
@@ -181,12 +256,12 @@ jobs:
       id-token: write
     steps:
       - name: Download dist
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           name: dist
           path: dist/
       - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
         with:
           # No api token argument — relies on OIDC trusted publishing.
           # If trusted publishing is not yet configured on PyPI, this
@@ -197,6 +272,8 @@ jobs:
 
   github-release:
     name: Create GitHub Release
+    # Dry runs skip this job entirely: it only exists to create the release.
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
     runs-on: ubuntu-latest
     needs: [publish-pypi, publish-image, verify-version, electricity-build, osi-build]
     permissions:

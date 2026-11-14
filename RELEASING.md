@@ -154,17 +154,23 @@ git push origin v0.2.0
 
 The workflow then:
 
-1. Runs the test matrix on Python 3.9–3.13.
-2. Verifies the tag matches `pyproject.toml`'s, `electricity/Cargo.toml`'s
+1. Runs the test matrix on Python 3.10–3.13.
+2. Verifies the tag's commit is on `main` (`git merge-base --is-ancestor`)
+   and that the tag matches `pyproject.toml`'s, `electricity/Cargo.toml`'s
    **and** `oscilloscope/Cargo.toml`'s version (catches forgot-to-bump tags
    before they ship).
-3. Builds wheel + sdist and runs `twine check` on them, and in parallel
-   builds electricity's and osi's release archives — the same reusable
-   workflow builds both — and validates electricity's container image
-   (without pushing it yet; osi has none).
-4. Once every build succeeds: uploads to PyPI via OIDC trusted publishing,
-   then pushes the container image to ghcr.io.
-5. Creates a GitHub Release with the changelog excerpt, the Python
+3. Builds wheel + sdist and, in parallel, builds electricity's and osi's
+   release archives — the same reusable workflow builds both — and
+   validates electricity's container image (without pushing it yet; osi
+   has none).
+4. Runs the same gate `quality.yml` runs on a fresh checkout and the just-
+   built dists: `ruff check .`, `mypy src`, `scripts/smoke-curation.sh`,
+   `scripts/sync-bundled-docs.py --check`, `scripts/build-changelog.py
+   --check`, and `scripts/check-direct-references.py` on the wheel and
+   sdist. Nothing publishes if any of this fails.
+5. Once every build and the gate succeed: uploads to PyPI via OIDC trusted
+   publishing, then pushes the container image to ghcr.io.
+6. Creates a GitHub Release with the changelog excerpt, the Python
    artifacts, and electricity's and osi's archives/checksums, all attached.
 
 Watch progress at:
@@ -174,6 +180,39 @@ gh run watch
 ```
 
 A typical end-to-end takes 4–6 minutes.
+
+## Dry run
+
+`release.yml` also takes a `workflow_dispatch` trigger with a `dry_run`
+input (default `true`). Dispatch it from any branch:
+
+```bash
+gh workflow run release.yml --ref <branch>            # dry_run=true
+gh workflow run release.yml --ref <branch> -f dry_run=false
+```
+
+A dry run (`dry_run=true`, the default) runs everything above except the
+last two steps: the PyPI upload, the image push and the GitHub Release are
+all skipped. It's the way to exercise the whole pipeline — the version
+checks, every build, and the full gate — before cutting a real tag.
+`dry_run=false` on a manual dispatch runs the real publish steps too,
+exactly like a tag push, including the main-ancestor check — it still
+refuses to publish from a branch that isn't on `main`. Prefer tagging;
+use `dry_run=false` only if you specifically need to repeat a publish
+without a new tag.
+
+### TestPyPI dry run
+
+A dispatch run never uploads anywhere real, even with `dry_run=false` —
+`publish-pypi` always targets the `pypi` environment and PyPI's trusted
+publisher is scoped to that. To rehearse an actual upload, add a second
+trusted publisher on **TestPyPI** (same repo, workflow filename and `pypi`
+environment name, pointed at `https://test.pypi.org/manage/project/circuitry-cof/settings/publishing/`)
+and a second workflow (or a repository-variable-gated branch in this one)
+that publishes to `https://test.pypi.org/legacy/` instead. Setting up a
+TestPyPI trusted publisher is a one-time, owner-only step — it isn't
+something a contributor's PR can add, since it requires access to the
+TestPyPI project settings.
 
 ## Pre-releases
 
@@ -229,4 +268,5 @@ ls -la dist/   # circuitry_cof-<version>.tar.gz + .whl
 | `changelog.d/` | Per-PR changelog fragments, compiled into `CHANGELOG.md` at release |
 | `scripts/build-changelog.py` | The fragment compiler |
 | `scripts/check-changelog.py` | CI gate: fragment required, no direct Unreleased edits |
+| `scripts/check-direct-references.py` | CI/release gate: fails on a direct-URL dependency in a built wheel or sdist |
 | `RELEASING.md` | This document |
