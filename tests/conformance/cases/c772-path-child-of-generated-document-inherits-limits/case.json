@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #772",
+  "description": "A use: {path: ...} child of an already-generated document inherits its ceiling instead of getting a fresh one just because it names a separate file.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

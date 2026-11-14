@@ -664,12 +664,17 @@ Because both cases are ordinary compiles of ordinary YAML, there is no separate 
 generated plans" — the same `electricity-vm` frame machinery (§6) runs a runtime-compiled
 `Region` exactly as it runs the root document's.
 
-**The generated-document check (#772).** Before either case's compiled `Region` ever runs, the
-parsed-but-uncompiled YAML is checked against `electricity-vm::generated_doc`: a generated `shell`
-effect's own `params.allowed_commands` may only narrow the effective allowlist — the union of the
-host config's default/pinned commands and every literal `shell` effect's own `allowed_commands` in
-the enclosing, non-generated document's own text (`Frame::document_shell_commands`) — never widen
-past it; a generated `service` effect's `params.shell: true` is refused outright. Every other
+**The generated-document check (#772).** A generated document's own text is checked twice. Before
+either case's compiled `Region` ever runs, the parsed-but-uncompiled YAML is checked against
+`electricity-vm::generated_doc`: a generated `shell` effect's own `params.allowed_commands` may
+only narrow the effective allowlist — the union of the host config's default/pinned commands and
+every literal `shell` effect's own `allowed_commands` in the enclosing, non-generated document's
+own text (`Frame::document_shell_commands`) — never widen past it; a generated `service` effect's
+`params.shell` is decided the plugin's own way (`electricity_tools::subprocess_tool::as_bool_param`,
+never a separate coercion) and a true value is refused outright, and a `service` effect that
+starts a process without `shell: true` has its executable (`params.command`'s first element)
+checked the same way a `shell` effect's own `command` is: a bare name
+(`electricity_tools::shell::is_bare_command`), present in the same allowlist. Every other
 `type: tool` provider it uses must either be one the document that generated it already uses
 itself, statically, or be named in the generating `use`/`reflector` effect's own literal
 `allow_tools:` (`UseOp`/`ReflectorOp`'s own field, never rendered). `Frame::document_tool_providers`
@@ -677,15 +682,37 @@ and `Frame::document_shell_commands` carry the current document's own ceiling, r
 accumulated) each time a fresh, non-generated document starts executing — `Frame::push_use`'s own
 call-stack field is a history; these are not. A `use: {inline: ...}` child is held to this check
 either when its own structure doesn't match its unrendered template
-(`generated_doc::is_generated_inline`) or when `Frame::document_is_generated` is already set —
-generated-ness is inherited: every document nested inside an already generated one is generated
-too, whatever its own shape looks like, judged against the *same* ceiling its enclosing document
-was rather than recomputed from its own (model-written) text, and its own `allow_tools:` can never
-grant anything the inherited ceiling didn't already (refused, not silently ignored, if it tries). A
-reflector's plan has no unrendered template to compare against and is always checked. A
-decomposition plan is always checked too, and against the tool-provider rule as well — except that
-it has no generating effect of its own to carry an `allow_tools:`, so it is additionally always
-allowed a fixed set of side-effect-free data tools (`generated_doc::decomposition_safe_providers`).
+(`generated_doc::is_generated_inline`) or when `Frame::document_is_generated` is already set;
+a `use: {path: ...}`/`ref:`/`orchestration:` child is held to it too, exactly when
+`Frame::document_is_generated` is already set — it no longer gets a fresh ceiling of its own just
+because it names a separate file. Generated-ness is inherited: every document nested inside an
+already generated one is generated too, whatever its own shape looks like, judged against the
+*same* ceiling its enclosing document was rather than recomputed from its own (model-written)
+text, and its own `allow_tools:` can never grant anything the inherited ceiling didn't already
+(refused, not silently ignored, if it tries). A reflector's plan has no unrendered template to
+compare against and is always checked. A decomposition plan is always checked too, with limits of
+its own (`decompose::decomposition_allowed_providers`): the enclosing frame's own limits unchanged
+when `Frame::document_is_generated` is already set, since widening past them with the fixed set
+below would grant a nested plan something its own already-generated enclosing document was not
+itself allowed; otherwise the enclosing document's own providers plus a fixed set of
+side-effect-free data tools it has no generating effect of its own to carry an `allow_tools:` for
+(`generated_doc::decomposition_safe_providers` — `csv` and `hash` are deliberately excluded: both
+support reading an arbitrary local file by path).
+
+That static check can only ever be as strict as the parsed, pre-dispatch document lets it be: it
+cannot see what `params_json` will merge in once rendered, or resolve a `{from: ...}` reference to
+the value it will actually dispatch with. The authoritative check
+(`generated_doc::dispatch_errors`) runs again, right before every tool effect inside a generated
+document actually dispatches (`exec::tool::execute_tool`), on every retry, against its final
+provider and params — after Mustache rendering and the `params_json` merge — reading the same
+`Frame::document_tool_providers`/`document_shell_commands`/`document_is_generated` fields, plus
+`Frame::generating_effect_path`/`allow_tools_available` for the refusal text. It is a no-op
+(returns no errors) whenever `Frame::document_is_generated` is unset: a literal document's own
+tool effects are never checked here. A violation only this second check can see fails that one
+attempt and is never retried (`dispatch_refused`, checked alongside `timeout_unresolved`/
+`secret_unresolved`/`prompt_file_unread` in the retry decision), recorded on the effect the same
+way any other failure is. Both checks call the same per-effect rule function
+(`generated_doc::tool_effect_errors`), so the first is never stricter than the second.
 
 ---
 

@@ -1,0 +1,8 @@
+effects:
+  - type: tool
+    name: t
+    provider: shell
+    params:
+      command: touch
+      args: ["pwned"]
+      allowed_commands: [touch]

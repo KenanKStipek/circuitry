@@ -1,0 +1,17 @@
+name: c772-reflector-plan-runs-a-command-the-document-allows
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: seed
+    provider: shell
+    params:
+      command: printf
+      args: ["seed"]
+      allowed_commands: [printf]
+  - type: reflector
+    name: planner
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "Plan."

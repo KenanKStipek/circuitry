@@ -1626,8 +1626,12 @@ to limits an author-written document isn't:
    allowlist — the union of the host config's default/pinned commands and
    every literal `shell` effect's own `allowed_commands` in the document
    that generated it; an entry outside that union is refused by name. A
-   generated `service` tool effect's `params.shell: true` is refused
-   outright, the same as before.
+   generated `service` tool effect's `params.shell` is decided the same
+   way the `service` plugin itself decides it, and a true value is
+   refused outright. A `service` effect that starts a process without
+   `shell: true` has its executable (the first element of its argv list)
+   checked against the same allowlist, as a bare name — a path never
+   counts as a member of it.
 2. **It gets a tool allowance.** It may use only the tool providers the
    document that generated it uses itself, statically — every `type: tool`
    effect anywhere in that document's own text, including inside a literal
@@ -1636,17 +1640,25 @@ to limits an author-written document isn't:
    list of plain strings naming known providers; a Mustache template, a
    `{from: ...}` reference, or an unknown name is a `cof check` error.
 3. **The allowance is inherited.** Every document nested inside an already
-   generated one is generated too, whatever its own `inline:` looks like,
-   and is judged against the *same* ceiling its enclosing document was —
-   never recomputed from the generated document's own text. A nested
+   generated one is generated too, whatever its own `inline:` looks like —
+   including a `use: {path: ...}`/`ref:`/`orchestration:` child, which no
+   longer gets a fresh ceiling of its own just because it names a separate
+   file — and is judged against the *same* ceiling its enclosing document
+   was, never recomputed from the generated document's own text. A nested
    `use`/`reflector` effect's own `allow_tools:` is itself part of that
    generated text, so it can never grant anything beyond what the
    enclosing document was itself allowed.
-4. **The refusal happens up front**, when the generated document is
-   compiled, before any of its effects run — naming the generated effect,
-   the tool provider or command, and (where one exists) the fix. The
-   failure belongs to the generating `use`/`reflector` effect, so its own
-   `on_error` applies like any other failure.
+4. **The refusal happens twice.** Statically, when the generated document
+   is compiled, before any of its effects run — naming the generated
+   effect, the tool provider or command, and (where one exists) the fix.
+   And again, authoritatively, right before each tool effect inside it
+   actually dispatches, on every retry, against its final provider and
+   params (after Mustache rendering and the `params_json` merge) — this is
+   the only check that can see a value `params_json` set or a `{from: ...}`
+   reference that only resolved to a disallowed value once rendered; a
+   refusal there fails that one attempt and is never retried. Either way
+   the failure belongs to the generating `use`/`reflector` effect, so its
+   own `on_error` applies like any other failure.
 
 Telling a generated document from an author's own: an author-written
 `inline:` whose *structure* is literal, with only scalar values templated
@@ -1654,19 +1666,24 @@ in, is unaffected and keeps working exactly as before. A reflector's plan
 has no author template to compare against at all, and is always generated.
 A value is still generated, even in an otherwise-literal structure, at a
 security-sensitive field (`type`, `provider`, `allow_tools`,
-`allowed_commands`, `shell`) that only matches the rendered document's
-value by coincidence rather than appearing in the unrendered text verbatim
-— a Mustache tag that renders to `shell` today can render to anything else
-tomorrow.
+`allowed_commands`, `shell`, `inline`, `path`, `ref`, `orchestration`) that
+only matches the rendered document's value by coincidence rather than
+appearing in the unrendered text verbatim — a Mustache tag that renders to
+`shell` today can render to anything else tomorrow, and a nested
+`inline:`/`path:`/`ref:`/`orchestration:` that only matches by rendered
+value is never the author's own either.
 
 A decomposition plan (`runtime.complexity.decomposition`) follows rule 1
-(it is always generated too) and rule 2, except that it has no
-`use`/`reflector` effect of its own to carry an `allow_tools:`: in its
-place, it is always additionally allowed a fixed set of side-effect-free
-data tools — `json`, `regex`, `math`, `cel`, `clock`, `hash`, `base64`,
-`hex`, `uuid`, `csv`, `validate_yaml` — since the merge step a decomposition
-plan commonly adds (a `tool` effect combining chunk results) needs one of
-them and the document it serves may not otherwise use any tool at all.
+(it is always generated too) and rule 3's inheritance: it runs with the
+enclosing context's own limits when it already has any, or otherwise the
+document it serves uses itself, statically, plus a fixed set of
+side-effect-free data tools it is always additionally allowed, since it
+has no `use`/`reflector` effect of its own to carry an `allow_tools:` and
+the merge step it commonly adds (a `tool` effect combining chunk results)
+needs one of them when the document it serves uses no tool at all:
+`json`, `regex`, `math`, `cel`, `clock`, `base64`, `hex`, `uuid`,
+`validate_yaml`. `csv` and `hash` are deliberately not in that set: both
+support reading an arbitrary local file by path (`from_path`).
 
 See [the threat model](./threat-model.md#11-generated-documents) for the
 full rule and why it exists.
