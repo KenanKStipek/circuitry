@@ -351,7 +351,13 @@ fn check_allowlists(plan: &Plan, runtime_config: &Value) -> Vec<String> {
 /// needs for a *planned* document. Shared so the size trigger's own,
 /// never-planned plan runs through the same gate [`validate_plan`]
 /// gives the score trigger's planner output.
-fn validate_generated_yaml(yaml: &str, result_path: &str, runtime_config: &Value) -> Vec<String> {
+fn validate_generated_yaml(
+    yaml: &str,
+    result_path: &str,
+    runtime_config: &Value,
+    frame: &Frame,
+    generating_effect_path: &str,
+) -> Vec<String> {
     let throwaway = Plan {
         say: Value::None,
         chunks: Value::None,
@@ -368,7 +374,64 @@ fn validate_generated_yaml(yaml: &str, result_path: &str, runtime_config: &Value
     }
     let mut problems = check_merge_contract(&throwaway);
     problems.extend(check_allowlists(&throwaway, runtime_config));
+    problems.extend(check_generated_tool_ceiling(
+        yaml,
+        frame,
+        generating_effect_path,
+    ));
     problems
+}
+
+/// `core/decompose.py::_check_generated_tool_ceiling` (#772): a
+/// decomposition plan is always generated -- its own `allowed_commands`
+/// never widen past the host config and the enclosing document's own
+/// literal shell effects, a `service` effect's `shell: true` is always
+/// refused, and it is held to a tool-provider ceiling like a `use`/
+/// `reflector` generated child -- except that it has no generating
+/// effect of its own to carry a literal `allow_tools:`.
+///
+/// The ceiling is *frame*'s own [`Frame::document_tool_providers`]
+/// unchanged when [`Frame::document_is_generated`] is already set (the
+/// plan runs inside an already-generated document: never widened by
+/// `generated_doc::decomposition_safe_providers` there, since that would
+/// grant a nested plan something its already-generated enclosing
+/// document was not itself allowed). Otherwise (the enclosing document
+/// is a plain, literal one) the ceiling is its own providers plus
+/// `generated_doc::decomposition_safe_providers`: the planner's own
+/// 'merge' step commonly needs a side-effect-free data tool (json, say)
+/// the enclosing document never uses itself, and none of that fixed set
+/// can reach anything outside the process.
+fn check_generated_tool_ceiling(
+    yaml: &str,
+    frame: &Frame,
+    generating_effect_path: &str,
+) -> Vec<String> {
+    let Ok(parsed) = electricity_yaml::load_yaml(yaml) else {
+        return Vec::new(); // already reported by the schema check
+    };
+    if parsed.as_dict().is_none() {
+        return Vec::new();
+    }
+    crate::generated_doc::generated_document_errors_with_shell(
+        &parsed,
+        Some(&decomposition_allowed_providers(frame)),
+        generating_effect_path,
+        Some(frame.document_shell_commands()),
+        false,
+    )
+}
+
+/// The tool-provider ceiling a decomposition plan runs under (#772) --
+/// see [`check_generated_tool_ceiling`]'s own doc comment.
+fn decomposition_allowed_providers(frame: &Frame) -> std::collections::BTreeSet<String> {
+    let enclosing = frame.document_tool_providers().clone();
+    if frame.document_is_generated() {
+        enclosing
+    } else {
+        let mut allowed = enclosing;
+        allowed.extend(crate::generated_doc::decomposition_safe_providers());
+        allowed
+    }
 }
 
 /// `core/decompose.py::_validate_plan`. `_check_capability_ceiling`
@@ -387,6 +450,8 @@ pub fn validate_plan(
     plan: &Plan,
     max_chunks: i64,
     runtime_config: &Value,
+    frame: &Frame,
+    generating_effect_path: &str,
 ) -> Result<Vec<String>, String> {
     let mut problems = Vec::new();
 
@@ -449,6 +514,11 @@ pub fn validate_plan(
 
     problems.extend(check_merge_contract(plan));
     problems.extend(check_allowlists(plan, runtime_config));
+    problems.extend(check_generated_tool_ceiling(
+        &yaml,
+        frame,
+        generating_effect_path,
+    ));
     Ok(problems)
 }
 
@@ -970,7 +1040,27 @@ pub(crate) async fn maybe_decompose(
     };
 
     let planner_settings_value = planner_settings(settings);
-    let planner_frame = child_frame(frame, &op.path);
+    // The planner is a document the project ships, not one the model
+    // wrote -- it runs under its own, fresh ceiling computed from its own
+    // text (#772), never the caller's generated-document ceiling: a
+    // planner run inside an already-generated document previously
+    // inherited that document's ceiling, which routinely lacks the
+    // `validate_yaml`/`json` providers the planner's own self-check uses,
+    // so decomposition inside a generated document always failed. The
+    // plan the planner goes on to emit is unaffected and still runs
+    // under the caller's own inherited ceiling (`decomposition_allowed_providers(frame)`,
+    // computed from the outer frame, never `planner_frame`).
+    let planner_host_pin = crate::generated_doc::host_shell_pin(run_ctx.runtime_config);
+    let planner_frame = child_frame(frame, &op.path).with_document_tool_providers(
+        crate::generated_doc::static_tool_providers_from_op(&planner_program.root),
+        crate::generated_doc::resolved_shell_allowlist(
+            &crate::generated_doc::static_shell_allowed_commands_from_op(&planner_program.root),
+            planner_host_pin.as_ref(),
+        ),
+        false,
+        String::new(),
+        true,
+    );
     let planner_run_ctx = child_run_ctx(
         run_ctx,
         &planner_settings_value,
@@ -1012,7 +1102,15 @@ pub(crate) async fn maybe_decompose(
     // (`validate_plan`'s own doc comment) -- raised here the same way,
     // bypassing `dset.on_failure`/`failure_result` entirely, for
     // `exec::prompt`'s `?` to propagate to its own `on_error` handling.
-    let problems = match validate_plan(&plan, dset.max_chunks, run_ctx.runtime_config) {
+    let generating_effect_path =
+        format!("decomposition of '{}'", frame.local_effect_path(&op.path));
+    let problems = match validate_plan(
+        &plan,
+        dset.max_chunks,
+        run_ctx.runtime_config,
+        frame,
+        &generating_effect_path,
+    ) {
         Ok(problems) => problems,
         Err(message) => {
             return Err(VmError::Raised {
@@ -1106,7 +1204,21 @@ pub(crate) async fn maybe_decompose(
     let seed_ctx = live_ctx(render_chain, store);
     let seed_state = child_seed_state(&seed_ctx, &plan.result_path);
 
-    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    // The plan is itself generated (#772): it becomes the "enclosing
+    // document" for any use/reflector effect of its own, and for any
+    // tool effect of its own a dispatch-time check reads limits for,
+    // allowed the tool providers it was just checked against in
+    // `check_generated_tool_ceiling`, never recomputed from its own,
+    // model-written text.
+    let plan_frame = child_frame(frame, &op.path)
+        .push_use(identity)
+        .with_document_tool_providers(
+            decomposition_allowed_providers(frame),
+            frame.document_shell_commands().clone(),
+            true,
+            generating_effect_path.clone(),
+            false,
+        );
     let plan_run_ctx = child_run_ctx(
         run_ctx,
         run_ctx.complexity,
@@ -2341,7 +2453,14 @@ async fn maybe_split(
     base.insert(key("yaml"), Value::Str(plan_yaml.clone()));
     base.insert(key("result_path"), Value::Str(result_path.clone()));
 
-    let problems = validate_generated_yaml(&plan_yaml, &result_path, run_ctx.runtime_config);
+    let generating_effect_path = format!("split of '{}'", frame.local_effect_path(&op.path));
+    let problems = validate_generated_yaml(
+        &plan_yaml,
+        &result_path,
+        run_ctx.runtime_config,
+        frame,
+        &generating_effect_path,
+    );
     if !problems.is_empty() {
         log::warn!(
             "Generated split plan for prompt {} failed validation: {}",
@@ -2414,7 +2533,17 @@ async fn maybe_split(
         }
     }
 
-    let plan_frame = child_frame(frame, &op.path).push_use(identity);
+    // The plan is itself generated (#772) -- see the score trigger's
+    // own `_execute_plan` for why.
+    let plan_frame = child_frame(frame, &op.path)
+        .push_use(identity)
+        .with_document_tool_providers(
+            decomposition_allowed_providers(frame),
+            frame.document_shell_commands().clone(),
+            true,
+            generating_effect_path.clone(),
+            false,
+        );
     let plan_run_ctx = child_run_ctx(
         run_ctx,
         run_ctx.complexity,
@@ -2519,6 +2648,21 @@ mod tests {
         let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
             .expect("the copy compiles");
         assert!(first_unsupported(&program, false, &Supported::current(&[])).is_none());
+    }
+
+    #[test]
+    fn the_planner_copys_own_providers_include_its_validate_yaml_and_json_checks() {
+        // The providers `maybe_decompose` gives `planner_frame` come from the
+        // planner's own compiled program, so they must include the two tools
+        // its self-check uses. That decomposition succeeds inside a
+        // generated document is covered end to end by the conformance case
+        // c772-decomposition-inside-generated-document.
+        let parsed = electricity_yaml::load_yaml(PLANNER_YAML).unwrap();
+        let program = electricity_compiler::compile_document(&parsed, &DocumentOrigin::Generated)
+            .expect("the copy compiles");
+        let providers = crate::generated_doc::static_tool_providers_from_op(&program.root);
+        assert!(providers.contains("validate_yaml"));
+        assert!(providers.contains("json"));
     }
 
     #[test]
@@ -2816,7 +2960,7 @@ mod tests {
             DEFAULT_RESULT_PATH,
         );
         assert_eq!(
-            validate_plan(&p, 5, &Value::None).unwrap(),
+            validate_plan(&p, 5, &Value::None, &Frame::root(), "").unwrap(),
             vec!["the planner returned no orchestration YAML".to_string()]
         );
         let blank = plan(
@@ -2827,7 +2971,7 @@ mod tests {
             DEFAULT_RESULT_PATH,
         );
         assert_eq!(
-            validate_plan(&blank, 5, &Value::None).unwrap(),
+            validate_plan(&blank, 5, &Value::None, &Frame::root(), "").unwrap(),
             vec!["the planner returned no orchestration YAML".to_string()]
         );
     }
@@ -2847,7 +2991,7 @@ mod tests {
                 done.clone(),
                 "prime.merge.value",
             );
-            let problems = validate_plan(&p, 5, &Value::None).unwrap();
+            let problems = validate_plan(&p, 5, &Value::None, &Frame::root(), "").unwrap();
             let has_done_problem = problems.iter().any(|p| p.contains("done gate is false"));
             assert_eq!(has_done_problem, rejected, "done={done:?}");
         }
@@ -2864,7 +3008,7 @@ mod tests {
             "prime.merge.value",
         );
         assert!(
-            validate_plan(&one_chunk, 5, &Value::None)
+            validate_plan(&one_chunk, 5, &Value::None, &Frame::root(), "")
                 .unwrap()
                 .iter()
                 .any(|p| p.contains("needs at least 2"))
@@ -2878,7 +3022,7 @@ mod tests {
             "prime.merge.value",
         );
         assert!(
-            validate_plan(&many, 5, &Value::None)
+            validate_plan(&many, 5, &Value::None, &Frame::root(), "")
                 .unwrap()
                 .iter()
                 .any(|p| p.contains("the budget is 5"))
@@ -2892,7 +3036,7 @@ mod tests {
         // every other `YamlError`, whose own `Display` text does.
         let yaml = "effects: []\nwhen: 2024-02-30\n";
         let p = ok_plan(yaml, "prime.merge.value");
-        let err = validate_plan(&p, 5, &Value::None).unwrap_err();
+        let err = validate_plan(&p, 5, &Value::None, &Frame::root(), "").unwrap_err();
         assert_eq!(err, "day is out of range for month");
     }
 
@@ -2900,7 +3044,7 @@ mod tests {
     fn validate_plan_rejects_a_result_path_not_under_prime() {
         let yaml = "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: '1'}}\n";
         let p = ok_plan(yaml, "input.merge.value");
-        let problems = validate_plan(&p, 5, &Value::None).unwrap();
+        let problems = validate_plan(&p, 5, &Value::None, &Frame::root(), "").unwrap();
         assert!(
             problems.iter().any(|e| e.contains("does not point into")),
             "{problems:?}"
@@ -2911,7 +3055,7 @@ mod tests {
     fn validate_plan_rejects_a_result_path_with_no_matching_top_level_effect() {
         let yaml = "effects:\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: '1'}}\n";
         let p = ok_plan(yaml, "prime.nope.value");
-        let problems = validate_plan(&p, 5, &Value::None).unwrap();
+        let problems = validate_plan(&p, 5, &Value::None, &Frame::root(), "").unwrap();
         assert!(
             problems
                 .iter()
@@ -2925,7 +3069,7 @@ mod tests {
         let yaml = "effects:\n  - {type: tool, name: a, provider: json, params: {mode: parse, input: '1'}}\n  - {type: tool, name: merge, provider: json, params: {mode: parse, input: '1'}}\n";
         let p = ok_plan(yaml, "prime.merge.value");
         assert_eq!(
-            validate_plan(&p, 5, &Value::None).unwrap(),
+            validate_plan(&p, 5, &Value::None, &Frame::root(), "").unwrap(),
             Vec::<String>::new()
         );
     }
@@ -2941,7 +3085,7 @@ mod tests {
             Value::List(vec![Value::Str("json".to_string())]),
         );
         let runtime_config = dict(vec![("_allowlists", Value::Dict(allowlists))]);
-        let problems = validate_plan(&p, 5, &runtime_config).unwrap();
+        let problems = validate_plan(&p, 5, &runtime_config, &Frame::root(), "").unwrap();
         assert!(problems.iter().any(|e| e.contains("shell")), "{problems:?}");
     }
 
@@ -3444,6 +3588,59 @@ mod tests {
         assert!(planner_frame.use_call_stack().is_empty());
         let plan_frame = child_frame(&frame, &op_path).push_use("inline:abc".to_string());
         assert_eq!(plan_frame.use_call_stack(), &["inline:abc".to_string()]);
+    }
+
+    // -- decomposition tool ceiling (#772) ------------------------------
+
+    #[test]
+    fn decomposition_allowed_providers_widens_with_the_safe_set_for_a_literal_enclosing_document() {
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::from(["shell".to_string()]),
+            std::collections::BTreeSet::new(),
+            false,
+            String::new(),
+            true,
+        );
+        let allowed = decomposition_allowed_providers(&frame);
+        assert!(allowed.contains("json"));
+        assert!(allowed.contains("shell"));
+    }
+
+    #[test]
+    fn decomposition_allowed_providers_never_widens_past_an_already_generated_enclosing_document() {
+        // A plan nested inside an already-generated document must never be
+        // granted the decomposition safe set in addition to what that
+        // document was itself allowed -- that would let a nested plan use
+        // a provider its own generated enclosing document couldn't.
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::from(["shell".to_string()]),
+            std::collections::BTreeSet::new(),
+            true,
+            "prime.outer".to_string(),
+            true,
+        );
+        let allowed = decomposition_allowed_providers(&frame);
+        assert_eq!(
+            allowed,
+            std::collections::BTreeSet::from(["shell".to_string()])
+        );
+        assert!(!allowed.contains("json"));
+    }
+
+    #[test]
+    fn a_decomposition_plan_outside_the_safe_set_and_the_enclosing_ceiling_is_refused() {
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            false,
+            String::new(),
+            true,
+        );
+        let yaml = "effects:\n  - {type: tool, name: merge, provider: awk, params: {}}\n";
+        let errors = check_generated_tool_ceiling(yaml, &frame, "decomposition of 'prime.plan_it'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("awk"));
+        assert!(errors[0].contains("json"));
     }
 
     // -- size trigger (issue #682) --------------------------------------

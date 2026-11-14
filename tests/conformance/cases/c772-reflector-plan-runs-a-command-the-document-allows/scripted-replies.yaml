@@ -1,0 +1,13 @@
+prime.planner.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: t
+          provider: shell
+          params:
+            command: printf
+            args: ["hi"]
+            allowed_commands: [printf]
+    tokens_sent: 10
+    tokens_received: 20

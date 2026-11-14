@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #772",
+  "description": "The same shell-widening refusal as the issue's own reproduction, but under the use effect's own on_error: continue -- the refusal belongs to the generating use effect, so the run itself succeeds, with the refusal only recorded on prime.child.meta.error; the child's own effects never run.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

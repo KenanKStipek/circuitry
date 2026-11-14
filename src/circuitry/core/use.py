@@ -589,6 +589,27 @@ class UseDefinition:
     #: a child resolved through the library is always limited.
     parent_trusted: bool = False
 
+    # Generated-document ceiling (#772): the tool providers this effect's
+    # own, literal 'allow_tools:' field allows beyond the enclosing
+    # document's own static providers, for an inline child that counts as
+    # generated. Never set from a rendered value, params_json or state —
+    # compiler._compile_use rejects anything else at compile time.
+    allow_tools: frozenset[str] = frozenset()
+
+    #: True only for the synthetic 'use' a reflector builds to run its own
+    #: generated plan (#772) — never set by a document author. A reflector's
+    #: plan has no unrendered template of its own to compare against, so it
+    #: is unconditionally generated, unlike an ordinary 'inline:' child (see
+    #: ``generated_doc.is_generated_inline``).
+    force_generated: bool = False
+
+    #: The dotted state path of the effect that actually generated this
+    #: child, named in a generated-document refusal so the fix is
+    #: actionable (#772) -- ``None`` for an ordinary 'use' effect (its own
+    #: node path is the generating effect); set by ``ReflectorRuntime`` to
+    #: the reflector's own path for its synthetic 'use'.
+    generating_effect_path_override: str | None = None
+
 
 class UseRuntime:
     """
@@ -911,6 +932,130 @@ class UseRuntime:
                 "enforcement: " + "; ".join(denials)
             )
 
+    def _check_generated_document(
+        self, child_orch: dict[str, Any], node_path: str
+    ) -> tuple[bool, frozenset[str], frozenset[str], str]:
+        """Refuse a generated child that widens the shell allowlist, enables
+        a service's shell, or uses a tool provider its enclosing document
+        does not itself use (#772).
+
+        Checked right after the allowlist gate, before the child is even
+        compiled: a generated document (a reflector's plan, or an
+        'inline:' child whose structure only exists because it was
+        rendered, see ``generated_doc.is_generated_inline``) is judged
+        against the document that carries this ``use`` effect.
+
+        Generated-ness is inherited (#772): when the document that carries
+        *this* ``use`` effect is itself generated
+        (``GENERATED_DOCUMENT_IS_GENERATED_KEY``), every nested child is
+        generated too, whatever its own shape looks like -- including a
+        ``path:``/``ref:``/``orchestration:`` child, which loads from disk
+        but carries no capability ceiling of its own strong enough to stop
+        a generated document from using it to escape this one; such a
+        child no longer gets a fresh ceiling once its enclosing document is
+        generated. Only when the enclosing document is itself *not*
+        generated does a ``path:``/``ref:``/``orchestration:`` child stay
+        what it always was: its own, independently trusted document. This
+        effect's own ``allow_tools`` -- itself part of the enclosing
+        generated text when the enclosing document is generated -- can
+        never grant anything beyond what the enclosing ceiling already
+        allows; naming something beyond it is refused the same way any
+        other violation is, rather than silently ignored.
+
+        Returns ``(generated, allowed_providers, allowed_shell_commands,
+        generating_effect_path)`` for the caller to install as *this
+        child's own* enclosing-document ceiling: a non-generated child gets
+        its own, freshly computed providers/shell-commands (it is a
+        document in its own right); a generated child inherits the ceiling
+        it was just checked against unchanged, never recomputed from its
+        own (model-written) text, so a further-nested document inside it
+        can't be granted more just because the generated text happens to
+        declare more. ``generating_effect_path`` is "" for a non-generated
+        child.
+        """
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_IS_GENERATED_KEY,
+            GENERATED_DOCUMENT_PROVIDERS_KEY,
+            current_shell_allowlist,
+            generated_document_errors,
+            host_shell_pin,
+            is_generated_inline,
+            resolved_shell_allowlist,
+            static_shell_allowed_commands,
+            static_tool_providers,
+        )
+
+        enclosing_providers = frozenset(
+            self.runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ()
+        )
+        own_doc_is_generated = bool(
+            self.runtime_config.get(GENERATED_DOCUMENT_IS_GENERATED_KEY)
+        )
+
+        def _fresh_ceiling() -> tuple[bool, frozenset[str], frozenset[str], str]:
+            # A non-generated child is a document in its own right: its own
+            # providers/shell-commands are recomputed fresh from its own
+            # text, fully resolved (host default/pin included) the same way
+            # the root document's own are (`runtime_shim.py`) -- never the
+            # bare, unresolved set, or a document two `use` levels down from
+            # here would judge its own generated children against a
+            # shell allowlist missing the host default and pin entirely.
+            return (
+                False,
+                static_tool_providers(child_orch),
+                resolved_shell_allowlist(
+                    static_shell_allowed_commands(child_orch),
+                    host_pin=host_shell_pin(self.runtime_config),
+                ),
+                "",
+            )
+
+        if self.defn.inline is None:
+            # A path/ref/orchestration child loads from disk; it is its own,
+            # independently trusted document unless the document that
+            # carries this use effect is itself generated, in which case it
+            # inherits that document's ceiling unchanged, same as a
+            # rendered inline child would.
+            if not own_doc_is_generated:
+                return _fresh_ceiling()
+            generated = True
+        else:
+            generated = (
+                own_doc_is_generated
+                or self.defn.force_generated
+                or is_generated_inline(self.defn.inline, child_orch)
+            )
+            if not generated:
+                return _fresh_ceiling()
+
+        generating_path = self.defn.generating_effect_path_override or node_path
+        errors: list[str] = []
+        overreach = sorted(self.defn.allow_tools - enclosing_providers)
+        if own_doc_is_generated and overreach:
+            errors.append(
+                f"generated effect '{generating_path}' sets allow_tools to include "
+                f"{overreach!r}, which the document that generated it was not itself "
+                "allowed to use; a document generated at run time can't grant its "
+                "own nested effects anything new this way."
+            )
+        allowed_providers = (
+            enclosing_providers
+            if own_doc_is_generated
+            else enclosing_providers | self.defn.allow_tools
+        )
+        allowed_shell_commands = current_shell_allowlist(self.runtime_config)
+        errors.extend(
+            generated_document_errors(
+                child_orch,
+                allowed_providers=allowed_providers,
+                generating_effect_path=generating_path,
+                allowed_shell_commands=allowed_shell_commands,
+            )
+        )
+        if errors:
+            raise ValueError("; ".join(errors))
+        return True, allowed_providers, allowed_shell_commands, generating_path
+
     def _check_capability_consent(
         self, child_orch: dict[str, Any], label: str, digest: str
     ) -> frozenset[str] | None:
@@ -1173,6 +1318,12 @@ class UseRuntime:
                     if self._pin is not None:
                         meta["library_ref"] = self._pin
                     self._check_allowlists(child_orch, label)
+                    (
+                        child_is_generated,
+                        child_tool_providers,
+                        child_shell_commands,
+                        child_generating_path,
+                    ) = self._check_generated_document(child_orch, node_path)
 
                     # Cycle detection — runtime call-stack tracking by resolved identity.
                     # The stack is derived per call-path rather than mutated in place:
@@ -1190,6 +1341,41 @@ class UseRuntime:
                         )
                     child_runtime_config = dict(self.runtime_config)
                     child_runtime_config["_use_call_stack"] = [*parent_stack, identity]
+                    # The child becomes the "enclosing document" for any
+                    # use/reflector effect of its own (#772). A non-generated
+                    # child's own providers/shell-commands are recomputed
+                    # fresh from its own text, never inherited; a generated
+                    # child instead inherits the ceiling it was just checked
+                    # against unchanged, carried through runtime_config the
+                    # same way `_use_call_stack` is (`_check_generated_document`'s
+                    # own doc comment). These limits travel with execution: a
+                    # dispatch-time check reads them right before every tool
+                    # effect inside the child runs (`generated_doc.dispatch_errors`,
+                    # called from `core.tool.ToolRuntime.execute`).
+                    from ..generated_doc import (
+                        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY,
+                        GENERATED_DOCUMENT_GENERATING_PATH_KEY,
+                        GENERATED_DOCUMENT_IS_GENERATED_KEY,
+                        GENERATED_DOCUMENT_PROVIDERS_KEY,
+                        GENERATED_DOCUMENT_SHELL_COMMANDS_KEY,
+                    )
+
+                    child_runtime_config[GENERATED_DOCUMENT_IS_GENERATED_KEY] = (
+                        child_is_generated
+                    )
+                    child_runtime_config[GENERATED_DOCUMENT_GENERATING_PATH_KEY] = (
+                        child_generating_path
+                    )
+                    # A use effect always has its own allow_tools field, so a
+                    # refusal inside this child always names it as the fix,
+                    # never the decomposition-plan fixed set.
+                    child_runtime_config[GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY] = True
+                    child_runtime_config[GENERATED_DOCUMENT_PROVIDERS_KEY] = sorted(
+                        child_tool_providers
+                    )
+                    child_runtime_config[GENERATED_DOCUMENT_SHELL_COMMANDS_KEY] = sorted(
+                        child_shell_commands
+                    )
                     if child_capability_ceiling is not None:
                         install_capability_ceiling(
                             child_runtime_config, child_capability_ceiling

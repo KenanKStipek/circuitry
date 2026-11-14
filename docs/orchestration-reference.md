@@ -743,6 +743,7 @@ The built-in prime constrains the plan's step descriptions and every generated e
 | `max_effects` | integer | no | `8` | Max top-level effects per planning cycle. Enforced: a generated plan over the cap is an invalid plan (same path as a plan that fails to parse), with an error naming the count and the cap. Never truncated. |
 | `max_steps` | integer | no | `8` | Alias for `max_effects` |
 | `prime_template` | string | no | built-in | Custom prime template for planning. The built-in prime enforces ASD-STE100 Simplified Technical English on generated plan text; supplying your own opts out |
+| `allow_tools` | array of string | no | `[]` | Literal list of tool-plugin provider names the generated plan may use beyond what this document already uses itself, statically. A reflector's plan is always generated, so it is checked against a tool-provider allowance: the providers this document already uses (`type: tool` effects anywhere in it, including a literal `use: inline:` child's own text) plus this list. Must be a literal list of plain strings naming known providers — a Mustache template, a `{from: ...}` reference, or an unknown name is a `cof check` error. See [Generated documents and tools](#generated-documents-and-tools). |
 
 **Example:**
 ```yaml
@@ -1419,6 +1420,7 @@ Config inheritance: the child executes with the exact same resolved `runtime.*` 
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this `use` when its saved node did not finish without error. `continue` continues inside its child when the saved state holds the child's record; `restart` always runs the child from its start in a fresh state. A finished one is skipped either way. |
 | `description` | string | no | — | |
+| `allow_tools` | array of string | no | `[]` | Literal list of tool-plugin provider names a generated inline child may use beyond what this document already uses itself, statically. Only applies when `inline`'s structure only exists because it was rendered (e.g. `inline: "{{{prime.plan.value}}}"`) — an author-written `inline` whose structure is literal, with only scalar values templated in, is unaffected. Must be a literal list of plain strings naming known providers — a Mustache template, a `{from: ...}` reference, or an unknown name is a `cof check` error. See [Generated documents and tools](#generated-documents-and-tools). |
 
 \* Exactly one of `ref` / `path` / `inline` / `orchestration` must be present.
 
@@ -1647,6 +1649,82 @@ The runtime tracks a per-execution call stack of resolved orchestration paths. I
   inline: "{{prime.plan.value}}"
   validate: true
 ```
+
+### Generated documents and tools
+
+A document produced while a run executes — a reflector's plan, a `use`
+whose `inline:` is rendered from state, or a decomposition plan — is held
+to limits an author-written document isn't:
+
+1. **It can never widen the shell allowlist.** A generated `shell` tool
+   effect's own `params.allowed_commands` may only narrow the effective
+   allowlist — the union of the host config's default/pinned commands and
+   every literal `shell` effect's own `allowed_commands` in the document
+   that generated it; an entry outside that union is refused by name. A
+   generated `service` tool effect's `params.shell` is decided the same
+   way the `service` plugin itself decides it, and a true value is
+   refused outright. A `service` effect that starts a process without
+   `shell: true` has its executable (the first element of its argv list)
+   checked against the same allowlist, as a bare name — a path never
+   counts as a member of it — and its `env` may not set `PATH` or any
+   `LD_*`/`DYLD_*` key. The decomposition planner runs as its own literal
+   document, so decomposition works inside a generated document; the plan
+   it produces runs with these limits.
+2. **It gets a tool allowance.** It may use only the tool providers the
+   document that generated it uses itself, statically — every `type: tool`
+   effect anywhere in that document's own text, including inside a literal
+   `use: inline:` child — plus whatever the generating `use`/`reflector`
+   effect's own literal `allow_tools:` adds. `allow_tools` must be a literal
+   list of plain strings naming known providers; a Mustache template, a
+   `{from: ...}` reference, or an unknown name is a `cof check` error.
+3. **The allowance is inherited.** Every document nested inside an already
+   generated one is generated too, whatever its own `inline:` looks like —
+   including a `use: {path: ...}`/`ref:`/`orchestration:` child, which no
+   longer gets a fresh ceiling of its own just because it names a separate
+   file — and is judged against the *same* ceiling its enclosing document
+   was, never recomputed from the generated document's own text. A nested
+   `use`/`reflector` effect's own `allow_tools:` is itself part of that
+   generated text, so it can never grant anything beyond what the
+   enclosing document was itself allowed.
+4. **The refusal happens twice.** Statically, when the generated document
+   is compiled, before any of its effects run — naming the generated
+   effect, the tool provider or command, and (where one exists) the fix.
+   And again, authoritatively, right before each tool effect inside it
+   actually dispatches, on every retry, against its final provider and
+   params (after Mustache rendering and the `params_json` merge) — this is
+   the only check that can see a value `params_json` set or a `{from: ...}`
+   reference that only resolved to a disallowed value once rendered; a
+   refusal there fails that one attempt and is never retried. Either way
+   the failure belongs to the generating `use`/`reflector` effect, so its
+   own `on_error` applies like any other failure.
+
+Telling a generated document from an author's own: an author-written
+`inline:` whose *structure* is literal, with only scalar values templated
+in, is unaffected and keeps working exactly as before. A reflector's plan
+has no author template to compare against at all, and is always generated.
+A value is still generated, even in an otherwise-literal structure, at a
+security-sensitive field (`type`, `provider`, `allow_tools`,
+`allowed_commands`, `shell`, `inline`, `path`, `ref`, `orchestration`) that
+only matches the rendered document's value by coincidence rather than
+appearing in the unrendered text verbatim — a Mustache tag that renders to
+`shell` today can render to anything else tomorrow, and a nested
+`inline:`/`path:`/`ref:`/`orchestration:` that only matches by rendered
+value is never the author's own either.
+
+A decomposition plan (`runtime.complexity.decomposition`) follows rule 1
+(it is always generated too) and rule 3's inheritance: it runs with the
+enclosing context's own limits when it already has any, or otherwise the
+document it serves uses itself, statically, plus a fixed set of
+side-effect-free data tools it is always additionally allowed, since it
+has no `use`/`reflector` effect of its own to carry an `allow_tools:` and
+the merge step it commonly adds (a `tool` effect combining chunk results)
+needs one of them when the document it serves uses no tool at all:
+`json`, `regex`, `math`, `cel`, `clock`, `base64`, `hex`, `uuid`,
+`validate_yaml`. `csv` and `hash` are deliberately not in that set: both
+support reading an arbitrary local file by path (`from_path`).
+
+See [the threat model](./threat-model.md#11-generated-documents) for the
+full rule and why it exists.
 
 ---
 

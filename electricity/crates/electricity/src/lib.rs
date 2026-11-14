@@ -2042,6 +2042,17 @@ pub async fn run_orchestration_with_config(
             Err(err) => fail!(err.to_string()),
         };
 
+    // `core/compiler.py::_compile_allow_tools`'s own unknown-provider
+    // check (#772) -- `electricity-compiler` cannot make it itself (that
+    // crate cannot depend on `electricity-tools`, a circular
+    // dependency), so it runs once here, on the already-compiled
+    // program, in the one crate that depends on both.
+    let unknown_allow_tools =
+        electricity_vm::generated_doc::unknown_allow_tools_errors(&program.root);
+    if !unknown_allow_tools.is_empty() {
+        fail!(unknown_allow_tools.join("; "));
+    }
+
     // Lane J2's own per-effect profile overlay (issue #518, settled
     // ruling 1): applied directly onto the compiled IR, right after
     // `post_state_checks` and before the refusal walker below -- so
@@ -2689,6 +2700,9 @@ mod tests {
             retries: RetryPolicy::default(),
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         }
     }
 

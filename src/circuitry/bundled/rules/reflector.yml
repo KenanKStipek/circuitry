@@ -37,6 +37,10 @@ fields:
   prime_template:
     type: string
     note: "Custom prime template driving the planning cycle, overriding the built-in REFLECTOR_PRIME_V1. Usually omitted — the built-in prime is tuned for plan generation and constrains plan language to ASD-STE100 Simplified Technical English; a custom prime_template opts out of that constraint. It is rendered with {goal} and {context} — see constraints below — plus {max_effects}."
+  allow_tools:
+    type: array
+    items: {type: string}
+    note: "Literal list of tool-plugin provider names the generated plan may use beyond what this document already uses itself, statically. A reflector's plan is always generated — there is no author template to compare it against — so it is held to a tool-provider ceiling: the document's own providers plus this list. Must be a literal list of plain strings naming known providers; a Mustache template, a {from: ...} reference, or an unknown name is a cof check error."
 state_paths:
   output: "prime.<name>.value"
 constraints:

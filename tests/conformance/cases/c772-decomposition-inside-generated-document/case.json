@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #772",
+  "description": "A prompt inside a generated document ('outer' renders from state, so it is generated) scores above the decomposition threshold and decomposes successfully: the planner itself now runs as its own, non-generated document, so its own validate_yaml/json self-check never hits the generated document's inherited ceiling, and the emitted plan runs under that inherited ceiling as before.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

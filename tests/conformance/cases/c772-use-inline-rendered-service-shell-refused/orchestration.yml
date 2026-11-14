@@ -1,0 +1,17 @@
+name: c772-use-inline-rendered-service-shell-refused
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: tool
+            name: t
+            provider: service
+            params:
+              command: touch pwned
+              shell: true
+effects:
+  - type: use
+    name: child
+    inline: "{{{input.plan}}}"

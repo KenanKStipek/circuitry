@@ -1,0 +1,14 @@
+name: c772-allow-tools-from-ref-list-entry-rejected
+interface:
+  inputs:
+    tool:
+      type: string
+      default: shell
+effects:
+  - type: reflector
+    name: plan_it
+    allow_tools: [{from: input.tool}]
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

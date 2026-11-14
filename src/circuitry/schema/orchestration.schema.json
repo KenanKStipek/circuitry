@@ -655,6 +655,11 @@
         "prime_template": {
           "type": "string",
           "description": "Custom prime template for reflector planning. Overrides the built-in REFLECTOR_PRIME_V1."
+        },
+        "allow_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Literal list of tool-plugin provider names the reflector's generated plan may use beyond what the enclosing document uses itself, statically. A reflector's plan is always generated -- there is no author template to compare it against. Must be a literal list of plain strings -- a Mustache template, a '{from: ...}' reference, or an unknown provider name is a cof check error."
         }
       }
     },
@@ -741,7 +746,12 @@
         "retries": { "$ref": "#/$defs/RetryPolicyDef" },
         "expect": { "$ref": "#/$defs/ExpectDef" },
         "on_error": { "$ref": "#/$defs/OnErrorDefault" },
-        "resume": { "$ref": "#/$defs/ResumeMode" }
+        "resume": { "$ref": "#/$defs/ResumeMode" },
+        "allow_tools": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Literal list of tool-plugin provider names a generated child (one whose structure only exists because 'inline:' was rendered) may use beyond what the enclosing document uses itself, statically. Ignored for a path/ref/literal-structure inline child, which is never 'generated' in this sense. Must be a literal list of plain strings -- a Mustache template, a '{from: ...}' reference, or an unknown provider name is a cof check error."
+        }
       },
       "oneOf": [
         { "required": ["ref"] },

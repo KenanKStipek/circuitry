@@ -1,0 +1,19 @@
+name: c772-use-inline-rendered-shell-widening-refused-on-error-continue
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: tool
+            name: t
+            provider: shell
+            params:
+              command: touch
+              args: ["pwned"]
+              allowed_commands: [touch]
+effects:
+  - type: use
+    name: child
+    on_error: continue
+    inline: "{{{input.plan}}}"

@@ -1,0 +1,17 @@
+name: c772-decomposition-inside-generated-document
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: prompt
+            name: proc
+            template: Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes, evaluate alternatives and justify your conclusion with explicit reasoning. Analyze and critique the following in great depth, cross-reference every claim, and deduce the underlying causes.
+adapter: scripted
+model: m
+effects:
+  - type: use
+    name: outer
+    allow_tools: [json]
+    inline: "{{{input.plan}}}"

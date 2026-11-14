@@ -56,7 +56,12 @@ from .state_ns import (
 )
 from .templates import template_syntax_error
 from .timeout_ref import compile_timeout_ms
-from .tool import _SECURITY_SENSITIVE_PARAM_KEYS, ToolDefinition, param_reference
+from .tool import (
+    _SECURITY_SENSITIVE_PARAM_HINTS,
+    _SECURITY_SENSITIVE_PARAM_KEYS,
+    ToolDefinition,
+    param_reference,
+)
 from .use import UseDefinition, reference_as, reference_path, validate_reference_as
 from .yield_effect import YieldDefinition
 
@@ -224,6 +229,51 @@ def _check_templates(
                 field=f"{field}[{index}]",
                 allow_partials=allow_partials,
             )
+
+
+def _compile_allow_tools(
+    effect: dict[str, Any], *, label: str, effect_path: str
+) -> frozenset[str]:
+    """Compile a 'use'/'reflector' effect's literal 'allow_tools:' (#772).
+
+    Must be a literal list of plain strings -- never a Mustache template or
+    a '{from: ...}' reference -- so a generated document's own tool-provider
+    ceiling can never be widened by rendered content, params_json or state,
+    the same rule a shell effect's 'allowed_commands' already follows. Each
+    name must be a known tool-plugin provider; 'cof check' rejects anything
+    else the same way it rejects an unknown plugin anywhere else.
+    """
+    from ..plugins.factory import SUPPORTED_PLUGINS
+
+    raw = effect.get("allow_tools")
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise ValueError(
+            f"{label} effect at '{effect_path}': 'allow_tools' must be a literal "
+            "list of plain strings."
+        )
+    normalized: set[str] = set()
+    for item in raw:
+        if "{{" in item:
+            raise ValueError(
+                f"{label} effect at '{effect_path}': 'allow_tools' must be a "
+                f"literal list of plain strings; {item!r} is a Mustache template, "
+                "never honoured here."
+            )
+        # Provider names are matched case-insensitively everywhere else
+        # (#772 rule 1: a tool effect's own 'provider:' dispatches the same
+        # way regardless of case -- plugins.factory.build_plugin), so
+        # 'allow_tools' accepts and stores the same normalized form.
+        name = item.strip().lower()
+        if name not in SUPPORTED_PLUGINS:
+            raise ValueError(
+                f"{label} effect at '{effect_path}': 'allow_tools' names unknown "
+                f"tool provider {item!r}. Known providers: "
+                f"{', '.join(sorted(SUPPORTED_PLUGINS))}."
+            )
+        normalized.add(name)
+    return frozenset(normalized)
 
 
 def _compile_retries(effect: dict[str, Any]) -> RetryPolicyDef | None:
@@ -988,6 +1038,7 @@ def _compile_effect(
         prime_template = effect.get("prime_template")  # optional override
         # Support both 'max_effects' (spec) and 'max_steps' (legacy)
         max_effects = int(effect.get("max_effects") or effect.get("max_steps") or 8)
+        allow_tools = _compile_allow_tools(effect, label="Reflector", effect_path=effect_path)
 
         return ReflectorDefinition(
             name=valid_name,
@@ -1000,6 +1051,7 @@ def _compile_effect(
             if isinstance(prime_template, str)
             else REFLECTOR_PRIME_V1,
             max_effects=max_effects,
+            allow_tools=allow_tools,
         )
 
     raise ValueError(f"Unsupported effect type at '{effect_path}': {effect_type!r}")
@@ -1417,29 +1469,34 @@ def _check_report_data_leaves(
 
 
 def _check_security_sensitive_param_leaf(
-    value: Any, *, name: str, field: str
+    value: Any, *, name: str, field: str, hint: str
 ) -> None:
     """Reject a ``{from: <path>}`` leaf anywhere inside a security-sensitive
-    param (today: ``allowed_commands``) at compile time.
+    param (``allowed_commands``, ``shell``) at compile time.
 
     Mirrors the runtime guard in ``core.tool._reject_templated_security_params``:
-    only a document's literal, unrendered list of strings is ever honoured for
-    a plugin's own allowlist, so a by-reference value — which can carry
-    runtime or model-generated content — is caught here too, before the
-    orchestration ever runs.
+    only a document's literal, unrendered value is ever honoured for a
+    plugin's own security boundary, so a by-reference value -- which can
+    carry runtime or model-generated content -- is caught here too, before
+    the orchestration ever runs. *hint* names what the literal value must
+    be (:data:`_SECURITY_SENSITIVE_PARAM_HINTS`), since that differs by key.
     """
     if param_reference(value) is not None:
         raise ValueError(
             f"Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' "
-            "value is not honoured for this security-sensitive setting; it must "
-            "be a literal list of strings."
+            f"value is not honoured for this security-sensitive setting; it must "
+            f"be {hint}."
         )
     if isinstance(value, dict):
         for key, item in value.items():
-            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}.{key}")
+            _check_security_sensitive_param_leaf(
+                item, name=name, field=f"{field}.{key}", hint=hint
+            )
     elif isinstance(value, list):
         for index, item in enumerate(value):
-            _check_security_sensitive_param_leaf(item, name=name, field=f"{field}[{index}]")
+            _check_security_sensitive_param_leaf(
+                item, name=name, field=f"{field}[{index}]", hint=hint
+            )
 
 
 def _untrusted_secret_error(where: str, name: str) -> str:
@@ -1604,7 +1661,10 @@ def _compile_tool(
         )
     for sensitive_key in _SECURITY_SENSITIVE_PARAM_KEYS & params.keys():
         _check_security_sensitive_param_leaf(
-            params[sensitive_key], name=str(name), field=f"params.{sensitive_key}"
+            params[sensitive_key],
+            name=str(name),
+            field=f"params.{sensitive_key}",
+            hint=_SECURITY_SENSITIVE_PARAM_HINTS[sensitive_key],
         )
     _check_templates(
         params_json, effect_path=effect_path, field="params_json", allow_partials=True
@@ -1850,6 +1910,7 @@ def _compile_use(
     expect = _compile_expect(
         effect, effect_type="use", effect_path=effect_path, loop_names=loop_names
     )
+    allow_tools = _compile_allow_tools(effect, label="Use", effect_path=effect_path)
 
     _ = scope_path
     return UseDefinition(
@@ -1867,6 +1928,7 @@ def _compile_use(
         retries=retries,
         expect=expect,
         parent_trusted=_current_document_trusted(),
+        allow_tools=allow_tools,
     )
 
 

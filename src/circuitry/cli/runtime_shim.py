@@ -912,6 +912,44 @@ def run(req: RunRequest) -> RunResult:
                     root_def, effect_overrides, profile_name=profile.name
                 )
 
+        # The root document is the first "enclosing document" a nested
+        # use/reflector effect's generated child is judged against (#772).
+        # Walked off the compiled, profile-overridden `root_def` -- after
+        # any `provider:` override above already applied -- the same
+        # compiled-tree semantics electricity's own
+        # `static_tool_providers_from_op` uses (rule 9), not the raw,
+        # pre-override `orch` dict.
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_IS_GENERATED_KEY as _DOC_IS_GENERATED_KEY,
+        )
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_PROVIDERS_KEY as _DOC_PROVIDERS_KEY,
+        )
+        from ..generated_doc import (
+            GENERATED_DOCUMENT_SHELL_COMMANDS_KEY as _DOC_SHELL_KEY,
+        )
+        from ..generated_doc import host_shell_pin as _shell_host_pin
+        from ..generated_doc import (
+            resolved_shell_allowlist as _resolved_shell_allowlist,
+        )
+        from ..generated_doc import (
+            static_shell_allowed_commands_from_definitions as _static_shell_commands_from_definitions,
+        )
+        from ..generated_doc import (
+            static_tool_providers_from_definitions as _static_tool_providers_from_definitions,
+        )
+
+        runtime_config[_DOC_IS_GENERATED_KEY] = False
+        runtime_config[_DOC_PROVIDERS_KEY] = sorted(
+            _static_tool_providers_from_definitions(root_def)
+        )
+        runtime_config[_DOC_SHELL_KEY] = sorted(
+            _resolved_shell_allowlist(
+                _static_shell_commands_from_definitions(root_def),
+                host_pin=_shell_host_pin(runtime_config),
+            )
+        )
+
         adapter: Adapter
         timeout_seconds = 120
         # Resolve the adapter/model *names* first; the actual adapter object

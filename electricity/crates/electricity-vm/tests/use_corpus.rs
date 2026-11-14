@@ -466,6 +466,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             retries: RetryPolicy::default(),
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "path_explicit_outputs" | "path_record_children" => {
             let mut outputs = IndexMap::new();
@@ -480,6 +483,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }
         }
         "path_auto_outputs_from_interface" => {
@@ -495,6 +501,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }
         }
         "path_interface_error_not_retried" => UseOp {
@@ -510,6 +519,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "path_cycle" => UseOp {
             resume_mode: electricity_bytecode::ResumeMode::Continue,
@@ -521,6 +533,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             retries: RetryPolicy::default(),
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "retried_failing_expect_then_fails" => UseOp {
             resume_mode: electricity_bytecode::ResumeMode::Continue,
@@ -537,6 +552,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                 expr: "false".to_string(),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "on_error_skip_absorbs_failure" => UseOp {
             resume_mode: electricity_bytecode::ResumeMode::Continue,
@@ -550,6 +568,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                 expr: "false".to_string(),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "inline_quirk_q3" => {
             let mut inputs = IndexMap::new();
@@ -578,6 +599,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                     retries: RetryPolicy::default(),
                     expect: None,
                     description: None,
+                    allow_tools: std::collections::BTreeSet::new(),
+                    force_generated: false,
+                    generating_effect_path_override: None,
                 },
                 Value::Dict(ctx_dict),
             );
@@ -597,6 +621,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                     expr: "value != null".to_string(),
                 }),
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }
         }
         "inline_validation_failure_wrapped" => UseOp {
@@ -613,6 +640,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             retries: RetryPolicy::default(),
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "inline_validation_failure_unwrapped" => UseOp {
             resume_mode: electricity_bytecode::ResumeMode::Continue,
@@ -628,6 +658,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
             retries: RetryPolicy::default(),
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         },
         "record_children_clean_node" => {
             let mut inputs = IndexMap::new();
@@ -656,6 +689,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                     expr: "value.tally == 'xx'".to_string(),
                 }),
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }
         }
         "full_namespace_clean_node" => {
@@ -689,6 +725,9 @@ fn case_use_op(name: &str) -> (UseOp, Value) {
                     expr: "has(meta.attempts)".to_string(),
                 }),
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }
         }
         other => panic!("unknown end-to-end corpus case {other:?}"),

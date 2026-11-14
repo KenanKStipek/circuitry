@@ -305,6 +305,43 @@ fn write_attempts(store: &Store, meta_node: &NodeRef, attempts: &[Value]) {
 /// variant's text has no *label* of its own -- the top-level document
 /// is always "the" document being checked, where a `use` child's own
 /// message must name which child).
+/// A non-generated child's own enclosing-document ceiling (#772 rule 2):
+/// recomputed fresh from its own text, fully resolved (host default/pin
+/// included the same way the root document's own is) -- `core/use.py::
+/// UseRuntime._check_generated_document`'s own `_fresh_ceiling` helper.
+fn fresh_ceiling(
+    document: &Value,
+    runtime_config: &Value,
+) -> (
+    bool,
+    std::collections::BTreeSet<String>,
+    std::collections::BTreeSet<String>,
+    String,
+) {
+    let host_pin = crate::generated_doc::host_shell_pin(runtime_config);
+    (
+        false,
+        crate::generated_doc::static_tool_providers(document),
+        crate::generated_doc::resolved_shell_allowlist(
+            &crate::generated_doc::static_shell_allowed_commands(document),
+            host_pin.as_ref(),
+        ),
+        String::new(),
+    )
+}
+
+/// Python's own `repr(sorted(x))` for a set of plain strings -- single
+/// quotes, exactly matching `f"{sorted(x)!r}"` for a `set[str]` of
+/// provider names (every one of which is ASCII).
+fn py_repr_sorted(items: &std::collections::BTreeSet<String>) -> String {
+    let inner = items
+        .iter()
+        .map(|s| format!("'{s}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("[{inner}]")
+}
+
 fn validation_failed_text(label: &str, errors: &[String]) -> String {
     let mut text = format!("Orchestration {label} validation failed:");
     for error in errors {
@@ -892,6 +929,84 @@ async fn attempt_once<R: ParamsCtx>(
         )));
     }
 
+    // Generated-document ceiling (#772): a generated child -- forced by
+    // the reflector's own synthetic `use`, an inline child whose
+    // structure only exists because it was rendered, or simply because
+    // the document that carries *this* `use` effect is itself generated
+    // (rule 2's inheritance: every nested document inside a generated
+    // one is generated too, whatever its own shape looks like) -- may
+    // never widen the shell allowlist or use a tool provider its
+    // enclosing document doesn't use itself, beyond this effect's own
+    // literal `allow_tools`. When the enclosing document is itself
+    // generated, this effect's own `allow_tools` is part of that same
+    // generated text and can never grant anything beyond the inherited
+    // ceiling -- naming something beyond it is refused, not silently
+    // ignored.
+    let own_doc_is_generated = frame.document_is_generated();
+    let enclosing_providers = frame.document_tool_providers().clone();
+    let enclosing_shell_commands = frame.document_shell_commands().clone();
+    // A path/ref/orchestration child loads from disk; it is its own,
+    // independently trusted document unless the document that carries
+    // this use effect is itself generated, in which case it inherits
+    // that document's ceiling unchanged, same as a rendered inline
+    // child would (#772: closes the gap where such a child always got
+    // a fresh ceiling regardless of the enclosing document).
+    let generated = match &use_op.source {
+        UseSource::Path(_) | UseSource::Orchestration(_) => own_doc_is_generated,
+        UseSource::Inline(text) => {
+            own_doc_is_generated
+                || use_op.force_generated
+                || crate::generated_doc::is_generated_inline(&text.source, &loaded.document)
+        }
+    };
+    let (child_is_generated, child_tool_providers, child_shell_commands, child_generating_path) =
+        if !generated {
+            fresh_ceiling(&loaded.document, run_ctx.runtime_config)
+        } else {
+            let generating_effect_path = use_op
+                .generating_effect_path_override
+                .clone()
+                .unwrap_or_else(|| frame.local_effect_path(&op.path).to_string());
+            let mut errors = Vec::new();
+            let overreach: std::collections::BTreeSet<String> = use_op
+                .allow_tools
+                .difference(&enclosing_providers)
+                .cloned()
+                .collect();
+            if own_doc_is_generated && !overreach.is_empty() {
+                errors.push(format!(
+                    "generated effect '{generating_effect_path}' sets allow_tools to \
+                     include {}, which the document that generated it was not itself \
+                     allowed to use; a document generated at run time can't grant its \
+                     own nested effects anything new this way.",
+                    py_repr_sorted(&overreach)
+                ));
+            }
+            let allowed_providers = if own_doc_is_generated {
+                enclosing_providers.clone()
+            } else {
+                let mut p = enclosing_providers.clone();
+                p.extend(use_op.allow_tools.iter().cloned());
+                p
+            };
+            errors.extend(crate::generated_doc::generated_document_errors_with_shell(
+                &loaded.document,
+                Some(&allowed_providers),
+                &generating_effect_path,
+                Some(&enclosing_shell_commands),
+                true,
+            ));
+            if !errors.is_empty() {
+                return Err(not_retried(errors.join("; ")));
+            }
+            (
+                true,
+                allowed_providers,
+                enclosing_shell_commands.clone(),
+                generating_effect_path,
+            )
+        };
+
     // Cycle detection -- the stack is per call path (`Frame::
     // push_use`'s own fresh `Vec`), checked after the allowlist check,
     // matching Python's own order.
@@ -917,7 +1032,17 @@ async fn attempt_once<R: ParamsCtx>(
         .with_display_depth(crate::complexity::depth::use_child_root(
             frame.display_depth(),
         ))
-        .push_use(loaded.identity.clone());
+        .push_use(loaded.identity.clone())
+        .with_document_tool_providers(
+            child_tool_providers,
+            child_shell_commands,
+            child_is_generated,
+            child_generating_path,
+            // A use effect always has its own allow_tools field, so a
+            // refusal inside this child always names it as the fix,
+            // never the decomposition-plan fixed set.
+            true,
+        );
 
     let child_program = electricity_compiler::compile_document(&loaded.document, &loaded.origin)
         .map_err(|e| not_retried(e.0))?;
@@ -2056,6 +2181,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2190,6 +2318,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 expr: "value.result == value.result".to_string(),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2390,6 +2521,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 ),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2500,6 +2634,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 ),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2669,6 +2806,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
                 ),
             }),
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -2903,6 +3043,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),
@@ -3000,6 +3143,9 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
             },
             expect: None,
             description: None,
+            allow_tools: std::collections::BTreeSet::new(),
+            force_generated: false,
+            generating_effect_path_override: None,
         };
         let op = Op {
             path: EffectPath::root().push_name("step"),

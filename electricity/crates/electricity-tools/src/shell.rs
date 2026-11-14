@@ -11,7 +11,11 @@ use electricity_value::Value;
 use electricity_value::pycompat::py_strip;
 use std::collections::BTreeSet;
 
-const DEFAULT_ALLOWED: [&str; 8] = ["ls", "cat", "head", "tail", "wc", "echo", "pwd", "date"];
+/// The default allowlist with no host pin or effect-own `allowed_commands`
+/// at all -- also `electricity_vm::generated_doc`'s own base for #772
+/// rule 2's resolved shell allowlist, rather than a duplicate constant
+/// that could drift (`electricity-vm` already depends on this crate).
+pub const DEFAULT_ALLOWED: [&str; 8] = ["ls", "cat", "head", "tail", "wc", "echo", "pwd", "date"];
 
 /// `plugins/shell.py::ShellPlugin` -- the default/pinned allowlist
 /// intersection, the per-arg shell-metacharacter/null-byte/newline
@@ -234,8 +238,10 @@ pub fn make_plugin(cfg: &Value) -> Result<Box<dyn ToolPlugin>, ToolError> {
 /// decimal, digit, or numeric, and there's at least one -- `"".isalnum()`
 /// is `False`). [`crate::generated::is_py_alnum`], not Rust's own,
 /// broader `char::is_alphanumeric` -- see that function's own doc
-/// comment for the confirmed gap between the two.
-fn is_bare_command(command: &str) -> bool {
+/// comment for the confirmed gap between the two. `pub`: #772's
+/// dispatch-time check reuses this same bareness test for a generated
+/// `service` effect's own executable, rather than a separate one.
+pub fn is_bare_command(command: &str) -> bool {
     let filtered: String = command.chars().filter(|&c| c != '-' && c != '_').collect();
     !filtered.is_empty() && filtered.chars().all(crate::generated::is_py_alnum)
 }

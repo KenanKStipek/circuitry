@@ -194,7 +194,7 @@ pub async fn run_tool(
 const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
 
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
-const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
+const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 2] = ["allowed_commands", "shell"];
 
 /// `plugins/http.py::_LIMITED_SAVE_TO`.
 const LIMITED_SAVE_TO: &str = "only a document run by path may save a response to a file (a \
@@ -387,8 +387,9 @@ fn tool_params_map(params: &ParamNode) -> &IndexMap<Value, ParamNode> {
 /// matching Python's own `if not isinstance(value, list): continue`.
 fn reject_security_sensitive_literal(params: &IndexMap<Value, ParamNode>) -> Result<(), String> {
     let by_reference_text = |key: &str| {
+        let hint = electricity_compiler::compile::params::security_sensitive_param_hint(key);
         format!(
-            "params.{key} must be a literal list of strings; a by-reference \
+            "params.{key} must be {hint}; a by-reference \
              '{{from: ...}}' value is not honoured for this security-sensitive setting."
         )
     };
@@ -398,12 +399,14 @@ fn reject_security_sensitive_literal(params: &IndexMap<Value, ParamNode>) -> Res
         };
         match node {
             ParamNode::List(items) => {
+                let hint =
+                    electricity_compiler::compile::params::security_sensitive_param_hint(key_name);
                 for item in items {
                     match item {
                         ParamNode::Template(text) => {
                             if text.source.contains("{{") {
                                 return Err(format!(
-                                    "params.{key_name} must be a literal list of strings; \
+                                    "params.{key_name} must be {hint}; \
                                      a templated value is not honoured for this \
                                      security-sensitive setting."
                                 ));
@@ -1210,6 +1213,11 @@ pub async fn execute_tool<R: ParamsCtx>(
         // own `missing_file`/`outside_within`/`not_utf8` effects pin
         // this: `meta` stops at `waiting_for`, with neither key).
         let mut prompt_file_unread = false;
+        // #772: a dispatch-time refusal (this document carries limits,
+        // and this attempt's final provider/params break one of them)
+        // is never retried either -- a retry would see the same
+        // provider and the same rendered params.
+        let mut dispatch_refused = false;
         if is_agent_provider && attempt_index == 0 {
             if let Some(source) = &tool.prompt_file {
                 agent_prompt_file = Some(resolve_agent_prompt_file(source, ctx, name));
@@ -1246,6 +1254,29 @@ pub async fn execute_tool<R: ParamsCtx>(
                     agent_prompt_record = Some(resolved.record.clone());
                 }
                 let rendered_value = Value::Dict(rendered);
+
+                // The authoritative check (#772): right before this tool
+                // effect dispatches, on every attempt, against its final
+                // provider and params -- after Mustache rendering and the
+                // params_json merge above, which the compile-time check on
+                // the parsed child document (`exec::use_`'s own
+                // generated-document check) never sees. A no-op when this
+                // document carries no limits.
+                if failure.is_none() {
+                    let dispatch_violations = crate::generated_doc::dispatch_errors(
+                        &tool.provider,
+                        rendered_value.as_dict(),
+                        frame,
+                        name,
+                    );
+                    if !dispatch_violations.is_empty() {
+                        dispatch_refused = true;
+                        failure = Some(electricity_tools::ToolError::message(
+                            dispatch_violations.join("; "),
+                        ));
+                    }
+                }
+
                 let is_http =
                     electricity_value::pycompat::py_strip(&tool.provider).to_lowercase() == "http";
 
@@ -2041,6 +2072,7 @@ pub async fn execute_tool<R: ParamsCtx>(
             let retryable = !timeout_unresolved
                 && !secret_unresolved
                 && !prompt_file_unread
+                && !dispatch_refused
                 && crate::retry::is_tool_failure_retryable(
                     &tool.provider,
                     http_status_for_retry,
@@ -5098,6 +5130,189 @@ mod tests {
             meta.get(&Value::from("error")),
             Some(&Value::from("HTTP 401: reason"))
         );
+    }
+
+    #[tokio::test]
+    async fn a_dispatch_time_refusal_is_recorded_and_never_retried() {
+        // #772: a generated document's tool effect outside the ceiling is
+        // refused right before it dispatches -- the refusal never reaches
+        // `resolve_plugin` at all (`shell` is never registered below), and
+        // a retry would see the same provider and the same rendered
+        // params, so it must not retry even with retries configured.
+        let mut tool = tool_op(IndexMap::from([(
+            Value::Str("command".to_string()),
+            literal(Value::Str("echo".to_string())),
+        )]));
+        tool.provider = "shell".to_string();
+        tool.retries = electricity_bytecode::RetryPolicy {
+            max_attempts: 3,
+            backoff_ms: 0,
+        };
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            true,
+            "prime.plan_it".to_string(),
+            true,
+        );
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        assert!(!meta.contains_key(&Value::from("retries_used")));
+        let error = meta
+            .get(&Value::from("error"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(error.contains("'shell'"), "{error}");
+        assert!(error.contains("prime.plan_it"), "{error}");
+    }
+
+    #[tokio::test]
+    async fn params_json_setting_shell_is_refused() {
+        // #772: `shell` joined `allowed_commands` as a key params_json
+        // may never set -- security-sensitive settings are only ever
+        // honoured from a document's own literal params block.
+        let mut params = IndexMap::new();
+        params.insert(Value::from("command"), template("touch x"));
+        let mut tool = tool_op(params);
+        tool.provider = "service".to_string();
+        tool.params_json = Some(electricity_bytecode::TemplateText::new(
+            "{\"shell\": true}".to_string(),
+            true,
+            electricity_bytecode::Escape::Html,
+        ));
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Fail)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+
+        let err = execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &Frame::root(),
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "params_json must not set ['shell']: security-sensitive \
+             settings are only honoured from a document's literal params block."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_generated_service_string_shell_value_is_refused_like_a_literal_true() {
+        // #772: the dispatch check decides `shell` with the same
+        // string-aware boolean coercion the service plugin itself uses --
+        // a string like "y" is truthy there too, so it must be refused
+        // the same way `shell: true` is.
+        let tool_params = IndexMap::from([
+            (
+                Value::Str("command".to_string()),
+                literal(Value::Str("touch x".to_string())),
+            ),
+            (
+                Value::Str("shell".to_string()),
+                literal(Value::Str("y".to_string())),
+            ),
+        ]);
+        let mut tool = tool_op(tool_params);
+        tool.provider = "service".to_string();
+        let op = Op {
+            kind: electricity_bytecode::NodeKind::Leaf(Box::new(
+                electricity_bytecode::LeafKind::Tool(tool.clone()),
+            )),
+            ..tool_node(OnError::Continue)
+        };
+        let store = crate::Store::new();
+        let registry = ToolRegistry::new();
+        let limiter = crate::Limiter::new();
+        let runtime_config = Value::None;
+        let run_ctx = default_run_ctx(&registry, &limiter, &runtime_config);
+        let token = CancellationToken::new();
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::from(["service".to_string()]),
+            std::collections::BTreeSet::new(),
+            true,
+            "prime.plan_it".to_string(),
+            true,
+        );
+
+        execute_tool(
+            &op,
+            &tool,
+            &store,
+            &store.root,
+            &Value::None,
+            &frame,
+            &run_ctx,
+            &crate::NullObserver,
+            &token,
+        )
+        .await
+        .unwrap();
+
+        let snapshot = store.snapshot(&store.root);
+        let node = snapshot
+            .as_dict()
+            .unwrap()
+            .get(&Value::from("fetch"))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        let meta = node.get(&Value::from("meta")).unwrap().as_dict().unwrap();
+        let error = meta
+            .get(&Value::from("error"))
+            .and_then(Value::as_str)
+            .unwrap();
+        assert!(error.contains("shell: true"), "{error}");
     }
 
     #[tokio::test]
