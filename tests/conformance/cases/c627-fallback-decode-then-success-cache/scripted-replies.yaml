@@ -5,7 +5,7 @@ prime.ask:
     tokens_cached_in: 4
     tokens_cache_write: 1
   - text: "{\"a\": 1}"
-    tokens_sent: 6
+    tokens_sent: 8
     tokens_received: 3
     tokens_cached_in: 5
     tokens_cache_write: 2
