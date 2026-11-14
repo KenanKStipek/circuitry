@@ -511,19 +511,72 @@ def _extract_generated_orchestration(yaml_text: str) -> dict[str, Any] | None:
 
 
 def _save_last_run(args: dict[str, Any]) -> None:
-    """Stash the current run args for --last replay."""
+    """Stash the current run args for --last replay.
+
+    Written atomically — a sibling temp file, 0600 from creation
+    (``tempfile.mkstemp``'s own default, unaffected by umask: its bits add
+    nothing a umask could strip), renamed over any previous stash — in a
+    directory created 0700 whatever the umask. The stash holds every ``-e``
+    value of the run, so a reader must never see a half-written file, and
+    neither the directory nor the file may end up looser than that.
+    """
     try:
-        GLOBAL_CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-        _LAST_RUN_PATH.write_text(json.dumps(args) + "\n", encoding="utf-8")
+        GLOBAL_CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=GLOBAL_CONFIG_DIR, prefix=".last-run.", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                handle.write(json.dumps(args) + "\n")
+            os.replace(tmp_name, _LAST_RUN_PATH)
+        except BaseException:
+            Path(tmp_name).unlink(missing_ok=True)
+            raise
     except Exception:
         pass  # Best-effort; don't fail the run
 
 
 def _load_last_run() -> dict[str, Any]:
-    """Load the stashed last-run args."""
-    if not _LAST_RUN_PATH.exists():
+    """Load the stashed last-run args.
+
+    A missing stash and an unparseable one both raise a one-line
+    :class:`typer.BadParameter` — never a bare traceback from a half-read
+    JSON file — at the same exit code ``--last`` already uses for "no
+    previous run", via :func:`read_last_run`'s own total read.
+    """
+    stash = read_last_run(_LAST_RUN_PATH)
+    if stash is None:
         raise typer.BadParameter("No previous run found. Run an orchestration first.")
-    return json.loads(_LAST_RUN_PATH.read_text(encoding="utf-8"))
+    if not stash.ok:
+        raise typer.BadParameter(stash.error)
+    return stash.args
+
+
+def _resolve_last_run_cwd(
+    stashed: dict[str, Any], orchestration: str, config: Path | None
+) -> tuple[str, Path | None]:
+    """Resolve a ``--last`` stash's relative ``orchestration``/``config``
+    against the working directory the stashed run itself ran from (#776),
+    printing one line naming what it resolved. A stash with no ``cwd`` key
+    (written before this change) is left exactly as given, resolved against
+    *this* invocation's own cwd the same way as before.
+    """
+    cwd = stashed.get("cwd")
+    if not cwd:
+        return orchestration, config
+    base = Path(cwd)
+    resolved: list[str] = []
+    if orchestration and not Path(orchestration).is_absolute():
+        orchestration = str(base / orchestration)
+        resolved.append("orchestration")
+    if config is not None and not config.is_absolute():
+        config = base / config
+        resolved.append("config")
+    if resolved:
+        err_console.print(
+            f"Resolved {' and '.join(resolved)} against {base} "
+            "(the last run's working directory).",
+            highlight=False, soft_wrap=True,
+        )
+    return orchestration, config
 
 
 def _resolve_resume_state(
@@ -1139,6 +1192,7 @@ def run_cmd(
         # every one of them (#265 part 2 follow-up).
         stashed_service_profile = stashed.get("service_profile")
         config = Path(stashed["config"]) if stashed.get("config") else None
+        orchestration, config = _resolve_last_run_cwd(stashed, orchestration, config)
         state = Path(stashed["state"]) if stashed.get("state") else None
         out = Path(stashed["out"]) if stashed.get("out") else None
         pretty = stashed.get("pretty", False)
@@ -1447,6 +1501,7 @@ def run_cmd(
     if not last:
         _save_last_run({
             "orchestration": str(orch_path),
+            "cwd": str(Path.cwd()),
             "config": str(config) if config else None,
             "state": str(state) if state else None,
             # The raw --out flag, not the resolved path — a profile's own
@@ -1911,6 +1966,7 @@ def run_library_cmd(
     # gate was on `main` before #335 (#337).
     _save_last_run({
         "orchestration": str(asset.file_path),
+        "cwd": str(Path.cwd()),
         "remote_library_source": True,
         "config": str(config) if config else None,
         "state": str(state) if state else None,
