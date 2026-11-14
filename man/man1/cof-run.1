@@ -1,0 +1,241 @@
+.TH COF-RUN 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-run \- Execute an orchestration
+.SH SYNOPSIS
+.nf
+cof run [OPTIONS] [orchestration]
+.fi
+.SH DESCRIPTION
+Executes an orchestration document: a bundled name (cof list), a local path,
+or (with --last) the most recently run orchestration's saved arguments. Config
+resolution runs first (the global config, then a trusted project config
+layered on top of it; CIRCUITRY_CONFIG or --config, if set, replaces both
+instead), then the document's effects run in order.
+.SH OPTIONS
+.TP
+.B ORCHESTRATION
+Path to orchestration file, or name of a bundled orchestration.
+.TP
+.B --config, -c
+\fICONFIG\fR Path to config JSON (or use CIRCUITRY_CONFIG).
+.TP
+.B --state, -s
+\fISTATE\fR Optional input state JSON.
+.TP
+.B --out, -o
+\fIOUT\fR Write resulting state JSON to this path.
+.TP
+.B --pretty
+Pretty-print JSON when writing/printing.
+.TP
+.B --print
+Print resulting state JSON to stdout.
+.TP
+.B --dry-run
+Skip adapter calls; validate/plan only.
+.TP
+.B --json
+Machine-readable output only (minimal logs).
+.TP
+.B --quiet
+Suppress non-essential output.
+.TP
+.B --verbose, -v
+Show detailed progress.
+.TP
+.B --live-state
+\fILIVE_STATE\fR Mirror state atomically to this file while the run goes (at
+most every 0.5 s, and once more when it ends). For live monitoring.
+.TP
+.B --events
+\fIEVENTS\fR Write a JSONL stream of effect starts and ends to this file as
+the run goes (created or truncated up front). Shows what --live-state cannot:
+a running tree branch, use child, or chain leaf.
+.TP
+.B -e
+\fIENV_VARS\fR Inline state variable (KEY=VALUE). Repeatable.
+.TP
+.B --label
+\fILABEL\fR Literal text for this run's label, shown wherever a run's label
+appears (e.g. --events' run_start, runtime.last_run.label). Beats the
+document's top-level label: template; never rendered. Cleaned the same way
+either way: whitespace collapsed to one space, control characters and escape
+sequences dropped, trimmed, and cut at 64 characters; empty after cleaning
+means no label. --resume re-renders the document's label from the same inputs
+unless this is given.
+.TP
+.B --tail
+Print only the final effect's value as plain text. Ideal for piping.
+.TP
+.B --last
+Re-run the most recent orchestration with the same arguments.
+.TP
+.B --resume
+\fIRESUME\fR Resume an interrupted or failed run of the SAME orchestration
+from its saved state: 'last' (the most recent run's --out) or a run-id (looked
+up in the orchestration's configured runtime.persistence backend). Effects
+whose node already finished without error are skipped and reused; the first
+unfinished or failed one, and everything after it, reruns. A named loop
+resumes at its first unfinished pass. Combine with --state <file> to resume
+from a specific saved state file directly instead of 'last'/a run-id.
+.TP
+.B --force
+With --resume, continue even though the orchestration's content changed since
+the saved run.
+.TP
+.B --skip-preflight
+Bypass dependency preflight; run even if check()s reported missing deps.
+.TP
+.B --allow-capabilities
+\fIALLOW_CAPABILITIES\fR Comma-separated capabilities
+(shell,python_eval,fs-write,network) to approve for this run without prompting
+\(em a scripted/CI escape hatch for a use: ref: child that needs fresh
+consent. Not persisted; see \fBcof trust\fR to approve a document permanently.
+.TP
+.B --profile
+\fIPROFILE\fR Named profile to apply (profiles/<name>.yml,
+orchestration-scoped wins over project-level). Precedence: CLI > profile >
+orchestration > config.
+.TP
+.B --profile-from-state
+\fIPROFILE_FROM_STATE\fR Reconstruct and apply the profile recorded at
+runtime.effective_settings.profile in this state JSON (e.g. a prior --out),
+instead of discovering profiles/<name>.yml by name. Fails if that record was
+redacted. Mutually exclusive with --profile.
+.TP
+.B --adapter
+\fIADAPTER\fR Adapter to use for this run. Beats CIRCUITRY_ADAPTER, --profile,
+and the orchestration.
+.TP
+.B --model
+\fIMODEL\fR Model to use for this run. Beats CIRCUITRY_MODEL, --profile, and
+the orchestration.
+.TP
+.B --explain-routing
+Print each prompt effect's complexity score, band, and model choice as it
+dispatches. Needs runtime.complexity.scoring.enabled; prints nothing if
+scoring is off. Suppressed by --quiet/--json.
+.TP
+.B --decompose-out
+\fIDECOMPOSE_OUT\fR Write every triggered decomposition's generated
+orchestration to this directory, one file per effect (failed plans included,
+marked as such). Needs runtime.complexity.decomposition.enabled; a run that
+never decomposes writes nothing.
+.TP
+.B --scoring, --no-scoring
+Force runtime.complexity.scoring on/off for this run. Beats --profile and the
+orchestration/config; omit to leave it resolved as configured.
+.TP
+.B --routing, --no-routing
+Force runtime.complexity.routing on/off for this run. Beats --profile and the
+orchestration/config; --no-routing also drops any profile per-effect routing
+pin, since routing is off for the whole run either way. Requires scoring (from
+this flag or config) when turned on.
+.TP
+.B --decompose, --no-decompose
+Force runtime.complexity.decomposition on/off for this run. Beats --profile
+and the orchestration/config. Requires scoring (from this flag or config) when
+turned on.
+.TP
+.B --split, --no-split
+Force runtime.complexity.splitting on/off for this run. Beats --profile and
+the orchestration/config. Needs no scoring: an effect's split.budget_tokens
+still splits even with this off, and --no-split does not stop it either \(em
+only an effect's split.enabled: false opts it out.
+.SH EXAMPLES
+.TP
+.B cof run hello-world
+Runs a bundled orchestration by name.
+.TP
+.B cof run my-flow.yml -e name=world --out state.json
+Runs a local document with one input, writing the final state to a file.
+.TP
+.B cof run --last
+Re-runs the most recent orchestration with the same arguments, from
+~/.config/circuitry/last-run.json.
+.TP
+.B cof run my-flow.yml --resume last
+Resumes the most recent interrupted or failed run of the same orchestration
+from its saved state.
+.SH ENVIRONMENT
+.TP
+.B CIRCUITRY_CONFIG
+An explicit config JSON path (same as --config). When set, replaces the global
+config and any project config entirely, rather than layering on top of them.
+.TP
+.B CIRCUITRY_MODEL
+Overrides the resolved config's default_model.
+.TP
+.B CIRCUITRY_ADAPTER
+Overrides the resolved config's default_adapter.
+.TP
+.B CIRCUITRY_ADAPTER_URL
+Overrides the resolved default adapter's base_url.
+.TP
+.B CIRCUITRY_COMFYUI_URL
+Overrides the comfyui plugin's base_url.
+.TP
+.B CIRCUITRY_SYSTEMONE_URL
+Overrides the systemone plugin's base_url.
+.TP
+.B CIRCUITRY_ENABLED_ADAPTERS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_adapters.
+.TP
+.B CIRCUITRY_ENABLED_PLUGINS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_plugins.
+.TP
+.B CIRCUITRY_ENABLED_TOOLS
+Comma-separated allowlist, narrowing (never widening) the resolved config's
+enabled_tools.
+.TP
+.B CIRCUITRY_ENVIRONMENT
+Overrides the resolved config's environment (dev, prod, or test).
+.TP
+.B CIRCUITRY_TRUST_PROJECT_CONFIG
+Trusts a project config in the current directory without running cof trust
+first.
+.SH FILES
+.TP
+.I ~/.config/circuitry/config.json
+The global config, applied first; a trusted project config layers on top of
+it.
+.TP
+.I ~/.config/circuitry/.env
+Private environment variables, loaded before config resolution (written by cof
+setup).
+.TP
+.I ~/.config/circuitry/trusted.json
+Project configs trusted by cof trust; config resolution consults it before
+applying a discovered project config.
+.TP
+.I ./circuitry.config.json, ./config.json
+A project config in the working directory, layered on top of the global config
+once trusted.
+.TP
+.I ~/.config/circuitry/last-run.json
+This run's arguments, for a later --last or --resume last. Secret-looking
+values are redacted before being written, and --last refuses to replay a
+redacted run.
+.SH EXIT STATUS
+.TP
+.B 0
+The run finished without error.
+.TP
+.B 1
+The run failed, or the orchestration could not be found.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.TP
+.B 129
+The run was interrupted by SIGHUP.
+.TP
+.B 130
+The run was interrupted by SIGINT (Ctrl-C).
+.TP
+.B 143
+The run was interrupted by SIGTERM.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-validate(1)\fR, \fBcof-list(1)\fR, \fBelectricity-run(1)\fR

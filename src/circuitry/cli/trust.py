@@ -183,7 +183,7 @@ def register_trust(app: typer.Typer) -> None:
         "trust",
         help=(
             "Trust a project config file, or consent to an orchestration "
-            "document's capabilities (#275). A .yml/.yaml PATH is a "
+            "document's capabilities. A .yml/.yaml PATH is a "
             "document (shows the capabilities it needs and asks); anything "
             "else is a project config file (shows what it sets and asks)."
         ),

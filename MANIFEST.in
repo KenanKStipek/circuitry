@@ -1,0 +1,5 @@
+# `man/man1/*.1` (issue #764) isn't under `src/`, so setuptools' own
+# package-data discovery never finds it; this is what gets it into the
+# sdist (`[tool.setuptools.data-files]` in pyproject.toml is what then
+# installs cof's own pages from the sdist/wheel into share/man/man1).
+graft man

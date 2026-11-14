@@ -1,0 +1,203 @@
+.ie \n(.g .ds Aq \(aq
+.el .ds Aq '
+.TH OSI 1 2026-11-13 "osi 0.1.0"
+.SH NAME
+osi \- Launches a Circuitry orchestration on cof or electricity and shows it
+running.
+.SH SYNOPSIS
+\fBosi\fR [\fB\-h\fR|\fB\-\-help\fR] [\fB\-e \fR] [\fB\-\-engine\fR]
+[\fB\-\-out\-dir\fR] [\fB\-\-log\fR] [\fB\-\-glance\fR]
+[\fB\-\-no\-animation\fR] [\fB\-\-theme\fR] [\fB\-\-no\-history\fR]
+[\fB\-\-label\fR] [\fB\-V\fR|\fB\-\-version\fR] [\fIORCHESTRATION\fR]
+[\fICONFIG\fR]
+.SH DESCRIPTION
+osi (oscilloscope) launches a Circuitry orchestration on cof or electricity
+and shows it running.
+.PP
+osi <orchestration> [config.json] [\-e key=value]... [\-\-engine
+cof|electricity] [\-\-out\-dir DIR] [\-\-log] [\-\-label TEXT]
+.PP
+osi watch <dir | state.live.json> [\-\-plan doc.yml]
+.PP
+With no orchestration, on a TTY with no \-\-log: finds the orchestrations
+already running on this machine (the run
+registry, a process scan, and any state.live.json in the current directory)
+and attaches to the only one, or shows
+a Select screen to choose among several, or a Recent Runs table from history
+with none. Without a TTY, or with
+\-\-log, it instead prints one line per running orchestration and exits 0.
+.PP
+osi man [watch] shows this page or osi\-watch(1) through man on a terminal, or
+prints its roff when piped or given \-\-roff.
+.SH OPTIONS
+.TP
+\fB\-h\fR, \fB\-\-help\fR
+Print help and exit
+.TP
+\fB\-e\fR \fI<key=value>\fR
+\fB\-e key=value\fR inputs, passed through to the engine unchanged
+.TP
+\fB\-\-engine\fR \fI<ENGINE>\fR [default: cof]
+Which engine runs the orchestration
+
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+cof
+.IP \(bu 2
+electricity
+.RE
+.TP
+\fB\-\-out\-dir\fR \fI<DIR>\fR
+Puts the run directory (state, events, stdout/stderr) here instead of a
+temporary one \-\- which osi never removes either way; it prints where that
+one ended up once the run ends
+.TP
+\fB\-\-log\fR
+Forces the plain\-text stream even on a TTY
+.TP
+\fB\-\-glance\fR
+Shows only the header line, without the tabs, rewritten in place about once a
+second \-\- for a tmux status line. Can\*(Aqt be combined with \fB\-\-log\fR
+.TP
+\fB\-\-no\-animation\fR
+Switches off the scope icon\*(Aqs trace: the header draws a still frame in its
+place instead
+.TP
+\fB\-\-theme\fR \fI<THEME>\fR
+The colour theme. \fBOSI_THEME\fR is used when this isn\*(Aqt given;
+\fBterminal\fR (today\*(Aqs look) otherwise
+
+\fIPossible values:\fR
+.RS 14
+.IP \(bu 2
+terminal
+.IP \(bu 2
+dracula
+.IP \(bu 2
+nord
+.IP \(bu 2
+solarized\-dark
+.IP \(bu 2
+solarized\-light
+.IP \(bu 2
+gruvbox\-dark
+.IP \(bu 2
+gruvbox\-light
+.IP \(bu 2
+catppuccin\-mocha
+.IP \(bu 2
+catppuccin\-latte
+.IP \(bu 2
+tokyo\-night
+.IP \(bu 2
+one\-dark
+.RE
+.TP
+\fB\-\-no\-history\fR
+Turns run history off: nothing is read or written, and no history directory is
+created. \fBOSI_HISTORY=off\fR does the same
+.TP
+\fB\-\-label\fR \fI<TEXT>\fR
+Literal text for this run\*(Aqs label, passed through to the engine unchanged
+\-\- wins over the document\*(Aqs \fBlabel:\fR template. Shown in place of the
+run\*(Aqs generated name wherever one is shown, from the first frame; \fBosi
+watch\fR has no \fB\-\-label\fR, since it never launches anything
+.TP
+\fB\-V\fR, \fB\-\-version\fR
+Print version
+.TP
+[\fIORCHESTRATION\fR]
+The orchestration document to run (YAML or JSON). With none, on a TTY with no
+\fB\-\-log\fR osi opens the Select screen instead; without a TTY, or with
+\fB\-\-log\fR, it lists the orchestrations already running on this machine and
+exits 0
+.TP
+[\fICONFIG\fR]
+The engine\*(Aqs config (JSON), passed through unchanged. With none, the
+engine resolves its default
+.SH VERSION
+v0.1.0 (preview)
+.SH EXAMPLES
+.TP
+.B osi orchestration.yml -e name=world
+Launches a document on cof, with one input, and watches it.
+.TP
+.B osi orchestration.yml --engine electricity --out-dir ./run
+Launches a document on electricity instead, keeping its run directory (state,
+events, stdout/stderr) at ./run.
+.TP
+.B osi --log
+Without an orchestration: lists the orchestrations already running on this
+machine and exits, instead of opening the Select screen.
+.SH ENVIRONMENT
+.TP
+.B OSI_THEME
+The colour theme, when --theme isn't given. terminal (today's look) otherwise.
+.TP
+.B OSI_HISTORY
+OSI_HISTORY=off turns run history off, the same as --no-history: nothing is
+read or written, and no history directory is created.
+.TP
+.B OSI_HISTORY_DIR
+Overrides osi's history directory (see FILES below).
+.TP
+.B OSI_RUNS_DIR
+Overrides osi's run registry directory (see FILES below).
+.TP
+.B OSI_PROCESS_SCAN
+OSI_PROCESS_SCAN=0 limits bare osi's discovery (no orchestration, no TTY, or
+--log) to the run registry, skipping the process scan and any state.live.json
+in the current directory.
+.TP
+.B XDG_STATE_HOME
+The base osi's history and run registry directories are rooted under, when
+OSI_HISTORY_DIR/OSI_RUNS_DIR aren't set.
+.TP
+.B XDG_RUNTIME_DIR
+Preferred over XDG_STATE_HOME for the run registry alone (a live run's pid
+file), when it's set.
+.TP
+.B CI
+Forces the plain-text stream, the same as --log.
+.SH FILES
+.TP
+.I ~/.local/state/circuitry/osi/history/
+Per-document run history: one record per finished run, read back for the
+Recent Runs table and ETA estimates. OSI_HISTORY_DIR overrides this directory;
+OSI_HISTORY=off or --no-history disables it entirely.
+.TP
+.I ~/.local/state/circuitry/osi/runs/
+The run registry: one file per run osi launched or is watching, used by bare
+osi's discovery and pruned once a run's pid is no longer alive. OSI_RUNS_DIR
+overrides this directory; $XDG_RUNTIME_DIR/circuitry/osi/runs is tried first
+when set.
+.SH EXIT STATUS
+.TP
+.B 0
+The watched or launched run finished without error.
+.TP
+.B 1 and other
+osi exits with the engine's own exit code, passed through unchanged -- a child
+process's own code if it had one, or 128 plus the signal number that killed
+it. 1 covers an ordinary failure, or osi being unable to start or attach to
+the run at all.
+.TP
+.B 2
+A usage error -- an unrecognized option, a missing required argument, or an
+unknown osi man page. Never from the watched or launched engine itself.
+.TP
+.B 129
+The run ended on SIGHUP (128 + 1).
+.TP
+.B 130
+The run ended on SIGINT, Ctrl-C (128 + 2).
+.TP
+.B 143
+The run ended on SIGTERM (128 + 15).
+.SH SEE ALSO
+.BR osi (1),
+.BR osi\-watch (1),
+.BR cof (1),
+.BR cof\-run (1),
+.BR electricity (1)

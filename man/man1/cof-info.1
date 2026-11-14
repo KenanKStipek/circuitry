@@ -1,0 +1,56 @@
+.TH COF-INFO 1 "2026-11-13" "cof 0.1.0" "User Commands"
+.SH NAME
+cof-info \- Show details for a bundled orchestration
+.SH SYNOPSIS
+.nf
+cof info [OPTIONS] {name}
+.fi
+.SH DESCRIPTION
+Shows a bundled orchestration's details from the curated index: description,
+category, complexity, and required extensions.
+.SH OPTIONS
+.TP
+.B NAME
+Name of the orchestration.
+.TP
+.B --json
+Output machine-readable JSON only.
+.TP
+.B --config, -c
+\fICONFIG\fR Path to config JSON (or use CIRCUITRY_CONFIG).
+.TP
+.B --profile
+\fIPROFILE\fR Named profile to layer in when resolving the complexity block,
+as \fBcof run --profile\fR would (see \fBcof run --help\fR).
+.TP
+.B --scoring, --no-scoring
+Preview runtime.complexity.scoring forced on/off, as \fBcof run --scoring\fR
+would resolve it.
+.TP
+.B --routing, --no-routing
+Preview runtime.complexity.routing forced on/off, as \fBcof run --routing\fR
+would resolve it.
+.TP
+.B --decompose, --no-decompose
+Preview runtime.complexity.decomposition forced on/off, as \fBcof run
+--decompose\fR would resolve it.
+.TP
+.B --split, --no-split
+Preview runtime.complexity.splitting forced on/off, as \fBcof run --split\fR
+would resolve it.
+.SH EXAMPLES
+.TP
+.B cof info hello-world
+Shows one bundled orchestration's details.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+The command failed, or the input was invalid.
+.TP
+.B 2
+A usage error -- an unrecognized option or missing argument.
+.SH SEE ALSO
+\fBcof(1)\fR, \fBcof-list(1)\fR, \fBcof-eject(1)\fR
