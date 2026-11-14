@@ -156,7 +156,25 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup, commands, and local verific
 
 ## Deployment and Operations
 
-No dedicated deployment manifests (Docker/K8s/Terraform/CI pipelines) are currently present in this repository snapshot.
+- **CI** — `.github/workflows/`: `quality.yml` (the pytest matrix across the
+  supported Python versions, `ruff`, `mypy`, the curation smoke test, a
+  built-dist check, the man-page check) runs on every pull request and push
+  to `main`; `electricity.yml` and `oscilloscope.yml` run their own Cargo
+  gates (`cargo fmt`, `clippy`, `cargo test --workspace`) for changes under
+  `electricity/`/`oscilloscope/`; `electricity-generated.yml` checks that the
+  files `electricity/scripts/generate_*.py` write from Circuitry's own code
+  are still current; `rust-release-build.yml` is the reusable workflow both
+  Rust workspaces' release builds call; `postgres-integration.yml` and
+  `surrealdb-integration.yml` run the integration suite against those
+  backends on `main`; `release.yml` publishes a tagged release to PyPI and
+  GitHub Releases; `accept.yml` and `rollup.yml` handle issue/PR bookkeeping.
+- **Docker** — `electricity/Dockerfile` builds the preview `electricity`
+  container image from the release workflow's pre-built static binaries;
+  `services/house-cook/Dockerfile` and `services/idea-farm/Dockerfile` build
+  two small always-on services that run Circuitry orchestrations in
+  production, kept in this repository so their own code stays in lockstep
+  with the library.
+- No Kubernetes or Terraform manifests are present in this repository.
 
 ## Testing Strategy
 
