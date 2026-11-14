@@ -461,6 +461,17 @@ pub fn duration_seconds(start: &str, end: &str) -> Option<f64> {
     Some(micros as f64 / 1_000_000.0)
 }
 
+/// [`duration_seconds`]'s own inverse: `start` plus `seconds`, in the
+/// same RFC3339 shape -- the Signal's own scrub cursor (issue #690)
+/// reads a column index back into the absolute instant it is, to
+/// reconstruct the run as of that column rather than its own current
+/// state.
+pub fn add_seconds(start: &str, seconds: f64) -> Option<String> {
+    let start = chrono::DateTime::parse_from_rfc3339(start).ok()?;
+    let delta = chrono::Duration::microseconds((seconds * 1_000_000.0).round() as i64);
+    Some((start + delta).to_rfc3339_opts(chrono::SecondsFormat::Millis, true))
+}
+
 /// The real wall clock's own current time, in the same RFC3339 shape
 /// as every `created_at`/`completed_at` an engine writes -- the one
 /// place `render::build`'s caller (osi-cli, which has no direct
