@@ -1718,7 +1718,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
         if attempt_index > 0 {
             if token.is_set() {
                 return Err(record_use_cancelled(
-                    store, &meta_node, &effect_path, instance, token, observer,
+                    store,
+                    &meta_node,
+                    &effect_path,
+                    instance,
+                    token,
+                    observer,
                 ));
             }
             tokio::select! {
@@ -1836,7 +1841,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             }
             Err(AttemptProblem::Fatal(VmError::Cancelled)) => {
                 return Err(record_use_cancelled(
-                    store, &meta_node, &effect_path, instance, token, observer,
+                    store,
+                    &meta_node,
+                    &effect_path,
+                    instance,
+                    token,
+                    observer,
                 ));
             }
             Err(AttemptProblem::Fatal(refused @ VmError::Refused { .. })) => {

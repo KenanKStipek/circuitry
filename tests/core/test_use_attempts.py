@@ -251,6 +251,50 @@ def test_attempts_interrupt_during_backoff_records_error_but_leaves_no_entry_for
     assert meta.get("error") == "run cancelled"
 
 
+def test_a_killed_tree_branchs_subprocess_is_still_recognised_as_an_interrupt(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#796: a real signal never reaches a tree-flow branch's own worker
+    thread directly (it only kills that branch's tracked subprocess), so a
+    cancelled run's own `use` effect sees an ordinary nonzero-exit
+    ``Exception`` there, never the ``BaseException`` a signal raises on the
+    main thread. Checking ``get_token().is_set()`` in the ordinary
+    ``except Exception`` branch catches that case too: the failure is
+    still recorded as an interrupt, not an absorbable one -- `on_error:
+    continue` must not swallow it, unlike an *ordinary* nonzero exit.
+    """
+    child_path = _write(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "killed",
+                    "provider": "shell",
+                    "params": {"command": "false", "allowed_commands": ["false"]},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(get_token(), "is_set", lambda: True)
+    monkeypatch.setattr(get_token(), "_signum", 15)  # SIGTERM; `signum` is a read-only property
+
+    defn = UseDefinition(name="run_child", path=str(child_path), on_error="continue")
+    store = Store({})
+    with pytest.raises(RunCancelledBySignal):
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    meta = store.state["run_child"]["meta"]
+    assert meta.get("error") == "Interrupted (SIGTERM)"
+    assert meta.get("completed_at") is not None
+    # No `meta.attempts` entry, and no `child_errors` walk, either -- the
+    # same shape a real `BaseException` interrupt already left (this
+    # module's own interrupt-during-backoff test above): the ordinary
+    # per-attempt bookkeeping never runs for this case.
+    assert "attempts" not in meta
+
+
 # ── inputs: {from: prime.<name>.meta.attempts}, record_children, full-namespace ──
 
 

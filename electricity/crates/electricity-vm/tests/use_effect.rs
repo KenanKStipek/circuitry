@@ -13,7 +13,7 @@ use electricity_bytecode::{
 use electricity_value::{Dict, Value};
 use electricity_vm::{CancellationToken, Limiter, Store, VmError};
 use indexmap::IndexMap;
-use support::{Event, RecordingObserver, json_registry, run_ctx};
+use support::{CancelOnStart, Event, RecordingObserver, json_registry, run_ctx};
 
 fn root_path() -> EffectPath {
     EffectPath::root()
@@ -859,5 +859,96 @@ effects:
             .iter()
             .any(|e| matches!(e, Event::ClearGraft(p) if p == "prime.step.inner")),
         "got {events:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_cancelled_use_pairs_its_own_start_and_end_and_records_the_interrupt() {
+    // issue #796: before this fix, a cancelled `use` left its own
+    // `effect_start` unanswered -- no `end` event at all in `--events`,
+    // and no `meta.error`/`meta.completed_at` on its node -- unlike an
+    // interrupted `dynamic`, which records both. `CancelOnStart` fires
+    // the real signal the moment the child's own `first` tool starts;
+    // `first` itself still finishes normally (nothing mid-step polls
+    // the token), but the child's own chain then refuses to dispatch
+    // `second` at all -- its own pre-step check already sees the token
+    // set -- so the `use` effect's own `attempt_once` sees
+    // `VmError::Cancelled` while this is still its first (and only)
+    // attempt, the shape this fix actually targets. A token already
+    // cancelled *before* `execute_root` ever runs instead stops the
+    // outer chain before ever reaching the `use` leaf at all, the
+    // unrelated case `an_already_cancelled_token_stops_the_chain_
+    // before_its_first_effect` already covers.
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let ctx = run_ctx(&registry, &limiter);
+    let observer = CancelOnStart {
+        inner: RecordingObserver::new(),
+        token: &token,
+        target: "prime.step.first",
+    };
+
+    let inline_yaml = "effects:\n  - type: tool\n    name: first\n    provider: json\n    params: {mode: stringify, input: 1}\n  - type: tool\n    name: second\n    provider: json\n    params: {mode: stringify, input: 2}\n";
+    let use_op = base_use_op(UseSource::Inline(electricity_bytecode::TemplateText::new(
+        inline_yaml.to_string(),
+        true,
+        Escape::Html,
+    )));
+    let op = support::use_leaf(
+        root_path().push_name("step"),
+        "step",
+        use_op.source,
+        use_op.inputs,
+        use_op.outputs,
+        use_op.validate,
+        use_op.retries,
+        use_op.expect,
+        OnError::Fail,
+    );
+    let root = support::chain_dynamic(root_path(), "prime", OnError::Fail, vec![op]);
+    let result = electricity_vm::execute_root(
+        &support::program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+        false,
+    )
+    .await;
+    assert!(matches!(result, Err(VmError::Cancelled)), "got {result:?}");
+
+    let events = observer.inner.events();
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, Event::Start(p) if p == "prime.step")),
+        "got {events:?}"
+    );
+    let end = events
+        .iter()
+        .find(|e| matches!(e, Event::Complete(p, _) if p == "prime.step"))
+        .unwrap_or_else(|| panic!("prime.step's own start must be answered by an end: {events:?}"));
+    assert_eq!(
+        end,
+        &Event::Complete(
+            "prime.step".to_string(),
+            Some("Interrupted (Ctrl-C/SIGINT)".to_string()),
+        ),
+    );
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let use_node = as_dict(get(prime, "step").unwrap());
+    let meta = as_dict(get(use_node, "meta").unwrap());
+    assert_eq!(
+        get(meta, "error"),
+        Some(&Value::Str("Interrupted (Ctrl-C/SIGINT)".to_string()))
+    );
+    assert!(
+        matches!(get(meta, "completed_at"), Some(Value::Str(_))),
+        "got {meta:?}"
     );
 }
