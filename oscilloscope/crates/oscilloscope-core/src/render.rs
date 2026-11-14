@@ -273,6 +273,15 @@ pub struct Header {
     /// both in the same frame.
     pub tokens_sent_live_estimate: u64,
     pub tokens_received_live_estimate: u64,
+    /// Issue #627's cached input, already part of `tokens_sent`
+    /// above (the adapters fold cache reads into it) -- `runtime.
+    /// last_run.totals.tokens_cached_in` once the run has one, else
+    /// the sum of every finished node's own `meta.tokens_cached_in`
+    /// (the same totals-or-sum-of-nodes rule `tokens_sent` itself
+    /// follows). `None` whenever nothing has reported it at all,
+    /// never a false `Some(0)` -- a front end shows the cached
+    /// parenthetical only where this is `Some`.
+    pub tokens_cached_in: Option<u64>,
     pub innermost_loop_eta_s: Option<f64>,
     /// `innermost_loop_eta_s`, as an absolute clock time (`now` plus
     /// the ETA) rather than a remaining duration (issue #613: "the
@@ -1662,6 +1671,26 @@ fn build_header(
             })
         });
 
+    // Issue #627's cached input: the same totals-or-sum-of-nodes
+    // rule as `tokens_sent`/`tokens_received` above, just reading
+    // `tokens_cached_in` instead -- `None` once nothing at all has
+    // reported it, since "absent" and "reported zero" are different
+    // facts a front end must tell apart.
+    let tokens_cached_in = state
+        .and_then(run_totals)
+        .and_then(|totals| totals.get("tokens_cached_in").and_then(Value::as_u64))
+        .or_else(|| {
+            let mut any = false;
+            let mut total = 0u64;
+            for node in flat.values() {
+                if let Some(n) = crate::model::node_cached_tokens(&node.meta).0 {
+                    any = true;
+                    total += n;
+                }
+            }
+            any.then_some(total)
+        });
+
     // Issue #702's cancelled-run case: a leftover `meta.live` whose
     // own node never got a `completed_at` at all (the run ended
     // while the session was still mid-attempt, or whose own
@@ -1793,6 +1822,7 @@ fn build_header(
         tokens_received,
         tokens_sent_live_estimate,
         tokens_received_live_estimate,
+        tokens_cached_in,
         innermost_loop_eta_s,
         innermost_loop_eta_ts,
         // Issue #649: `build`/`build_header` have no history of
