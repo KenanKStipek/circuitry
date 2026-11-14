@@ -1,0 +1,14 @@
+name: c772-nested-generated-document-literal-shape-refused
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: use
+            name: inner
+            inline: "effects:\n  - type: tool\n    name: t\n    provider: 'sh{{!c}}ell'\n    params:\n      command: touch\n      allowed_commands: [touch]\n"
+effects:
+  - type: use
+    name: outer
+    inline: "{{{input.plan}}}"
