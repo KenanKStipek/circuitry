@@ -1722,7 +1722,10 @@ async fn run_while<'a>(
                     if let Some(ci) = outcome.generated.as_ref().and_then(|g| g.tokens_cached_in) {
                         tokens_cached_in_total = Some(tokens_cached_in_total.unwrap_or(0) + ci);
                     }
-                    if let Some(cw) = outcome.generated.as_ref().and_then(|g| g.tokens_cache_write)
+                    if let Some(cw) = outcome
+                        .generated
+                        .as_ref()
+                        .and_then(|g| g.tokens_cache_write)
                     {
                         tokens_cache_write_total = Some(tokens_cache_write_total.unwrap_or(0) + cw);
                     }
@@ -1931,6 +1934,7 @@ fn evaluate_while_condition(
 /// whatever they already summed from earlier checks); *tokens_sent_
 /// total*/*tokens_received_total* are the running sums [`run_while`]
 /// keeps across this call's own checks.
+#[allow(clippy::too_many_arguments)]
 fn write_model_while_reply(
     store: &Store,
     meta: &NodeRef,
@@ -1989,7 +1993,11 @@ fn write_model_while_reply(
             .unwrap_or(Value::None),
     );
     if let Some(cached_in_total) = tokens_cached_in_total {
-        store.set_leaf(meta, key("tokens_cached_in_total"), Value::from(cached_in_total));
+        store.set_leaf(
+            meta,
+            key("tokens_cached_in_total"),
+            Value::from(cached_in_total),
+        );
     }
     if let Some(cache_write_total) = tokens_cache_write_total {
         store.set_leaf(

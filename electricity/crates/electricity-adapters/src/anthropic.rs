@@ -1116,6 +1116,29 @@ mod tests {
     }
 
     #[test]
+    fn interpret_outcome_adds_cache_reads_and_writes_into_tokens_sent() {
+        let outcome = success(
+            r#"{"content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 3, "output_tokens": 5, "cache_read_input_tokens": 100, "cache_creation_input_tokens": 20}}"#,
+        );
+        let result = interpret_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, Some(3 + 100 + 20));
+        assert_eq!(result.tokens_received, Some(5));
+        assert_eq!(result.tokens_cached_in, Some(100));
+        assert_eq!(result.tokens_cache_write, Some(20));
+    }
+
+    #[test]
+    fn interpret_outcome_with_no_cache_fields_leaves_them_absent() {
+        let outcome = success(
+            r#"{"content": [{"type": "text", "text": "hi"}], "usage": {"input_tokens": 3, "output_tokens": 5}}"#,
+        );
+        let result = interpret_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, Some(3));
+        assert_eq!(result.tokens_cached_in, None);
+        assert_eq!(result.tokens_cache_write, None);
+    }
+
+    #[test]
     fn interpret_outcome_raises_the_join_text_for_a_non_str_text_block() {
         let outcome = success(
             r#"{"content": [{"type": "text", "text": "a"}, {"type": "text", "text": null}]}"#,
@@ -1180,6 +1203,63 @@ mod tests {
     }
 
     #[test]
+    fn interpret_streaming_outcome_rebuilds_the_cache_fields_into_raw_usage() {
+        let body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":",
+            "{\"input_tokens\":3,\"cache_read_input_tokens\":100,",
+            "\"cache_creation_input_tokens\":20}}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},",
+            "\"usage\":{\"output_tokens\":5}}\n",
+            "data: {\"type\":\"message_stop\"}\n",
+        );
+        let outcome = success(body);
+        let result = interpret_streaming_outcome(&outcome, "m", "http://x", "k").unwrap();
+        assert_eq!(result.tokens_sent, Some(3 + 100 + 20));
+        assert_eq!(result.tokens_received, Some(5));
+        assert_eq!(result.tokens_cached_in, Some(100));
+        assert_eq!(result.tokens_cache_write, Some(20));
+        let usage = result
+            .raw
+            .as_dict()
+            .unwrap()
+            .get(&Value::Str("usage".to_string()))
+            .unwrap()
+            .as_dict()
+            .unwrap();
+        assert_eq!(
+            usage.get(&Value::Str("input_tokens".to_string())),
+            Some(&Value::from(3))
+        );
+        assert_eq!(
+            usage.get(&Value::Str("cache_read_input_tokens".to_string())),
+            Some(&Value::from(100))
+        );
+        assert_eq!(
+            usage.get(&Value::Str("cache_creation_input_tokens".to_string())),
+            Some(&Value::from(20))
+        );
+    }
+
+    #[test]
+    fn parse_anthropic_stream_adds_cache_reads_and_writes_into_tokens_sent() {
+        let body = concat!(
+            "data: {\"type\":\"message_start\",\"message\":{\"usage\":",
+            "{\"input_tokens\":3,\"cache_read_input_tokens\":100,",
+            "\"cache_creation_input_tokens\":20}}}\n",
+            "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},",
+            "\"usage\":{\"output_tokens\":5}}\n",
+            "data: {\"type\":\"message_stop\"}\n",
+        );
+        let parsed = parse_anthropic_stream(body);
+        assert_eq!(parsed.tokens_sent, Some(3 + 100 + 20));
+        assert_eq!(parsed.tokens_received, Some(5));
+        assert_eq!(parsed.tokens_cached_in, Some(100));
+        assert_eq!(parsed.tokens_cache_write, Some(20));
+    }
+
+    #[test]
     fn parse_anthropic_stream_reports_an_error_event() {
         let body = concat!(
             "data: {\"type\":\"content_block_delta\",\"delta\":{\"text\":\"hi\"}}\n",
@@ -1225,6 +1305,21 @@ mod tests {
             &tokens_sent,
         );
         assert_eq!(*seen.borrow(), vec![(0, Some(7)), (2, Some(7))]);
+    }
+
+    #[test]
+    fn stream_on_line_progress_message_start_adds_cache_reads_and_writes() {
+        let tokens_sent = Cell::new(None);
+        stream_on_line_progress(
+            concat!(
+                "data: {\"type\":\"message_start\",\"message\":{\"usage\":",
+                "{\"input_tokens\":3,\"cache_read_input_tokens\":100,",
+                "\"cache_creation_input_tokens\":20}}}"
+            ),
+            None,
+            &tokens_sent,
+        );
+        assert_eq!(tokens_sent.get(), Some(3 + 100 + 20));
     }
 
     #[tokio::test]

@@ -688,6 +688,65 @@ mod tests {
     }
 
     #[test]
+    fn interpret_outcome_reads_cached_tokens_from_prompt_tokens_details() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                r#"{"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"#,
+                r#""usage":{"prompt_tokens":100,"completion_tokens":2,"#,
+                r#""prompt_tokens_details":{"cached_tokens":96}}}"#,
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let result = interpret_outcome(&outcome, "m", "http://x", "sk-test").unwrap();
+        assert_eq!(result.tokens_sent, Some(100));
+        assert_eq!(result.tokens_cached_in, Some(96));
+        assert_eq!(result.tokens_cache_write, None);
+    }
+
+    #[test]
+    fn interpret_outcome_with_no_prompt_tokens_details_leaves_cached_in_absent() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                r#"{"choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"#,
+                r#""usage":{"prompt_tokens":3,"completion_tokens":2}}"#,
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let result = interpret_outcome(&outcome, "m", "http://x", "sk-test").unwrap();
+        assert_eq!(result.tokens_cached_in, None);
+    }
+
+    #[test]
+    fn interpret_streaming_outcome_reads_cached_tokens_from_prompt_tokens_details() {
+        let outcome = crate::transport::CurlOutcome {
+            returncode: 0,
+            stdout: concat!(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"hi\"},",
+                "\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,",
+                "\"completion_tokens\":2,\"prompt_tokens_details\":",
+                "{\"cached_tokens\":96}}}\n",
+                "data: [DONE]\n",
+            )
+            .to_string(),
+            stderr: String::new(),
+            status: None,
+            retry_after: None,
+        };
+        let result = interpret_streaming_outcome(&outcome, "m", "http://x", "sk-test").unwrap();
+        assert_eq!(result.tokens_sent, Some(100));
+        assert_eq!(result.tokens_cached_in, Some(96));
+        assert_eq!(result.tokens_cache_write, None);
+    }
+
+    #[test]
     fn interpret_streaming_outcome_carries_the_provider_error_code_from_a_mid_stream_error() {
         let outcome = crate::transport::CurlOutcome {
             returncode: 0,
