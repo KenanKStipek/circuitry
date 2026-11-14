@@ -967,6 +967,21 @@ fn path_to_string(path: PathBuf) -> String {
     path.to_string_lossy().into_owned()
 }
 
+/// `cli/app.py::_join_resolved_names`'s own English list join -- `["a"]`
+/// joins as `"a"`, `["a", "b"]` as `"a and b"`, `["a", "b", "c"]` as
+/// `"a, b and c"` (no Oxford comma, matching the reference's own
+/// `' and '.join(...)` for exactly two names).
+fn join_resolved_names(names: &[&str]) -> String {
+    match names {
+        [] => String::new(),
+        [only] => only.to_string(),
+        _ => {
+            let (last, rest) = names.split_last().expect("checked non-empty above");
+            format!("{} and {last}", rest.join(", "))
+        }
+    }
+}
+
 /// `str(pathlib.Path(s))`'s own normalisation for a POSIX path string --
 /// drop a `.` component, collapse repeated `/`, and drop a trailing `/`
 /// (verified directly: `Path('./a//b/')` stringifies to `'a/b'`). Never
@@ -1017,7 +1032,7 @@ fn last_run_stash_args(
     run_args: &RunArgs,
     resume_default_out_path: Option<&Path>,
     piped: bool,
-    cwd: &Path,
+    cwd: Option<&Path>,
 ) -> electricity_value::Dict {
     use electricity_value::{Dict, Value};
 
@@ -1042,7 +1057,14 @@ fn last_run_stash_args(
     );
     args.insert(
         Value::Str("cwd".to_string()),
-        Value::Str(path_to_string(cwd.to_path_buf())),
+        // `None` when the working directory couldn't be read (removed
+        // during the run) -- `cli/app.py::_current_cwd_or_none`'s own
+        // fallback, so a run whose cwd vanished mid-run still leaves a
+        // stash instead of failing after `--out` is already written.
+        match cwd {
+            Some(path) => Value::Str(path_to_string(path.to_path_buf())),
+            None => Value::None,
+        },
     );
     args.insert(
         Value::Str("config".to_string()),
@@ -1921,6 +1943,18 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
             print_run_usage_error(&format!("Invalid value: {}", stash.error));
             return ExitCode::from(2);
         }
+        if stash.orchestration().is_empty() {
+            // `cof run --last`'s own `_load_last_run` raises the same
+            // `typer.BadParameter` for a stash that parses as a JSON
+            // object but carries no `orchestration` key -- never the
+            // bare `KeyError` the reference used to crash on reading it
+            // (issue #776).
+            print_run_usage_error(&format!(
+                "Invalid value: {} does not name an orchestration.",
+                stash.path.display(),
+            ));
+            return ExitCode::from(2);
+        }
         if stash.has_redacted_secrets() {
             write_stdout("Error: previous run included redacted secrets in -e values.\n");
             write_stdout(
@@ -1954,34 +1988,48 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
         // the stash, never refusing on `bogus.yml` not existing).
         run_args.orchestration = stash.orchestration();
         run_args.config = stash.config_path().map(path_to_string);
-        // Resolve a relative stashed `orchestration`/`config` against the
-        // working directory *that run* ran from, not this invocation's own
-        // cwd (issue #776) -- a stash with no `cwd` key (written before
-        // this field existed) is left exactly as given, same as before.
+        run_args.state = stash.state_path().map(path_to_string);
+        // Resolve a relative stashed `orchestration`/`config`/`state`
+        // against the working directory *that run* ran from, not this
+        // invocation's own cwd (issue #776) -- a stash with no `cwd` key
+        // (written before this field existed) is left exactly as given,
+        // same as before.
         if let Some(cwd) = stash.cwd() {
             let base = PathBuf::from(&cwd);
-            let mut resolved_names: Vec<&str> = Vec::new();
-            if !run_args.orchestration.is_empty()
-                && !Path::new(&run_args.orchestration).is_absolute()
-            {
-                run_args.orchestration = path_to_string(base.join(&run_args.orchestration));
-                resolved_names.push("orchestration");
-            }
-            if let Some(cfg) = run_args.config.clone() {
-                if !Path::new(&cfg).is_absolute() {
-                    run_args.config = Some(path_to_string(base.join(&cfg)));
-                    resolved_names.push("config");
+            // Replaying from the same directory needs no explicit
+            // resolution: a relative path already resolves against
+            // today's cwd on its own, the same as a stash with no `cwd`
+            // key at all.
+            let same_cwd = std::env::current_dir().ok().as_deref() == Some(base.as_path());
+            if !same_cwd {
+                let mut resolved_names: Vec<&str> = Vec::new();
+                if !run_args.orchestration.is_empty()
+                    && !Path::new(&run_args.orchestration).is_absolute()
+                {
+                    run_args.orchestration = path_to_string(base.join(&run_args.orchestration));
+                    resolved_names.push("orchestration");
+                }
+                if let Some(cfg) = run_args.config.clone() {
+                    if !Path::new(&cfg).is_absolute() {
+                        run_args.config = Some(path_to_string(base.join(&cfg)));
+                        resolved_names.push("config");
+                    }
+                }
+                if let Some(state) = run_args.state.clone() {
+                    if !Path::new(&state).is_absolute() {
+                        run_args.state = Some(path_to_string(base.join(&state)));
+                        resolved_names.push("state");
+                    }
+                }
+                if !resolved_names.is_empty() {
+                    write_stderr(&format!(
+                        "Resolved {} against {} (the last run's working directory).\n",
+                        join_resolved_names(&resolved_names),
+                        base.display(),
+                    ));
                 }
             }
-            if !resolved_names.is_empty() {
-                write_stderr(&format!(
-                    "Resolved {} against {} (the last run's working directory).\n",
-                    resolved_names.join(" and "),
-                    base.display(),
-                ));
-            }
         }
-        run_args.state = stash.state_path().map(path_to_string);
         run_args.inputs = stash.env_pairs();
         run_args.out = stash.out_path().map(path_to_string);
         run_args.pretty = stash.pretty();
@@ -2033,7 +2081,8 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
     // branch the legacy two-positional form -- always `Some` -- never
     // takes.
     let explicit_config_path = run_args.config.as_ref().map(PathBuf::from);
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let cwd_for_stash = std::env::current_dir().ok();
+    let cwd = cwd_for_stash.clone().unwrap_or_else(|| PathBuf::from("."));
     let (cfg, config_warnings) =
         match electricity::config_error_for_run(explicit_config_path.as_deref(), &cwd) {
             Ok(resolved) => resolved,
@@ -2281,7 +2330,7 @@ fn run_action(mut run_args: RunArgs) -> ExitCode {
                     &run_args,
                     resume_default_out_path.as_deref(),
                     !std::io::stdout().is_terminal(),
-                    &cwd,
+                    cwd_for_stash.as_deref(),
                 ),
             );
         }
