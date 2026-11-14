@@ -672,7 +672,6 @@ def test_replay_of_a_real_run_library_stash_is_gated_without_consent(
 
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(cli_app_module, "GLOBAL_CONFIG_DIR", fake_home)
     stash_path = fake_home / "last-run.json"
     monkeypatch.setattr(cli_app_module, "_LAST_RUN_PATH", stash_path)
 

@@ -428,6 +428,12 @@ class ServicePlugin:
         import fcntl
 
         state_dir = self._dir()
+        if self.state_dir is None:
+            # `state_dir.mkdir(parents=True)` only applies `mode` to the
+            # leaf it creates; a first-ever run would otherwise leave
+            # ``~/.config/circuitry`` itself at the process's default mode
+            # as a side effect of creating ``services`` under it.
+            default_state_dir().parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         state_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
         fd = os.open(state_dir / ".lock", os.O_RDWR | os.O_CREAT, 0o600)
         try:
@@ -454,7 +460,12 @@ class ServicePlugin:
     def _save(self, state_dir: Path, record: dict[str, Any]) -> None:
         path = self._record_path(state_dir, str(record["name"]))
         tmp = path.with_suffix(".json.tmp")
-        tmp.write_text(json.dumps(record, indent=2, sort_keys=True), encoding="utf-8")
+        # 0600 from creation, matching the state directory's own 0700: a
+        # service record can carry the command and env the service started
+        # with.
+        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(json.dumps(record, indent=2, sort_keys=True))
         os.replace(tmp, path)
 
     def _drop(self, state_dir: Path, name: str) -> None:

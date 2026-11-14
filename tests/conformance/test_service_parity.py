@@ -25,6 +25,7 @@ import json
 import os
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -941,3 +942,61 @@ def test_sigint_during_a_waiting_start_and_a_locked_stop_does_not_hang(
             if cx_pgid is not None:
                 _stop_and_wait_free(cx_pgid)
             _stop_and_wait_free(stub_pgid)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="file modes are POSIX-only")
+def test_default_state_dir_is_created_0700_and_its_record_0600_under_umask_022_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """issue #776: with no `runtime.plugins.service.state_dir` override, a
+    service starts under the default state directory,
+    `~/.config/circuitry/services` -- starting one there for the first
+    time must create `~/.config/circuitry` itself `0700`, not just the
+    `services` subdirectory under it, and the service's own record file
+    `0600` -- on both engines, whatever the umask.
+    """
+    port = _free_port()
+    params = {
+        "action": "start",
+        "name": "web",
+        "command": _http_server_command(port),
+        "ports": [port],
+        "ready": f"http://127.0.0.1:{port}/",
+        "ready_timeout_ms": 5000,
+    }
+
+    old_umask = os.umask(0o022)
+    try:
+        for engine, runner in (
+            ("cof", _run_cof),
+            (
+                "electricity",
+                lambda doc, cfg, home: _run_electricity(electricity_binary, doc, cfg, home),
+            ),
+        ):
+            case_dir = tmp_path / engine
+            case_dir.mkdir()
+            home_dir = case_dir / "home"
+            home_dir.mkdir()
+            doc_path = case_dir / "orchestration.json"
+            config_path = case_dir / "config.json"
+            config_path.write_text(json.dumps({}), encoding="utf-8")
+
+            _write_orchestration(doc_path, params)
+            start_result = runner(doc_path, config_path, home_dir)
+            assert start_result.returncode == 0, (engine, start_result.stderr)
+            pgid = _svc_value(start_result)["pgid"]
+            try:
+                config_dir = home_dir / ".config" / "circuitry"
+                services_dir = config_dir / "services"
+                record_path = services_dir / "web.json"
+                assert stat.S_IMODE(config_dir.stat().st_mode) == 0o700, (engine, config_dir)
+                assert stat.S_IMODE(services_dir.stat().st_mode) == 0o700, (engine, services_dir)
+                assert stat.S_IMODE(record_path.stat().st_mode) == 0o600, (engine, record_path)
+            finally:
+                _write_orchestration(doc_path, {"action": "stop", "name": "web"})
+                stop_result = runner(doc_path, config_path, home_dir)
+                assert stop_result.returncode == 0, (engine, stop_result.stderr)
+                _stop_and_wait_free(pgid)
+    finally:
+        os.umask(old_umask)

@@ -57,7 +57,8 @@ class LastRun:
 
     @property
     def orchestration(self) -> str:
-        return str(self.args.get("orchestration") or "")
+        raw = str(self.args.get("orchestration") or "")
+        return str(self.resolve(Path(raw))) if raw else raw
 
     @property
     def adapter(self) -> str:
@@ -128,12 +129,40 @@ class LastRun:
         return Path(str(value)) if value else None
 
     @property
+    def cwd(self) -> Path | None:
+        """The absolute working directory the stashed run itself ran
+        from (#776), or ``None`` for an older stash written before this
+        field existed."""
+        value = self.args.get("cwd")
+        return Path(str(value)) if value else None
+
+    def resolve(self, path: Path | None) -> Path | None:
+        """Resolve *path* against this stash's own working directory
+        when it's relative and that directory differs from this
+        process's own — the same rule ``cli/app.py::_resolve_last_run_cwd``
+        applies to ``cof run --last``, reused here for a TUI replay
+        (#776). A stash with no ``cwd`` key, or one read from the same
+        directory it was written in, is left exactly as given.
+        """
+        if path is None or path.is_absolute():
+            return path
+        base = self.cwd
+        if base is None:
+            return path
+        try:
+            if base == Path.cwd():
+                return path
+        except OSError:
+            pass
+        return base / path
+
+    @property
     def config_path(self) -> Path | None:
-        return self._path_arg("config")
+        return self.resolve(self._path_arg("config"))
 
     @property
     def state_path(self) -> Path | None:
-        return self._path_arg("state")
+        return self.resolve(self._path_arg("state"))
 
     @property
     def out_path(self) -> Path | None:
@@ -148,7 +177,7 @@ class LastRun:
         """The recorded-state file a ``--profile-from-state`` run was
         reconstructed from, if this run used it — mutually exclusive with
         :attr:`profile` (see ``run_cmd``'s own check)."""
-        return self._path_arg("profile_from_state")
+        return self.resolve(self._path_arg("profile_from_state"))
 
     @property
     def has_redacted_secrets(self) -> bool:

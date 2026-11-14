@@ -191,7 +191,6 @@ def test_run_library_stashes_for_last_with_no_trust(
     (#265 part 2)."""
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_home)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_home / "last-run.json")
     lib_root = tmp_path / "library"
     config_path = tmp_path / "config.json"
@@ -228,7 +227,6 @@ def test_run_library_replay_via_last_carries_the_capability_gate(
     """
     fake_home = tmp_path / "home"
     fake_home.mkdir()
-    monkeypatch.setattr(app_module, "GLOBAL_CONFIG_DIR", fake_home)
     monkeypatch.setattr(app_module, "_LAST_RUN_PATH", fake_home / "last-run.json")
     lib_root = tmp_path / "library"
     config_path = tmp_path / "config.json"
