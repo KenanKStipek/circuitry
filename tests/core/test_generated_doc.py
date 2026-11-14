@@ -414,7 +414,7 @@ def test_static_tool_providers_from_definitions_reflects_a_profile_provider_over
 
 
 def test_decomposition_safe_providers_are_side_effect_free_data_tools() -> None:
-    assert DECOMPOSITION_SAFE_PROVIDERS == frozenset(
+    assert frozenset(
         {
             "json",
             "regex",
@@ -428,4 +428,4 @@ def test_decomposition_safe_providers_are_side_effect_free_data_tools() -> None:
             "csv",
             "validate_yaml",
         }
-    )
+    ) == DECOMPOSITION_SAFE_PROVIDERS

@@ -68,7 +68,12 @@ fn compile_allow_tools(
                 Value::Str(item.clone()).py_repr()
             )));
         }
-        names.insert(item.trim().to_string());
+        // Provider names are matched case-insensitively everywhere else
+        // (#772 rule 1: a tool effect's own 'provider:' dispatches the
+        // same way regardless of case -- `electricity_tools::registry::
+        // build_plugin`), so 'allow_tools' stores the same normalized
+        // form.
+        names.insert(electricity_value::pycompat::py_strip(item).to_lowercase());
     }
     Ok(names)
 }

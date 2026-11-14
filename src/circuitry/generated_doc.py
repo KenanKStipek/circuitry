@@ -386,9 +386,7 @@ def _same_shape(a: Any, b: Any, *, sensitive: bool = False) -> bool:
         return all(
             _same_shape(x, y, sensitive=sensitive) for x, y in zip(a, b, strict=True)
         )
-    if sensitive and a != b:
-        return False
-    return True
+    return not (sensitive and a != b)
 
 
 def is_generated_inline(raw_template: str, rendered: Any) -> bool:

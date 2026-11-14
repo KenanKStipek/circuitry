@@ -921,8 +921,12 @@ def run(req: RunRequest) -> RunResult:
             GENERATED_DOCUMENT_SHELL_COMMANDS_KEY as _DOC_SHELL_KEY,
         )
         from ..generated_doc import host_shell_pin as _shell_host_pin
-        from ..generated_doc import resolved_shell_allowlist as _resolved_shell_allowlist
-        from ..generated_doc import static_shell_allowed_commands as _static_shell_commands
+        from ..generated_doc import (
+            resolved_shell_allowlist as _resolved_shell_allowlist,
+        )
+        from ..generated_doc import (
+            static_shell_allowed_commands as _static_shell_commands,
+        )
         from ..generated_doc import (
             static_tool_providers_from_definitions as _static_tool_providers_from_definitions,
         )
