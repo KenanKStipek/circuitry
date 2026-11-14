@@ -418,6 +418,8 @@ mod tests {
             raw: Value::None,
             tokens_sent: Some(tokens_sent),
             tokens_received: Some(tokens_received),
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             finish_reason: None,
             warnings: vec!["ignored".to_string()],
             cost_usd: Some(9.0),

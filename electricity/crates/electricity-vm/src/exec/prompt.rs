@@ -267,6 +267,10 @@ struct AttemptEntry {
     error: Option<String>,
     tokens_sent: Option<i64>,
     tokens_received: Option<i64>,
+    /// #627: included in the entry only when not `None` -- unlike
+    /// `tokens_sent`/`tokens_received`, which are always present.
+    tokens_cached_in: Option<i64>,
+    tokens_cache_write: Option<i64>,
     /// Issue #660: set on the generate-error and build-error branches,
     /// never on the decode/schema-failure branch, after
     /// `tokens_received`, before `raw_reply` -- an entry never has
@@ -294,6 +298,12 @@ impl AttemptEntry {
             key("tokens_received"),
             self.tokens_received.map(Value::from).unwrap_or(Value::None),
         );
+        if let Some(tokens_cached_in) = self.tokens_cached_in {
+            dict.insert(key("tokens_cached_in"), Value::from(tokens_cached_in));
+        }
+        if let Some(tokens_cache_write) = self.tokens_cache_write {
+            dict.insert(key("tokens_cache_write"), Value::from(tokens_cache_write));
+        }
         if let Some(error_code) = self.error_code {
             dict.insert(key("error_code"), Value::Str(error_code));
         }
@@ -330,6 +340,8 @@ enum PassOutcome {
         value: Value,
         tokens_sent: Option<i64>,
         tokens_received: Option<i64>,
+        tokens_cached_in: Option<i64>,
+        tokens_cache_write: Option<i64>,
         cost_usd: Option<f64>,
         attempts_meta: Vec<Value>,
         winner_adapter: String,
@@ -528,6 +540,8 @@ async fn generate_with_fallbacks(
                             error: Some(redact_str(&err.message)),
                             tokens_sent: None,
                             tokens_received: None,
+                            tokens_cached_in: None,
+                            tokens_cache_write: None,
                             error_code: err.retry.error_code.as_deref().map(redact_str),
                             http_status: err.retry.status,
                             raw_reply: None,
@@ -721,6 +735,8 @@ async fn generate_with_fallbacks(
                         error: Some(redact_str(&err.message)),
                         tokens_sent: None,
                         tokens_received: None,
+                        tokens_cached_in: None,
+                        tokens_cache_write: None,
                         error_code: err.retry.error_code.as_deref().map(redact_str),
                         http_status: err.retry.status,
                         raw_reply: None,
@@ -745,6 +761,8 @@ async fn generate_with_fallbacks(
                                 error: None,
                                 tokens_sent: result.tokens_sent,
                                 tokens_received: result.tokens_received,
+                                tokens_cached_in: result.tokens_cached_in,
+                                tokens_cache_write: result.tokens_cache_write,
                                 error_code: None,
                                 http_status: None,
                                 raw_reply: None,
@@ -755,6 +773,8 @@ async fn generate_with_fallbacks(
                             value: decoded_value,
                             tokens_sent: result.tokens_sent,
                             tokens_received: result.tokens_received,
+                            tokens_cached_in: result.tokens_cached_in,
+                            tokens_cache_write: result.tokens_cache_write,
                             cost_usd: result.cost_usd,
                             attempts_meta,
                             winner_adapter: adapter_name.clone(),
@@ -770,6 +790,8 @@ async fn generate_with_fallbacks(
                                 error: Some(redact_str(&message)),
                                 tokens_sent: result.tokens_sent,
                                 tokens_received: result.tokens_received,
+                                tokens_cached_in: result.tokens_cached_in,
+                                tokens_cache_write: result.tokens_cache_write,
                                 error_code: None,
                                 http_status: None,
                                 raw_reply: Some(cap_reply_text(&result.text)),
@@ -820,10 +842,22 @@ async fn generate_with_fallbacks(
     })
 }
 
-/// Accumulates every attempt entry's non-`None` `tokens_sent`/
-/// `tokens_received` into *totals* -- `None` until the first real
-/// value, matching Python's own `(total_tokens_sent or 0) + sent`.
-fn accumulate_tokens(totals: &mut (Option<i64>, Option<i64>), attempts_meta: &[Value]) {
+/// Running `tokens_sent`/`tokens_received`/`tokens_cached_in`/
+/// `tokens_cache_write` totals across a prompt's retries -- the latter
+/// two stay `None` (never written to `meta` at all) until at least one
+/// attempt reports one (#627 R1/R3), unlike the first two.
+#[derive(Default)]
+struct TokenTotals {
+    sent: Option<i64>,
+    received: Option<i64>,
+    cached_in: Option<i64>,
+    cache_write: Option<i64>,
+}
+
+/// Accumulates every attempt entry's non-`None` token fields into
+/// *totals* -- `None` until the first real value, matching Python's own
+/// `(total_tokens_sent or 0) + sent`.
+fn accumulate_tokens(totals: &mut TokenTotals, attempts_meta: &[Value]) {
     for entry in attempts_meta {
         let Some(dict) = entry.as_dict() else {
             continue;
@@ -831,12 +865,22 @@ fn accumulate_tokens(totals: &mut (Option<i64>, Option<i64>), attempts_meta: &[V
         if let Some(Value::Int(electricity_value::IntValue::Small(n))) =
             dict.get(&key("tokens_sent"))
         {
-            totals.0 = Some(totals.0.unwrap_or(0) + n);
+            totals.sent = Some(totals.sent.unwrap_or(0) + n);
         }
         if let Some(Value::Int(electricity_value::IntValue::Small(n))) =
             dict.get(&key("tokens_received"))
         {
-            totals.1 = Some(totals.1.unwrap_or(0) + n);
+            totals.received = Some(totals.received.unwrap_or(0) + n);
+        }
+        if let Some(Value::Int(electricity_value::IntValue::Small(n))) =
+            dict.get(&key("tokens_cached_in"))
+        {
+            totals.cached_in = Some(totals.cached_in.unwrap_or(0) + n);
+        }
+        if let Some(Value::Int(electricity_value::IntValue::Small(n))) =
+            dict.get(&key("tokens_cache_write"))
+        {
+            totals.cache_write = Some(totals.cache_write.unwrap_or(0) + n);
         }
     }
 }
@@ -853,6 +897,8 @@ fn attempt_entry(
     fallback_attempts: Vec<Value>,
     tokens_sent: Value,
     tokens_received: Value,
+    tokens_cached_in: Option<i64>,
+    tokens_cache_write: Option<i64>,
 ) -> Value {
     let mut entry = Dict::new();
     entry.insert(key("created_at"), created_at);
@@ -862,6 +908,13 @@ fn attempt_entry(
     entry.insert(key("fallback_attempts"), Value::List(fallback_attempts));
     entry.insert(key("tokens_sent"), tokens_sent);
     entry.insert(key("tokens_received"), tokens_received);
+    // #627: included only when not `None`, unlike the two above.
+    if let Some(tokens_cached_in) = tokens_cached_in {
+        entry.insert(key("tokens_cached_in"), Value::from(tokens_cached_in));
+    }
+    if let Some(tokens_cache_write) = tokens_cache_write {
+        entry.insert(key("tokens_cache_write"), Value::from(tokens_cache_write));
+    }
     Value::Dict(entry)
 }
 
@@ -875,7 +928,13 @@ fn write_attempts(store: &Store, meta_node: &NodeRef, attempts: &[Value]) {
 /// The last entry of `fallback_attempts`'s own `tokens_sent`/`tokens_received`
 /// -- `None` when the chain never ran (always present otherwise, since
 /// `generate_with_fallbacks` tries at least one provider).
-fn last_fallback_tokens(attempts_meta: &[Value]) -> (Value, Value) {
+fn last_fallback_tokens(attempts_meta: &[Value]) -> (Value, Value, Option<i64>, Option<i64>) {
+    fn small_int(dict: &Dict, field: &str) -> Option<i64> {
+        match dict.get(&key(field)) {
+            Some(Value::Int(electricity_value::IntValue::Small(n))) => Some(*n),
+            _ => None,
+        }
+    }
     attempts_meta
         .last()
         .and_then(Value::as_dict)
@@ -887,9 +946,11 @@ fn last_fallback_tokens(attempts_meta: &[Value]) -> (Value, Value) {
                 dict.get(&key("tokens_received"))
                     .cloned()
                     .unwrap_or(Value::None),
+                small_int(dict, "tokens_cached_in"),
+                small_int(dict, "tokens_cache_write"),
             )
         })
-        .unwrap_or((Value::None, Value::None))
+        .unwrap_or((Value::None, Value::None, None, None))
 }
 
 /// `core/prompt.py`'s own per-attempt entry `error` for an ordinary
@@ -992,6 +1053,12 @@ fn finish_failure(
                 last.insert(key("error"), Value::Str(redacted.clone()));
                 last.insert(key("tokens_sent"), Value::None);
                 last.insert(key("tokens_received"), Value::None);
+                // #627: follows meta's own absent-on-failure fields
+                // (never set outside the success branch), so any copy
+                // carried from the chain's last fallback entry is
+                // dropped here rather than resynced to a value.
+                last.shift_remove(&key("tokens_cached_in"));
+                last.shift_remove(&key("tokens_cache_write"));
             }
         } else {
             // This attempt never reached its own fallback chain (an
@@ -1006,6 +1073,8 @@ fn finish_failure(
                 Vec::new(),
                 Value::None,
                 Value::None,
+                None,
+                None,
             ));
         }
         write_attempts(store, meta_node, &recorded_attempts);
@@ -1204,6 +1273,10 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "warnings");
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
+    pop_leaf(&meta_node, "tokens_cached_in");
+    pop_leaf(&meta_node, "tokens_cache_write");
+    pop_leaf(&meta_node, "tokens_cached_in_total");
+    pop_leaf(&meta_node, "tokens_cache_write_total");
     pop_leaf(&meta_node, "template_files");
     pop_leaf(&meta_node, "error_code");
     pop_leaf(&meta_node, "http_status");
@@ -1509,7 +1582,7 @@ pub(crate) async fn execute_prompt(
     // meta.attempts only once more than one attempt has run, exactly
     // when meta.retries_used is also set.
     let mut retry_attempts: Vec<Value> = Vec::new();
-    let mut totals: (Option<i64>, Option<i64>) = (None, None);
+    let mut totals = TokenTotals::default();
     let mut next_delay_ms = backoff_ms;
     // `meta.live.attempt` (#674/#676): numbered across every
     // `(adapter, model)` this prompt effect tries, continuing from
@@ -1654,6 +1727,8 @@ pub(crate) async fn execute_prompt(
                 value,
                 tokens_sent,
                 tokens_received,
+                tokens_cached_in,
+                tokens_cache_write,
                 cost_usd,
                 attempts_meta,
                 winner_adapter,
@@ -1664,14 +1739,30 @@ pub(crate) async fn execute_prompt(
                     store,
                     &meta_node,
                     "tokens_sent_total",
-                    totals.0.map(Value::from).unwrap_or(Value::None),
+                    totals.sent.map(Value::from).unwrap_or(Value::None),
                 );
                 set_leaf(
                     store,
                     &meta_node,
                     "tokens_received_total",
-                    totals.1.map(Value::from).unwrap_or(Value::None),
+                    totals.received.map(Value::from).unwrap_or(Value::None),
                 );
+                if let Some(cached_in_total) = totals.cached_in {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "tokens_cached_in_total",
+                        Value::from(cached_in_total),
+                    );
+                }
+                if let Some(cache_write_total) = totals.cache_write {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "tokens_cache_write_total",
+                        Value::from(cache_write_total),
+                    );
+                }
                 let value_for_entry = value.clone();
                 set_leaf(store, &effect_node, "value", value);
                 set_leaf(
@@ -1686,6 +1777,22 @@ pub(crate) async fn execute_prompt(
                     "tokens_received",
                     tokens_received.map(Value::from).unwrap_or(Value::None),
                 );
+                if let Some(tokens_cached_in) = tokens_cached_in {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "tokens_cached_in",
+                        Value::from(tokens_cached_in),
+                    );
+                }
+                if let Some(tokens_cache_write) = tokens_cache_write {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "tokens_cache_write",
+                        Value::from(tokens_cache_write),
+                    );
+                }
                 if let Some(cost_usd) = cost_usd {
                     set_leaf(store, &meta_node, "cost_usd", Value::from(cost_usd));
                 }
@@ -1723,6 +1830,8 @@ pub(crate) async fn execute_prompt(
                     fallback_attempts_for_entry,
                     tokens_sent.map(Value::from).unwrap_or(Value::None),
                     tokens_received.map(Value::from).unwrap_or(Value::None),
+                    tokens_cached_in,
+                    tokens_cache_write,
                 ));
                 if attempt_index > 0 {
                     write_attempts(store, &meta_node, &retry_attempts);
@@ -1746,14 +1855,30 @@ pub(crate) async fn execute_prompt(
                     store,
                     &meta_node,
                     "tokens_sent_total",
-                    totals.0.map(Value::from).unwrap_or(Value::None),
+                    totals.sent.map(Value::from).unwrap_or(Value::None),
                 );
                 set_leaf(
                     store,
                     &meta_node,
                     "tokens_received_total",
-                    totals.1.map(Value::from).unwrap_or(Value::None),
+                    totals.received.map(Value::from).unwrap_or(Value::None),
                 );
+                if let Some(cached_in_total) = totals.cached_in {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "tokens_cached_in_total",
+                        Value::from(cached_in_total),
+                    );
+                }
+                if let Some(cache_write_total) = totals.cache_write {
+                    set_leaf(
+                        store,
+                        &meta_node,
+                        "tokens_cache_write_total",
+                        Value::from(cache_write_total),
+                    );
+                }
                 attempts_meta_outer = attempts_meta;
 
                 let cause = failure.cause.clone();
@@ -1780,7 +1905,7 @@ pub(crate) async fn execute_prompt(
                         )
                     }
                 };
-                let (entry_tokens_sent, entry_tokens_received) =
+                let (entry_tokens_sent, entry_tokens_received, entry_cached_in, entry_cache_write) =
                     last_fallback_tokens(&attempts_meta_outer);
                 retry_attempts.push(attempt_entry(
                     attempt_started_at,
@@ -1790,6 +1915,8 @@ pub(crate) async fn execute_prompt(
                     attempts_meta_outer.clone(),
                     entry_tokens_sent,
                     entry_tokens_received,
+                    entry_cached_in,
+                    entry_cache_write,
                 ));
 
                 let is_last_attempt = attempt_index + 1 >= max_attempts;
@@ -2239,6 +2366,8 @@ mod tests {
             error: Some("pass 0 failure".to_string()),
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             error_code: Some("bad_request".to_string()),
             http_status: Some(400),
             raw_reply: None,
@@ -2287,6 +2416,8 @@ mod tests {
                     error: Some("pass 0 failure".to_string()),
                     tokens_sent: None,
                     tokens_received: None,
+                    tokens_cached_in: None,
+                    tokens_cache_write: None,
                     error_code: None,
                     http_status: None,
                     raw_reply: None,
