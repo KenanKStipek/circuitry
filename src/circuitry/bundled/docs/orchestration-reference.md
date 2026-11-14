@@ -2578,16 +2578,18 @@ opt-in behavior from plain `--state`/persistence carryover (above and
 [Loop Iteration Paths](#loop-iteration-paths)), which only seeds a run's
 starting state and reruns every effect regardless of what already finished.
 
-`electricity run` has the same `--state <file> --resume <anything>` and
-`--force` flags, with this section's own skip-and-continue rules applied
-the same way (everything below, `resume: restart` included) — a state
-file either engine wrote resumes on the other. `--resume last`/a run-id
-(the other two rows of the table below) aren't supported: electricity has
-no `--last` stash and `runtime.persistence` stays refused on it, so
-`--resume` always needs `--state <file>` naming the saved state directly—
-given without it, electricity refuses the same way cof's own safety checks
-do (before anything runs, writing no state, exit 1). electricity's own
-`--last` stash is tracked separately (#760).
+`electricity run` has the same `--state <file> --resume <anything>`,
+`--resume last`, `--force` and `--last` flags, with this section's own
+skip-and-continue rules applied the same way (everything below,
+`resume: restart` included) — a state file either engine wrote resumes
+on the other, and `--last`/`--resume last` read the same stash either
+engine wrote (`~/.config/circuitry/last-run.json`), with the same checks
+and messages: no previous run, an unreadable stash, a different
+orchestration, no `--out`, a gone `--out` file, or a redacted `-e` value
+refusing `--last`. A bare run-id (the one remaining row of the table
+below) still isn't supported: `runtime.persistence` stays refused on
+electricity, so `--resume <run-id>` refuses the same way cof's own safety
+checks do (before anything runs, writing no state, exit 1).
 
 **What gets skipped, what reruns.** Every effect's node already carries
 `meta.completed_at` and `meta.error` (see each effect type above). An
@@ -2714,7 +2716,7 @@ wrote:
 | `--resume` form | Source |
 |---|---|
 | `--state <file> --resume <anything>` | that file, read directly — the value after `--resume` is ignored |
-| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`); that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
+| `--resume last` | the most recent run's own `--out` file, found through the `--last` stash (`~/.config/circuitry/last-run.json`), shared by cof and electricity; that file already carries its own resolved `input.*`, so nothing from the stash's `-e` args is replayed on top of it |
 | `--resume <run-id>` | looked up in the orchestration's configured `runtime.persistence` backend, scoped to that same orchestration path — a run that *failed* is looked up and found here too, not only one that succeeded |
 
 A run interrupted by Ctrl-C/SIGINT, killed by SIGTERM (`kill <pid>`, a
