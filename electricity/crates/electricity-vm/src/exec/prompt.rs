@@ -36,6 +36,27 @@ fn pop_leaf(node: &NodeRef, name: &str) {
     node.borrow_mut().shift_remove(&key(name));
 }
 
+/// Drops the four cache-count keys their shared seed (below) sets to
+/// `Value::None` placeholders, on an exit path that never finishes a
+/// dispatch attempt at all -- these are absent when not reported,
+/// unlike `tokens_sent`/`tokens_received`, which stay null.
+fn clear_unreported_cache_fields(meta_node: &NodeRef) {
+    for name in [
+        "tokens_cached_in",
+        "tokens_cache_write",
+        "tokens_cached_in_total",
+        "tokens_cache_write_total",
+    ] {
+        let still_unset = matches!(
+            meta_node.borrow().get(&key(name)),
+            None | Some(crate::store::Slot::Value(Value::None))
+        );
+        if still_unset {
+            pop_leaf(meta_node, name);
+        }
+    }
+}
+
 fn now_iso() -> Value {
     use chrono::SecondsFormat;
     Value::Str(chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Micros, false))
@@ -845,7 +866,7 @@ async fn generate_with_fallbacks(
 /// Running `tokens_sent`/`tokens_received`/`tokens_cached_in`/
 /// `tokens_cache_write` totals across a prompt's retries -- the latter
 /// two stay `None` (never written to `meta` at all) until at least one
-/// attempt reports one (#627 R1/R3), unlike the first two.
+/// attempt reports one, unlike the first two.
 #[derive(Default)]
 struct TokenTotals {
     sent: Option<i64>,
@@ -1031,6 +1052,7 @@ fn finish_failure(
     }
     let completed_at = now_iso();
     set_leaf(store, meta_node, "completed_at", completed_at.clone());
+    clear_unreported_cache_fields(meta_node);
     if attempt_index > 0 {
         set_leaf(
             store,
@@ -1251,8 +1273,15 @@ pub(crate) async fn execute_prompt(
     );
     set_leaf(store, &meta_node, "tokens_sent", Value::None);
     set_leaf(store, &meta_node, "tokens_received", Value::None);
+    // Seeded here, right next to the field each belongs with, so a
+    // first-time assignment later keeps this position instead of
+    // appending after whatever else this pass has written by then.
+    set_leaf(store, &meta_node, "tokens_cached_in", Value::None);
+    set_leaf(store, &meta_node, "tokens_cache_write", Value::None);
     set_leaf(store, &meta_node, "tokens_sent_total", Value::None);
     set_leaf(store, &meta_node, "tokens_received_total", Value::None);
+    set_leaf(store, &meta_node, "tokens_cached_in_total", Value::None);
+    set_leaf(store, &meta_node, "tokens_cache_write_total", Value::None);
     set_leaf(store, &meta_node, "error", Value::None);
     set_leaf(store, &meta_node, "dry_run", Value::Bool(run_ctx.dry_run));
     set_leaf(
@@ -1273,10 +1302,6 @@ pub(crate) async fn execute_prompt(
     pop_leaf(&meta_node, "warnings");
     pop_leaf(&meta_node, "assets");
     pop_leaf(&meta_node, "cost_usd");
-    pop_leaf(&meta_node, "tokens_cached_in");
-    pop_leaf(&meta_node, "tokens_cache_write");
-    pop_leaf(&meta_node, "tokens_cached_in_total");
-    pop_leaf(&meta_node, "tokens_cache_write_total");
     pop_leaf(&meta_node, "template_files");
     pop_leaf(&meta_node, "error_code");
     pop_leaf(&meta_node, "http_status");
@@ -1430,6 +1455,7 @@ pub(crate) async fn execute_prompt(
             crate::decompose::Posture::Decomposed(value) => {
                 set_leaf(store, &effect_node, "value", value);
                 set_leaf(store, &meta_node, "completed_at", now_iso());
+                clear_unreported_cache_fields(&meta_node);
                 observer.record_totals(&store.snapshot(&meta_node));
                 observer.effect_complete(
                     &effect_path,
@@ -1754,6 +1780,8 @@ pub(crate) async fn execute_prompt(
                         "tokens_cached_in_total",
                         Value::from(cached_in_total),
                     );
+                } else {
+                    pop_leaf(&meta_node, "tokens_cached_in_total");
                 }
                 if let Some(cache_write_total) = totals.cache_write {
                     set_leaf(
@@ -1762,6 +1790,8 @@ pub(crate) async fn execute_prompt(
                         "tokens_cache_write_total",
                         Value::from(cache_write_total),
                     );
+                } else {
+                    pop_leaf(&meta_node, "tokens_cache_write_total");
                 }
                 let value_for_entry = value.clone();
                 set_leaf(store, &effect_node, "value", value);
@@ -1784,6 +1814,8 @@ pub(crate) async fn execute_prompt(
                         "tokens_cached_in",
                         Value::from(tokens_cached_in),
                     );
+                } else {
+                    pop_leaf(&meta_node, "tokens_cached_in");
                 }
                 if let Some(tokens_cache_write) = tokens_cache_write {
                     set_leaf(
@@ -1792,6 +1824,8 @@ pub(crate) async fn execute_prompt(
                         "tokens_cache_write",
                         Value::from(tokens_cache_write),
                     );
+                } else {
+                    pop_leaf(&meta_node, "tokens_cache_write");
                 }
                 if let Some(cost_usd) = cost_usd {
                     set_leaf(store, &meta_node, "cost_usd", Value::from(cost_usd));
@@ -1870,6 +1904,8 @@ pub(crate) async fn execute_prompt(
                         "tokens_cached_in_total",
                         Value::from(cached_in_total),
                     );
+                } else {
+                    pop_leaf(&meta_node, "tokens_cached_in_total");
                 }
                 if let Some(cache_write_total) = totals.cache_write {
                     set_leaf(
@@ -1878,6 +1914,8 @@ pub(crate) async fn execute_prompt(
                         "tokens_cache_write_total",
                         Value::from(cache_write_total),
                     );
+                } else {
+                    pop_leaf(&meta_node, "tokens_cache_write_total");
                 }
                 attempts_meta_outer = attempts_meta;
 

@@ -1087,8 +1087,8 @@ pub async fn execute_tool<R: ParamsCtx>(
     let mut total_tokens_sent: Option<i64> = None;
     let mut total_tokens_received: Option<i64> = None;
     // #627: same accumulation, but absent from `meta` entirely until at
-    // least one attempt reports one (R1/R3) -- unlike the two above,
-    // which `meta` always carries, `null` or not.
+    // least one attempt reports one -- unlike the two above, which
+    // `meta` always carries, `null` or not.
     let mut total_tokens_cached_in: Option<i64> = None;
     let mut total_tokens_cache_write: Option<i64> = None;
     // Issue #720: an `agent` effect's `params.prompt` of `{file: {from:

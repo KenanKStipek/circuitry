@@ -702,9 +702,9 @@ struct UsageTotals {
     sent: Option<i64>,
     received: Option<i64>,
     cost: Option<f64>,
-    /// Summed separately from `sent` (which already includes them, per
-    /// R2) -- each set only when at least one turn's own usage reported
-    /// that field (R3, #627).
+    /// Summed separately from `sent` (which already includes them) --
+    /// each set only when at least one turn's own usage reported that
+    /// field (#627).
     cached_in: Option<i64>,
     cache_write: Option<i64>,
 }
