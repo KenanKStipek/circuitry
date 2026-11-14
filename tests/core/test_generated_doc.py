@@ -6,6 +6,7 @@ rules a generated document is held to.
 
 from __future__ import annotations
 
+from circuitry.core.compiler import apply_effect_overrides, compile_orchestration
 from circuitry.generated_doc import (
     DECOMPOSITION_SAFE_PROVIDERS,
     current_shell_allowlist,
@@ -14,6 +15,7 @@ from circuitry.generated_doc import (
     resolved_shell_allowlist,
     static_shell_allowed_commands,
     static_tool_providers,
+    static_tool_providers_from_definitions,
 )
 
 # ── is_generated_inline ──────────────────────────────────────────────────
@@ -372,6 +374,43 @@ def test_a_generated_shell_command_beyond_the_document_literal_allowlist_is_refu
     assert "'rm'" in errors[0]
     assert "node" not in errors[0]
     assert "runtime.plugins.shell.allowed_commands" in errors[0]
+
+
+# ── static_tool_providers_from_definitions (rule 9) ──────────────────────
+
+
+def test_static_tool_providers_from_definitions_matches_the_raw_walk() -> None:
+    orch = {
+        "effects": [
+            {"type": "tool", "name": "a", "provider": "shell"},
+            {
+                "type": "use",
+                "name": "child",
+                "inline": "effects:\n  - type: tool\n    name: x\n    provider: docker\n",
+            },
+        ]
+    }
+    root_def = compile_orchestration(orch=orch, root_name="prime")
+    assert static_tool_providers_from_definitions(root_def) == frozenset({"shell", "docker"})
+
+
+def test_static_tool_providers_from_definitions_reflects_a_profile_provider_override() -> None:
+    """The root document's own providers are computed from the *effective*
+    document, after a profile's per-effect provider override already
+    applied -- the same compiled-tree semantics electricity's own
+    static_tool_providers_from_op uses (#772 rule 9), not the raw,
+    pre-override YAML."""
+    orch = {
+        "effects": [
+            {"type": "tool", "name": "t", "provider": "shell", "params": {"command": "echo"}},
+        ]
+    }
+    root_def = compile_orchestration(orch=orch, root_name="prime")
+    assert static_tool_providers_from_definitions(root_def) == frozenset({"shell"})
+
+    overridden, matched = apply_effect_overrides(root_def, {"t": {"provider": "json"}})
+    assert matched == {"t"}
+    assert static_tool_providers_from_definitions(overridden) == frozenset({"json"})
 
 
 def test_decomposition_safe_providers_are_side_effect_free_data_tools() -> None:
