@@ -296,6 +296,7 @@ class ConditionalRuntime:
                 name = getattr(effect, "name", None) or "?"
                 is_prompt = isinstance(effect, PromptDefinition)
                 is_report = isinstance(effect, ReportDefinition)
+                is_use = isinstance(effect, UseDefinition)
 
                 if not is_enabled(effect):
                     _skip_disabled_effect(
@@ -315,10 +316,28 @@ class ConditionalRuntime:
                     )
                     continue
 
+                existing_node = child_store.state.get(name)
+                use_inputs_changed = False
+                if is_use and resume_active and effect_completed_ok(existing_node):
+                    from .use import use_rerun_for_changed_inputs
+
+                    use_inputs_changed = use_rerun_for_changed_inputs(
+                        effect,
+                        node=existing_node,
+                        ctx=ctx,
+                        adapter=self.adapter,
+                        model=self.model,
+                        model_locked=self.model_locked,
+                        runtime_config=self.runtime_config,
+                        dry_run=self.dry_run,
+                        timeout_seconds=self.timeout_seconds,
+                    )
+
                 if (
                     resume_active
                     and name != "?"
-                    and effect_completed_ok(child_store.state.get(name))
+                    and effect_completed_ok(existing_node)
+                    and not use_inputs_changed
                 ):
                     if self.verbose and not is_prompt and not is_report:
                         _console.print(

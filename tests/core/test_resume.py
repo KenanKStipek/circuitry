@@ -658,3 +658,275 @@ finally:
     assert second.state["prime"]["step1"]["value"] == "ok:one"
     assert second.state["prime"]["step2"]["value"] == "ok:two"
     assert second.state["prime"]["cleanup"]["value"] == "ok:cleanup"
+
+
+def test_resume_skips_a_finished_reflector_and_reruns_the_failed_step_after_it(
+    tmp_path: Path,
+) -> None:
+    """issue #585: a reflector that finished without error now records
+    `meta.completed_at`, so `--resume` skips it whole exactly as it would
+    any other finished effect -- no planning call at all, and the chain
+    step after it (which never finished in the saved state) reruns.
+    """
+    orch = _write(
+        tmp_path,
+        "reflector_resume.yml",
+        """
+effects:
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose"
+  - type: prompt
+    name: later
+    template: "later"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    state: dict[str, Any] = {
+        "prime": {
+            "plan_it": {
+                "value": True,
+                "meta": {
+                    "iterations": [{"i": 0, "done": True, "stop": True}],
+                    "completed_at": "t",
+                    "error": None,
+                },
+            },
+            "later": {"value": None, "meta": {"completed_at": None, "error": None}},
+        }
+    }
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=state,
+            resume=True,
+        )
+    )
+    assert result.ok is True, result.error
+    # The reflector is skipped whole: no planning call at all.
+    assert adapter.calls == ["later"]
+    assert result.state["prime"]["plan_it"]["meta"]["completed_at"] == "t"
+    assert result.state["prime"]["later"]["value"] == "ok:later"
+
+
+def test_resume_reruns_a_reflector_that_did_not_finish(tmp_path: Path) -> None:
+    """issue #585: a reflector whose saved node shows no ``meta.
+    completed_at`` at all -- the process stopped (a crash, an interrupt)
+    before this effect ever finished -- reruns from its start on resume,
+    same as any other effect: the generic ``effect_completed_ok`` check
+    this relies on requires a truthy ``completed_at``, and this node has
+    none.
+    """
+    orch = _write(
+        tmp_path,
+        "reflector_resume_fail.yml",
+        """
+effects:
+  - type: reflector
+    name: plan_it
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose"
+""".lstrip(),
+    )
+    # A dedicated planner reply (never `CountingAdapter`'s generic
+    # `ok:<prompt>` echo, which the reflector's own YAML-plan parsing
+    # would reject): "done: true" stops cleanly after one iteration.
+    class _StopReflectorAdapter:
+        name = "stop-reflector"
+
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def generate(
+            self, *, model: str, prompt: str, timeout_seconds: int = 120
+        ) -> GenerateResult:
+            self.calls.append(prompt)
+            return GenerateResult(text="done: true", raw={})
+
+    adapter = _StopReflectorAdapter()
+    state: dict[str, Any] = {
+        "prime": {
+            "plan_it": {"value": None, "meta": {"iterations": []}},
+        }
+    }
+
+    result = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=state,
+            resume=True,
+        )
+    )
+    assert result.ok is True, result.error
+    # Reran from its start: one fresh planning call.
+    assert len(adapter.calls) == 1
+    assert not result.state["prime"]["plan_it"]["meta"].get("error")
+    assert result.state["prime"]["plan_it"]["meta"]["completed_at"]
+
+
+def test_resume_reruns_a_finished_use_whose_resolved_inputs_changed(
+    tmp_path: Path,
+) -> None:
+    """issue #584: a finished `use`'s inputs, resolved against the
+    resumed run's own inputs, are checked against its recorded
+    `meta.inputs`. Changed, it reruns (and so does the chain step after
+    it); unchanged, it stays skipped (`test_resume_skips_a_finished_use_
+    whose_resolved_inputs_are_unchanged` below).
+    """
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+interface:
+  inputs:
+    x: {type: string, required: true}
+effects:
+  - type: tool
+    name: noop
+    provider: json
+    params: {mode: parse, input: '{"ok": true}'}
+""".lstrip(),
+    )
+    orch = _write(
+        tmp_path,
+        "use_resume.yml",
+        """
+interface:
+  inputs:
+    x: {type: string, default: a}
+effects:
+  - type: use
+    name: part
+    path: child.yml
+    inputs: {x: {from: input.x}}
+  - type: prompt
+    name: later
+    template: "later"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"later"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state={"input": {"x": "a"}},
+        )
+    )
+    assert first.ok is False
+    assert first.state["prime"]["part"]["meta"]["inputs"] == {"x": "a"}
+    first_created_at = first.state["prime"]["part"]["meta"]["created_at"]
+
+    adapter.fail_prompts = set()
+    resumed_state: dict[str, Any] = first.state
+    resumed_state["input"]["x"] = "b"
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=resumed_state,
+            resume=True,
+        )
+    )
+    assert second.ok is True, second.error
+    assert second.state["prime"]["part"]["meta"]["inputs"] == {"x": "b"}
+    assert second.state["prime"]["part"]["meta"]["created_at"] != first_created_at
+    assert second.state["prime"]["later"]["value"] == "ok:later"
+
+
+def test_resume_skips_a_finished_use_whose_resolved_inputs_are_unchanged(
+    tmp_path: Path,
+) -> None:
+    """issue #584's other half: an unchanged `-e`/run input leaves a
+    finished `use` skipped whole, as before this issue."""
+    _write(
+        tmp_path,
+        "child.yml",
+        """
+interface:
+  inputs:
+    x: {type: string, required: true}
+effects:
+  - type: tool
+    name: noop
+    provider: json
+    params: {mode: parse, input: '{"ok": true}'}
+""".lstrip(),
+    )
+    orch = _write(
+        tmp_path,
+        "use_resume_unchanged.yml",
+        """
+interface:
+  inputs:
+    x: {type: string, default: a}
+effects:
+  - type: use
+    name: part
+    path: child.yml
+    inputs: {x: {from: input.x}}
+  - type: prompt
+    name: later
+    template: "later"
+""".lstrip(),
+    )
+    adapter = CountingAdapter()
+    adapter.fail_prompts = {"later"}
+
+    first = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state={"input": {"x": "a"}},
+        )
+    )
+    assert first.ok is False
+    first_created_at = first.state["prime"]["part"]["meta"]["created_at"]
+
+    adapter.fail_prompts = set()
+    second = run(
+        RunRequest(
+            orchestration_path=orch,
+            state_path=None,
+            out_path=None,
+            dry_run=False,
+            validate_only=False,
+            adapter=adapter,
+            initial_state=first.state,
+            resume=True,
+        )
+    )
+    assert second.ok is True, second.error
+    assert second.state["prime"]["part"]["meta"]["inputs"] == {"x": "a"}
+    assert second.state["prime"]["part"]["meta"]["created_at"] == first_created_at

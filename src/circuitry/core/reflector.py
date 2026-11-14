@@ -152,9 +152,11 @@ class ReflectorRuntime:
 
                 if rec.get("stop", False):
                     node["value"] = True
+                    meta["completed_at"] = _now_iso()
                     return
 
             node["value"] = True
+            meta["completed_at"] = _now_iso()
         except Exception as e:
             node["value"] = False
             meta.setdefault("error", str(e))

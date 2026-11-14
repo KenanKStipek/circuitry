@@ -90,7 +90,9 @@ ENGINES = ("cof", "electricity")
 #: `finally:` body that was never re-run), so their own event counts are
 #: legitimately smaller than a from-scratch baseline's; checked there
 #: only for having something ok to show, not for exact equality.
-_EXPECT_IDENTICAL_EVENTS = frozenset({"chain_loop", "tree_loop", "named_if", "use_restart"})
+_EXPECT_IDENTICAL_EVENTS = frozenset(
+    {"chain_loop", "tree_loop", "named_if", "use_restart", "reflector_interrupted"}
+)
 
 
 @pytest.fixture(scope="module")
@@ -296,11 +298,17 @@ class _Scenario:
     def __init__(
         self, *, orchestration: str, child: str | None, config: str, blocking_name: str,
         wait_mode: str = "live_state", interrupt_mode: str = "signal",
+        replies_file: str | None = None,
     ) -> None:
         self.orchestration = orchestration
         self.child = child
         self.config = config
         self.blocking_name = blocking_name
+        # A `scripted`-adapter replies file (#585/#584) -- written as
+        # `scripted-replies.yaml` in the case directory when set, for a
+        # scenario whose document names `adapter: scripted` (a
+        # reflector's own planning prompt).
+        self.replies_file = replies_file
         # "signal" (the default): spawn, wait for the blocking step to
         # start, send SIGINT. "fail_first_time": just run to completion
         # once with no `proceed` marker and no signal at all -- the
@@ -389,22 +397,77 @@ def _scenario(name: str) -> _Scenario:
             ),
             child=None, config=_PLAIN_CONFIG, blocking_name="step",
         )
-    assert name == "finally"
-    body = _quick_step("body", indent="      ")
-    cleanup = _failing_shell_effect("cleanup", indent="      ")
+    if name == "finally":
+        body = _quick_step("body", indent="      ")
+        cleanup = _failing_shell_effect("cleanup", indent="      ")
+        return _Scenario(
+            orchestration=(
+                "effects:\n  - type: dynamic\n    name: outer\n"
+                f"    effects:\n{body}    finally:\n{cleanup}"
+            ),
+            child=None, config=_PLAIN_CONFIG, blocking_name="cleanup",
+            interrupt_mode="fail_first_time",
+        )
+    _SCRIPTED_CONFIG = (
+        '{"runtime": {"adapters": {"scripted": {"replies_file": '
+        '"scripted-replies.yaml"}}}}'
+    )
+    if name == "reflector_finished":
+        # issue #585: a finished reflector is skipped whole on resume --
+        # the scripted replies file provides exactly one reply, so a
+        # resumed run that incorrectly re-invoked the planner would run
+        # out of replies and fail, instead of this scenario's own
+        # `later` step (deterministic, no signal) finally succeeding.
+        later = _failing_shell_effect("later", indent="  ")
+        return _Scenario(
+            orchestration=(
+                'adapter: scripted\nmodel: test\n'
+                "effects:\n  - type: reflector\n    name: plan_it\n"
+                '    prime_template: "Plan it."\n    effects:\n'
+                "      - type: prompt\n        name: propose_steps\n"
+                '        template: "propose steps"\n'
+                f"{later}"
+            ),
+            child=None, config=_SCRIPTED_CONFIG, blocking_name="later",
+            interrupt_mode="fail_first_time",
+            replies_file=(
+                "prime.plan_it.inner.propose_steps:\n  - text: |\n      done: true\n"
+            ),
+        )
+    assert name == "reflector_interrupted"
+    # issue #585: a reflector interrupted mid-plan reruns from its own
+    # start on resume -- the scripted replies file provides two
+    # identical replies, one for the interrupted attempt's own
+    # planning call and one for the resumed attempt's fresh one (an
+    # unfinished reflector never continues inside a generated plan).
+    reply = (
+        "  - text: |\n"
+        "      done: false\n"
+        "      effects:\n"
+        "        - type: tool\n"
+        "          name: step\n"
+        "          provider: shell\n"
+        "          params:\n"
+        "            command: bash\n"
+        '            args: ["-c", "[ -f proceed ] || { touch started; exec sleep 60; }"]\n'
+        '            allowed_commands: ["bash"]\n'
+    )
     return _Scenario(
         orchestration=(
-            "effects:\n  - type: dynamic\n    name: outer\n"
-            f"    effects:\n{body}    finally:\n{cleanup}"
+            'adapter: scripted\nmodel: test\n'
+            "effects:\n  - type: reflector\n    name: plan_it\n"
+            '    prime_template: "Plan it."\n    effects:\n'
+            "      - type: prompt\n        name: propose_steps\n"
+            '        template: "propose steps"\n'
         ),
-        child=None, config=_PLAIN_CONFIG, blocking_name="cleanup",
-        interrupt_mode="fail_first_time",
+        child=None, config=_SCRIPTED_CONFIG, blocking_name="step",
+        replies_file=f"prime.plan_it.inner.propose_steps:\n{reply}{reply}",
     )
 
 
 SCENARIOS = (
     "chain_loop", "tree_loop", "tree_dynamic", "use_record_children", "use_restart",
-    "named_if", "finally",
+    "named_if", "finally", "reflector_finished", "reflector_interrupted",
 )
 
 
@@ -415,6 +478,8 @@ def _write_case(scenario_name: str, case_dir: Path) -> _Scenario:
     _write(case_dir / "orchestration.yml", scenario.orchestration)
     if scenario.child is not None:
         _write(case_dir / "child.yml", scenario.child)
+    if scenario.replies_file is not None:
+        _write(case_dir / "scripted-replies.yaml", scenario.replies_file)
     return scenario
 
 
@@ -586,3 +651,120 @@ def test_a_use_childs_interrupted_step_runs_again_only_when_it_never_finished(
     log_lines = (case_dir / log_name).read_text(encoding="utf-8").splitlines()
     counts = {name: log_lines.count(name) for name in ("s1", "s2", "s3")}
     assert counts == {"s1": 1, "s2": 2, "s3": 1}, (interrupt_engine, resume_engine, log_lines)
+
+
+#: issue #584: a top-level `use` reading a declared `interface.inputs`
+#: value, and a tool that fails unless `proceed` already exists on
+#: disk -- the same deterministic, signal-free interrupt `finally`'s
+#: own scenario uses (this module's own docstring on why).
+_CHANGED_INPUTS_ORCHESTRATION = (
+    "interface:\n  inputs:\n    x: {type: string, default: a}\n"
+    "effects:\n  - type: use\n    name: part\n    path: child.yml\n"
+    "    inputs: {x: {from: input.x}}\n"
+)
+_CHANGED_INPUTS_CHILD = (
+    "interface:\n  inputs:\n    x: {type: string, required: true}\n"
+    "effects:\n  - type: tool\n    name: noop\n    provider: json\n"
+    "    params: {mode: parse, input: '{\"ok\": true}'}\n"
+)
+
+
+def _write_changed_inputs_case(case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    _write(case_dir / "config.json", _PLAIN_CONFIG)
+    _write(case_dir / "child.yml", _CHANGED_INPUTS_CHILD)
+    _write(
+        case_dir / "orchestration.yml",
+        _CHANGED_INPUTS_ORCHESTRATION
+        + "  - type: tool\n    name: later\n    provider: shell\n    params:\n"
+        '      command: bash\n      args: ["-c", "[ -f proceed ]"]\n'
+        '      allowed_commands: ["bash"]\n',
+    )
+
+
+_RESUMED_INPUT_WARNING = (
+    "WARNING: Resuming with changed input(s): x: 'a' -> 'b'. "
+    "Other finished effects keep their saved results."
+)
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("interrupt_engine", ENGINES)
+def test_a_finished_use_whose_resolved_inputs_changed_reruns_on_resume(
+    tmp_path: Path, electricity_binary: Path, interrupt_engine: str, resume_engine: str,
+) -> None:
+    """issue #584: `part`'s own `meta.inputs` records whatever `input.x`
+    resolved to when it ran. A first run with `-e x=a` finishes `part`
+    and then fails at `later` (deterministic, no signal needed -- same
+    technique as the `finally` scenario above). Resumed with `-e x=b`,
+    `part`'s own inputs no longer match what it ran with, so it reruns
+    (a fresh `meta.created_at`, `meta.inputs.x: "b"`) and the run warns,
+    on both engines, with the exact same text. Resumed instead with the
+    unchanged `-e x=a`, `part` is skipped whole (same `meta.created_at`
+    as the first run) and nothing warns.
+    """
+    env = _sandboxed_env(tmp_path)
+
+    case_dir = tmp_path / "case"
+    _write_changed_inputs_case(case_dir)
+    first = _run_to_completion(
+        interrupt_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=case_dir, env=env,
+    )
+    assert first.returncode == 1, (interrupt_engine, first.stdout, first.stderr)
+    first_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    first_created_at = first_state["prime"]["part"]["meta"]["created_at"]
+    assert first_state["prime"]["part"]["meta"]["inputs"] == {"x": "a"}
+
+    # Changed: `part` reruns, and the run warns.
+    (case_dir / "proceed").write_text("")
+    changed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=b",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert changed.returncode == 0, (resume_engine, changed.stdout, changed.stderr)
+    assert _RESUMED_INPUT_WARNING in changed.stderr, (resume_engine, changed.stderr)
+    changed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert changed_state["prime"]["part"]["meta"]["inputs"] == {"x": "b"}
+    assert changed_state["prime"]["part"]["meta"]["created_at"] != first_created_at
+
+    # Unchanged (a fresh case, same first run): `part` is skipped whole,
+    # and nothing warns.
+    unchanged_dir = tmp_path / "unchanged"
+    _write_changed_inputs_case(unchanged_dir)
+    first_unchanged = _run_to_completion(
+        interrupt_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=unchanged_dir, env=env,
+    )
+    assert first_unchanged.returncode == 1, (
+        interrupt_engine, first_unchanged.stdout, first_unchanged.stderr,
+    )
+    first_unchanged_state = json.loads(
+        (unchanged_dir / "out.json").read_text(encoding="utf-8")
+    )
+    first_unchanged_created_at = first_unchanged_state["prime"]["part"]["meta"]["created_at"]
+    (unchanged_dir / "proceed").write_text("")
+    unchanged = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=a",
+        ],
+        cwd=unchanged_dir, env=env,
+    )
+    assert unchanged.returncode == 0, (resume_engine, unchanged.stdout, unchanged.stderr)
+    assert "Resuming with changed input(s)" not in unchanged.stderr, (
+        resume_engine, unchanged.stderr,
+    )
+    unchanged_state = json.loads((unchanged_dir / "out.json").read_text(encoding="utf-8"))
+    assert unchanged_state["prime"]["part"]["meta"]["inputs"] == {"x": "a"}
+    assert (
+        unchanged_state["prime"]["part"]["meta"]["created_at"]
+        == first_unchanged_created_at
+    )

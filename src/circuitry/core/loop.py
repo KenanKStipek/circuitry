@@ -1536,10 +1536,28 @@ Should the loop continue? Answer (yes/no):"""
                 ctx = _scope_ctx(base_ctx, self._local_writes(iter_store, baseline))
                 continue
 
+            existing_node = iter_store.state.get(name)
+            use_inputs_changed = False
+            if is_use and resume_active and effect_completed_ok(existing_node):
+                from .use import use_rerun_for_changed_inputs
+
+                use_inputs_changed = use_rerun_for_changed_inputs(
+                    effect,
+                    node=existing_node,
+                    ctx=ctx,
+                    adapter=self.adapter,
+                    model=self.model,
+                    model_locked=self.model_locked,
+                    runtime_config=self.runtime_config,
+                    dry_run=self.dry_run,
+                    timeout_seconds=self.timeout_seconds,
+                )
+
             if (
                 resume_active
                 and name != "?"
-                and effect_completed_ok(iter_store.state.get(name))
+                and effect_completed_ok(existing_node)
+                and not use_inputs_changed
             ):
                 if self.verbose and not is_prompt and not is_tool and not is_use and not is_yield and not is_report:
                     _console.print(
