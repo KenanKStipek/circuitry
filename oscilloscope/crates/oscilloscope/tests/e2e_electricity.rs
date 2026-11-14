@@ -27,7 +27,7 @@ use std::time::Duration;
 
 use support::{
     ELECTRICITY_CONFIG, TestHome, assert_no_leftover_process, e2e_electricity_enabled, last_event,
-    osi_electricity_command, wait_for_step_start, wait_with_timeout,
+    osi_electricity_command, scripted_config, wait_for_step_start, wait_with_timeout,
     wait_with_timeout_capturing_stdout, wait_with_timeout_capturing_stdout_and_stderr, write_doc,
 };
 
@@ -1209,6 +1209,117 @@ fn a_finished_runs_effects_count_matches_effects_run() {
     );
     assert_eq!(rendered.header.effects_planned, Some(effects_run));
     assert_eq!(rendered.header.effects_done, effects_run);
+}
+
+/// Issue #585: a successful reflector now records `meta.completed_at`
+/// like any other effect, so it counts toward `runtime.last_run.
+/// totals.effects_run` -- osi's own reflector row (already counted
+/// through `RowKind::Reflector`, issue #620) must agree, ending with
+/// `effects N/N` rather than `effects (N-1)/N`.
+#[test]
+fn a_reflectors_own_row_counts_toward_a_finished_runs_effects_total() {
+    if !e2e_electricity_enabled() {
+        eprintln!("skipping: OSI_E2E_ELECTRICITY not set or electricity not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let run_dir = tempfile::tempdir().unwrap();
+    let replies = write_doc(
+        work.path(),
+        "scripted-replies.yaml",
+        "prime.plan_it.inner.propose_steps:\n  - text: |\n      done: true\n",
+    );
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        r#"adapter: scripted
+model: test
+effects:
+  - name: plan_it
+    type: reflector
+    prime_template: "Plan it."
+    effects:
+      - name: propose_steps
+        type: prompt
+        template: "propose"
+  - name: after
+    type: tool
+    provider: shell
+    params: {command: echo, args: ["after"]}
+"#,
+    );
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies));
+
+    let mut electricity = Command::new("electricity");
+    electricity
+        .arg(&config)
+        .arg(&doc)
+        .arg("--out")
+        .arg(run_dir.path().join("state.json"))
+        .env("HOME", home.path())
+        .current_dir(work.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    for key in [
+        "OPENAI_API_KEY",
+        "ANTHROPIC_API_KEY",
+        "CYBERDINER_TOKEN",
+        "CYBERDINER_EXPO_URL",
+    ] {
+        electricity.env_remove(key);
+    }
+    let status = wait_with_timeout(
+        electricity.spawn().expect("spawn electricity"),
+        Duration::from_secs(30),
+    );
+    assert!(status.success());
+
+    let state: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(run_dir.path().join("state.json")).expect("read state.json"),
+    )
+    .expect("parse state.json");
+    let effects_run = state
+        .pointer("/runtime/last_run/totals/effects_run")
+        .and_then(serde_json::Value::as_u64)
+        .expect("effects_run in state.json");
+
+    let inputs = oscilloscope_core::plan::parse_inputs(&[]).expect("no -e inputs");
+    let program = oscilloscope_core::plan::compile(&doc, Some(&config), &inputs)
+        .expect("the document compiles");
+    let plan = oscilloscope_core::plan::PlanTree::from_program(&program);
+    let process = oscilloscope_core::model::ProcessState::Exited {
+        interrupted: false,
+        likely_failed: false,
+        has_failure_reason: false,
+        exited_at: None,
+    };
+
+    let mut model = oscilloscope_core::model::RunModel::new();
+    let rendered = oscilloscope_core::render::build(
+        "do.yml",
+        "electricity",
+        &plan,
+        &mut model,
+        Some(&state),
+        process,
+        0.0,
+        "2026-01-01T00:00:10Z",
+        &[],
+    );
+    assert_eq!(rendered.header.effects_planned, Some(effects_run));
+    assert_eq!(rendered.header.effects_done, effects_run);
+    // The fixed point, not a tautological re-derivation of whatever
+    // the engine happened to write: `plan_it`, `plan_it.inner`,
+    // `plan_it.inner.propose_steps` and `after` -- four effects, the
+    // document's root dynamic making five. Before issue #585, a
+    // successful reflector recorded no `completed_at` of its own, so
+    // this read four.
+    assert_eq!(
+        effects_run, 5,
+        "plan_it's own row must count toward effects_run"
+    );
 }
 
 /// Issue #626: `--glance` shows only the header line, with the final
