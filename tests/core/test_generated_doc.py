@@ -430,3 +430,183 @@ def test_decomposition_safe_providers_are_side_effect_free_data_tools() -> None:
             "validate_yaml",
         }
     ) == DECOMPOSITION_SAFE_PROVIDERS
+
+
+# ── the provider ceiling runs independently of the shell/service checks ──
+
+
+def test_shell_effect_within_the_shell_allowlist_but_outside_the_provider_ceiling_is_still_refused() -> None:
+    """A shell effect whose own allowed_commands is in order must still be
+    refused when 'shell' itself isn't in the provider ceiling -- the three
+    checks are independent, never an if/elif chain where the allowlist
+    check matching skips the provider check entirely."""
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "shell",
+                "params": {"command": "touch", "allowed_commands": ["touch"]},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"json"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"touch"}),
+    )
+    assert errors
+    assert "shell" in errors[0]
+    assert "allow_tools" in errors[0]
+
+
+def test_service_shell_true_outside_the_provider_ceiling_is_still_refused_for_the_provider_too() -> None:
+    """A 'service' effect's shell: true is refused on its own terms; the
+    provider-ceiling violation is reported too, not swallowed by the
+    shell: true branch matching first."""
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {"command": "touch x", "shell": True},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"json"}),
+        generating_effect_path="prime.plan_it",
+    )
+    assert len(errors) == 2
+    assert any("shell: true" in e for e in errors)
+    assert any("service" in e and "allow_tools" in e for e in errors)
+
+
+# ── service shell: true uses the real plugin's own boolean coercion ──
+
+
+def test_service_shell_set_to_a_string_the_old_gate_missed_is_refused() -> None:
+    """plugins.base._as_bool treats every non-empty string except
+    false/0/no/off/n as true -- a gate that only recognised
+    1/true/yes/on let a string like 'y' or 'on please' through as
+    falsy. This must be refused the same as shell: true."""
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {"command": "touch x", "shell": "y"},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch, allowed_providers=frozenset({"service"}), generating_effect_path="prime.plan_it"
+    )
+    assert errors
+    assert "shell: true" in errors[0]
+
+
+# ── a generated service start's own executable is checked like shell's command ──
+
+
+def test_generated_service_start_with_an_allowed_executable_is_clean() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {"action": "start", "name": "svc", "command": ["node", "server.js"]},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"service"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"node"}),
+    )
+    assert errors == []
+
+
+def test_generated_service_start_with_a_disallowed_executable_is_refused() -> None:
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {"action": "start", "name": "svc", "command": ["rm", "-rf", "/"]},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"service"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"node"}),
+    )
+    assert errors
+    assert "'rm'" in errors[0]
+
+
+def test_generated_service_start_with_a_path_executable_is_refused() -> None:
+    """A path is never 'in' the shell allowlist, however it compares --
+    the same rule the shell tool itself applies to params.command."""
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "service",
+                "params": {"action": "start", "name": "svc", "command": ["/usr/bin/node"]},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"service"}),
+        generating_effect_path="prime.plan_it",
+        allowed_shell_commands=frozenset({"node"}),
+    )
+    assert errors
+    assert "/usr/bin/node" in errors[0]
+
+
+# ── a nested, still-templated inline inside a literal inline is generated ──
+
+
+def test_a_rendered_inline_nested_inside_a_literal_inline_is_generated() -> None:
+    """'inline' is a security-sensitive shape key: a nested use effect's
+    own inline text must be byte-identical between the unrendered
+    template and the rendered document, or the outer child counts as
+    generated -- closing the gap where a model's own nested document,
+    once rendered into an inner inline:, could pass as the author's own
+    merely because the outer structure still matched."""
+    raw = (
+        "effects:\n"
+        "  - type: use\n"
+        "    name: wrapper\n"
+        "    inline: |\n"
+        "      effects:\n"
+        "        - type: use\n"
+        "          name: run\n"
+        "          inline: \"{{{prime.plan.value}}}\"\n"
+    )
+    rendered = {
+        "effects": [
+            {
+                "type": "use",
+                "name": "wrapper",
+                "inline": (
+                    "effects:\n- {type: tool, name: x, provider: shell, "
+                    "params: {command: curl, allowed_commands: [curl]}}\n"
+                ),
+            }
+        ]
+    }
+    assert is_generated_inline(raw, rendered)

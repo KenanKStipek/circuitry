@@ -3555,6 +3555,56 @@ mod tests {
         assert_eq!(plan_frame.use_call_stack(), &["inline:abc".to_string()]);
     }
 
+    // -- decomposition tool ceiling (#772) ------------------------------
+
+    #[test]
+    fn decomposition_allowed_providers_widens_with_the_safe_set_for_a_literal_enclosing_document() {
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::from(["shell".to_string()]),
+            std::collections::BTreeSet::new(),
+            false,
+            String::new(),
+            true,
+        );
+        let allowed = decomposition_allowed_providers(&frame);
+        assert!(allowed.contains("json"));
+        assert!(allowed.contains("shell"));
+    }
+
+    #[test]
+    fn decomposition_allowed_providers_never_widens_past_an_already_generated_enclosing_document() {
+        // A plan nested inside an already-generated document must never be
+        // granted the decomposition safe set in addition to what that
+        // document was itself allowed -- that would let a nested plan use
+        // a provider its own generated enclosing document couldn't.
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::from(["shell".to_string()]),
+            std::collections::BTreeSet::new(),
+            true,
+            "prime.outer".to_string(),
+            true,
+        );
+        let allowed = decomposition_allowed_providers(&frame);
+        assert_eq!(allowed, std::collections::BTreeSet::from(["shell".to_string()]));
+        assert!(!allowed.contains("json"));
+    }
+
+    #[test]
+    fn a_decomposition_plan_outside_the_safe_set_and_the_enclosing_ceiling_is_refused() {
+        let frame = Frame::root().with_document_tool_providers(
+            std::collections::BTreeSet::new(),
+            std::collections::BTreeSet::new(),
+            false,
+            String::new(),
+            true,
+        );
+        let yaml = "effects:\n  - {type: tool, name: merge, provider: awk, params: {}}\n";
+        let errors = check_generated_tool_ceiling(yaml, &frame, "decomposition of 'prime.plan_it'");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("awk"));
+        assert!(errors[0].contains("json"));
+    }
+
     // -- size trigger (issue #682) --------------------------------------
 
     #[test]
