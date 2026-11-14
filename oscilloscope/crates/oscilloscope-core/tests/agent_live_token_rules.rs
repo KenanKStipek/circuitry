@@ -335,6 +335,8 @@ fn signal_columns_sum_to_the_agents_final_tokens_and_readings_match_totals() {
         None,
         None,
         PI_ENDED_NOW,
+        true,
+        &Default::default(),
     );
     let (sent, received) = signal
         .buckets
