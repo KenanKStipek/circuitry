@@ -482,7 +482,10 @@ fn param_node_literal_command(node: &electricity_bytecode::ParamNode) -> Option<
 /// no params-compilation path produces this for `allowed_commands`
 /// today, but nothing here should silently stop collecting if one
 /// ever does).
-fn collect_literal_command_list(node: &electricity_bytecode::ParamNode, commands: &mut BTreeSet<String>) {
+fn collect_literal_command_list(
+    node: &electricity_bytecode::ParamNode,
+    commands: &mut BTreeSet<String>,
+) {
     use electricity_bytecode::ParamNode;
     match node {
         ParamNode::List(items) => {
@@ -515,7 +518,10 @@ fn collect_literal_command_list(node: &electricity_bytecode::ParamNode, commands
 /// `cel` tool's params today, but a generated plan's own merge step or
 /// a future params-compilation path could produce the same shape for
 /// any provider, and this walk must read a grant from it either way).
-fn collect_literal_allowed_commands(params: &electricity_bytecode::ParamNode, commands: &mut BTreeSet<String>) {
+fn collect_literal_allowed_commands(
+    params: &electricity_bytecode::ParamNode,
+    commands: &mut BTreeSet<String>,
+) {
     use electricity_bytecode::ParamNode;
     let key = Value::Str("allowed_commands".to_string());
     match params {
@@ -1062,7 +1068,11 @@ pub fn dispatch_errors(
     }
     let normalized_provider = {
         let normalized = py_strip(provider).to_lowercase();
-        if normalized.is_empty() { None } else { Some(normalized) }
+        if normalized.is_empty() {
+            None
+        } else {
+            Some(normalized)
+        }
     };
     let allowed_providers = frame.document_tool_providers().clone();
     let known_providers: BTreeSet<String> = electricity_tools::registry::supported_names()
@@ -1327,9 +1337,12 @@ mod tests {
     // -- #772 my-finding: every params-compilation shape must be read ----
 
     fn compiled_root(doc: &Value) -> electricity_bytecode::Op {
-        electricity_compiler::compile_document(doc, &electricity_compiler::DocumentOrigin::Generated)
-            .expect("compiles")
-            .root
+        electricity_compiler::compile_document(
+            doc,
+            &electricity_compiler::DocumentOrigin::Generated,
+        )
+        .expect("compiles")
+        .root
     }
 
     #[test]
@@ -1368,10 +1381,16 @@ mod tests {
         // `cel` tool's params do), but this walk must read a grant from
         // it if one ever does.
         let mut dict = Dict::new();
-        dict.insert(Value::Str("command".to_string()), Value::Str("node".to_string()));
+        dict.insert(
+            Value::Str("command".to_string()),
+            Value::Str("node".to_string()),
+        );
         dict.insert(
             Value::Str("allowed_commands".to_string()),
-            Value::List(vec![Value::Str("node".to_string()), Value::Str("npm".to_string())]),
+            Value::List(vec![
+                Value::Str("node".to_string()),
+                Value::Str("npm".to_string()),
+            ]),
         );
         let params = electricity_bytecode::ParamNode::Literal(Value::Dict(dict));
         let mut commands = BTreeSet::new();
@@ -1387,9 +1406,9 @@ mod tests {
         let mut entries = indexmap::IndexMap::new();
         entries.insert(
             Value::Str("allowed_commands".to_string()),
-            electricity_bytecode::ParamNode::Literal(Value::List(vec![
-                Value::Str("node".to_string()),
-            ])),
+            electricity_bytecode::ParamNode::Literal(Value::List(vec![Value::Str(
+                "node".to_string(),
+            )])),
         );
         let params = electricity_bytecode::ParamNode::Map(entries);
         let mut commands = BTreeSet::new();
@@ -1431,10 +1450,16 @@ mod tests {
     #[test]
     fn tool_effect_errors_accepts_a_service_start_with_an_allowed_executable() {
         let mut params = Dict::new();
-        params.insert(Value::Str("action".to_string()), Value::Str("start".to_string()));
+        params.insert(
+            Value::Str("action".to_string()),
+            Value::Str("start".to_string()),
+        );
         params.insert(
             Value::Str("command".to_string()),
-            Value::List(vec![Value::Str("node".to_string()), Value::Str("server.js".to_string())]),
+            Value::List(vec![
+                Value::Str("node".to_string()),
+                Value::Str("server.js".to_string()),
+            ]),
         );
         let allowed_providers = BTreeSet::from(["service".to_string()]);
         let allowed_shell_commands = BTreeSet::from(["node".to_string()]);
@@ -1456,10 +1481,16 @@ mod tests {
     #[test]
     fn tool_effect_errors_refuses_a_service_start_with_a_disallowed_executable() {
         let mut params = Dict::new();
-        params.insert(Value::Str("action".to_string()), Value::Str("start".to_string()));
+        params.insert(
+            Value::Str("action".to_string()),
+            Value::Str("start".to_string()),
+        );
         params.insert(
             Value::Str("command".to_string()),
-            Value::List(vec![Value::Str("rm".to_string()), Value::Str("-rf".to_string())]),
+            Value::List(vec![
+                Value::Str("rm".to_string()),
+                Value::Str("-rf".to_string()),
+            ]),
         );
         let allowed_providers = BTreeSet::from(["service".to_string()]);
         let allowed_shell_commands = BTreeSet::from(["node".to_string()]);
@@ -1483,7 +1514,10 @@ mod tests {
     fn tool_effect_errors_refuses_a_service_start_with_a_path_executable() {
         // A path is never "in" the allowlist, however it compares.
         let mut params = Dict::new();
-        params.insert(Value::Str("action".to_string()), Value::Str("start".to_string()));
+        params.insert(
+            Value::Str("action".to_string()),
+            Value::Str("start".to_string()),
+        );
         params.insert(
             Value::Str("command".to_string()),
             Value::List(vec![Value::Str("/usr/bin/node".to_string())]),
@@ -1516,7 +1550,10 @@ mod tests {
             Value::Str("steps".to_string()),
             Value::List(vec![Value::Str("placeholder".to_string())]),
         );
-        assert_eq!(effects_of(&effect), Some(&Value::List(vec![Value::Str("placeholder".to_string())])));
+        assert_eq!(
+            effects_of(&effect),
+            Some(&Value::List(vec![Value::Str("placeholder".to_string())]))
+        );
     }
 
     #[test]
@@ -1527,7 +1564,10 @@ mod tests {
             Value::Str("steps".to_string()),
             Value::List(vec![Value::Str("placeholder".to_string())]),
         );
-        assert_eq!(effects_of(&effect), Some(&Value::List(vec![Value::Str("placeholder".to_string())])));
+        assert_eq!(
+            effects_of(&effect),
+            Some(&Value::List(vec![Value::Str("placeholder".to_string())]))
+        );
     }
 
     #[test]

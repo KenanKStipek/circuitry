@@ -195,7 +195,7 @@ pub async fn run_tool(
 const DEFAULT_TOOL_TIMEOUT_SECONDS: u32 = 300;
 
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
-const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
+const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 2] = ["allowed_commands", "shell"];
 
 /// `plugins/http.py::_LIMITED_SAVE_TO`.
 const LIMITED_SAVE_TO: &str = "only a document run by path may save a response to a file (a \

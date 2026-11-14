@@ -32,7 +32,7 @@ use indexmap::IndexMap;
 use std::collections::BTreeSet;
 
 /// `core/tool.py::_SECURITY_SENSITIVE_PARAM_KEYS`.
-pub(crate) const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 1] = ["allowed_commands"];
+pub(crate) const SECURITY_SENSITIVE_PARAM_KEYS: [&str; 2] = ["allowed_commands", "shell"];
 
 /// A `{from: <path>}` leaf's path, `default:` and `as:` as written -- ports
 /// `core/tool.py::ParamReference`.
@@ -118,7 +118,7 @@ fn check_no_reference(value: &Value, name: &str, field: &str) -> Result<(), Comp
         return Err(CompileError(format!(
             "Tool effect '{name}' param '{field}': a by-reference '{{from: ...}}' \
              value is not honoured for this security-sensitive setting; it must \
-             be a literal list of strings."
+             be a literal value."
         )));
     }
     match value {

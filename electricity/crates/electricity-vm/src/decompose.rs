@@ -3585,7 +3585,10 @@ mod tests {
             true,
         );
         let allowed = decomposition_allowed_providers(&frame);
-        assert_eq!(allowed, std::collections::BTreeSet::from(["shell".to_string()]));
+        assert_eq!(
+            allowed,
+            std::collections::BTreeSet::from(["shell".to_string()])
+        );
         assert!(!allowed.contains("json"));
     }
 
