@@ -270,8 +270,12 @@ class LoopRuntime:
         self._model_answer: str | None = None
         self._model_tokens_sent: int | None = None
         self._model_tokens_received: int | None = None
+        self._model_tokens_cached_in: int | None = None
+        self._model_tokens_cache_write: int | None = None
         self._model_tokens_sent_total: int | None = None
         self._model_tokens_received_total: int | None = None
+        self._model_tokens_cached_in_total: int | None = None
+        self._model_tokens_cache_write_total: int | None = None
 
     def execute(self, *, store: Store, ctx: dict[str, Any]) -> None:
         # Reset at the top of every execute() call, not just __init__: this
@@ -280,6 +284,8 @@ class LoopRuntime:
         # while-condition token total must not bleed into this one's (#260).
         self._model_tokens_sent_total = None
         self._model_tokens_received_total = None
+        self._model_tokens_cached_in_total = None
+        self._model_tokens_cache_write_total = None
 
         # Named loop: create a node for this loop
         # Transparent control: effects merge directly into parent
@@ -1008,8 +1014,24 @@ class LoopRuntime:
                                     meta["model"] = self.model
                                     meta["tokens_sent"] = self._model_tokens_sent
                                     meta["tokens_received"] = self._model_tokens_received
+                                    if self._model_tokens_cached_in is not None:
+                                        meta["tokens_cached_in"] = self._model_tokens_cached_in
+                                    else:
+                                        meta.pop("tokens_cached_in", None)
+                                    if self._model_tokens_cache_write is not None:
+                                        meta["tokens_cache_write"] = self._model_tokens_cache_write
+                                    else:
+                                        meta.pop("tokens_cache_write", None)
                                     meta["tokens_sent_total"] = self._model_tokens_sent_total
                                     meta["tokens_received_total"] = self._model_tokens_received_total
+                                    if self._model_tokens_cached_in_total is not None:
+                                        meta["tokens_cached_in_total"] = (
+                                            self._model_tokens_cached_in_total
+                                        )
+                                    if self._model_tokens_cache_write_total is not None:
+                                        meta["tokens_cache_write_total"] = (
+                                            self._model_tokens_cache_write_total
+                                        )
                             except Exception as exc:
                                 if meta and self.defn.while_def.mode == "model":
                                     meta["answer"] = self._model_answer
@@ -1017,8 +1039,24 @@ class LoopRuntime:
                                     meta["model"] = self.model
                                     meta["tokens_sent"] = self._model_tokens_sent
                                     meta["tokens_received"] = self._model_tokens_received
+                                    if self._model_tokens_cached_in is not None:
+                                        meta["tokens_cached_in"] = self._model_tokens_cached_in
+                                    else:
+                                        meta.pop("tokens_cached_in", None)
+                                    if self._model_tokens_cache_write is not None:
+                                        meta["tokens_cache_write"] = self._model_tokens_cache_write
+                                    else:
+                                        meta.pop("tokens_cache_write", None)
                                     meta["tokens_sent_total"] = self._model_tokens_sent_total
                                     meta["tokens_received_total"] = self._model_tokens_received_total
+                                    if self._model_tokens_cached_in_total is not None:
+                                        meta["tokens_cached_in_total"] = (
+                                            self._model_tokens_cached_in_total
+                                        )
+                                    if self._model_tokens_cache_write_total is not None:
+                                        meta["tokens_cache_write_total"] = (
+                                            self._model_tokens_cache_write_total
+                                        )
                                 if self.defn.on_error == "fail":
                                     termination_reason = "error"
                                     raise
@@ -1321,6 +1359,8 @@ class LoopRuntime:
         self._model_answer = None
         self._model_tokens_sent = None
         self._model_tokens_received = None
+        self._model_tokens_cached_in = None
+        self._model_tokens_cache_write = None
         if self.dry_run:
             return False  # Stop loop in dry run after first iteration
 
@@ -1353,6 +1393,8 @@ Should the loop continue? Answer (yes/no):"""
         self._model_answer = res.text
         self._model_tokens_sent = res.tokens_sent
         self._model_tokens_received = res.tokens_received
+        self._model_tokens_cached_in = res.tokens_cached_in
+        self._model_tokens_cache_write = res.tokens_cache_write
         if res.tokens_sent is not None:
             self._model_tokens_sent_total = (
                 self._model_tokens_sent_total or 0
@@ -1361,6 +1403,14 @@ Should the loop continue? Answer (yes/no):"""
             self._model_tokens_received_total = (
                 self._model_tokens_received_total or 0
             ) + res.tokens_received
+        if res.tokens_cached_in is not None:
+            self._model_tokens_cached_in_total = (
+                self._model_tokens_cached_in_total or 0
+            ) + res.tokens_cached_in
+        if res.tokens_cache_write is not None:
+            self._model_tokens_cache_write_total = (
+                self._model_tokens_cache_write_total or 0
+            ) + res.tokens_cache_write
 
         # Parse response as a lenient yes/no; raises on an answer that
         # doesn't unambiguously read as one (see core.answers).

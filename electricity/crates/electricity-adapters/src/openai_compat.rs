@@ -569,13 +569,18 @@ pub fn parse_sse_stream(stdout: &str) -> SseStream {
 }
 
 /// `_openai_compat.py::usage_tokens`.
-pub fn usage_tokens(usage: Option<&Value>) -> (Option<i64>, Option<i64>) {
+pub fn usage_tokens(usage: Option<&Value>) -> (Option<i64>, Option<i64>, Option<i64>) {
     let Some(dict) = usage.and_then(Value::as_dict) else {
-        return (None, None);
+        return (None, None, None);
     };
+    let cached_in = dict
+        .get(&Value::Str("prompt_tokens_details".to_string()))
+        .and_then(Value::as_dict)
+        .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
     (
         int_if_pyint(dict.get(&Value::Str("prompt_tokens".to_string()))),
         int_if_pyint(dict.get(&Value::Str("completion_tokens".to_string()))),
+        cached_in,
     )
 }
 
@@ -642,11 +647,17 @@ pub fn interpret_streaming_outcome(
             usage_dict.and_then(|d| int_if_pyint(d.get(&Value::Str("prompt_tokens".to_string()))));
         let tokens_received = usage_dict
             .and_then(|d| int_if_pyint(d.get(&Value::Str("completion_tokens".to_string()))));
+        let tokens_cached_in = usage_dict
+            .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
+            .and_then(Value::as_dict)
+            .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
         return Ok(GenerateResult {
             text,
             raw,
             tokens_sent,
             tokens_received,
+            tokens_cached_in,
+            tokens_cache_write: None,
             finish_reason,
             warnings: Vec::new(),
             cost_usd: None,
@@ -689,7 +700,7 @@ pub fn interpret_streaming_outcome(
         });
     }
 
-    let (tokens_sent, tokens_received) = usage_tokens(parsed.usage.as_ref());
+    let (tokens_sent, tokens_received, tokens_cached_in) = usage_tokens(parsed.usage.as_ref());
     let mut raw = Dict::new();
     let mut message_dict = Dict::new();
     dict_insert(
@@ -719,6 +730,8 @@ pub fn interpret_streaming_outcome(
         raw: Value::Dict(raw),
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write: None,
         finish_reason: parsed.finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
@@ -795,12 +808,18 @@ pub fn interpret_outcome(
         usage_dict.and_then(|d| int_if_pyint(d.get(&Value::Str("prompt_tokens".to_string()))));
     let tokens_received =
         usage_dict.and_then(|d| int_if_pyint(d.get(&Value::Str("completion_tokens".to_string()))));
+    let tokens_cached_in = usage_dict
+        .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
+        .and_then(Value::as_dict)
+        .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
 
     Ok(GenerateResult {
         text,
         raw,
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write: None,
         finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
@@ -1749,9 +1768,24 @@ mod tests {
         assert!(parsed.saw_done);
         assert!(parsed.saw_data_line);
         assert!(parsed.error.is_none());
-        let (sent, received) = usage_tokens(parsed.usage.as_ref());
+        let (sent, received, cached_in) = usage_tokens(parsed.usage.as_ref());
         assert_eq!(sent, Some(3));
         assert_eq!(received, Some(2));
+        assert_eq!(cached_in, None);
+    }
+
+    #[test]
+    fn usage_tokens_reads_cached_tokens_from_prompt_tokens_details() {
+        let mut details = Dict::new();
+        dict_insert(&mut details, "cached_tokens", Value::from(96i64));
+        let mut usage = Dict::new();
+        dict_insert(&mut usage, "prompt_tokens", Value::from(111i64));
+        dict_insert(&mut usage, "completion_tokens", Value::from(7i64));
+        dict_insert(&mut usage, "prompt_tokens_details", Value::Dict(details));
+        let (sent, received, cached_in) = usage_tokens(Some(&Value::Dict(usage)));
+        assert_eq!(sent, Some(111));
+        assert_eq!(received, Some(7));
+        assert_eq!(cached_in, Some(96));
     }
 
     #[test]

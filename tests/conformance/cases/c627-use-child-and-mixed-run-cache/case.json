@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #627 (a use child's cache usage reaches the run totals; a sibling with none keeps its own node clean)",
+  "description": "A top-level prompt reporting no cache usage alongside a use child's own prompt that does: the reporting node (and the use child's namespaced node) carries tokens_cached_in/tokens_cache_write, the non-reporting sibling's meta never gains the keys, and runtime.last_run.totals carries both only because at least one effect reported them.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

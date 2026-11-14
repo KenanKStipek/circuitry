@@ -324,6 +324,20 @@ def _int_field(meta: dict[str, Any], *keys: str) -> int:
     return 0
 
 
+def _int_field_optional(meta: dict[str, Any], *keys: str) -> int | None:
+    """Like :func:`_int_field`, but ``None`` (not 0) when none of *keys* is
+    present -- for a count that is itself absent rather than null/zero when
+    a provider never reported it (#627's ``tokens_cached_in``/
+    ``tokens_cache_write``): a run with no cache usage anywhere must not
+    gain these keys on ``last_run.totals`` at all.
+    """
+    for key in keys:
+        value = meta.get(key)
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+    return None
+
+
 def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
     """``state.runtime.last_run.totals`` recomputed from a *finished* state
     tree — wall time, effects run, tokens both ways over every attempt, and
@@ -342,22 +356,37 @@ def _run_totals(state: dict[str, Any], *, wall_time_s: float) -> dict[str, Any]:
     """
     effects_run = 0
     tokens_sent = tokens_received = 0
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     cost_usd: float | None = None
     for meta in _effect_meta_nodes(state):
         if meta.get("completed_at"):
             effects_run += 1
         tokens_sent += _int_field(meta, "tokens_sent_total", "tokens_sent")
         tokens_received += _int_field(meta, "tokens_received_total", "tokens_received")
+        cached_in = _int_field_optional(meta, "tokens_cached_in_total", "tokens_cached_in")
+        if cached_in is not None:
+            tokens_cached_in = (tokens_cached_in or 0) + cached_in
+        cache_write = _int_field_optional(
+            meta, "tokens_cache_write_total", "tokens_cache_write"
+        )
+        if cache_write is not None:
+            tokens_cache_write = (tokens_cache_write or 0) + cache_write
         cost = meta.get("cost_usd")
         if isinstance(cost, (int, float)) and not isinstance(cost, bool):
             cost_usd = (cost_usd or 0.0) + cost
-    return {
+    totals: dict[str, Any] = {
         "wall_time_s": wall_time_s,
         "effects_run": effects_run,
         "tokens_sent": tokens_sent,
         "tokens_received": tokens_received,
-        "cost_usd": cost_usd,
     }
+    if tokens_cached_in is not None:
+        totals["tokens_cached_in"] = tokens_cached_in
+    if tokens_cache_write is not None:
+        totals["tokens_cache_write"] = tokens_cache_write
+    totals["cost_usd"] = cost_usd
+    return totals
 
 
 class _TotalsAccumulator:
@@ -379,6 +408,8 @@ class _TotalsAccumulator:
         self.effects_run = 0
         self.tokens_sent = 0
         self.tokens_received = 0
+        self.tokens_cached_in: int | None = None
+        self.tokens_cache_write: int | None = None
         self.cost_usd: float | None = None
 
     def observe(self, effect_path: str, effect_result: dict[str, Any]) -> None:
@@ -390,18 +421,31 @@ class _TotalsAccumulator:
         self.tokens_received += _int_field(
             meta, "tokens_received_total", "tokens_received"
         )
+        cached_in = _int_field_optional(meta, "tokens_cached_in_total", "tokens_cached_in")
+        if cached_in is not None:
+            self.tokens_cached_in = (self.tokens_cached_in or 0) + cached_in
+        cache_write = _int_field_optional(
+            meta, "tokens_cache_write_total", "tokens_cache_write"
+        )
+        if cache_write is not None:
+            self.tokens_cache_write = (self.tokens_cache_write or 0) + cache_write
         cost = meta.get("cost_usd")
         if isinstance(cost, (int, float)) and not isinstance(cost, bool):
             self.cost_usd = (self.cost_usd or 0.0) + cost
 
     def totals(self, *, wall_time_s: float) -> dict[str, Any]:
-        return {
+        totals: dict[str, Any] = {
             "wall_time_s": wall_time_s,
             "effects_run": self.effects_run,
             "tokens_sent": self.tokens_sent,
             "tokens_received": self.tokens_received,
-            "cost_usd": self.cost_usd,
         }
+        if self.tokens_cached_in is not None:
+            totals["tokens_cached_in"] = self.tokens_cached_in
+        if self.tokens_cache_write is not None:
+            totals["tokens_cache_write"] = self.tokens_cache_write
+        totals["cost_usd"] = self.cost_usd
+        return totals
 
 
 def _load_state(

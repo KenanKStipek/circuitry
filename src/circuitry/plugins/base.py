@@ -89,6 +89,12 @@ class ToolResult:
     #: tree's token sums count it without a special case.
     tokens_sent: int | None = None
     tokens_received: int | None = None
+    #: Cache reads/writes behind ``tokens_sent`` (which already includes
+    #: them), each ``None`` unless the plugin's own call reported one
+    #: (#627) -- copied the same way into ``meta.tokens_cached_in``/
+    #: ``meta.tokens_cache_write`` when not ``None``.
+    tokens_cached_in: int | None = None
+    tokens_cache_write: int | None = None
     cost_usd: float | None = None
     #: ``True`` when ``value`` is the parsed JSON of ``stdout`` (``parse:
     #: json`` on a subprocess-family plugin). ``runtime.state.parsed_stdout:

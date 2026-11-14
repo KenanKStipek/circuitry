@@ -1618,6 +1618,8 @@ async fn run_while<'a>(
     // `None` until the first check whose own count isn't `None`.
     let mut tokens_sent_total: Option<i64> = None;
     let mut tokens_received_total: Option<i64> = None;
+    let mut tokens_cached_in_total: Option<i64> = None;
+    let mut tokens_cache_write_total: Option<i64> = None;
 
     if let Some(m) = meta {
         store.set_leaf(
@@ -1718,6 +1720,16 @@ async fn run_while<'a>(
                     if let Some(tr) = outcome.generated.as_ref().and_then(|g| g.tokens_received) {
                         tokens_received_total = Some(tokens_received_total.unwrap_or(0) + tr);
                     }
+                    if let Some(ci) = outcome.generated.as_ref().and_then(|g| g.tokens_cached_in) {
+                        tokens_cached_in_total = Some(tokens_cached_in_total.unwrap_or(0) + ci);
+                    }
+                    if let Some(cw) = outcome
+                        .generated
+                        .as_ref()
+                        .and_then(|g| g.tokens_cache_write)
+                    {
+                        tokens_cache_write_total = Some(tokens_cache_write_total.unwrap_or(0) + cw);
+                    }
                     if let Some(m) = meta {
                         write_model_while_reply(
                             store,
@@ -1726,6 +1738,8 @@ async fn run_while<'a>(
                             outcome.generated.as_ref(),
                             tokens_sent_total,
                             tokens_received_total,
+                            tokens_cached_in_total,
+                            tokens_cache_write_total,
                         );
                     }
                     match outcome.verdict {
@@ -1921,6 +1935,7 @@ fn evaluate_while_condition(
 /// whatever they already summed from earlier checks); *tokens_sent_
 /// total*/*tokens_received_total* are the running sums [`run_while`]
 /// keeps across this call's own checks.
+#[allow(clippy::too_many_arguments)]
 fn write_model_while_reply(
     store: &Store,
     meta: &NodeRef,
@@ -1928,6 +1943,8 @@ fn write_model_while_reply(
     generated: Option<&crate::adapter::GenerateResult>,
     tokens_sent_total: Option<i64>,
     tokens_received_total: Option<i64>,
+    tokens_cached_in_total: Option<i64>,
+    tokens_cache_write_total: Option<i64>,
 ) {
     store.set_leaf(
         meta,
@@ -1958,6 +1975,16 @@ fn write_model_while_reply(
             .map(Value::from)
             .unwrap_or(Value::None),
     );
+    if let Some(cached_in) = generated.and_then(|g| g.tokens_cached_in) {
+        store.set_leaf(meta, key("tokens_cached_in"), Value::from(cached_in));
+    } else {
+        meta.borrow_mut().shift_remove(&key("tokens_cached_in"));
+    }
+    if let Some(cache_write) = generated.and_then(|g| g.tokens_cache_write) {
+        store.set_leaf(meta, key("tokens_cache_write"), Value::from(cache_write));
+    } else {
+        meta.borrow_mut().shift_remove(&key("tokens_cache_write"));
+    }
     store.set_leaf(
         meta,
         key("tokens_sent_total"),
@@ -1970,6 +1997,20 @@ fn write_model_while_reply(
             .map(Value::from)
             .unwrap_or(Value::None),
     );
+    if let Some(cached_in_total) = tokens_cached_in_total {
+        store.set_leaf(
+            meta,
+            key("tokens_cached_in_total"),
+            Value::from(cached_in_total),
+        );
+    }
+    if let Some(cache_write_total) = tokens_cache_write_total {
+        store.set_leaf(
+            meta,
+            key("tokens_cache_write_total"),
+            Value::from(cache_write_total),
+        );
+    }
 }
 
 /// `core/loop.py::LoopRuntime._collect_values` -- reads only

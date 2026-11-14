@@ -751,6 +751,11 @@ struct Totals {
     effects_run: Cell<u64>,
     tokens_sent: Cell<i64>,
     tokens_received: Cell<i64>,
+    /// #627: unlike `tokens_sent`/`tokens_received`, absent from
+    /// `value()`'s own dict entirely until at least one effect reports
+    /// one -- `None` means exactly that, never a placeholder zero.
+    tokens_cached_in: Cell<Option<i64>>,
+    tokens_cache_write: Cell<Option<i64>>,
     cost_usd: Cell<Option<f64>>,
 }
 
@@ -760,6 +765,8 @@ impl Totals {
             effects_run: Cell::new(0),
             tokens_sent: Cell::new(0),
             tokens_received: Cell::new(0),
+            tokens_cached_in: Cell::new(None),
+            tokens_cache_write: Cell::new(None),
             cost_usd: Cell::new(None),
         }
     }
@@ -783,6 +790,20 @@ impl Totals {
         0
     }
 
+    /// Like [`Self::int_field`], but `None` (not `0`) when none of
+    /// *keys* is present -- for a count that is itself absent rather
+    /// than null/zero when nothing ever reported one (#627).
+    fn int_field_optional(meta: &electricity_value::Dict, keys: &[&str]) -> Option<i64> {
+        for key in keys {
+            if let Some(Value::Int(electricity_value::IntValue::Small(n))) =
+                meta.get(&Value::Str((*key).to_string()))
+            {
+                return Some(*n);
+            }
+        }
+        None
+    }
+
     /// `_TotalsAccumulator.observe`'s own tokens/cost half -- *meta* is
     /// a completing effect's own `meta` snapshot, already known to have
     /// a truthy `completed_at` by the caller (every [`RunObserver::
@@ -800,6 +821,19 @@ impl Totals {
             self.tokens_received.get()
                 + Self::int_field(meta, &["tokens_received_total", "tokens_received"]),
         );
+        if let Some(cached_in) =
+            Self::int_field_optional(meta, &["tokens_cached_in_total", "tokens_cached_in"])
+        {
+            self.tokens_cached_in
+                .set(Some(self.tokens_cached_in.get().unwrap_or(0) + cached_in));
+        }
+        if let Some(cache_write) =
+            Self::int_field_optional(meta, &["tokens_cache_write_total", "tokens_cache_write"])
+        {
+            self.tokens_cache_write.set(Some(
+                self.tokens_cache_write.get().unwrap_or(0) + cache_write,
+            ));
+        }
         let cost = match meta.get(&Value::Str("cost_usd".to_string())) {
             Some(Value::Int(electricity_value::IntValue::Small(n))) => Some(*n as f64),
             Some(Value::Float(f)) => Some(*f),
@@ -829,6 +863,18 @@ impl Totals {
             Value::Str("tokens_received".to_string()),
             Value::from(self.tokens_received.get()),
         );
+        if let Some(cached_in) = self.tokens_cached_in.get() {
+            dict.insert(
+                Value::Str("tokens_cached_in".to_string()),
+                Value::from(cached_in),
+            );
+        }
+        if let Some(cache_write) = self.tokens_cache_write.get() {
+            dict.insert(
+                Value::Str("tokens_cache_write".to_string()),
+                Value::from(cache_write),
+            );
+        }
         dict.insert(
             Value::Str("cost_usd".to_string()),
             self.cost_usd.get().map(Value::from).unwrap_or(Value::None),

@@ -231,6 +231,8 @@ enum Reply {
         chunks: Option<Vec<String>>,
         tokens_sent: Option<i64>,
         tokens_received: Option<i64>,
+        tokens_cached_in: Option<i64>,
+        tokens_cache_write: Option<i64>,
         finish_reason: Option<String>,
     },
     Error {
@@ -247,6 +249,8 @@ const TEXT_REPLY_KEYS: &[&str] = &[
     "chunks",
     "tokens_sent",
     "tokens_received",
+    "tokens_cached_in",
+    "tokens_cache_write",
     "finish_reason",
 ];
 /// `adapters/scripted.py::_ERROR_KEYS`.
@@ -523,6 +527,8 @@ fn parse_reply(
     };
     let tokens_sent = parse_token_count(dict, "tokens_sent", &prefix)?;
     let tokens_received = parse_token_count(dict, "tokens_received", &prefix)?;
+    let tokens_cached_in = parse_token_count(dict, "tokens_cached_in", &prefix)?;
+    let tokens_cache_write = parse_token_count(dict, "tokens_cache_write", &prefix)?;
     let finish_reason = match dict.get(&key("finish_reason")) {
         None | Some(Value::None) => None,
         Some(Value::Str(s)) => Some(s.clone()),
@@ -537,6 +543,8 @@ fn parse_reply(
         chunks,
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write,
         finish_reason,
     })
 }
@@ -819,6 +827,8 @@ impl Adapter for ScriptedAdapter {
                 chunks,
                 tokens_sent,
                 tokens_received,
+                tokens_cached_in,
+                tokens_cache_write,
                 finish_reason,
             } => {
                 // `adapters/scripted.py::ScriptedAdapter.generate`: each
@@ -844,6 +854,8 @@ impl Adapter for ScriptedAdapter {
                     raw: Value::Dict(raw),
                     tokens_sent,
                     tokens_received,
+                    tokens_cached_in,
+                    tokens_cache_write,
                     finish_reason,
                     warnings: crate::ignored_options_warning(&self.name, options, &[]),
                     cost_usd: None,
@@ -1421,7 +1433,8 @@ mod tests {
         assert_eq!(
             err.message,
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['b', \"it's\"]; one of \
-             ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+             ['chunks', 'finish_reason', 'text', 'tokens_cache_write', 'tokens_cached_in', \
+             'tokens_received', 'tokens_sent']"
         );
     }
 
@@ -1434,7 +1447,8 @@ mod tests {
         assert_eq!(
             err.message,
             "<replies>: reply 0 for path 'prime.x': unknown key(s) ['token_sent']; one of \
-             ['chunks', 'finish_reason', 'text', 'tokens_received', 'tokens_sent']"
+             ['chunks', 'finish_reason', 'text', 'tokens_cache_write', 'tokens_cached_in', \
+             'tokens_received', 'tokens_sent']"
         );
     }
 

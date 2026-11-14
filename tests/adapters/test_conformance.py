@@ -57,6 +57,38 @@ def test_openai_adapter_conformance_with_mocked_transport(
     result = adapter.generate(model="gpt-4o-mini", prompt="ping")
 
     assert result.text == "hello from openai"
+    assert result.tokens_cached_in is None
+    assert validate_generate_result(result, adapter_name="openai") == []
+
+
+def test_openai_adapter_conformance_with_cached_tokens(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#627: ``prompt_tokens`` already includes the cache; ``cached_tokens``
+    lands separately on ``tokens_cached_in``, with no write count."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    payload = {
+        "choices": [{"message": {"content": "hello from openai"}}],
+        "usage": {
+            "prompt_tokens": 111,
+            "completion_tokens": 7,
+            "prompt_tokens_details": {"cached_tokens": 96},
+        },
+    }
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.Popen", fake_run)
+
+    adapter = OpenAIAdapter(streams=False)
+    result = adapter.generate(model="gpt-4o-mini", prompt="ping")
+
+    assert result.tokens_sent == 111
+    assert result.tokens_cached_in == 96
+    assert result.tokens_cache_write is None
     assert validate_generate_result(result, adapter_name="openai") == []
 
 
@@ -80,6 +112,41 @@ def test_anthropic_adapter_conformance_with_mocked_transport(
     result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
 
     assert result.text == "hello from anthropic"
+    assert result.tokens_cached_in is None
+    assert result.tokens_cache_write is None
+    assert validate_generate_result(result, adapter_name="anthropic") == []
+
+
+def test_anthropic_adapter_conformance_with_cache_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#627: ``tokens_sent`` includes cache reads/writes; the two counts
+    land separately on ``tokens_cached_in``/``tokens_cache_write``."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key")
+
+    payload = {
+        "content": [{"type": "text", "text": "hello from anthropic"}],
+        "usage": {
+            "input_tokens": 3,
+            "output_tokens": 5,
+            "cache_read_input_tokens": 100,
+            "cache_creation_input_tokens": 20,
+        },
+    }
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=0, stdout=json.dumps(payload))
+
+    monkeypatch.setattr("subprocess.Popen", fake_run)
+
+    adapter = AnthropicAdapter(streams=False)
+    result = adapter.generate(model="claude-sonnet-4-20250514", prompt="ping")
+
+    assert result.tokens_sent == 3 + 100 + 20
+    assert result.tokens_received == 5
+    assert result.tokens_cached_in == 100
+    assert result.tokens_cache_write == 20
     assert validate_generate_result(result, adapter_name="anthropic") == []
 
 

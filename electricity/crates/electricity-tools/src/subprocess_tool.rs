@@ -452,6 +452,8 @@ pub(crate) async fn run_binary(
         stdout_parsed: false,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
     })
 }
@@ -673,6 +675,8 @@ mod tests {
             stdout_parsed: false,
             tokens_sent: None,
             tokens_received: None,
+            tokens_cached_in: None,
+            tokens_cache_write: None,
             cost_usd: None,
         }
     }

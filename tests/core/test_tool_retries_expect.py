@@ -749,6 +749,79 @@ def test_expect_model_mode_asks_adapter_and_records_tokens(
     adapter.generate.assert_called_once()
 
 
+def test_expect_model_mode_records_cache_fields_right_after_tokens_received(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.adapters.base import GenerateResult
+
+    ok_result = ToolResult(value="a summary", raw={}, stdout="", stderr="", exit_code=0)
+    plugin = MagicMock()
+    plugin.execute.return_value = ok_result
+    _patch_plugin(monkeypatch, plugin)
+
+    adapter = MagicMock()
+    adapter.generate.return_value = GenerateResult(
+        text="yes",
+        raw={},
+        tokens_sent=103,
+        tokens_received=4,
+        tokens_cached_in=100,
+        tokens_cache_write=20,
+    )
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        expect=ExpectDef(mode="model", template="Does this look right? {{value}}"),
+    )
+    store = _make_store()
+    ToolRuntime(defn, adapter=adapter, model="m").execute(store=store, ctx={})
+
+    expect_meta = store.state["x"]["meta"]["expect"]
+    assert list(expect_meta.keys()) == [
+        "mode",
+        "template",
+        "answer",
+        "tokens_sent",
+        "tokens_received",
+        "tokens_cached_in",
+        "tokens_cache_write",
+        "result",
+    ]
+    assert expect_meta["tokens_cached_in"] == 100
+    assert expect_meta["tokens_cache_write"] == 20
+
+
+def test_expect_model_mode_with_no_cache_fields_omits_them(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from circuitry.adapters.base import GenerateResult
+
+    ok_result = ToolResult(value="a summary", raw={}, stdout="", stderr="", exit_code=0)
+    plugin = MagicMock()
+    plugin.execute.return_value = ok_result
+    _patch_plugin(monkeypatch, plugin)
+
+    adapter = MagicMock()
+    adapter.generate.return_value = GenerateResult(
+        text="yes", raw={}, tokens_sent=12, tokens_received=1
+    )
+
+    defn = ToolDefinition(
+        name="x",
+        provider="shell",
+        params={},
+        expect=ExpectDef(mode="model", template="Does this look right? {{value}}"),
+    )
+    store = _make_store()
+    ToolRuntime(defn, adapter=adapter, model="m").execute(store=store, ctx={})
+
+    expect_meta = store.state["x"]["meta"]["expect"]
+    assert "tokens_cached_in" not in expect_meta
+    assert "tokens_cache_write" not in expect_meta
+
+
 def test_expect_model_mode_without_adapter_raises_configuration_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
