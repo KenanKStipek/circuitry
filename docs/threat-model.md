@@ -690,8 +690,8 @@ true under the same boolean coercion the `service` plugin itself uses,
 and a still-templated `command:` entry is never a bare name, so the first
 check refuses either one up front even when it would end up rendering to
 an allowed value. The second check, seeing the value actually rendered,
-may allow what the first refused this way; the first never lets through
-something the second would refuse.
+may allow what the first refused this way, and anything the first check
+passes is still checked by the second.
 
 **What is checked.** A generated document's `shell` effects may run only
 what the host config and the document that generated it already allow: the
@@ -709,7 +709,11 @@ disagree with what actually runs) and a true value is refused outright; a
 executable (the first element of its argv list) checked the same way the
 `shell` plugin checks its own `command`: a bare name, present in the same
 allowlist a `shell` effect would be checked against — a path never counts
-as a member of that allowlist, however it compares. `params_json` can
+as a member of that allowlist, however it compares. That start's own `env`
+may not set `PATH` or any `LD_*`/`DYLD_*` key, which would change how the
+executable resolves or loads. The decomposition planner itself runs as its
+own literal document, so decomposition still works inside a generated
+document; the plan it produces runs with the limits. `params_json` can
 never set `allowed_commands` or `shell`; the two checks above are what
 decide a generated `service` effect's `shell`, never a value `params_json`
 carried in. A generated document may use only the tool providers the

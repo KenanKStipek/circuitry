@@ -1666,7 +1666,10 @@ to limits an author-written document isn't:
    refused outright. A `service` effect that starts a process without
    `shell: true` has its executable (the first element of its argv list)
    checked against the same allowlist, as a bare name — a path never
-   counts as a member of it.
+   counts as a member of it — and its `env` may not set `PATH` or any
+   `LD_*`/`DYLD_*` key. The decomposition planner runs as its own literal
+   document, so decomposition works inside a generated document; the plan
+   it produces runs with these limits.
 2. **It gets a tool allowance.** It may use only the tool providers the
    document that generated it uses itself, statically — every `type: tool`
    effect anywhere in that document's own text, including inside a literal
