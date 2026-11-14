@@ -125,9 +125,14 @@ own, or the reflector lists it:
 
 `allow_tools` is a literal list of provider names — never a Mustache
 template, a `{from: ...}` reference, or a name the run doesn't recognize;
-`cof check` rejects any of those. It never widens the shell allowlist: a
-generated `shell` effect's own `allowed_commands` is never honoured,
-whatever it says, `allow_tools` included. See
+`cof check` rejects any of those. It never widens the shell allowlist past
+what the host config and this document's own `shell` effects already
+allow: a generated `shell` effect's own `allowed_commands` can only narrow
+that set, never add a command outside it, `allow_tools` included — and if
+the reflector itself sits inside a document that is already generated (a
+plan nested inside another plan), `allow_tools` cannot grant anything
+beyond what *that* enclosing document was itself allowed, since the
+reflector's own text is generated too. See
 [the orchestration reference](../orchestration-reference.md#generated-documents-and-tools)
 for the full rule.
 

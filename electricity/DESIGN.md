@@ -666,18 +666,26 @@ generated plans" — the same `electricity-vm` frame machinery (§6) runs a runt
 
 **The generated-document check (#772).** Before either case's compiled `Region` ever runs, the
 parsed-but-uncompiled YAML is checked against `electricity-vm::generated_doc`: a generated `shell`
-effect's own `params.allowed_commands` is never honoured (the effective allowlist stays whatever
-the host config and the document that generated it already allow), a generated `service` effect's
-`params.shell: true` is refused the same way, and every other `type: tool` provider it uses must
-either be one the document that generated it already uses itself, statically, or be named in the
-generating `use`/`reflector` effect's own literal `allow_tools:` (`UseOp`/`ReflectorOp`'s own
-field, never rendered). `Frame::document_tool_providers` carries the current document's own
-static providers, replaced (never accumulated) each time a fresh document starts executing —
-`Frame::push_use`'s own call-stack field is a history; this one is not. A `use: {inline: ...}`
-child is only held to this check when its own structure doesn't match its unrendered template
-(`generated_doc::is_generated_inline`); a reflector's plan has no unrendered template to compare
-against and is always checked. A decomposition plan is always checked too, but only against the
-shell-specific rule — it has no generating effect of its own to carry an `allow_tools:`.
+effect's own `params.allowed_commands` may only narrow the effective allowlist — the union of the
+host config's default/pinned commands and every literal `shell` effect's own `allowed_commands` in
+the enclosing, non-generated document's own text (`Frame::document_shell_commands`) — never widen
+past it; a generated `service` effect's `params.shell: true` is refused outright. Every other
+`type: tool` provider it uses must either be one the document that generated it already uses
+itself, statically, or be named in the generating `use`/`reflector` effect's own literal
+`allow_tools:` (`UseOp`/`ReflectorOp`'s own field, never rendered). `Frame::document_tool_providers`
+and `Frame::document_shell_commands` carry the current document's own ceiling, replaced (never
+accumulated) each time a fresh, non-generated document starts executing — `Frame::push_use`'s own
+call-stack field is a history; these are not. A `use: {inline: ...}` child is held to this check
+either when its own structure doesn't match its unrendered template
+(`generated_doc::is_generated_inline`) or when `Frame::document_is_generated` is already set —
+generated-ness is inherited: every document nested inside an already generated one is generated
+too, whatever its own shape looks like, judged against the *same* ceiling its enclosing document
+was rather than recomputed from its own (model-written) text, and its own `allow_tools:` can never
+grant anything the inherited ceiling didn't already (refused, not silently ignored, if it tries). A
+reflector's plan has no unrendered template to compare against and is always checked. A
+decomposition plan is always checked too, and against the tool-provider rule as well — except that
+it has no generating effect of its own to carry an `allow_tools:`, so it is additionally always
+allowed a fixed set of side-effect-free data tools (`generated_doc::decomposition_safe_providers`).
 
 ---
 

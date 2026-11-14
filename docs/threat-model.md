@@ -96,7 +96,12 @@ shell-meta characters rejected in args). A document's own `params` may
 widen the allowlist per-effect, but only from a literal, unrendered list —
 never `params_json` (runtime-built via `#203`, can carry model-generated
 content) and never a list entry that is still a Mustache tag — both are a
-hard error rather than silently accepted. A host may additionally pin
+hard error rather than silently accepted. This is the *author's own*
+document's own widening; a document produced while the run executes — a
+reflector's plan, a `use` whose `inline:` is rendered from state, or a
+decomposition plan — is narrower still, since its own `allowed_commands`
+can look exactly as literal as an author's own: see
+[Section 11](#11-generated-documents). A host may additionally pin
 `runtime.plugins.shell.allowed_commands` in config; when set, the effective
 allowlist is that pin intersected with the effect's own list, so a *limited*
 document can only narrow it further, never widen it past the host's pin. The
@@ -594,14 +599,16 @@ never independently trusted).
 
 ### 11. Generated documents
 
-A document produced while a run executes — a reflector's plan, or a `use`
-whose `inline:` is rendered from state — can carry a tool effect that looks
-exactly like a document the author wrote by hand: the same
-`params.allowed_commands` on a `shell` effect, the same `provider:` tokens.
-Section 2's shell allowlist widens "only from a literal, unrendered list" —
-but in a generated document, every list is rendered content that merely
-*looks* literal once parsed. Tools that run commands without going through
-the `shell` plugin's allowlist at all are open to the same problem: `agent`,
+A document produced while a run executes — a reflector's plan, a `use`
+whose `inline:` is rendered from state, or a decomposition plan — can carry
+a tool effect that looks exactly like a document the author wrote by hand:
+the same `params.allowed_commands` on a `shell` effect, the same
+`provider:` tokens. Section 2's shell allowlist widens "only from a
+literal, unrendered list" — but in a generated document, every list is
+rendered content that merely *looks* literal once parsed (see that
+section's own mitigation, which this one narrows further for generated
+content specifically). Tools that run commands without going through the
+`shell` plugin's allowlist at all are open to the same problem: `agent`,
 `service`, `python_eval`, `git`, `docker`, `kubectl`, `gh`, `yt_dlp`,
 `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`, `mediainfo`, `imagemagick`,
 `exiftool`, `7z`, `ping`, `traceroute`, `linter`, `ocr`, `gpg`, `diff_patch`,
@@ -617,43 +624,65 @@ working exactly as before. The test: parse the `use` effect's own `inline:`
 text *before* Mustache rendering as YAML; if that parse succeeds and its
 shape (dict keys, list lengths, recursively) matches the rendered, parsed
 document exactly, every difference is a templated *value*, not generated
-structure. A parse failure (the common case — the whole `inline:` is one
+structure — except at a security-sensitive key (`type`, `provider`,
+`allow_tools`, `allowed_commands`, `shell`), where even a value that merely
+*renders to* what the author could have written counts as generated: a
+Mustache tag that renders to `shell` today can render to anything else
+tomorrow. A parse failure (the common case — the whole `inline:` is one
 `{{{...}}}` tag) or a shape mismatch anywhere means some or all of the
 document only exists because it was rendered: generated. A reflector's plan
 has no author template of its own to compare against at all — it is always
-generated. Both engines apply exactly this test, so a document that is
-generated on one is generated on the other.
+generated. **Generated-ness is inherited**: every effect textually inside
+an already-generated document is itself generated too, whatever its own
+shape looks like — a document the model wrote has no "author's own
+template" anywhere inside it, including a nested `use: inline:` whose own
+unrendered text happens to match its rendered shape by coincidence. Both
+engines apply exactly this test, so a document that is generated on one is
+generated on the other.
 
 **Mitigation.** A generated document's `shell` effects may run only what
-the host config and the document that generated it already allow — its own
-`params.allowed_commands` is never honoured, whatever it contains. A
-generated `service` effect's `params.shell: true` is refused the same way.
-A generated document may use only the tool providers the document that
+the host config and the document that generated it already allow: the
+union of the default/host-pinned allowlist and every literal `shell`
+effect's own `allowed_commands` anywhere in the enclosing, non-generated
+document's own text. A generated effect's own `params.allowed_commands`
+narrows that set further when it names fewer commands, but never widens
+past it — entries outside it are refused by name, naming the fix (add the
+command to a literal shell effect's `allowed_commands` in the document, or
+to `runtime.plugins.shell.allowed_commands`). A generated `service`
+effect's `params.shell: true` is refused outright, the same as before. A
+generated document may use only the tool providers the document that
 generated it uses itself, statically (every `type: tool` effect anywhere in
 that document's own text, including inside a literal `use: inline:` child),
 plus whatever the generating `use`/`reflector` effect's own literal
 `allow_tools:` field adds — never a rendered value, `params_json`, or a
 state reference; `cof check` rejects any of those, and validates each name
-against the known tool-plugin providers. A provider that isn't a real
-plugin at all is not refused here — it still fails the ordinary way (an
-"Unknown plugin" error) once the generated document actually tries to
-dispatch it, since adding an unknown name to `allow_tools` would itself be
-a `cof check` error. The refusal happens when the generated document is
-compiled, before any of its effects run, naming the generated effect, the
-provider or command, and — where one exists — the `allow_tools` fix; the
-failure belongs to the generating `use`/`reflector` effect, so its own
-`on_error` applies like any other failure. A decomposition plan
-(`runtime.complexity.decomposition`) is generated too and follows the
-shell-allowlist rule, but not the tool-provider allowance: it has no
-`use`/`reflector` effect of its own to carry an `allow_tools:`, and its own
-merge step commonly needs a tool (to combine chunk results) the document it
-serves doesn't otherwise use.
+against the known tool-plugin providers. Because generated-ness is
+inherited, a nested `use`/`reflector` effect's own `allow_tools:` is itself
+part of the enclosing generated document's text whenever that document is
+itself generated, and can never grant anything beyond what the enclosing
+document was itself allowed — naming something beyond it is refused, not
+silently ignored. A provider that isn't a real plugin at all is not refused
+here — it still fails the ordinary way (an "Unknown plugin" error) once the
+generated document actually tries to dispatch it, since adding an unknown
+name to `allow_tools` would itself be a `cof check` error. The refusal
+happens when the generated document is compiled, before any of its effects
+run, naming the generated effect, the provider or command, and — where one
+exists — the fix; the failure belongs to the generating `use`/`reflector`
+effect, so its own `on_error` applies like any other failure. A
+decomposition plan (`runtime.complexity.decomposition`) is generated too
+and follows the shell-allowlist rule and the tool-provider ceiling — the
+document it serves uses itself, statically, plus a fixed set of
+side-effect-free data tools (`json`, `regex`, `math`, `cel`, `clock`,
+`hash`, `base64`, `hex`, `uuid`, `csv`, `validate_yaml`) every plan is
+always allowed, since it has no `use`/`reflector` effect of its own to
+carry an `allow_tools:` and its own merge step commonly needs a tool to
+combine chunk results the document it serves doesn't otherwise use.
 
 Implementation: [`src/circuitry/generated_doc.py`](../src/circuitry/generated_doc.py),
 and the equivalent Rust module,
 [`electricity/crates/electricity-vm/src/generated_doc.rs`](../electricity/crates/electricity-vm/src/generated_doc.rs).
-See [the orchestration reference](./orchestration-reference.md#generated-documents-and-tools)
-for the author-facing `allow_tools:` field.
+See [the orchestration reference](./orchestration-reference.md) for the
+author-facing `use`/`reflector`/`allow_tools:` fields.
 
 **Residual risk.** The structural test is deliberately coarse (whole-document
 shape, not per-field): an author-written `inline:` that happens to add or
