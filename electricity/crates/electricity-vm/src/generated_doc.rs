@@ -556,12 +556,7 @@ fn same_shape(a: &Value, b: &Value, sensitive: bool) -> bool {
                     .zip(b_list.iter())
                     .all(|(x, y)| same_shape(x, y, sensitive))
         }
-        (None, None) => {
-            if sensitive && a != b {
-                return false;
-            }
-            true
-        }
+        (None, None) => !(sensitive && a != b),
     }
 }
 
