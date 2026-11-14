@@ -269,6 +269,31 @@ pub fn redact(mut value: Value) -> Value {
     }
 }
 
+/// `cli/redaction.py::redact_env_pairs` -- a list of `KEY=VALUE` strings
+/// (the `-e` flag shape, and `cli/last_run.py`'s own stashed `env_vars`):
+/// the key is kept as given (so a replay can show what was supplied), the
+/// value is replaced with [`REDACTED`] when the key matches
+/// [`is_sensitive_key`], else redacted at the string level
+/// ([`redact_string`]) the same way any other string value is -- so a
+/// credential-shaped value under an innocuous key (`my_var=sk-...`) is
+/// still caught. An entry with no `=` passes through unchanged, same as
+/// the reference's own `"=" not in pair` branch.
+pub fn redact_env_pairs(pairs: &[String]) -> Vec<String> {
+    pairs
+        .iter()
+        .map(|pair| match pair.split_once('=') {
+            None => pair.clone(),
+            Some((key, value)) => {
+                if is_sensitive_key(key) {
+                    format!("{key}={REDACTED}")
+                } else {
+                    format!("{key}={}", redact_string(value))
+                }
+            }
+        })
+        .collect()
+}
+
 /// `core/tool.py::_capped_raw`'s own truncation-marker shape: `{
 /// "_truncated": true, "_original_bytes": N, "_preview": "..." }`,
 /// substituted for `meta.raw` wholesale once its redacted, JSON-encoded
@@ -324,6 +349,38 @@ mod tests {
             d.insert(Value::Str(k.to_string()), v);
         }
         Value::Dict(d)
+    }
+
+    #[test]
+    fn redact_env_pairs_redacts_sensitive_keys_and_keyish_values() {
+        let pairs = vec![
+            "name=World".to_string(),
+            "OPENAI_API_KEY=sk-test-1234567890abcdef1234567890abcdef".to_string(),
+            "auth_token=abc.def.ghi".to_string(),
+            "password=hunter2hunter2hunter2hunter2hunter2".to_string(),
+            "topic=cats".to_string(),
+            "MY_TOKEN=plain".to_string(),
+            "shaped_value=sk-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        ];
+        let redacted = redact_env_pairs(&pairs);
+        assert!(redacted.contains(&"name=World".to_string()));
+        assert!(redacted.contains(&"topic=cats".to_string()));
+        assert!(redacted.contains(&format!("OPENAI_API_KEY={REDACTED}")));
+        assert!(redacted.contains(&format!("auth_token={REDACTED}")));
+        assert!(redacted.contains(&format!("password={REDACTED}")));
+        // Suffix-matched secret name.
+        assert!(redacted.contains(&format!("MY_TOKEN={REDACTED}")));
+        // Value shaped like an API key, redacted even though the key isn't sensitive.
+        assert!(redacted.contains(&format!("shaped_value={REDACTED}")));
+    }
+
+    #[test]
+    fn redact_env_pairs_passes_a_pair_with_no_equals_through() {
+        assert_eq!(redact_env_pairs(&[]), Vec::<String>::new());
+        assert_eq!(
+            redact_env_pairs(&["badtext".to_string()]),
+            vec!["badtext".to_string()]
+        );
     }
 
     #[test]

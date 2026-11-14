@@ -753,6 +753,7 @@ version = "0.1.0"
 dependencies = [
  "electricity-bytecode",
  "electricity-json",
+ "electricity-redaction",
  "electricity-value",
  "indexmap",
  "log",
