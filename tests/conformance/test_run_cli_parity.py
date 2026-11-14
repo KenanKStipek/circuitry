@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import sys
 import time
@@ -32,8 +31,6 @@ from typing import Any
 import pytest
 
 from . import harness
-
-ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 
 #: A trivial, adapter-free document both engines already run identically.
 ORCHESTRATION = (
@@ -192,20 +189,12 @@ def _no_such_option_core(stderr: str) -> str:
 
 @pytest.fixture(scope="module")
 def electricity_binary() -> Path:
-    """Builds the `electricity` binary once for this module -- same
-    pattern as `test_electricity_runner.py`'s own session fixture
-    (incremental, so a prior build in the same tree is cache-hit fast)."""
-    if shutil.which("cargo") is None:
+    """The shared `electricity` binary -- see `harness.resolve_electricity_binary`."""
+    binary, failure = harness.resolve_electricity_binary()
+    if failure is not None:
+        pytest.fail(failure)
+    if binary is None:
         pytest.skip("cargo not available; electricity binary cannot be built")
-    proc = subprocess.run(
-        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
-        cwd=ELECTRICITY_DIR, env=harness.cargo_env(), capture_output=True, text=True,
-        timeout=600, check=False,
-    )
-    if proc.returncode != 0:
-        pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
-    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
-    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
     return binary
 
 

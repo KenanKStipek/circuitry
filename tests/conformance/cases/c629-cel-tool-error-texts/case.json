@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #629, issue #735",
+  "description": "The `cel` tool (#735) shares the same evaluator as `if`/`while`'s own `mode: cel`, so its own error texts follow the same table: a list index out of range and division by zero, each a `provider: cel` tool with `on_error: continue`. Circuitry's own one-line text, identical in both engines, never a container's contents, a Python tuple repr or a Rust Debug repr.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -24,13 +24,14 @@ class FireworksAdapter:
     name: str = "fireworks"
     base_url: str = "https://api.fireworks.ai/inference/v1"
     default_model: str = "accounts/fireworks/models/llama-v3p3-70b-instruct"
+    api_key_env: str = "FIREWORKS_API_KEY"
 
     streams: bool = True
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="FIREWORKS_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
             streams=self.streams,
         )

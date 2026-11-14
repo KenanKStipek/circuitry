@@ -156,7 +156,9 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = SELECT_LOCK.lock().unwrap();
+    let _guard = SELECT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let doc_a = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
@@ -319,7 +321,9 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = SELECT_LOCK.lock().unwrap();
+    let _guard = SELECT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     // Two live runs, not one: with exactly one, bare `osi` attaches
@@ -500,7 +504,9 @@ fn bare_osi_attaches_at_once_with_exactly_one_live_run() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = SELECT_LOCK.lock().unwrap();
+    let _guard = SELECT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let doc = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
@@ -560,7 +566,9 @@ fn bare_osi_shows_the_empty_select_with_a_recorded_run() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = SELECT_LOCK.lock().unwrap();
+    let _guard = SELECT_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let doc = write_doc(work.path(), "quick.yml", QUICK_DOC);

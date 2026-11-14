@@ -302,7 +302,10 @@
 //!   (98 total `expr` productions on that path, each individually within
 //!   both this crate's own caps, 53 and 48) fails to *parse* at all in
 //!   this crate (`cel`'s own guard, not a cap this module tracks), where
-//!   Circuitry still compiles it and only fails once it evaluates.
+//!   Circuitry still compiles it and only fails once it evaluates --
+//!   worded the same clean, one-line way as every other too-deep
+//!   rejection either engine gives (`crate::CelSyntaxError::TooDeeplyNestedToParse`,
+//!   issue #629), even though *when* each engine gives up differs.
 //!
 //! A mixed shape this far outside anything an ordinary orchestration
 //! writes is a known, accepted residual divergence in both directions,
@@ -1355,7 +1358,11 @@ mod tests {
         // though each half is individually within this crate's own
         // caps (53, 48) -- a compile-time *parse* failure here, where
         // Circuitry itself still compiles this and only fails once it
-        // evaluates. Pinned as a known, accepted stricter gap.
+        // evaluates. Pinned as a known, accepted stricter gap -- but
+        // one `crate::CelSyntaxError::TooDeeplyNestedToParse` (issue
+        // #629) now words the same clean, one-line way as every other
+        // too-deep rejection, never `cel`'s own raw parser dump or the
+        // whole (deeply nested) expression quoted back.
         let expr = format!(
             "{}{}1{}{}",
             "(".repeat(50),
@@ -1364,6 +1371,7 @@ mod tests {
             ")".repeat(50)
         );
         let err = crate::validate_syntax(&expr).unwrap_err();
-        assert!(err.is_parse_error());
+        assert!(!err.is_parse_error());
+        assert_eq!(err.to_string(), "expression is nested too deeply");
     }
 }

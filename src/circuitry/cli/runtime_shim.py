@@ -15,6 +15,7 @@ from uuid import uuid4
 
 from ..adapters import Adapter, build_adapter
 from ..adapters.factory import (
+    adapter_api_key_env_errors,
     alias_config_errors,
     alias_names,
     configured_timeout_seconds,
@@ -588,6 +589,13 @@ def run(req: RunRequest) -> RunResult:
             raise ValueError(
                 "Invalid adapter aliases:\n"
                 + "\n".join(f"  - {e}" for e in alias_errors)
+            )
+
+        api_key_env_errors = adapter_api_key_env_errors(effective.runtime)
+        if api_key_env_errors:
+            raise ValueError(
+                "Invalid adapter api_key_env:\n"
+                + "\n".join(f"  - {e}" for e in api_key_env_errors)
             )
 
         if profile is not None and profile.effects:
@@ -1613,10 +1621,19 @@ def validate(
                 "errors": concurrency_config_errors,
                 "warnings": lint_warnings,
             }
+        # An alias whose own `api_key_env` is malformed is already reported
+        # once, building it, by `alias_config_errors` above -- drop the
+        # identical message `adapter_api_key_env_errors` would add for the
+        # same entry rather than listing it twice.
+        merged_alias_errors = alias_config_errors(merged_runtime)
+        merged_api_key_env_errors = [
+            e for e in adapter_api_key_env_errors(merged_runtime) if e not in merged_alias_errors
+        ]
         state_config_errors = [
             *prompt_sent_errors(merged_runtime),
             *parsed_stdout_errors(merged_runtime),
-            *alias_config_errors(merged_runtime),
+            *merged_alias_errors,
+            *merged_api_key_env_errors,
         ]
         if state_config_errors:
             return {

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import signal
 import socket
 import subprocess
@@ -34,7 +33,7 @@ from typing import Any
 
 import pytest
 
-ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
+from . import harness
 
 _CREDENTIAL_ENV_VARS = (
     "OPENAI_API_KEY",
@@ -174,19 +173,12 @@ def _assert_parity(cof_node: dict, electricity_node: dict) -> None:
 
 @pytest.fixture(scope="module")
 def electricity_binary() -> Path:
-    if shutil.which("cargo") is None:
+    """The shared `electricity` binary -- see `harness.resolve_electricity_binary`."""
+    binary, failure = harness.resolve_electricity_binary()
+    if failure is not None:
+        pytest.fail(failure)
+    if binary is None:
         pytest.skip("cargo not available; electricity binary cannot be built")
-    from . import harness
-
-    proc = subprocess.run(
-        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
-        cwd=ELECTRICITY_DIR, env=harness.cargo_env(), capture_output=True, text=True,
-        timeout=600, check=False,
-    )
-    if proc.returncode != 0:
-        pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
-    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
-    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
     return binary
 
 

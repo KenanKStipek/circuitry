@@ -1,0 +1,12 @@
+{"v":1,"seq":0,"ts":"2026-11-13T19:41:11.807Z","ev":"run_start","run_id":"27c912b9-9059-4eab-b3c0-d1352015360e","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":64090}
+{"v":1,"seq":1,"ts":"2026-11-13T19:41:11.810Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-13T19:41:11.810Z","ev":"start","id":1,"path":"prime.third"}
+{"v":1,"seq":3,"ts":"2026-11-13T19:41:13.391Z","ev":"end","id":1,"path":"prime.third","ok":true,"ms":1581}
+{"v":1,"seq":4,"ts":"2026-11-13T19:41:13.391Z","ev":"start","id":2,"path":"prime.first"}
+{"v":1,"seq":5,"ts":"2026-11-13T19:41:13.418Z","ev":"end","id":2,"path":"prime.first","ok":true,"ms":27}
+{"v":1,"seq":6,"ts":"2026-11-13T19:41:13.419Z","ev":"start","id":3,"path":"prime.never"}
+{"v":1,"seq":7,"ts":"2026-11-13T19:41:14.055Z","ev":"end","id":3,"path":"prime.never","ok":false,"ms":636,"error":"expect failed: value == 'never matches'"}
+{"v":1,"seq":8,"ts":"2026-11-13T19:41:14.055Z","ev":"start","id":4,"path":"prime.cleanup"}
+{"v":1,"seq":9,"ts":"2026-11-13T19:41:14.056Z","ev":"end","id":4,"path":"prime.cleanup","ok":true,"ms":1}
+{"v":1,"seq":10,"ts":"2026-11-13T19:41:14.056Z","ev":"end","id":0,"path":"prime","ok":true,"ms":2246}
+{"v":1,"seq":11,"ts":"2026-11-13T19:41:14.056Z","ev":"run_end","ok":true}

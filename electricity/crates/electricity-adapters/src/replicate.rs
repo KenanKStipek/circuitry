@@ -2,7 +2,7 @@
 //! predictions API (`Prefer: wait=N` for a synchronous-feeling call),
 //! over [`crate::transport`].
 
-use crate::config::{cfg_str_or, cfg_value_or, rstrip_base_url};
+use crate::config::{cfg_str_or, cfg_value_or, resolve_required_api_key_env, rstrip_base_url};
 use crate::curl_text::{classify_curl_outcome_with_error_code, curl_failure_message};
 use crate::transport::{TransportFailure, run_curl};
 use async_trait::async_trait;
@@ -151,6 +151,7 @@ pub struct ReplicateAdapter {
     /// comment.
     pub base_url: Value,
     pub default_model: String,
+    pub api_key_env: String,
 }
 
 #[async_trait(?Send)]
@@ -166,10 +167,10 @@ impl Adapter for ReplicateAdapter {
         options: &GenerateOptions,
         call: &CallContext<'_>,
     ) -> Result<GenerateResult, AdapterError> {
-        let api_token = std::env::var("REPLICATE_API_TOKEN").unwrap_or_default();
+        let api_token = std::env::var(&self.api_key_env).unwrap_or_default();
         if api_token.is_empty() {
             return Err(AdapterError {
-                message: "replicate: REPLICATE_API_TOKEN not set.".to_string(),
+                message: format!("replicate: {} not set.", self.api_key_env),
                 retry: RetryInfo::not_retryable(),
                 py_class: PyExc::RuntimeError,
             });
@@ -234,11 +235,11 @@ impl Adapter for ReplicateAdapter {
 
     async fn check(&self) -> CheckResult {
         let mut missing = Vec::new();
-        if std::env::var("REPLICATE_API_TOKEN")
+        if std::env::var(&self.api_key_env)
             .unwrap_or_default()
             .is_empty()
         {
-            missing.push("env:REPLICATE_API_TOKEN".to_string());
+            missing.push(format!("env:{}", self.api_key_env));
         }
         CheckResult {
             ok: missing.is_empty(),
@@ -254,6 +255,7 @@ pub fn build_replicate(name: &str, cfg: &Value) -> Result<Box<dyn Adapter>, Adap
         name: name.to_string(),
         base_url: cfg_value_or(cfg, "base_url", "https://api.replicate.com/v1"),
         default_model: cfg_str_or(cfg, "default_model", "meta/meta-llama-3-70b-instruct"),
+        api_key_env: resolve_required_api_key_env(cfg, "REPLICATE_API_TOKEN", name)?,
     }))
 }
 

@@ -1,0 +1,14 @@
+ERROR: CEL evaluation failed for expr "{'a': 1, 'b': [1, 2]}['zz'] == 1": no such key: 'zz'
+WARNING: Conditional 'missing_string_key': condition failed (CEL evaluation failed for "{'a': 1, 'b': [1, 2]}['zz'] == 1": no such key: 'zz'); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr "{'a': 1, 'b': [1, 2]}[7] == 1": no such key: 7
+WARNING: Conditional 'missing_int_key': condition failed (CEL evaluation failed for "{'a': 1, 'b': [1, 2]}[7] == 1": no such key: 7); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr '[1, 2, 3][5] == 1': list index out of range: 5
+WARNING: Conditional 'list_index_out_of_range': condition failed (CEL evaluation failed for '[1, 2, 3][5] == 1': list index out of range: 5); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr "[1, 2, 3]['a'] == 1": cannot index a list with a string
+WARNING: Conditional 'list_indexed_by_a_string': condition failed (CEL evaluation failed for "[1, 2, 3]['a'] == 1": cannot index a list with a string); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr '5[0] == 1': cannot index an int with an int
+WARNING: Conditional 'int_indexed_by_an_int': condition failed (CEL evaluation failed for '5[0] == 1': cannot index an int with an int); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr '1 / 0 == 1': division by zero
+WARNING: Conditional 'division_by_zero': condition failed (CEL evaluation failed for '1 / 0 == 1': division by zero); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr '1 % 0 == 1': modulus by zero
+WARNING: Conditional 'modulus_by_zero': condition failed (CEL evaluation failed for '1 % 0 == 1': modulus by zero); on_error=continue, taking the else branch

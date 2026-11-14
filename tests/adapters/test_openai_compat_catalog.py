@@ -218,3 +218,104 @@ def test_nvidia_nim_can_disable_auth_via_runtime_override(
     result = adapter.generate(model="m", prompt="ping")
     assert result.text == "ok"
     assert "Authorization" not in captured["headers"]
+
+
+@pytest.mark.parametrize("name,env_var,base_url_substr", CATALOG)
+def test_api_key_env_override_reads_the_named_variable(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    env_var: str,
+    base_url_substr: str,
+) -> None:
+    """runtime.adapters.<name>.api_key_env redirects the credential lookup to
+    a different environment variable, whether or not the adapter has a
+    default one: #669."""
+    if env_var:
+        monkeypatch.delenv(env_var, raising=False)
+    monkeypatch.setenv("ALT_KEY_VAR", "alt-key-value")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["cmd"] = cmd
+        captured["headers"] = read_config_headers(cmd)
+        return FakeProc(returncode=0, stdout=_ok_payload(f"hi from {name}"))
+
+    monkeypatch.setattr("subprocess.Popen", fake_run)
+
+    adapter = build_adapter(
+        adapter_name=name,
+        runtime={"adapters": {name: {"api_key_env": "ALT_KEY_VAR", "stream": False}}},
+    )
+    result = adapter.generate(model="any-model", prompt="ping")
+
+    assert result.text == f"hi from {name}"
+    assert captured["headers"]["Authorization"] == "Bearer alt-key-value"
+    assert_not_in_argv(captured["cmd"], "alt-key-value")
+
+
+@pytest.mark.parametrize("name,env_var,base_url_substr", CATALOG)
+def test_api_key_env_override_missing_reports_the_named_variable(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    env_var: str,
+    base_url_substr: str,
+) -> None:
+    monkeypatch.delenv("ALT_KEY_VAR", raising=False)
+    adapter = build_adapter(
+        adapter_name=name,
+        runtime={"adapters": {name: {"api_key_env": "ALT_KEY_VAR"}}},
+    )
+    result = adapter.check()
+    assert result.ok is False
+    assert "env:ALT_KEY_VAR" in result.missing
+    if env_var:
+        assert f"env:{env_var}" not in result.missing
+
+
+@pytest.mark.parametrize("name,env_var,base_url_substr", CATALOG)
+def test_api_key_env_invalid_name_is_a_config_error(
+    name: str, env_var: str, base_url_substr: str
+) -> None:
+    with pytest.raises(ValueError) as exc_info:
+        build_adapter(
+            adapter_name=name,
+            runtime={"adapters": {name: {"api_key_env": "not a name!"}}},
+        )
+    assert (
+        f"runtime.adapters.{name}.api_key_env must be an environment variable "
+        "name, got 'not a name!'" == str(exc_info.value)
+    )
+
+
+@pytest.mark.parametrize("name,env_var,base_url_substr", CATALOG)
+def test_api_key_env_override_value_is_masked_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    name: str,
+    env_var: str,
+    base_url_substr: str,
+) -> None:
+    """A curl failure's message never echoes the credential, however it was
+    named (#669's own masking requirement) -- and the credential did reach
+    the request (via the override, even for a normally keyless adapter), so
+    this isn't vacuously true of a call that never sent one at all."""
+    monkeypatch.setenv("ALT_KEY_VAR", "alt-secret-value-1234567")
+
+    captured: dict[str, Any] = {}
+
+    def fake_run(cmd: list[str], **kwargs: Any) -> FakeProc:
+        captured["headers"] = read_config_headers(cmd)
+        return FakeProc(returncode=22, stdout="", stderr="HTTP 401")
+
+    monkeypatch.setattr("subprocess.Popen", fake_run)
+
+    adapter = build_adapter(
+        adapter_name=name,
+        runtime={"adapters": {name: {"api_key_env": "ALT_KEY_VAR", "stream": False}}},
+    )
+    from circuitry.adapters._retry import AdapterCallError
+
+    with pytest.raises(AdapterCallError) as exc_info:
+        adapter.generate(model="any-model", prompt="ping")
+    assert captured["headers"]["Authorization"] == "Bearer alt-secret-value-1234567"
+    assert "alt-secret-value-1234567" not in str(exc_info.value)

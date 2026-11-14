@@ -2261,7 +2261,7 @@ fn earliest_created_at(
 /// by `build_header`'s own planned/done counts and `build_rows`'s own
 /// tree walk, so both agree on what a `use` node's own discovered
 /// children are.
-fn all_observed_paths(
+pub(crate) fn all_observed_paths(
     flat: &BTreeMap<String, NodeMeta>,
     statuses: &BTreeMap<String, RowStatus>,
     plan: &PlanTree,

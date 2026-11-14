@@ -23,6 +23,17 @@ jobs:
       (github.event_name == 'issue_comment' && github.event.issue.pull_request && startsWith(github.event.comment.body, '/accept')) ||
       (github.event_name == 'pull_request' && github.event.label.name == 'accepted')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    # Serializes every accept run repo-wide: two /accept comments (or an
+    # /accept plus an `accepted`-label run) started close together must
+    # never both reach `gh pr merge` on heads compared before either one
+    # landed -- the race that produced the 2026-11-12 incident the
+    # up-to-date check below exists for. `cancel-in-progress: false`
+    # queues the second run rather than cancelling it, so it still runs
+    # its own fresh checks once the first one is done.
+    concurrency:
+      group: accept-pr
+      cancel-in-progress: false
     permissions:
       contents: write
       pull-requests: write
@@ -122,6 +133,25 @@ jobs:
                  --jq '.[].body' | grep -q '/releases/download/demos/'; then
               fail "Not accepted: no demo recording found on this PR. (If this change has no visual surface, label the PR no-demo and re-run /accept.)"
             fi
+          fi
+
+          # A text-clean merge can still break the base branch if the PR
+          # head doesn't contain its current tip: each half can be green
+          # alone and still fail to compile together once both land.
+          # `compare` is directional (base...head): a nonzero `behind_by`
+          # means the base branch has commits this head doesn't, i.e. the
+          # branch is out of date. Checked here, against the same
+          # `$head_sha` the merge below uses, right before the merge --
+          # not at the top of this script, before the up-to-5-minute
+          # readiness poll, where the base branch (or another accept run)
+          # could still move before the compare's result is acted on. The
+          # `concurrency` group above keeps a second accept run from even
+          # starting until this one is done, so this is the second half of
+          # the fix, not a substitute for it.
+          base_ref=$(echo "$pr_json" | jq -r '.base.ref')
+          behind_by=$(gh api "repos/$REPO/compare/$base_ref...$head_sha" --jq '.behind_by')
+          if [ "$behind_by" != "0" ]; then
+            fail "Not accepted: this branch is $behind_by commit(s) behind $base_ref. Merge $base_ref into the branch, let CI run, then run /accept again."
           fi
 
           gh pr merge "$PR" --repo "$REPO" "--$MERGE_METHOD" --delete-branch --match-head-commit "$head_sha"

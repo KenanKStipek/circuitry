@@ -23,13 +23,14 @@ class XaiAdapter:
     name: str = "xai"
     base_url: str = "https://api.x.ai/v1"
     default_model: str = "grok-2-latest"
+    api_key_env: str = "XAI_API_KEY"
 
     streams: bool = True
 
     def _cfg(self) -> OpenAICompatibleConfig:
         return OpenAICompatibleConfig(
             base_url=self.base_url,
-            api_key_env="XAI_API_KEY",
+            api_key_env=self.api_key_env,
             default_model=self.default_model,
             streams=self.streams,
         )

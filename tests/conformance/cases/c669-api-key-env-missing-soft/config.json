@@ -1,0 +1,1 @@
+{"runtime": {"adapters": {"groq": {"api_key_env": "GROQ_TEAM_KEY"}}}}

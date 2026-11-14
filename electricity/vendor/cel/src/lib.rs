@@ -198,6 +198,14 @@ pub enum ExecutionError {
     /// Indicates that a map literal declared the same key more than once.
     #[error("Failed with repeated key: {0:?}")]
     DuplicateKey(Value),
+    /// Indicates that `left.field` failed because `left` has no field
+    /// access of any kind -- unlike [`NoSuchOverload`](Self::NoSuchOverload),
+    /// raised for the same failure by the generic index path, this keeps
+    /// the field name itself (`left`'s own type name only, never `left`
+    /// itself, which the field-selection code never retains past this
+    /// point).
+    #[error("Cannot select field {0:?} on '{1}'")]
+    UnsupportedFieldSelect(Value, String),
     #[error("InternalError: {0:?}")]
     InternalError(String),
 }
@@ -301,6 +309,10 @@ impl ExecutionError {
 
     pub fn unsupported_key_type(value: Value) -> Self {
         ExecutionError::UnsupportedKeyType(value)
+    }
+
+    pub fn unsupported_field_select(field: Value, target_type_name: &str) -> Self {
+        ExecutionError::UnsupportedFieldSelect(field, target_type_name.to_owned())
     }
 
     pub fn missing_argument_or_target() -> Self {

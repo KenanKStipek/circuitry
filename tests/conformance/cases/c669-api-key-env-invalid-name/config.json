@@ -1,0 +1,9 @@
+{
+  "default_model": "m",
+  "runtime": {
+    "adapters": {
+      "anthropic": {"api_key_env": "also bad"},
+      "groq": {"api_key_env": "lower-case-bad"}
+    }
+  }
+}

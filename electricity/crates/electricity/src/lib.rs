@@ -831,15 +831,15 @@ impl RunObserver for Observer<'_> {
         }
     }
 
-    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+    fn register_child_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.graft_child_write(node_path, snapshot);
+            mirror.register_child_graft(node_path, child_root);
         }
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
+    fn clear_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.clear_graft(node_path);
+            mirror.clear_graft(node_path, child_root);
         }
     }
 
@@ -853,15 +853,6 @@ impl RunObserver for Observer<'_> {
         if let Some(mirror) = self.live_state {
             mirror.clear_tree_branches(node_path, branches);
         }
-    }
-
-    // R4's own refinement on PR #472's review: `graft_child_write`
-    // above is a no-op without a mirror, so a caller that would
-    // otherwise snapshot a child store purely to call it should never
-    // do so either -- true exactly when a `--live-state` mirror is
-    // actually running.
-    fn wants_child_snapshots(&self) -> bool {
-        self.live_state.is_some()
     }
 
     // A report never fires effect_start/effect_complete, so it never
@@ -1649,6 +1640,21 @@ pub async fn run_orchestration_with_config(
         fail!(format!(
             "Invalid adapter aliases:\n{}",
             alias_errors
+                .iter()
+                .map(|e| format!("  - {e}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        ));
+    }
+
+    // Every `runtime.adapters.<name>.api_key_env` is validated up front
+    // here too, built-in or alias, whether or not any effect selects it
+    // (#669), identical text to `cof`'s.
+    let api_key_env_errors = adapters.adapter_api_key_env_errors(&alias_check_runtime);
+    if !api_key_env_errors.is_empty() {
+        fail!(format!(
+            "Invalid adapter api_key_env:\n{}",
+            api_key_env_errors
                 .iter()
                 .map(|e| format!("  - {e}"))
                 .collect::<Vec<_>>()
