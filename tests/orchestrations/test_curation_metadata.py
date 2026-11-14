@@ -78,7 +78,7 @@ def test_manifest_entry_name_matches_file_stem(manifest: dict) -> None:
 def test_comic_strip_eject_example_writes_the_named_file(
     manifest: dict, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The manifest's own eject-first example for comic_strip (#789 P1) must
+    """The manifest's own eject-first example for comic_strip (#604) must
     actually produce the file its ``cof run`` half names: parsed from the
     manifest text itself, not hardcoded here, so a stale edit to one command
     without the other fails this test rather than only being caught by eye."""
