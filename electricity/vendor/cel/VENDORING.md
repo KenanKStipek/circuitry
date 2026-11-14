@@ -36,7 +36,17 @@ types' names but not the field name itself (issue #629). A new variant,
 the field's own name plus the target's type name only (never the target's
 own value); `objects.rs`'s `select_field`/`index_into` raise it instead of
 `NoSuchOverload` for this one case, and `src/lib.rs` declares the variant
-and its constructor. Nothing else in this copy differs from the published
+and its constructor.
+
+### `list + <non-list>` fails instead of appending
+
+`DefaultList`'s `Adder` (`common/types/list.rs`) accepted any
+[`Iterable`] on the right of `+`, so `[1] + {'a': 2}` appended the map's
+iterated keys. A map is the only other iterable type here, and it isn't a
+`list`; the CEL spec only defines `+` between two lists (issue #783). `add` now requires the right-hand side to downcast to
+`DefaultList` too, raising the usual `UnsupportedBinaryOperator` error
+otherwise, same as every other `Adder` in this crate already does for a
+mismatched type. Nothing else in this copy differs from the published
 crate.
 
 ## Keeping this in sync
@@ -45,4 +55,4 @@ If `cel` publishes a new version electricity wants, re-vendor by copying
 the new version's source over this directory (preserving this file,
 `LICENSE`, and the `indexmap` dependency) and re-applying the same
 source changes against the new version's `objects.rs`/
-`common/types/map.rs`/`src/lib.rs`.
+`common/types/map.rs`/`src/lib.rs`/`common/types/list.rs`.
