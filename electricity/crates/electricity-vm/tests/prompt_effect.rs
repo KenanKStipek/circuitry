@@ -467,6 +467,301 @@ async fn a_schema_decode_failure_is_retried_down_then_across_passes() {
     );
 }
 
+/// `meta.attempts` (#668): absent, not an empty list, when a pass's
+/// own retries never run more than once.
+#[tokio::test]
+async fn attempts_absent_when_only_one_attempt_ran() {
+    let default = Rc::new(FakeAdapter::new("scripted", vec![FakeAdapter::text("ok")]));
+    let adapters = registry_with_scripted();
+    let mut op = template_prompt("hi");
+    op.retries = Some(RetryPolicy {
+        max_attempts: 3,
+        backoff_ms: 1,
+    });
+    let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    assert_eq!(get(meta, "attempts"), None);
+    assert_eq!(get(meta, "retries_used"), None);
+}
+
+/// `meta.attempts` (#668): a 503, then a reply that fails the effect's
+/// own schema, then a reply that passes it -- both failure modes are
+/// retryable, so all three attempts land in `meta.attempts`, oldest
+/// first, the last one repeating the node's own fields.
+#[tokio::test]
+async fn attempts_retried_on_a_503_then_a_schema_mismatch_then_succeeds() {
+    let mut schema = Dict::new();
+    schema.insert(
+        Value::Str("type".to_string()),
+        Value::Str("object".to_string()),
+    );
+    schema.insert(
+        Value::Str("required".to_string()),
+        Value::List(vec![Value::Str("ok".to_string())]),
+    );
+    let mut op = template_prompt("hi");
+    op.prompt_type = PromptType::Json;
+    op.schema = Some(Value::Dict(schema));
+    op.retries = Some(RetryPolicy {
+        max_attempts: 3,
+        backoff_ms: 1,
+    });
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "scripted: overloaded".to_string(),
+                retry: RetryInfo::retryable(),
+                py_class: PyExc::AdapterCallError,
+            }),
+            FakeAdapter::text("{\"nope\": 1}"),
+            FakeAdapter::text("{\"ok\": true}"),
+        ],
+    ));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    assert_eq!(get(meta, "retries_used"), Some(&Value::from(2i64)));
+    assert_eq!(
+        meta.keys().next_back(),
+        Some(&Value::Str("attempts".to_string()))
+    );
+
+    let attempts = match get(meta, "attempts").unwrap() {
+        Value::List(items) => items,
+        other => panic!("expected a list, got {other:?}"),
+    };
+    assert_eq!(attempts.len(), 3);
+
+    let first = as_dict(&attempts[0]);
+    let first_error = match get(first, "error").unwrap() {
+        Value::Str(s) => s,
+        other => panic!("expected a string, got {other:?}"),
+    };
+    assert!(first_error.contains("overloaded"));
+    assert_eq!(get(first, "value"), Some(&Value::None));
+
+    let second = as_dict(&attempts[1]);
+    assert!(get(second, "error").is_some());
+    assert_eq!(get(second, "value"), Some(&Value::None));
+
+    let third = as_dict(&attempts[2]);
+    assert_eq!(get(third, "error"), Some(&Value::None));
+    assert_eq!(get(third, "value"), get(ask, "value"));
+
+    // Prompts have no `expect`, unlike a tool or use effect's own entry.
+    assert_eq!(get(first, "expect"), None);
+}
+
+/// `meta.attempts` (#668): every entry's own key order, every effect
+/// type, cof's own convention.
+#[tokio::test]
+async fn attempts_entry_key_order() {
+    let mut op = template_prompt("hi");
+    op.retries = Some(RetryPolicy {
+        max_attempts: 2,
+        backoff_ms: 1,
+    });
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "scripted: server_error".to_string(),
+                retry: RetryInfo::retryable(),
+                py_class: PyExc::AdapterCallError,
+            }),
+            FakeAdapter::text("ok"),
+        ],
+    ));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt(op, OnError::Fail, default, &adapters).await;
+    result.unwrap();
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    let attempts = match get(meta, "attempts").unwrap() {
+        Value::List(items) => items,
+        other => panic!("expected a list, got {other:?}"),
+    };
+    for entry in attempts {
+        let keys: Vec<&str> = as_dict(entry)
+            .keys()
+            .map(|k| match k {
+                Value::Str(s) => s.as_str(),
+                other => panic!("expected a string key, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(
+            keys,
+            vec![
+                "created_at",
+                "completed_at",
+                "value",
+                "error",
+                "fallback_attempts",
+                "tokens_sent",
+                "tokens_received",
+            ]
+        );
+    }
+}
+
+/// `meta.attempts` (#668): kept even once `on_error: continue` swallows
+/// the exhausted pass's own failure.
+#[tokio::test]
+async fn attempts_kept_on_continue_after_retries_exhausted() {
+    let mut schema = Dict::new();
+    schema.insert(
+        Value::Str("type".to_string()),
+        Value::Str("object".to_string()),
+    );
+    schema.insert(
+        Value::Str("required".to_string()),
+        Value::List(vec![Value::Str("ok".to_string())]),
+    );
+    let mut op = template_prompt("hi");
+    op.prompt_type = PromptType::Json;
+    op.schema = Some(Value::Dict(schema));
+    op.retries = Some(RetryPolicy {
+        max_attempts: 2,
+        backoff_ms: 1,
+    });
+    let default = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            FakeAdapter::text("{\"nope\": 1}"),
+            FakeAdapter::text("{\"nope\": 1}"),
+        ],
+    ));
+    let adapters = registry_with_scripted();
+    let (store, _observer, result) = run_prompt(op, OnError::Continue, default, &adapters).await;
+    result.unwrap();
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    assert_eq!(get(ask, "value"), Some(&Value::None));
+    let attempts = match get(meta, "attempts").unwrap() {
+        Value::List(items) => items,
+        other => panic!("expected a list, got {other:?}"),
+    };
+    assert_eq!(attempts.len(), 2);
+    assert!(
+        attempts
+            .iter()
+            .all(|a| get(as_dict(a), "error") != Some(&Value::None))
+    );
+    assert_eq!(get(meta, "retries_used"), Some(&Value::from(1i64)));
+
+    // The last entry repeats the node's own deciding fields (#668):
+    // the wrapped "All adapter attempts failed: ..." text `meta.error`
+    // shows, not the bare per-attempt chain failure `fallback_attempts`
+    // holds inside it, and null tokens, like the node's own.
+    let last = as_dict(&attempts[1]);
+    assert_eq!(get(last, "error"), get(meta, "error"));
+    assert_eq!(get(meta, "tokens_sent"), Some(&Value::None));
+    assert_eq!(get(meta, "tokens_received"), Some(&Value::None));
+    assert_eq!(get(last, "tokens_sent"), Some(&Value::None));
+    assert_eq!(get(last, "tokens_received"), Some(&Value::None));
+}
+
+/// `meta.attempts` (#668): cleared at the start of every pass, so a
+/// reused node (an unnamed loop's own next pass) never shows an
+/// earlier pass's attempts.
+#[tokio::test]
+async fn attempts_is_reset_on_a_reused_node() {
+    let store = Store::new();
+    let token = CancellationToken::new();
+    let registry = json_registry();
+    let limiter = Limiter::new();
+    let adapters = registry_with_scripted();
+
+    let mut ctx = run_ctx(&registry, &limiter);
+    ctx.default_adapter = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![
+            Err(AdapterError {
+                message: "scripted: server_error".to_string(),
+                retry: RetryInfo::retryable(),
+                py_class: PyExc::AdapterCallError,
+            }),
+            FakeAdapter::text("first pass ok"),
+        ],
+    ));
+    ctx.adapters = &adapters;
+    ctx.model = "m";
+    let mut op = template_prompt("hi");
+    op.retries = Some(RetryPolicy {
+        max_attempts: 2,
+        backoff_ms: 1,
+    });
+    let leaf = prompt_leaf(
+        root_path().push_name("ask"),
+        "ask",
+        op.clone(),
+        OnError::Fail,
+    );
+    let root = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf]);
+    let observer = RecordingObserver::new();
+    electricity_vm::execute_root(
+        &program(root),
+        &store,
+        &Value::None,
+        &ctx,
+        &observer,
+        &token,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let snapshot = store.snapshot(&store.root);
+    let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
+    let ask = as_dict(get(prime, "ask").unwrap());
+    let meta = as_dict(get(ask, "meta").unwrap());
+    assert!(get(meta, "attempts").is_some());
+
+    // The node reused, as an unnamed loop's own next pass would: a
+    // second run against the same store, succeeding on its own first
+    // attempt.
+    let mut ctx2 = run_ctx(&registry, &limiter);
+    ctx2.default_adapter = Rc::new(FakeAdapter::new(
+        "scripted",
+        vec![FakeAdapter::text("second pass ok")],
+    ));
+    ctx2.adapters = &adapters;
+    ctx2.model = "m";
+    let leaf2 = prompt_leaf(root_path().push_name("ask"), "ask", op, OnError::Fail);
+    let root2 = chain_dynamic(root_path(), "prime", OnError::Fail, vec![leaf2]);
+    electricity_vm::execute_root(
+        &program(root2),
+        &store,
+        &Value::None,
+        &ctx2,
+        &observer,
+        &token,
+        false,
+    )
+    .await
+    .unwrap();
+
+    let snapshot2 = store.snapshot(&store.root);
+    let prime2 = as_dict(get(as_dict(&snapshot2), "prime").unwrap());
+    let ask2 = as_dict(get(prime2, "ask").unwrap());
+    let meta2 = as_dict(get(ask2, "meta").unwrap());
+    assert_eq!(get(meta2, "attempts"), None);
+    assert_eq!(get(meta2, "retries_used"), None);
+}
+
 #[tokio::test]
 async fn an_answer_parse_error_carries_no_raw_payload_cause() {
     // Issue #522 §3: `ErrorCause::SchemaRejected` is only ever set for
@@ -1128,6 +1423,7 @@ async fn meta_key_order_on_failure_matches_cof_run() {
             &Value::Str("fallback_recovered".to_string()),
             &Value::Str("waiting_for".to_string()),
             &Value::Str("retries_used".to_string()),
+            &Value::Str("attempts".to_string()),
         ]
     );
 }

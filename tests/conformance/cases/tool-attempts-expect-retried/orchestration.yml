@@ -1,0 +1,35 @@
+name: tool-attempts-expect-retried
+effects:
+  - type: tool
+    name: third
+    provider: shell
+    params:
+      command: counter
+      allowed_commands: [counter]
+      args: ["scratch/third.txt"]
+    retries: {max_attempts: 3, backoff_ms: 0}
+    expect: "value == 'xxx'"
+  - type: tool
+    name: first
+    provider: shell
+    params:
+      command: counter
+      allowed_commands: [counter]
+      args: ["scratch/first.txt"]
+    retries: {max_attempts: 3, backoff_ms: 0}
+    expect: "value == 'x'"
+  - type: tool
+    name: never
+    on_error: continue
+    provider: shell
+    params:
+      command: counter
+      allowed_commands: [counter]
+      args: ["scratch/never.txt"]
+    retries: {max_attempts: 2, backoff_ms: 0}
+    expect: "value == 'never matches'"
+finally:
+  - type: tool
+    name: cleanup
+    provider: fs
+    params: {mode: delete, path: "scratch", recursive: true}

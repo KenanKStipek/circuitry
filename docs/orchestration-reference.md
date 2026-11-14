@@ -107,7 +107,7 @@ The atomic execution unit. Performs exactly one model invocation and writes a ty
 | `deterministic` | boolean | no | `false` | Temperature 0 unless `params.temperature` is set, plus a fixed seed on ollama and openai unless `params.seed` is set |
 | `inputs` | object | no | — | Prompt-local key/value pairs for template rendering |
 | `assets` | array | no | — | Images for a vision model: `[{kind: "image", ref: "path/to/img"}]`. `ref` is a Mustache template rendering to a local path or an `http(s)` URL. Other kinds are skipped with a warning |
-| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the final pass's chain survives into `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier pass's own attempts, and its classification, are gone once a retry starts a fresh one |
+| `retries` | object | no | — | `{max_attempts: N, backoff_ms: M}`. A dispatch failure retries only if classified retryable (429, 408, 5xx, a timeout, a dropped connection); 400/401/403/404/422 and a missing key fail the attempt loop immediately. A reply that came back but failed to decode/validate (see `provider_fallbacks` below) always retries, same as before classification existed. Wait is exponential backoff with jitter from `backoff_ms`, capped at 60s; a provider's `Retry-After` header overrides the computed wait when the adapter can read one. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff; `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike, and is absent (not `0`) when the first attempt is also the last — the same rule a tool's and a `use` effect's `retries` use. Only the deciding attempt's chain survives into the top-level `meta.fallback_attempts`/`meta.error_code`/`meta.http_status` — an earlier attempt's own chain and classification are kept in `meta.attempts` instead, never left on the node's own top-level fields; see [Every attempt](#every-attempt-metaattempts) |
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` |
 | `group` | string | no | — | Joins a named concurrency-group slot (`runtime.concurrency_groups.<name>`) — see [Concurrency Limits](#concurrency-limits). Must name a group `runtime.concurrency_groups` defines; `cof check` rejects an unknown one. Held for the whole dispatch, retries included — but not decomposition's chunk fan-out (see [Complexity Configuration](./complexity-config.md)): decomposition runs before the slot is acquired, and the chunk prompts it generates do not inherit this effect's `group:` |
 | `split` | object | no | — | `{enabled?: bool, budget_tokens?: int, max_parts?: int, separator?: string, merge?: {template: string}}` — the size trigger's per-effect overlay (see [Complexity Configuration](./complexity-config.md#splitting)). `budget_tokens` splits this effect even with `runtime.complexity.splitting.enabled: false`; `enabled: false` always opts it out. `merge.template` is required for any `prompt_type` other than `text` or an array (`array`, or `json` with an array schema), whose parts the runtime joins/concatenates natively |
@@ -895,7 +895,7 @@ time.
 Tool providers reference a *tool plugin*, not an *adapter*, so the `prompt`-effect `on_error` reclassification above does not apply here: a missing tool-plugin dependency (e.g. `ffmpeg` not on `PATH`) always hard-fails preflight regardless of this effect's `on_error`.
 
 <a id="tool-retries"></a>
-**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's.
+**Retries.** `retries: {max_attempts, backoff_ms}` — same two fields, same default (unset: one attempt, no retry) and the same exponential-backoff-with-jitter curve (capped at 60s) a prompt's `retries` uses. What counts as worth retrying differs by provider family: an **HTTP-family** tool (`http`, `web_fetch`, `webhook`, `linear`, `systemone`) classifies its failure by status the way an adapter dispatch does — 429, 408 and 5xx retry; any other 4xx (400, 401, 404, 422, ...) does not, so a request that can never succeed doesn't spend the rest of the budget trying. Every other (**process**) tool — `shell`, `ffmpeg`, `comfyui`, and the rest — retries on any failure: there is no status to classify, and a process failing once (a transient GPU-watchdog kill, a flaky read) is exactly the case this exists for. `meta.created_at` is the start of the first attempt, not reset on a retry, so a duration computed from it includes every attempt's backoff — the same rule a prompt's and a `use` effect's `retries` use. `meta.retries_used` records how many it took, set on both a successful and a failed outcome alike; it's absent, not `0`, when the first attempt is also the last — again the same as a prompt's and a `use` effect's. When more than one attempt ran, `meta.attempts` keeps every one; see [Every attempt](#every-attempt-metaattempts).
 
 <a id="tool-expect"></a>
 **`expect`.** An output check run once an attempt otherwise succeeds. Either a CEL expression — a bare string is shorthand for `{mode: cel, expr: <string>}` — evaluated over this effect's own `value` and `meta` (bound directly, not under `state.`) plus `state` (bound the usual way), e.g. `expect: "has(value.prompt_id)"`; or `{mode: model, template: ...}`, which asks yes/no the same way a model-mode `if` does, on the run's own adapter/model, and records its tokens. A false or unreadable expectation fails the attempt with `expect failed: <expr or template summary>`, after which `retries` and `on_error` apply exactly like any other failure — an expect failure is always worth retrying, since (unlike an HTTP status) it carries no classification of its own. The outcome lands at `meta.expect` (`{mode, result, expr|template, error?, tokens_sent?, tokens_received?}`).
@@ -1528,41 +1528,75 @@ Every `use` node also records, whether or not the setting is on:
 
 #### Every attempt (meta.attempts)
 
-A `use` with `retries` only ever showed the attempt that decided the outcome: the earlier
-ones' proposals, errors and `expect` results were gone the moment the next attempt started,
-visible only in `--events` or an adapter's own log. `meta.attempts` keeps every attempt that
-ran, oldest first:
+A retried `use`, `tool` or `prompt` used to show only the attempt that decided the outcome:
+the earlier ones' proposals, errors, `expect` results and token spend were gone the moment
+the next attempt started, visible only in `--events` or an adapter's own log. `meta.attempts`
+keeps every attempt that ran, oldest first. Every entry starts with the same four keys,
+whatever the effect type:
 
 | Key | Value |
 |-----|-------|
 | `created_at` | When this attempt started |
 | `completed_at` | When it ended |
-| `value` | What this attempt mapped: the declared-outputs dict, or `null` in full-namespace mode or when the child failed |
+| `value` | What this attempt produced: a `use`'s declared-outputs dict (`null` in full-namespace mode or when the child failed), a tool's own `value`, or a prompt's decoded reply (`null` on failure) |
 | `error` | `null` if this attempt succeeded, otherwise the text `meta.error` would show for it |
-| `child_errors` | This attempt's own `meta.child_errors` |
-| `expect` | This attempt's own `meta.expect`, or `null` when the check didn't run |
-| `children` | Only with `runtime.state.record_children`: this attempt's own child effects, in the same shape the complete record keeps under the node |
+
+Then each effect type's own extra keys, in this order:
+
+- **`use`:** `child_errors` (this attempt's own `meta.child_errors`), `expect` (this attempt's
+  own `meta.expect`, or `null` when the check didn't run), and, only with
+  `runtime.state.record_children`, `children` — this attempt's own child effects, in the same
+  shape the complete record keeps under the node.
+- **`tool`:** `expect` (this attempt's own `meta.expect`, or `null` when the check didn't run),
+  then `exit_code` and `status_code`, each only for a provider that sets it on the node at all
+  (every tool sets `exit_code`, `null` for a non-process plugin; only the HTTP-family providers
+  ever set `status_code`).
+- **`prompt`:** `fallback_attempts` — that attempt's own provider tries (the
+  `provider`/`provider_fallbacks` chain tried within this one attempt), each entry carrying its
+  own `error_code`/`http_status` the same way the top-level field does — then `tokens_sent` and
+  `tokens_received`. A prompt has no `expect` of its own (unlike a `tool` or `use` effect), so
+  its entry skips straight from `error` to `fallback_attempts`.
 
 - **Present exactly when `meta.retries_used` is** — one attempt (a dry run, a failure before
   the first attempt) never gets an `attempts` list at all, not an empty one.
-- **The last entry is the deciding attempt.** Its `value`, `error`, `expect` and `child_errors`
-  equal the node's own; `meta.created_at`/`meta.completed_at` tie to its first/last entry.
-- **Each retry starts from a clean node.** From the second attempt on, the previous attempt's
-  child effects are removed from under the node — kept in its own `attempts` entry when
-  `record_children` is on — so the final node never mixes an earlier attempt's step (an `if`
-  branch it alone took) with the deciding one's, in either `record_children` or
-  full-namespace mode.
-- **Written as soon as an attempt ends**, before the backoff wait — so `--live-state`, and the
-  `use`'s own `expect` and `inputs`, can read the attempts before the current one:
+- **The last entry is the deciding attempt.** Its own fields equal the node's own top-level
+  ones (`value`, `error`, a `use`'s `expect`/`child_errors`, a tool's `expect`, a prompt's
+  `fallback_attempts`/`tokens_sent`/`tokens_received`); `meta.created_at`/`meta.completed_at`
+  tie to its first/last entry.
+- **A `use`'s own retry starts from a clean node.** From the second attempt on, the previous
+  attempt's child effects are removed from under the node — kept in its own `attempts` entry
+  when `record_children` is on — so the final node never mixes an earlier attempt's step (an
+  `if` branch it alone took) with the deciding one's, in either `record_children` or
+  full-namespace mode. A `tool` or `prompt` effect is a leaf and has no child effects to clean
+  up this way.
+- **Written as soon as an attempt ends**, before the backoff wait — so `--live-state`, and (for
+  a `use`) the effect's own `expect` and `inputs`, can read the attempts before the current
+  one:
   ```yaml
   inputs:
     earlier: {from: prime.theme.meta.attempts}  # null on the first attempt
   ```
 - After `on_error: skip`/`continue` absorbs an exhausted retry, the entries are a record of what
-  each attempt mapped — downstream still reads the node's own `value`, which is `null`.
+  each attempt produced — downstream still reads the node's own `value`, which is `null`.
 - Reset at the start of every pass, same as `expect` and `retries_used` — a reused node (an
   unnamed loop's next pass, `--state` carryover) never shows an earlier pass's attempts.
-- Tools and prompts do not record attempts yet; only `use` does.
+- **Doesn't change run totals.** A prompt's own `meta.tokens_sent_total`/`tokens_received_total`
+  already sum every attempt's spend, retried or not — the entries just make that spend readable
+  per attempt, they don't add to it. A tool's `expect: {mode: model}` check spends its own
+  tokens on every attempt, including one that is later retried; those never reach
+  `last_run.totals` on either engine. Each attempt's own `expect.tokens_sent`/`tokens_received`
+  is readable inside that attempt's own `meta.attempts` entry; the deciding attempt's is also
+  on the node's own `meta.expect`, which a `dynamic`'s own token sum (`core/dynamic.py`'s
+  `_sum_tokens`) does walk — so a parent `dynamic`'s total counts the deciding attempt's
+  `expect` spend but not an earlier, retried attempt's, which `meta.expect` no longer holds
+  once a later attempt overwrites it.
+- **No size cap.** A prompt's own entry repeats that attempt's whole decoded reply in `value`
+  (and, inside `fallback_attempts`, a losing attempt's `raw_reply`, already capped the way the
+  top-level field is) — a document sending many large prompts through a few retries keeps every
+  reply in state. [`runtime.state.prompt_sent`](#recording-the-prompt-text-runtimestateprompt_sent)
+  shapes only `meta.prompt_sent` itself (the text sent, set once per pass before the retry loop);
+  it has no effect on `meta.attempts`, whose entries never carry the prompt text at all, only
+  what came back.
 
 **Cycle detection:**
 
