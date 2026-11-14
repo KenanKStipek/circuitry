@@ -356,9 +356,11 @@ fn interpret_body(raw: Value) -> Result<GenerateResult, AdapterError> {
         int_if_not_none(usage_dict.and_then(|d| d.get(&Value::Str("output_tokens".to_string()))))?;
     let (tokens_cached_in, tokens_cache_write) = cache_fields(usage_dict);
     // Every input token Anthropic counted, cache reads and writes included
-    // (R2) -- `input_tokens` alone excludes the cache.
-    let tokens_sent =
-        input_tokens.map(|v| v + tokens_cached_in.unwrap_or(0) + tokens_cache_write.unwrap_or(0));
+    // -- `input_tokens` alone excludes the cache.
+    let tokens_sent = input_tokens.map(|v| {
+        v.saturating_add(tokens_cached_in.unwrap_or(0))
+            .saturating_add(tokens_cache_write.unwrap_or(0))
+    });
     let finish_reason = match dict.get(&Value::Str("stop_reason".to_string())) {
         Some(Value::Str(s)) => Some(s.clone()),
         _ => None,
@@ -379,8 +381,8 @@ fn interpret_body(raw: Value) -> Result<GenerateResult, AdapterError> {
 
 /// `adapters/anthropic.py::_cache_fields` -- `(cache_read_input_tokens,
 /// cache_creation_input_tokens)` from an Anthropic `usage` object, each
-/// `None` unless the reply's own field is a pyint (R1: absent, not 0,
-/// when the provider didn't report one).
+/// `None` unless the reply's own field is a pyint -- absent, not 0,
+/// when the provider didn't report one.
 fn cache_fields(usage: Option<&Dict>) -> (Option<i64>, Option<i64>) {
     let read =
         usage.and_then(|d| int_if_pyint(d.get(&Value::Str("cache_read_input_tokens".to_string()))));
@@ -444,7 +446,9 @@ pub fn stream_on_line_progress(
                 return;
             };
             let (cache_read, cache_write) = cache_fields(usage_dict);
-            let sent = input_tokens + cache_read.unwrap_or(0) + cache_write.unwrap_or(0);
+            let sent = input_tokens
+                .saturating_add(cache_read.unwrap_or(0))
+                .saturating_add(cache_write.unwrap_or(0));
             tokens_sent.set(Some(sent));
             if let Some(on_progress) = on_progress {
                 on_progress(GenerateProgress {
@@ -560,8 +564,11 @@ pub fn parse_anthropic_stream(stdout: &str) -> AnthropicStream {
                     let (cache_read, cache_write) = cache_fields(usage_dict);
                     tokens_cached_in = cache_read;
                     tokens_cache_write = cache_write;
-                    tokens_sent =
-                        Some(input_tokens + cache_read.unwrap_or(0) + cache_write.unwrap_or(0));
+                    tokens_sent = Some(
+                        input_tokens
+                            .saturating_add(cache_read.unwrap_or(0))
+                            .saturating_add(cache_write.unwrap_or(0)),
+                    );
                 }
             }
             "content_block_delta" => {

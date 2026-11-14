@@ -41,15 +41,15 @@ _STREAM_ERROR_STATUS: dict[str, int] = {
 def _cache_fields(usage: Any) -> tuple[int | None, int | None]:
     """``(cache_read_input_tokens, cache_creation_input_tokens)`` from an
     Anthropic ``usage`` object, each ``None`` unless the reply's own field
-    is an int (R1: absent, not 0, when the provider didn't report one).
+    is an int -- absent, not 0, when the provider didn't report one.
     """
     if not isinstance(usage, dict):
         return None, None
     read = usage.get("cache_read_input_tokens")
     write = usage.get("cache_creation_input_tokens")
     return (
-        read if isinstance(read, int) else None,
-        write if isinstance(write, int) else None,
+        int(read) if isinstance(read, int) else None,
+        int(write) if isinstance(write, int) else None,
     )
 
 
@@ -66,8 +66,8 @@ class _AnthropicStream:
     def __init__(self, on_progress: Any) -> None:
         self._on_progress = on_progress
         #: The most recently reported exact input-token count
-        #: (``message_start``, cache reads/writes included -- R2), carried
-        #: onto every later progress call so ``meta.live.tokens_sent`` stays
+        #: (``message_start``, cache reads/writes included), carried onto
+        #: every later progress call so ``meta.live.tokens_sent`` stays
         #: populated once known.
         self._tokens_sent: int | None = None
         self.saw_event = False
@@ -94,9 +94,9 @@ class _AnthropicStream:
             if isinstance(input_tokens, int):
                 cache_read, cache_write = _cache_fields(usage)
                 self._tokens_sent = input_tokens + (cache_read or 0) + (cache_write or 0)
-                # Not "a delta" (R6/#674): this carries only the input
-                # token count, no reply text, so it never gates the
-                # per-second throttle or counts as the first token.
+                # Not "a delta" (#674): this carries only the input token
+                # count, no reply text, so it never gates the per-second
+                # throttle or counts as the first token.
                 if self._on_progress is not None:
                     self._on_progress(
                         GenerateProgress(
@@ -133,7 +133,7 @@ def parse_anthropic_stream(
     parsed in full — the authoritative result for a streamed call, built
     the same way the non-streamed path builds its one JSON object's.
     ``message_start`` reports the exact input token count, cache reads and
-    writes included (``tokens_sent`` is their sum, per R2); ``content_block_delta``
+    writes included (``tokens_sent`` is their sum); ``content_block_delta``
     carries the text; ``message_delta`` carries the stop reason and the
     exact output token count; ``error`` carries the same explanation an
     HTTP error body would; ``saw_message_stop`` is whether the stream's own
@@ -482,15 +482,15 @@ class AnthropicAdapter:
             text = "".join(text_parts)
 
         # Extract token usage. `tokens_sent` is every input token Anthropic
-        # counted, cache reads and writes included (R2) -- `input_tokens`
-        # alone excludes the cache.
+        # counted, cache reads and writes included -- `input_tokens` alone
+        # excludes the cache.
         usage = raw.get("usage", {})
         input_tokens = usage.get("input_tokens")
         tokens_received = usage.get("output_tokens")
         tokens_cached_in, tokens_cache_write = _cache_fields(usage)
         tokens_sent = (
             int(input_tokens) + (tokens_cached_in or 0) + (tokens_cache_write or 0)
-            if isinstance(input_tokens, int)
+            if input_tokens is not None
             else None
         )
         stop_reason = raw.get("stop_reason")
