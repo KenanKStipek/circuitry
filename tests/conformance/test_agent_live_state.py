@@ -9,7 +9,6 @@ engine in turn.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 import sys
 import time
@@ -18,8 +17,6 @@ from pathlib import Path
 import pytest
 
 from . import harness
-
-ELECTRICITY_DIR = Path(__file__).resolve().parents[2] / "electricity"
 
 #: How long this test waits for `meta.live.current_tool` to appear before
 #: giving up -- generous for a loaded machine, far short of the fake's own
@@ -223,21 +220,10 @@ def _sample_electricity(tmp_path: Path, binary: Path) -> dict:
 
 @pytest.fixture(scope="module")
 def electricity_binary() -> Path | None:
-    if shutil.which("cargo") is None:
-        return None
-    proc = subprocess.run(
-        ["cargo", "build", "-p", "electricity-cli", "--bin", "electricity"],
-        cwd=ELECTRICITY_DIR,
-        env=harness.cargo_env(),
-        capture_output=True,
-        text=True,
-        timeout=600,
-        check=False,
-    )
-    if proc.returncode != 0:
-        pytest.fail(f"cargo build -p electricity-cli failed:\n{proc.stdout}\n{proc.stderr}")
-    binary = ELECTRICITY_DIR / "target" / "debug" / "electricity"
-    assert binary.exists(), f"cargo build succeeded but {binary} is missing"
+    """The shared `electricity` binary -- see `harness.resolve_electricity_binary`."""
+    binary, failure = harness.resolve_electricity_binary()
+    if failure is not None:
+        pytest.fail(failure)
     return binary
 
 

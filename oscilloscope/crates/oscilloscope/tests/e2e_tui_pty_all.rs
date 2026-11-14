@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use support::{
     SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process, drain_continuously,
     e2e_enabled, launch_osi_log, open_pty, resize_pty, send_bytes, spawn_osi_on_pty,
-    wait_for_registry_entries, wait_for_screen_text, wait_for_screen_text_gone,
+    wait_for_registry_entries, wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone,
     wait_for_step_start, wait_with_timeout, write_doc,
 };
 
@@ -81,7 +81,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -148,7 +150,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     // two runs started a moment apart is real timing, not something
     // this test can assume either way.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
+        !s.contains("osi  All") && s.contains("SIGNAL")
+    });
     assert!(
         screen.contains("SIGNAL") && !screen.contains("osi  All"),
         "expected enter to open the focused run on the screen every tile was already showing \
@@ -171,12 +175,14 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
 
     send_bytes(&mut master, b"\x1b[C"); // Right arrow: focus the other tile.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
     let second_doc = if first_doc == "a.yml" {
         "b.yml"
     } else {
         "a.yml"
     };
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
+        !s.contains("osi  All") && s.contains(second_doc)
+    });
     assert!(
         screen.contains(second_doc) && !screen.contains(first_doc) && !screen.contains("osi  All"),
         "expected the right arrow to move focus to the other tile, so this enter opens \
@@ -197,7 +203,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     // also reach from a freshly reset focus, so this is the one
     // check that actually tells the two apart.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
+        !s.contains("osi  All") && s.contains(second_doc)
+    });
     assert!(
         screen.contains(second_doc) && !screen.contains(first_doc) && !screen.contains("osi  All"),
         "expected the grid's own focus to still be on {second_doc} after the esc round trip, \
@@ -263,7 +271,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -374,8 +384,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     // "SIGNAL" alone is a substring of "COMBINED SIGNAL", so this
     // waits for the Combined chip to actually disappear, not merely
     // for a needle the Combined screen itself already satisfies.
-    let screen =
-        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
+        !s.contains("COMBINED SIGNAL") && s.contains("SIGNAL")
+    });
     assert!(
         screen.contains("SIGNAL") && !screen.contains("COMBINED SIGNAL"),
         "expected enter on the selected run to open it full-screen on Signal:\n{screen}"
@@ -398,8 +409,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     );
 
     send_bytes(&mut master, b"\x1b");
-    let screen =
-        wait_for_screen_text_gone(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
+        !s.contains("COMBINED SIGNAL") && s.contains("osi  All")
+    });
     assert!(
         screen.contains("osi  All") && !screen.contains("COMBINED SIGNAL"),
         "expected esc from the Combined Signal to return to the tiles:\n{screen}"
@@ -419,7 +431,9 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     // TAPE" chip), so this waits for that chip to actually change,
     // not merely for a needle the grid itself already satisfies.
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text_gone(&captured_buf, "ALL · TAPE", Duration::from_secs(10));
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
+        !s.contains("ALL · TAPE") && doc_names.iter().any(|doc| s.contains(doc))
+    });
     assert!(
         doc_names.iter().any(|doc| screen.contains(doc)),
         "expected enter on the grid to open one of the three runs:\n{screen}"
@@ -464,7 +478,9 @@ fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -594,7 +610,9 @@ fn two_runs_of_the_same_document_and_config_get_different_names_on_select_and_al
         eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
         return;
     }
-    let _guard = ALL_LOCK.lock().unwrap();
+    let _guard = ALL_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
 
@@ -680,4 +698,149 @@ fn two_runs_of_the_same_document_and_config_get_different_names_on_select_and_al
     drop(child_b);
     assert_no_leftover_process(out_a.path());
     assert_no_leftover_process(out_b.path());
+}
+
+/// Issue #712: osi records one history entry for every run that
+/// truly ends, keyed by the document's own hash -- three finished
+/// runs of the same document, seeded before a fourth, live one even
+/// starts, are already enough for that fourth run's own tile to
+/// show a real ETA on its Run End row, the same figure its own
+/// single-run Tape would, never "no history yet".
+#[test]
+fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let _guard = ALL_LOCK.lock().unwrap();
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - name: alpha\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"5\"]\n      allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    // Three finished runs of the same document, already in history
+    // before the fourth, live one even starts -- run in parallel,
+    // since each is its own independent `cof` with nothing to
+    // contend over.
+    let mut seeds: Vec<(Child, tempfile::TempDir)> = Vec::new();
+    for _ in 0..3 {
+        let out = tempfile::tempdir().unwrap();
+        let child = launch_osi_log(&home, work.path(), &doc, &config, out.path());
+        seeds.push((child, out));
+    }
+    for (child, _out) in &mut seeds {
+        let status = child.wait().expect("a seed run should run to completion");
+        assert!(status.success(), "a seed run should exit 0, got {status:?}");
+    }
+
+    let out_live = tempfile::tempdir().unwrap();
+    let live_child = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &doc,
+        &config,
+        out_live.path(),
+    ));
+    wait_for_step_start(
+        &out_live.path().join("events.jsonl"),
+        "prime.alpha",
+        Duration::from_secs(20),
+    );
+    // Bare `osi` attaches straight to a single live run rather than
+    // showing Select at all -- a second, unrelated live run is the
+    // only way to reach Select's own `All` row here.
+    let other_doc = write_doc(work.path(), "other.yml", SELECT_SLOW_DOC);
+    let out_other = tempfile::tempdir().unwrap();
+    let other_child = AutoKill::new(launch_osi_log(
+        &home,
+        work.path(),
+        &other_doc,
+        &config,
+        out_other.path(),
+    ));
+    wait_for_step_start(
+        &out_other.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    let runs_dir = home.path().join("runs");
+    wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
+
+    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    assert!(
+        screen.contains("do.yml"),
+        "expected the live run listed on Select:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"g");
+    send_bytes(&mut master, b"\r");
+    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(20));
+    assert!(
+        screen.contains("do.yml"),
+        "expected the live run's own tile on the grid:\n{screen}"
+    );
+
+    let screen = wait_for_screen_text(&captured_buf, "Run End", Duration::from_secs(20));
+    // Two tiles share one text row of the grid (screen_grid's own
+    // replay has no notion of columns, only characters): the two
+    // boxes' own touching borders split a content row into each
+    // tile's own half, at the same column position every row in
+    // the grid shares -- including the band line above the boxes,
+    // which has no border of its own to split on there directly.
+    let run_end_line = line_with(&screen, "Run End");
+    let run_end_chars: Vec<char> = run_end_line.chars().collect();
+    let split = run_end_chars
+        .windows(2)
+        .position(|w| w == ['│', '│'])
+        .map(|i| i + 1)
+        .unwrap_or(run_end_chars.len());
+    let band_line = screen
+        .lines()
+        .find(|l| l.contains("do.yml") && l.contains("config.json"))
+        .unwrap_or_else(|| panic!("no tile band line naming do.yml in:\n{screen}"));
+    let band_chars: Vec<char> = band_line.chars().collect();
+    let doc_pos = band_chars
+        .windows(6)
+        .position(|w| w.iter().collect::<String>() == "do.yml")
+        .unwrap_or_else(|| panic!("do.yml not found by character position in:\n{band_line}"));
+    let do_yml_is_left = doc_pos < split;
+    let my_half: String = if do_yml_is_left {
+        run_end_chars[..split].iter().collect()
+    } else {
+        run_end_chars[split..].iter().collect()
+    };
+    assert!(
+        !my_half.contains("no history yet") && !my_half.contains("ETA —"),
+        "expected do.yml's own tile Run End to show a real ETA once history holds three finished \
+         runs of this document, not \"no history yet\" (its own half: {my_half:?}):\n{screen}"
+    );
+    assert!(
+        my_half.contains("Run End") && my_half.contains("ETA "),
+        "expected do.yml's own tile Run End row to carry both its own label and a real ETA \
+         (its own half: {my_half:?}):\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(select_child.into_inner(), Duration::from_secs(20));
+    assert!(
+        status.success(),
+        "q on the grid should quit at once with exit 0, got {status:?}"
+    );
+
+    drop(live_child);
+    drop(other_child);
+    assert_no_leftover_process(out_live.path());
+    assert_no_leftover_process(out_other.path());
+    for (_, out) in &seeds {
+        assert_no_leftover_process(out.path());
+    }
 }

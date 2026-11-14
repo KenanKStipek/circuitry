@@ -213,18 +213,14 @@ fn wait_until_started(home: &TempHome, paths: &[&str]) -> serde_json::Value {
     }
 }
 
-/// Waits for *path* to exist -- used where `--live-state` itself can't
-/// stand in for "this step has actually started". A `use` child's
-/// *first* graft onto the parent happens on its own first write, so
-/// `wait_until_started` works for a child's first step (as in
-/// `sigint_during_a_use_child_without_record_children_exits_130_with_no_leftover_child_effects`
-/// below), but every later graft is throttled to once per 100ms
-/// (`ChildObserver::write`'s own `CHILD_GRAFT_INTERVAL` in
-/// `electricity-vm/src/exec/use_.rs`): a later step that starts and
-/// finishes inside that window never appears in `--live-state` at
-/// all, so polling it for one of those steps could just hang. The
-/// blocking step's own script creates *path* only once it actually
-/// starts running, which works regardless of graft timing.
+/// Waits for *path* to exist -- used where `--live-state` can't stand in
+/// for "this step has actually started". `--live-state` is written at
+/// most once per interval, a `use` child's steps included (the mirror
+/// reads the child's live root at each write), so a step that starts and
+/// finishes between two writes never shows there at all, and polling for
+/// it could hang. The blocking step's own script creates *path* only once
+/// it actually starts running, which works regardless of when the live
+/// state is written.
 fn wait_for_file(path: &Path) {
     let deadline = std::time::Instant::now() + Duration::from_secs(10);
     while !path.exists() {

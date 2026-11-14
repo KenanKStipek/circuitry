@@ -2985,13 +2985,13 @@ async fn streamed_progress_captures_meta_live_at_each_delta_and_clears_it_on_suc
 /// child's own path, read off the same shared *store* the child
 /// grafts its writes into the parent through.
 struct NestedLiveCapturingObserver {
-    /// The child's own latest grafted snapshot (`exec::use_::
-    /// ChildObserver::write`'s own `graft_child_write` call,
-    /// forwarded here unchanged) -- a `use` child's own writes land
-    /// in its own separate `Store`, never the parent's, so `meta.live`
-    /// on a nested prompt is only ever reachable through this overlay,
-    /// the same way a real `--live-state` mirror reads it.
-    grafted: std::cell::RefCell<Option<Value>>,
+    /// The child's own live root (`exec::use_::run_isolated_inner`'s
+    /// own `register_child_graft` call, forwarded here unchanged) --
+    /// a `use` child's own writes land in its own separate `Store`,
+    /// never the parent's, so `meta.live` on a nested prompt is only
+    /// ever reachable by reading this root lazily, the same way a
+    /// real `--live-state` mirror reads it.
+    grafted: std::cell::RefCell<Option<electricity_vm::NodeRef>>,
     live_snapshots: std::cell::RefCell<Vec<Value>>,
 }
 
@@ -3000,12 +3000,8 @@ impl RunObserver for NestedLiveCapturingObserver {
         1
     }
 
-    fn wants_child_snapshots(&self) -> bool {
-        true
-    }
-
-    fn graft_child_write(&self, _node_path: &EffectPath, snapshot: &Value) {
-        *self.grafted.borrow_mut() = Some(snapshot.clone());
+    fn register_child_graft(&self, _node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
+        *self.grafted.borrow_mut() = Some(child_root.clone());
     }
 
     fn progress(
@@ -3016,10 +3012,12 @@ impl RunObserver for NestedLiveCapturingObserver {
         _data: &electricity_vm::observer::ProgressData,
     ) {
         let grafted = self.grafted.borrow();
-        let grafted = grafted
+        let child_root = grafted
             .as_ref()
-            .expect("write() always grafts before progress() fires");
-        let prime = as_dict(get(as_dict(grafted), "prime").unwrap());
+            .expect("register_child_graft always runs before progress() fires");
+        let reader = Store::new();
+        let snapshot = reader.saved(child_root);
+        let prime = as_dict(get(as_dict(&snapshot), "prime").unwrap());
         let greeting = as_dict(get(prime, "greeting").unwrap());
         let meta = as_dict(get(greeting, "meta").unwrap());
         let live = get(meta, "live").cloned().unwrap_or(Value::None);
