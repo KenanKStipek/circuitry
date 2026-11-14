@@ -10,8 +10,11 @@ additionally always allowed the fixed, side-effect-free
 
 from __future__ import annotations
 
-from circuitry.core.decompose import _planner_path, _planner_runtime_config
-from circuitry.core.decompose import _check_generated_tool_ceiling
+from circuitry.core.decompose import (
+    _check_generated_tool_ceiling,
+    _planner_path,
+    _planner_runtime_config,
+)
 from circuitry.generated_doc import (
     GENERATED_DOCUMENT_IS_GENERATED_KEY,
     GENERATED_DOCUMENT_PROVIDERS_KEY,
