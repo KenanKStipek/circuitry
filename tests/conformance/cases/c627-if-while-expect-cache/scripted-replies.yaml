@@ -1,0 +1,18 @@
+prime.gate:
+  - text: "yes"
+    tokens_sent: 23
+    tokens_received: 2
+    tokens_cached_in: 20
+    tokens_cache_write: 1
+prime.lp:
+  - text: "no"
+    tokens_sent: 13
+    tokens_received: 1
+    tokens_cached_in: 10
+    tokens_cache_write: 2
+prime.fetch:
+  - text: "yes"
+    tokens_sent: 9
+    tokens_received: 1
+    tokens_cached_in: 5
+    tokens_cache_write: 3
