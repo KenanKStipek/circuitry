@@ -124,6 +124,16 @@ fn coerce_token_count(value: Option<&Value>) -> Result<Option<i64>, AdapterError
     }
 }
 
+/// `usage_tokens`'s own `cached_tokens` coercion: an actual int or bool
+/// only, never a float or numeric string, unlike [`coerce_token_count`]
+/// above.
+fn int_if_pyint(value: Option<&Value>) -> Option<i64> {
+    match value {
+        Some(v @ (Value::Int(_) | Value::Bool(_))) => electricity_value::pycompat::py_int(v).ok(),
+        _ => None,
+    }
+}
+
 /// Shared by the streamed and non-streamed failure paths -- on the
 /// streaming path, a non-22 failure leaves whatever OpenAI had
 /// already answered in *outcome*'s own stdout -- only a complete HTTP
@@ -200,8 +210,7 @@ pub fn interpret_outcome(
     let tokens_cached_in = usage_dict
         .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
         .and_then(Value::as_dict)
-        .and_then(|d| d.get(&Value::Str("cached_tokens".to_string())))
-        .and_then(|v| electricity_value::pycompat::py_int(v).ok());
+        .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
 
     Ok(GenerateResult {
         text,
@@ -255,8 +264,7 @@ pub fn interpret_streaming_outcome(
         let tokens_cached_in = usage_dict
             .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
             .and_then(Value::as_dict)
-            .and_then(|d| d.get(&Value::Str("cached_tokens".to_string())))
-            .and_then(|v| electricity_value::pycompat::py_int(v).ok());
+            .and_then(|d| int_if_pyint(d.get(&Value::Str("cached_tokens".to_string()))));
         return Ok(GenerateResult {
             text,
             raw,
