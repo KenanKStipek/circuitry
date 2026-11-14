@@ -1133,7 +1133,10 @@ async fn a_reflector_that_failed_then_succeeds_on_resume_clears_its_old_error() 
         "the stale error is cleared, not carried over from the failed attempt"
     );
     assert_ne!(child(&resumed_meta, "completed_at"), Value::None);
-    assert_eq!(child(at_mut(&mut resumed, "prime.plan_it"), "value"), Value::Bool(true));
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.plan_it"), "value"),
+        Value::Bool(true)
+    );
 }
 
 #[tokio::test]

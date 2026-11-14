@@ -827,6 +827,14 @@ fn not_retried(message: String) -> AttemptProblem {
 /// resolve (the child no longer loads or compiles, a newly missing
 /// required input, ...) -- the caller then treats that as a mismatch,
 /// so the real run surfaces the failure normally.
+///
+/// Copies the input-rendering loop and interface pre-check
+/// `attempt_once` (below) runs for a real attempt -- Python's own
+/// `UseRuntime.resolved_inputs_match_recorded` shares `_render_inputs`
+/// with `UseRuntime.execute` instead, which this function has no
+/// equivalent of to share with (`attempt_once`'s own retry/record-
+/// children machinery, this doc comment's own first paragraph). Keep
+/// the two in sync by hand until something unifies them.
 async fn resolved_inputs_now<R: ParamsCtx>(
     use_op: &UseOp,
     name: &str,
@@ -1056,7 +1064,11 @@ async fn attempt_once<R: ParamsCtx>(
 
     // Render `inputs:` -- a top-level `{from:}`/template/literal walk
     // (`core/use.py::_render_inputs`), never `crate::params`'s own
-    // tool-shaped walk (this module's own doc comment).
+    // tool-shaped walk (this module's own doc comment). `resolved_
+    // inputs_now` above duplicates this same walk and the interface
+    // pre-check just below for #584's own resume check, which has no
+    // real attempt of its own to share this one with; keep the two in
+    // sync by hand until something unifies them.
     let mut rendered_inputs: IndexMap<Value, Value> = IndexMap::new();
     let mut unresolved: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();

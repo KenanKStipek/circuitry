@@ -1027,6 +1027,10 @@ class UseRuntime:
         typed values coerced) -- never the raw, pre-check rendering.
         Compared as JSON values (:func:`_saved_form`), the same comparison
         :class:`_SavedChildRun` uses for the unfinished-child case (#567).
+        Shares ``_render_inputs`` with :meth:`execute` itself; electricity's
+        own ``use_.rs::resolved_inputs_now`` has no real attempt of its own
+        to share that rendering with, so it keeps its own copy instead --
+        see that function's own doc comment.
 
         Any failure to resolve the child now (it no longer loads, a newly
         missing required input, ...) answers False: the mismatch then
