@@ -1438,7 +1438,27 @@ pub async fn run_orchestration_with_config(
                         warn_resumed_input_changes(&loaded.document, &old_values, &restored_input);
                     }
                 }
-                _ => state::replace_input_namespace(&store, restored_input),
+                _ => {
+                    // In practice `store.child` above always matches
+                    // `Some(..)`: `Store::with_resumed_state`'s own
+                    // `migrate_legacy_state` already lifted a genuinely
+                    // input-less saved state's bare root keys under
+                    // `input` (inserting an empty dict there even with
+                    // nothing to lift) before this function ever runs.
+                    // Kept as a defensive fallback matching cof's own
+                    // `_warn_resumed_input_changes`, which treats a
+                    // missing `saved_input` as `{}` rather than silently
+                    // warning nothing the way a bare `replace_input_
+                    // namespace` would.
+                    if req.resume {
+                        warn_resumed_input_changes(
+                            &loaded.document,
+                            &indexmap::IndexMap::new(),
+                            &restored_input,
+                        );
+                    }
+                    state::replace_input_namespace(&store, restored_input);
+                }
             }
         }
     } else {
