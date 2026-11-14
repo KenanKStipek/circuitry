@@ -1781,8 +1781,12 @@ fn select_field<'b, 'v>(
     // borrows the field name from the AST
     let key: CelString = field.into();
     let no_such_key = || ExecutionError::NoSuchKey(Arc::new(field.to_owned()));
-    let overload_error =
-        |value: &dyn Val| ExecutionError::overload_for_values("_._", [value, &key], false);
+    let overload_error = |value: &dyn Val| {
+        ExecutionError::unsupported_field_select(
+            Value::String(Arc::new(field.to_owned())),
+            value.get_type().name(),
+        )
+    };
 
     // Plain `.field` on an `Optional` propagates optional-ness
     // per cel-spec — matches cel-go `applyQualifiers` at
@@ -1871,13 +1875,24 @@ fn index_into<'b, 'v>(
     missing: impl FnOnce(&dyn Val) -> ExecutionError,
 ) -> Result<CowVal<'b, 'v>, ExecutionError> {
     let overload = |value_type: &Type| {
-        ExecutionError::no_such_overload(
-            function,
-            vec![
-                value_type.name().to_owned(),
-                idx.get_type().name().to_owned(),
-            ],
-        )
+        if function == "_._" {
+            // A `.field` select reached through the generic index path
+            // (the target does implement indexing, just not with a
+            // string key) -- the field's own name, from `idx` itself,
+            // never `value_type`'s own contents.
+            ExecutionError::unsupported_field_select(
+                idx.try_into().unwrap_or(crate::Value::Null),
+                value_type.name(),
+            )
+        } else {
+            ExecutionError::no_such_overload(
+                function,
+                vec![
+                    value_type.name().to_owned(),
+                    idx.get_type().name().to_owned(),
+                ],
+            )
+        }
     };
     match value {
         CowVal::Borrowed(v) => v
@@ -2422,22 +2437,25 @@ mod tests {
         assert!(eval("[1, 0].map(x, 1 / x)").is_err());
     }
 
-    /// Selecting a field from something that has none reports the `_._` overload
-    /// and the runtime types involved, whether the operand is borrowed (a variable)
-    /// or owned (a literal, consumed by the lookup); a missing key on a real map
-    /// is still a `NoSuchKey`.
+    /// Selecting a field from something that has none reports the field's
+    /// own name and the target's runtime type, whether the operand is
+    /// borrowed (a variable) or owned (a literal, consumed by the
+    /// lookup); a missing key on a real map is still a `NoSuchKey`.
     #[test]
-    fn test_select_errors_report_the_overload_and_types() {
+    fn test_select_errors_report_the_field_and_type() {
         let mut context = Context::default();
         context.add_variable_from_value("borrowed", vec![1, 2]);
         let eval = |expr: &str| Program::compile(expr).unwrap().execute(&context);
-        let overload = |types: [&str; 2]| {
-            ExecutionError::no_such_overload("_._", types.iter().map(|t| t.to_string()).collect())
+        let select = |target_type: &str| {
+            ExecutionError::unsupported_field_select(
+                Value::String(Arc::new("field".to_owned())),
+                target_type,
+            )
         };
 
-        assert_eq!(eval("borrowed.field"), Err(overload(["list", "string"])));
-        assert_eq!(eval("[1, 2].field"), Err(overload(["list", "string"])));
-        assert_eq!(eval("(1).field"), Err(overload(["int", "string"])));
+        assert_eq!(eval("borrowed.field"), Err(select("list")));
+        assert_eq!(eval("[1, 2].field"), Err(select("list")));
+        assert_eq!(eval("(1).field"), Err(select("int")));
         assert_eq!(eval("{'a': 1}.b"), Err(ExecutionError::no_such_key("b")));
         assert_eq!(eval("{'a': 1}.a"), Ok(Value::Int(1)));
     }

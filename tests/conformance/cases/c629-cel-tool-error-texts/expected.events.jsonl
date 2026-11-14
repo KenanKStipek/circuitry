@@ -1,0 +1,10 @@
+{"v":1,"seq":0,"ts":"2026-11-13T22:47:13.047Z","ev":"run_start","run_id":"4cfde371-fad6-431d-9373-f625ef313c88","orchestration":"orchestration.yml","config":null,"engine":"cof 0.1.0","pid":48015}
+{"v":1,"seq":1,"ts":"2026-11-13T22:47:13.051Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-13T22:47:13.051Z","ev":"start","id":1,"path":"prime.list_index_out_of_range"}
+{"v":1,"seq":3,"ts":"2026-11-13T22:47:13.051Z","ev":"end","id":1,"path":"prime.list_index_out_of_range","ok":false,"ms":0,"error":"CEL evaluation failed for '[1, 2, 3][5]': list index out of range: 5"}
+{"v":1,"seq":4,"ts":"2026-11-13T22:47:13.051Z","ev":"start","id":2,"path":"prime.division_by_zero"}
+{"v":1,"seq":5,"ts":"2026-11-13T22:47:13.051Z","ev":"end","id":2,"path":"prime.division_by_zero","ok":false,"ms":0,"error":"CEL evaluation failed for '1 / 0': division by zero"}
+{"v":1,"seq":6,"ts":"2026-11-13T22:47:13.051Z","ev":"start","id":3,"path":"prime.marker"}
+{"v":1,"seq":7,"ts":"2026-11-13T22:47:13.051Z","ev":"end","id":3,"path":"prime.marker","ok":true,"ms":0}
+{"v":1,"seq":8,"ts":"2026-11-13T22:47:13.051Z","ev":"end","id":0,"path":"prime","ok":true,"ms":1}
+{"v":1,"seq":9,"ts":"2026-11-13T22:47:13.051Z","ev":"run_end","ok":true}

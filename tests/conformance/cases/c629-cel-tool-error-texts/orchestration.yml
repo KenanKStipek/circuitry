@@ -1,0 +1,16 @@
+name: c629-cel-tool-error-texts
+effects:
+  - type: tool
+    name: list_index_out_of_range
+    provider: cel
+    params: {expr: "[1, 2, 3][5]"}
+    on_error: continue
+  - type: tool
+    name: division_by_zero
+    provider: cel
+    params: {expr: "1 / 0"}
+    on_error: continue
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}

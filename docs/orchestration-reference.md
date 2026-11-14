@@ -2291,6 +2291,54 @@ only fails here) is one line, never a dump of CEL's own internal state:
 CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'
 ```
 
+A missing map key, an out-of-range or wrong-type index, indexing a
+non-container, division by zero and modulus by zero are the same one line in
+both engines too — the key or index and the container's type, never the
+container's own contents:
+
+```
+CEL evaluation failed for "state.input.m['zz'] == 1": no such key: 'zz'
+CEL evaluation failed for 'state.input.l[5] == 1': list index out of range: 5
+CEL evaluation failed for 'state.input.n[0] == 1': cannot index an int with an int
+CEL evaluation failed for '1 / 0 == 1': division by zero
+CEL evaluation failed for '1 % 0 == 1': modulus by zero
+```
+
+The same holds for every other case where the underlying library would
+otherwise leak a Python/Rust implementation detail — an `int`/`uint`
+overflow, a map literal's duplicate or invalid key, selecting a field on
+something that has none, and `in` against a type it can't search:
+
+```
+CEL evaluation failed for '9223372036854775807 + 1 == 1': return error for overflow
+CEL evaluation failed for "{'a': 1, 'a': 2}.a == 1": duplicate key: 'a'
+CEL evaluation failed for '{[1]: 2} == {}': cannot use a list as a key
+CEL evaluation failed for '[1, 2].zz == 1': cannot select field 'zz' on a list
+CEL evaluation failed for '5 in 5': cannot apply 'in' to an int and an int
+```
+
+A map key of the wrong exact numeric type (an `int`-keyed map probed with a
+`uint` or a `bool` of the same value) is also one line naming the mismatch,
+not a silent miss — the two numeric types compare equal elsewhere in CEL,
+but a map's own key lookup does not cross between them:
+
+```
+CEL evaluation failed for 'state.input.m[1u] == 1': cannot index a map with a uint
+```
+
+An expression nested too deeply to parse — deep parenthesisation, a long
+accessor chain — is a compile-time rejection in both engines, named the same
+way as any other check error, never the parser's own dump or the whole
+expression quoted back:
+
+```
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply
+```
+
+The depth at which each engine gives up differs (Python's own recursion
+limit for cof, the `cel` crate's parser for electricity), but the text naming
+it does not.
+
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset read that decides the
 expression's result makes it `False` and logs a warning naming the path.

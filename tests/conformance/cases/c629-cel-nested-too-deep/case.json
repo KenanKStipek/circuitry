@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #629",
+  "description": "An `if` condition's `expr` wraps `state.input.missing` in 150 pairs of parentheses -- too deeply nested to parse. Both engines reject the document at validation, before any effect runs, naming the location the way every other CEL check error does, then one line: 'expression is nested too deeply' -- never the parser's own recursion-limit dump, and never the whole expression quoted back.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}
