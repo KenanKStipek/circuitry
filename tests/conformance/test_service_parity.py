@@ -941,3 +941,143 @@ def test_sigint_during_a_waiting_start_and_a_locked_stop_does_not_hang(
             if cx_pgid is not None:
                 _stop_and_wait_free(cx_pgid)
             _stop_and_wait_free(stub_pgid)
+
+
+def _write_generated_service_orchestration(doc_path: Path, plan_effects: list[dict]) -> None:
+    """A generated document (#772): the document the author wrote has no
+    'service' effect of its own anywhere in its own text -- only a
+    'shell' effect granting 'sleep' into the document's own shell
+    allowlist, and a 'use' effect whose own literal allow_tools: [service]
+    is what lets its *generated* child (rendered from 'input.plan', so it
+    counts as generated even though nothing here ever calls an adapter)
+    use the 'service' provider at all."""
+    plan = json.dumps({"effects": plan_effects})
+    doc = {
+        "interface": {"inputs": {"plan": {"type": "string", "default": plan}}},
+        "effects": [
+            {
+                "type": "tool",
+                "name": "seed",
+                "provider": "shell",
+                "params": {"command": "sleep", "args": ["0"], "allowed_commands": ["sleep"]},
+            },
+            {
+                "type": "use",
+                "name": "outer",
+                "allow_tools": ["service"],
+                "inline": "{{{input.plan}}}",
+            },
+        ],
+    }
+    doc_path.write_text(json.dumps(doc), encoding="utf-8")
+
+
+def test_a_generated_service_start_that_is_allowed_runs_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """#772: a generated document's own service start is checked against
+    the ceiling the document that generated it is allowed -- 'sleep' is
+    granted via a literal shell effect's own allowed_commands, and
+    'service' via the use effect's own literal allow_tools, so this is
+    allowed and the start (and the stop right after it) actually run,
+    identically on both engines."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    plan_effects = [
+        {
+            "type": "tool",
+            "name": "svc",
+            "provider": "service",
+            "params": {"action": "start", "name": "web", "command": ["sleep", "2"]},
+        },
+        {
+            "type": "tool",
+            "name": "stop_it",
+            "provider": "service",
+            "params": {"action": "stop", "name": "web"},
+        },
+    ]
+
+    nodes: dict[str, dict] = {}
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-generated-allowed"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_generated_service_orchestration(doc_path, plan_effects)
+
+        result = runner(doc_path, config_path)
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        outer = payload["prime"]["outer"]
+        start_value = outer["svc"]["value"]
+        pgid = start_value["pgid"]
+        try:
+            # The run already called stop_it itself, in the same
+            # process, before this subprocess returned -- the process is
+            # correctly gone by now; this only proves the start itself
+            # (recorded before that stop) actually ran, not a race.
+            assert start_value["running"] is True
+            assert start_value["ready"] is True
+            assert outer["stop_it"]["value"]["stopped"] is True
+        finally:
+            # So an assertion failure mid-loop never leaves the process
+            # running for the rest of the suite (#661).
+            _stop_and_wait_free(pgid)
+        nodes[engine] = outer
+
+    assert _scrub(nodes["cof"]) == _scrub(nodes["electricity"])
+
+
+def test_a_generated_service_start_that_is_refused_matches_on_both_engines(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """#772: the same generated document, but the start names an
+    executable ('id') that is neither the host default allowlist nor any
+    literal shell effect's own allowed_commands -- refused before
+    anything dispatches, with the identical text on both engines, and no
+    process is ever started."""
+    home_dir = tmp_path / "home"
+    home_dir.mkdir()
+    plan_effects = [
+        {
+            "type": "tool",
+            "name": "svc",
+            "provider": "service",
+            "params": {"action": "start", "name": "web", "command": ["id"]},
+        },
+    ]
+
+    errors: dict[str, str] = {}
+    for engine, runner in (
+        ("cof", lambda doc, cfg: _run_cof(doc, cfg, home_dir)),
+        (
+            "electricity",
+            lambda doc, cfg: _run_electricity(electricity_binary, doc, cfg, home_dir),
+        ),
+    ):
+        case_dir = tmp_path / f"{engine}-generated-refused"
+        case_dir.mkdir()
+        state_dir = case_dir / "state"
+        doc_path = case_dir / "orchestration.json"
+        config_path = case_dir / "config.json"
+        _write_config(config_path, state_dir)
+        _write_generated_service_orchestration(doc_path, plan_effects)
+
+        result = runner(doc_path, config_path)
+        assert result.returncode != 0, result.stdout
+        payload = json.loads(result.stdout)
+        assert payload["ok"] is False
+        errors[engine] = payload["error"]
+        assert "'id'" in errors[engine], errors[engine]
+        assert not (state_dir / "web.json").exists(), f"{engine}: a record was written for a refused start"
+
+    assert errors["cof"] == errors["electricity"]
