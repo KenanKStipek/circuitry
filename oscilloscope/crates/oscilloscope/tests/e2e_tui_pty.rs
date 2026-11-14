@@ -24,8 +24,8 @@ use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
     drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
     screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
-    wait_for_screen_text, wait_for_screen_text_gone, wait_for_step_start, wait_with_timeout,
-    write_doc,
+    wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start,
+    wait_with_timeout, write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -471,10 +471,17 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     let home = TestHome::new();
     let work = tempfile::tempdir().unwrap();
     let out_dir = tempfile::tempdir().unwrap();
+    // The step runs until this test creates `release` (at most 60 s), so
+    // the run is certainly still live when bare `osi` lists it below; a
+    // fixed `sleep` could end first on a loaded machine.
+    let release = work.path().join("release");
     let doc = write_doc(
         work.path(),
         "do.yml",
-        "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sleep\n      args: [\"2\"]\n      allowed_commands: [\"sleep\"]\n",
+        &format!(
+            "effects:\n  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: sh\n      args: [\"-c\", \"i=0; while [ ! -f '{}' ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done\"]\n      allowed_commands: [\"sh\"]\n",
+            release.display()
+        ),
     );
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
@@ -561,6 +568,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
         1,
         "discovery must not have disturbed the still-live entry"
     );
+    std::fs::write(&release, b"").expect("release the step");
 
     // `q` opens a confirm-cancel dialog instead of quitting outright
     // as long as osi's own `child.try_wait()` hasn't yet observed the
@@ -1272,6 +1280,99 @@ fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
         "osi should exit 130 (cancelled), got {status:?}"
     );
 
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #693 item 4: two unnamed `if`s sharing the same host, one
+/// resolving `then` and the other `else` -- selecting each decision
+/// in turn (← after the run ends, issue #704 rule 3) must show that
+/// decision's own condition and branch, never the other's. Both
+/// decisions are already settled by the time the run has ended and
+/// this test selects either one (`find_station` looks a station up
+/// by its own path once the run is over), so this alone does not
+/// prove the suffixes never swap mid-run before that -- see
+/// `rail::tests::a_selection_of_prime_if_keeps_as_own_decision_once_
+/// the_other_resolves` (`oscilloscope-core`) for that.
+#[test]
+fn selecting_either_of_two_unnamed_ifs_on_one_host_shows_its_own_decision() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        "effects:\n  - type: if\n    if:\n      mode: cel\n      expr: \"true\"\n    then:\n      - name: a_then\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n    else:\n      - name: a_else\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n  - type: if\n    if:\n      mode: cel\n      expr: \"false\"\n    then:\n      - name: b_then\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n    else:\n      - name: b_else\n        type: tool\n        provider: shell\n        params:\n          command: sleep\n          args: [\"0.1\"]\n          allowed_commands: [\"sleep\"]\n",
+    );
+    let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
+
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+
+    let doc_arg = doc.as_os_str();
+    let config_arg = config.as_os_str();
+    let out_dir_arg = out_dir.path().as_os_str();
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
+    );
+
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    assert!(
+        screen.contains("Ended"),
+        "expected the run to have ended; screen:\n{screen}"
+    );
+
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"2");
+    let screen = wait_for_screen_text(&captured_buf, "Flow \u{b7}", Duration::from_secs(10));
+    assert!(
+        screen.contains("Flow \u{b7}"),
+        "expected the Flow screen after pressing 2; screen:\n{screen}"
+    );
+
+    // The run just ended with no `selected_path` of its own set yet
+    // (the display alone falls back to "b_else", the last step the
+    // plan ran) -- the first ← only makes that fallback concrete
+    // (`flow_select_station`'s own `None` case lands back on the
+    // same last station), so it takes two to actually step off it
+    // onto b's own decision.
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[D\x1b[D");
+    let screen = wait_for_screen_text(&captured_buf, "cel  false", Duration::from_secs(10));
+    assert!(
+        screen.contains("cel  false"),
+        "expected b's own condition once its decision is selected; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{2192} else") && screen.contains("(inferred)"),
+        "expected b's own else branch, inferred, never a's; screen:\n{screen}"
+    );
+
+    // Two more ← steps: over a's own taken step ("a_then"), then
+    // onto a's own decision.
+    std::thread::sleep(SIGNAL_DELAY);
+    send_bytes(&mut master, b"\x1b[D\x1b[D");
+    let screen = wait_for_screen_text(&captured_buf, "cel  true", Duration::from_secs(10));
+    assert!(
+        screen.contains("cel  true"),
+        "expected a's own condition once its decision is selected; screen:\n{screen}"
+    );
+    assert!(
+        screen.contains("\u{2192} then") && screen.contains("(inferred)"),
+        "expected a's own then branch, inferred, never b's; screen:\n{screen}"
+    );
+
+    send_bytes(&mut master, b"q");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert!(status.success(), "osi should exit 0, got {status:?}");
+    std::thread::sleep(Duration::from_millis(200));
     assert_no_leftover_process(work.path());
 }
 
@@ -2941,6 +3042,98 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
     assert_no_leftover_process(work.path());
 }
 
+/// Issue #684: with follow off and the Now band's own row scrolled
+/// out of the list's window, the status line says so and names `f`
+/// -- otherwise nothing on screen below 100 columns tells the user
+/// how to get Now back in view.
+#[test]
+fn follow_off_with_now_out_of_view_shows_a_status_line_notice() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    // Prompts, not tool steps: two or more finished tool steps under
+    // a second merge into one `N quick steps` row the Tape never
+    // lists at all (`fold::is_quick_step`) -- this test needs 30
+    // separate rows above the Now band to push it out of the list's
+    // own window, each with a row of its own.
+    let mut steps = String::new();
+    let mut replies = String::new();
+    for i in 0..30 {
+        steps.push_str(&format!(
+            "  - name: step{i}\n    type: prompt\n    template: \"go {i}\"\n"
+        ));
+        replies.push_str(&format!(
+            "prime.step{i}:\n  - text: \"ok {i}\"\n    tokens_sent: 1\n    tokens_received: 1\n"
+        ));
+    }
+    let doc = write_doc(
+        work.path(),
+        "do.yml",
+        &format!(
+            "adapter: scripted\nmodel: scripted-model\neffects:\n{steps}  - name: slow\n    type: tool\n    provider: shell\n    params:\n      command: tail\n      args: [\"-f\", \"/dev/null\"]\n      allowed_commands: [\"tail\"]\n"
+        ),
+    );
+    let replies_doc = write_doc(work.path(), "replies.yaml", &replies);
+    let config = write_doc(work.path(), "config.json", &scripted_config(&replies_doc));
+    let (master, slave_path) = open_pty();
+    let mut master = master;
+    let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
+    let child = spawn_osi_on_pty(
+        &home,
+        &slave_path,
+        &[
+            doc.as_os_str(),
+            config.as_os_str(),
+            OsStr::new("--out-dir"),
+            out_dir.path().as_os_str(),
+        ],
+    );
+    wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
+    resize_pty(&slave_path, 80, 24);
+    wait_for_step_start(
+        &out_dir.path().join("events.jsonl"),
+        "prime.slow",
+        Duration::from_secs(20),
+    );
+    std::thread::sleep(SIGNAL_DELAY);
+
+    {
+        let screen = wait_for_screen_text(&captured_buf, "Now ", Duration::from_secs(10));
+        assert!(
+            screen.contains("Now "),
+            "expected the Now band visible by default while following; got:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"g");
+    {
+        let screen = wait_for_screen_text(&captured_buf, "follow is off", Duration::from_secs(10));
+        assert!(
+            !screen.contains("\u{2501}\u{2501} Now"),
+            "expected the Now band's own rule scrolled out of view after g; got:\n{screen}"
+        );
+        assert!(
+            screen.contains("follow is off") && screen.contains(" f "),
+            "expected the status line to say follow is off and name f; got:\n{screen}"
+        );
+    }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
 /// Issue #738: the Help overlay opens over the Tape on its Keys page
 /// (the key bar's own keys, including the movement aliases and
 /// `/`/`e` the key bar itself does not show), and `←→` reaches its
@@ -2967,7 +3160,17 @@ fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
 
     // `?` opens on the Keys page, the same order the merged page reads in.
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Tape · Keys", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &[
+            "Help · Tape · Keys",
+            "tokens:",
+            "usual",
+            "filter rows",
+            "errors only",
+        ],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("tokens:") && screen.contains("usual"),
         "expected the Tape's own t key listed; got:\n{screen}"
@@ -2978,7 +3181,11 @@ fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
     );
 
     send_bytes(&mut master, "\x1b[C".as_bytes());
-    let screen = wait_for_screen_text(&captured_buf, "done · failed", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Help · Tape · Key", "done · failed", "running · ahead"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
         "expected the Key page's own title; got:\n{screen}"
@@ -3025,7 +3232,17 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
     std::thread::sleep(Duration::from_millis(300));
 
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Tape", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &[
+            "Help · Tape",
+            "select a row",
+            "tokens:",
+            "done · failed",
+            "running · ahead",
+        ],
+        Duration::from_secs(10),
+    );
     assert!(
         !screen.contains("Help · Tape · Key") && !screen.contains("Help · Tape · Keys"),
         "expected the merged page's own title, with no page suffix; got:\n{screen}"
@@ -3056,18 +3273,32 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
     );
 
     send_bytes(&mut master, b"T");
-    let screen = wait_for_screen_text(&captured_buf, "theme: ", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["theme: ", "done · failed"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("Key"),
         "expected the Help overlay to stay open after T; got:\n{screen}"
     );
-    let after_bytes = captured_buf.lock().unwrap().clone();
-    let after_grid = screen_grid(&after_bytes, 200, 60);
-    let (glyph_row, glyph_col) =
-        find_glyph(&after_grid, "done · failed", '✓').unwrap_or_else(|| {
-            panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
-        });
-    let after_fg = screen_grid_fg(&after_bytes, 200, 60)[glyph_row][glyph_col].clone();
+    // The new theme repaints the whole screen in several writes, so the
+    // ✓ cell may still carry the old colour when the theme banner shows;
+    // read it again until it changes or the deadline passes.
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let (after_grid, after_fg) = loop {
+        let after_bytes = captured_buf.lock().unwrap().clone();
+        let after_grid = screen_grid(&after_bytes, 200, 60);
+        let fg = find_glyph(&after_grid, "done · failed", '✓')
+            .map(|(row, col)| screen_grid_fg(&after_bytes, 200, 60)[row][col].clone());
+        if fg.as_ref().is_some_and(|fg| *fg != before_fg) || std::time::Instant::now() >= deadline {
+            break (after_grid, fg);
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    let after_fg = after_fg.unwrap_or_else(|| {
+        panic!("expected a ✓ cell on the \"done · failed\" row after T:\n{after_grid:?}")
+    });
     assert_ne!(
         before_fg, after_fg,
         "expected the ✓ Key symbol's own cell colour to change after T, not just the text around it"
@@ -3105,7 +3336,11 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"1");
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Signal", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Help · Signal", "scrub the cursor", "finished prompt"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("scrub the cursor") && screen.contains("finished prompt"),
         "expected the Signal's own keys and Key; got:\n{screen}"
@@ -3115,7 +3350,11 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"2");
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Flow", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Help · Flow", "select a station", "a station: done"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("select a station") && screen.contains("a station: done"),
         "expected the Flow's own keys and Key; got:\n{screen}"
@@ -3125,7 +3364,15 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"3");
     send_bytes(&mut master, b"?");
-    let screen = wait_for_screen_text(&captured_buf, "Help · Store", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &[
+            "Help · Store",
+            "select a row",
+            "area is its share of tokens",
+        ],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("select a row") && screen.contains("area is its share of tokens"),
         "expected the Store's own keys and Key; got:\n{screen}"
@@ -3428,6 +3675,58 @@ fn the_tapes_detail_pane_still_shows_at_100x30() {
             "expected the detail pane's own title at 100x30; got:\n{rendered:?}"
         );
     }
+
+    send_bytes(&mut master, b"q");
+    std::thread::sleep(Duration::from_millis(200));
+    send_bytes(&mut master, b"y");
+    let status = wait_with_timeout(child, Duration::from_secs(30));
+    assert_eq!(
+        status.code(),
+        Some(130),
+        "osi should exit 130 (cancelled, the \"slow\" tool was still running); got {status:?}"
+    );
+    assert_no_leftover_process(work.path());
+}
+
+/// Issue #684: at 100-119 columns the list pane's own share of the
+/// terminal falls short of the Tape's own full title -- the
+/// previews clause is dropped whole, with a trailing ellipsis,
+/// rather than the border clipping the text mid-word.
+#[test]
+fn the_tapes_list_title_shortens_instead_of_clipping_at_100x30() {
+    if !e2e_enabled() {
+        eprintln!("skipping: OSI_E2E_COF not set or cof not on PATH");
+        return;
+    }
+    let home = TestHome::new();
+    let work = tempfile::tempdir().unwrap();
+    let out_dir = tempfile::tempdir().unwrap();
+    let (mut master, slave_path, child, captured_buf) =
+        spawn_scripted_run_on_tape(&home, work.path(), out_dir.path());
+
+    let before_100 = captured_buf.lock().unwrap().len();
+    resize_pty(&slave_path, 100, 30);
+    wait_for_pattern_since(
+        &captured_buf,
+        before_100,
+        b"Selected",
+        Duration::from_secs(10),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    let whole = captured_buf.lock().unwrap().clone();
+    let screen = support::screen_grid(&whole, 200, 60).join("\n");
+    let title_row = screen
+        .lines()
+        .find(|l| l.contains("Tape ·"))
+        .unwrap_or_default();
+    assert!(
+        title_row.contains('⋯'),
+        "expected the title's own dropped clause to end in an ellipsis at 100x30; got:\n{title_row}"
+    );
+    assert!(
+        !title_row.contains("Previews"),
+        "expected the previews clause dropped whole, not clipped mid-word, at 100x30; got:\n{title_row}"
+    );
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));

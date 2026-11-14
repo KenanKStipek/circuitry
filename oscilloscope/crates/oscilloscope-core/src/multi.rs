@@ -604,6 +604,15 @@ pub struct TileRender {
 /// has no interactive cursor; `enter` opens the real, selectable
 /// screen instead) and no previews (there is no room for a second
 /// line per row at a tile's own width either way).
+///
+/// `history` (issue #712) is this document's own already-resolved
+/// whole-run ETA and statistics -- read however the caller's own
+/// single-run screens already do (a `HistoryHandle`, refreshed the
+/// same way, per slot), never anything this function reads off disk
+/// itself. `None` reads exactly as a tile does today: no `usually
+/// …` on an ahead row, no deviation next to a finished step, no
+/// Usual in the Totals row, and Run End's own ETA stays `· no
+/// history yet`.
 #[allow(clippy::too_many_arguments)]
 pub fn build_tile(
     document_label: &str,
@@ -614,8 +623,9 @@ pub fn build_tile(
     screen_kind: Screen,
     zone: &dyn ClockZone,
     now: &str,
+    history: Option<(&crate::history::EtaOutput, &crate::history::DocumentStats)>,
 ) -> TileRender {
-    let rendered = crate::render::build_folded(
+    let mut rendered = crate::render::build_folded(
         document_label,
         engine_label,
         plan,
@@ -628,6 +638,9 @@ pub fn build_tile(
         true,
         &Default::default(),
     );
+    if let Some((eta, stats)) = history {
+        crate::history::apply_eta_to_header(&mut rendered.header, eta, stats, state, now);
+    }
     let empty = Value::Null;
     let flat = flatten_state(state.unwrap_or(&empty));
     // Only a Signal tile ever feeds the shared scale (the other
@@ -664,6 +677,8 @@ pub fn build_tile(
                 None,
                 None,
                 now,
+                true,
+                &Default::default(),
             );
             signal.tile_finished_labels = signal_tile_finished_labels(
                 &rendered.rows,
@@ -1335,5 +1350,188 @@ mod tests {
         assert_eq!(run_role_index(5), 5);
         assert_eq!(run_role_index(6), 0);
         assert_eq!(run_role_index(7), 1);
+    }
+
+    fn compile_doc(yaml: &str) -> PlanTree {
+        let dir = tempfile::tempdir().unwrap();
+        let doc = dir.path().join("do.yml");
+        std::fs::write(&doc, yaml).unwrap();
+        let program = crate::plan::compile(&doc, None, &indexmap::IndexMap::new())
+            .unwrap_or_else(|e| panic!("doesn't compile: {e}"));
+        PlanTree::from_program(&program)
+    }
+
+    fn ok_record(
+        run_id: &str,
+        started_at: &str,
+        wall_s: f64,
+        hash: &str,
+    ) -> crate::history::HistoryRecord {
+        let mut steps = BTreeMap::new();
+        steps.insert(
+            "alpha".to_string(),
+            crate::history::StepRecord {
+                start_s: 0.0,
+                end_s: wall_s,
+                busy_s: wall_s,
+                passes: 1,
+                tokens_sent: Some(100),
+                tokens_received: Some(50),
+                cost_usd: None,
+                ok: true,
+            },
+        );
+        crate::history::HistoryRecord {
+            v: crate::history::FORMAT_VERSION,
+            run_id: run_id.to_string(),
+            document: "alpha.yml".to_string(),
+            config: None,
+            run_dir: None,
+            document_hash: Some(hash.to_string()),
+            engine: Some("cof".to_string()),
+            label: None,
+            started_at: started_at.to_string(),
+            ended_at: started_at.to_string(),
+            outcome: crate::history::Outcome::Ok,
+            wall_s,
+            effects_run: 1,
+            tokens_sent: 100,
+            tokens_received: 50,
+            cost_usd: None,
+            steps,
+        }
+    }
+
+    /// Issue #712: with three finished runs of the document in
+    /// history, a tile reads them exactly like the single-run Tape
+    /// does -- its own Run End row carries a real ETA and usual
+    /// total, never the `None`/`no history yet` a tile without a
+    /// `history` parameter at all (or too few runs) shows.
+    #[test]
+    fn build_tile_with_three_finished_runs_shows_the_usual_figures_and_eta() {
+        let plan = compile_doc(
+            "effects:\n  - name: alpha\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"x\\\"\"}\n",
+        );
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "a-run".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: None,
+        });
+        let records = vec![
+            ok_record("r1", "2026-01-01T00:00:00Z", 100.0, "h1"),
+            ok_record("r2", "2026-01-01T00:01:00Z", 100.0, "h1"),
+            ok_record("r3", "2026-01-01T00:02:00Z", 100.0, "h1"),
+        ];
+        let stats = crate::history::compute_stats(&records, Some("h1"));
+        let eta_input = crate::history::EtaInput {
+            now_offset_s: 0.0,
+            finished_steps: Vec::new(),
+            running_step: None,
+        };
+        let eta = crate::history::compute_eta(&stats, &eta_input);
+        let render = build_tile(
+            "alpha.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            Screen::Tape,
+            &chrono::FixedOffset::east_opt(0).unwrap(),
+            "2026-01-01T00:00:00Z",
+            Some((&eta, &stats)),
+        );
+        let TileScreen::Tape(tape) = &render.screen else {
+            panic!("expected a Tape tile");
+        };
+        let run_end = tape
+            .items
+            .iter()
+            .find_map(|it| match it {
+                TapeItem::RunEnd {
+                    eta_ts,
+                    usual_total_tokens,
+                    usual_wall_s,
+                } => Some((eta_ts, usual_total_tokens, usual_wall_s)),
+                _ => None,
+            })
+            .expect("a Tape tile always carries a Run End row while the run hasn't ended");
+        assert!(run_end.0.is_some(), "expected a real ETA: {run_end:?}");
+        assert!(
+            run_end.1.is_some(),
+            "expected a usual total tokens figure: {run_end:?}"
+        );
+        assert!(
+            run_end.2.is_some(),
+            "expected a usual total duration: {run_end:?}"
+        );
+    }
+
+    /// The same shape, but with only two finished runs -- below the
+    /// 3-run threshold, so the tile reads exactly as it does today:
+    /// no ETA, no usual total.
+    #[test]
+    fn build_tile_with_fewer_than_three_finished_runs_shows_no_usual_figures() {
+        let plan = compile_doc(
+            "effects:\n  - name: alpha\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"x\\\"\"}\n",
+        );
+        let mut model = RunModel::new();
+        model.observe_event(&crate::observe::Event::RunStart {
+            ts: "2026-01-01T00:00:00Z".to_string(),
+            run_id: "a-run".to_string(),
+            pid: None,
+            engine: None,
+            config: None,
+            label: None,
+        });
+        let records = vec![
+            ok_record("r1", "2026-01-01T00:00:00Z", 100.0, "h1"),
+            ok_record("r2", "2026-01-01T00:01:00Z", 100.0, "h1"),
+        ];
+        let stats = crate::history::compute_stats(&records, Some("h1"));
+        let eta_input = crate::history::EtaInput {
+            now_offset_s: 0.0,
+            finished_steps: Vec::new(),
+            running_step: None,
+        };
+        let eta = crate::history::compute_eta(&stats, &eta_input);
+        let render = build_tile(
+            "alpha.yml",
+            "cof",
+            &plan,
+            &mut model,
+            None,
+            Screen::Tape,
+            &chrono::FixedOffset::east_opt(0).unwrap(),
+            "2026-01-01T00:00:00Z",
+            Some((&eta, &stats)),
+        );
+        let TileScreen::Tape(tape) = &render.screen else {
+            panic!("expected a Tape tile");
+        };
+        let run_end = tape
+            .items
+            .iter()
+            .find_map(|it| match it {
+                TapeItem::RunEnd {
+                    eta_ts,
+                    usual_total_tokens,
+                    usual_wall_s,
+                } => Some((eta_ts, usual_total_tokens, usual_wall_s)),
+                _ => None,
+            })
+            .expect("a Tape tile always carries a Run End row while the run hasn't ended");
+        assert!(run_end.0.is_none(), "expected no ETA yet: {run_end:?}");
+        assert!(
+            run_end.1.is_none(),
+            "expected no usual total tokens yet: {run_end:?}"
+        );
+        assert!(
+            run_end.2.is_none(),
+            "expected no usual total duration yet: {run_end:?}"
+        );
     }
 }

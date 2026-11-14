@@ -397,8 +397,17 @@ def test_tool_created_at_is_the_first_attempts_start_not_the_last(
     which does track the attempt that decided the outcome."""
     from circuitry.core import tool as tool_mod
 
-    timestamps = iter(["T0", "T1", "T2"])
-    monkeypatch.setattr(tool_mod, "_now_iso", lambda: next(timestamps))
+    # Captures every call (each attempt's own meta.attempts entry calls
+    # `_now_iso` too, #668) rather than pinning an exact count: created_at
+    # is always the first call this pass makes, completed_at always the
+    # last, whatever else happens between them.
+    calls: list[str] = []
+
+    def _next_ts() -> str:
+        calls.append(f"T{len(calls)}")
+        return calls[-1]
+
+    monkeypatch.setattr(tool_mod, "_now_iso", _next_ts)
 
     ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
     plugin = MagicMock()
@@ -415,8 +424,8 @@ def test_tool_created_at_is_the_first_attempts_start_not_the_last(
     ToolRuntime(defn).execute(store=store, ctx={})
 
     meta = store.state["x"]["meta"]
-    assert meta["created_at"] == "T0"
-    assert meta["completed_at"] == "T2"
+    assert meta["created_at"] == calls[0]
+    assert meta["completed_at"] == calls[-1]
     assert meta["retries_used"] == 1
 
 
@@ -427,8 +436,13 @@ def test_tool_exhausting_retries_still_records_created_at_and_retries_used(
     success — and created_at still names the first attempt's start."""
     from circuitry.core import tool as tool_mod
 
-    timestamps = iter(["T0", "T1", "T2"])
-    monkeypatch.setattr(tool_mod, "_now_iso", lambda: next(timestamps))
+    calls: list[str] = []
+
+    def _next_ts() -> str:
+        calls.append(f"T{len(calls)}")
+        return calls[-1]
+
+    monkeypatch.setattr(tool_mod, "_now_iso", _next_ts)
 
     plugin = MagicMock()
     plugin.execute.side_effect = RuntimeError("always fails")
@@ -445,8 +459,8 @@ def test_tool_exhausting_retries_still_records_created_at_and_retries_used(
         ToolRuntime(defn).execute(store=store, ctx={})
 
     meta = store.state["x"]["meta"]
-    assert meta["created_at"] == "T0"
-    assert meta["completed_at"] == "T2"
+    assert meta["created_at"] == calls[0]
+    assert meta["completed_at"] == calls[-1]
     assert meta["retries_used"] == 1
 
 
@@ -504,8 +518,13 @@ def test_tool_second_pass_of_a_reused_node_gets_a_fresh_created_at(
     for value/retries_used on a reused node."""
     from circuitry.core import tool as tool_mod
 
-    timestamps = iter(["P0_T0", "P0_T1", "P0_T2", "P1_T0", "P1_T1"])
-    monkeypatch.setattr(tool_mod, "_now_iso", lambda: next(timestamps))
+    calls: list[str] = []
+
+    def _next_ts() -> str:
+        calls.append(f"T{len(calls)}")
+        return calls[-1]
+
+    monkeypatch.setattr(tool_mod, "_now_iso", _next_ts)
 
     ok_result = ToolResult(value="done", raw={}, stdout="", stderr="", exit_code=0)
     plugin = MagicMock()
@@ -523,13 +542,14 @@ def test_tool_second_pass_of_a_reused_node_gets_a_fresh_created_at(
 
     # Pass 0 needs one retry.
     runtime.execute(store=store, ctx={})
-    assert store.state["x"]["meta"]["created_at"] == "P0_T0"
+    assert store.state["x"]["meta"]["created_at"] == calls[0]
     assert store.state["x"]["meta"]["retries_used"] == 1
+    pass0_call_count = len(calls)
 
     # Pass 1 (the node reused, as an unnamed loop's next pass would) succeeds
     # on its own first attempt: a fresh created_at, and no stale retries_used.
     runtime.execute(store=store, ctx={})
-    assert store.state["x"]["meta"]["created_at"] == "P1_T0"
+    assert store.state["x"]["meta"]["created_at"] == calls[pass0_call_count]
     assert "retries_used" not in store.state["x"]["meta"]
 
 
