@@ -449,6 +449,16 @@ pub(crate) fn execute_op<'a>(
     // an ambient flag here. `false` for an ordinary (non-resumed) run,
     // and for every call this crate made before this parameter existed.
     resume_active: bool,
+    // `cof run --resume` (#584): a finished `use`'s inputs, resolved
+    // now, are checked against its recorded `meta.inputs` -- changed,
+    // it reruns (and so does everything after it in the chain)
+    // instead of being skipped whole. `false` for a tree-flow branch
+    // (`dynamic.rs`'s own tree dispatch): each branch is already
+    // checked and skipped independently, with no "later in the chain"
+    // to protect, and is out of scope for this check (#584) --
+    // `core/dynamic.py::DynamicRuntime._execute_effect`'s own
+    // `check_use_input_change` parameter.
+    check_use_input_change: bool,
 ) -> BoxExecOutcomeFuture<'a> {
     Box::pin(async move {
         // Wired now (`core/
@@ -500,7 +510,30 @@ pub(crate) fn execute_op<'a>(
             if let Some(name) = &op.name {
                 if let Ok(Some(existing)) = store.child(parent, &Value::Str(name.clone())) {
                     if effect_completed_ok(store, &existing) {
-                        return Ok(ExecOutcome::NotRan);
+                        let use_op = if check_use_input_change {
+                            match &op.kind {
+                                NodeKind::Leaf(leaf) => match leaf.as_ref() {
+                                    LeafKind::Use(use_op) => Some(use_op),
+                                    _ => None,
+                                },
+                                _ => None,
+                            }
+                        } else {
+                            None
+                        };
+                        let use_inputs_changed = match use_op {
+                            Some(use_op) => {
+                                let live_root = live_scope::LiveRoot::new(ctx_chain, store);
+                                use_::use_rerun_for_changed_inputs(
+                                    use_op, name, &existing, store, &live_root, run_ctx,
+                                )
+                                .await
+                            }
+                            None => false,
+                        };
+                        if !use_inputs_changed {
+                            return Ok(ExecOutcome::NotRan);
+                        }
                     }
                 }
             }

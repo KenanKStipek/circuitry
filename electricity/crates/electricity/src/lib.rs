@@ -647,6 +647,80 @@ fn now_iso() -> String {
         .to_string()
 }
 
+/// *node*'s own *key*, materialized (`Value::None` when absent) --
+/// the same read [`exec::use_::read_key`]-shaped helpers across this
+/// codebase give a leaf that may be stored as either a [`Slot::Value`]
+/// or (for a dict) a [`Slot::Node`].
+fn peeked_value(store: &Store, node: &electricity_vm::NodeRef, key: &Value) -> Value {
+    match store.peek(node, key) {
+        Some(electricity_vm::Slot::Value(v)) => v,
+        Some(electricity_vm::Slot::Node(n)) => store.snapshot(&n),
+        None => Value::None,
+    }
+}
+
+/// `cli/app.py::_warn_resumed_input_changes` (#584): a `--resume`
+/// whose own `-e` overrides change a value from the saved run's --
+/// named as `name: <old> -> <new>` (Python `repr`), in the interface's
+/// declared order, then any undeclared ones sorted, through the usual
+/// `log::warn!` channel (`WARNING: ...` on stderr, [`StderrWarnLogger`]
+/// in `electricity-cli`) -- the same text either engine prints, never
+/// `RunResult::warnings`' own `Warning: ...` lines. Only *overrides*'
+/// own keys can ever differ from *old_values* (nothing else was
+/// touched), so that is this function's only candidate set.
+fn warn_resumed_input_changes(
+    document: &Value,
+    old_values: &indexmap::IndexMap<Value, Value>,
+    overrides: &indexmap::IndexMap<Value, Value>,
+) {
+    let changed: Vec<(Value, Value, Value)> = overrides
+        .iter()
+        .filter(|(k, v)| old_values.get(*k).map(|old| old != *v).unwrap_or(true))
+        .map(|(k, v)| {
+            (
+                k.clone(),
+                old_values.get(k).cloned().unwrap_or(Value::None),
+                v.clone(),
+            )
+        })
+        .collect();
+    if changed.is_empty() {
+        return;
+    }
+    let declared_order: Vec<Value> = document
+        .as_dict()
+        .and_then(|d| d.get(&Value::Str("interface".to_string())))
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&Value::Str("inputs".to_string())))
+        .and_then(Value::as_dict)
+        .map(|iface_inputs| {
+            iface_inputs
+                .keys()
+                .filter(|k| changed.iter().any(|(ck, _, _)| ck == *k))
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut remaining: Vec<Value> = changed
+        .iter()
+        .map(|(k, _, _)| k.clone())
+        .filter(|k| !declared_order.contains(k))
+        .collect();
+    remaining.sort_by_key(Value::py_str);
+    let parts: Vec<String> = declared_order
+        .iter()
+        .chain(remaining.iter())
+        .map(|k| {
+            let (_, old, new) = changed.iter().find(|(ck, _, _)| ck == k).unwrap();
+            format!("{}: {} -> {}", k.py_str(), old.py_repr(), new.py_repr())
+        })
+        .collect();
+    log::warn!(
+        "Resuming with changed input(s): {}. Other finished effects keep their saved results.",
+        parts.join(", ")
+    );
+}
+
 /// `state.runtime.last_run.totals` (issue #431's run-wiring step 17/18):
 /// `effects_run` counts every completed node, root and containers
 /// included, whose own `meta.completed_at` is truthy -- `Observer::
@@ -1343,8 +1417,25 @@ pub async fn run_orchestration_with_config(
                 electricity_compiler::seeded_input_namespace(&loaded.document, &check_options);
             match store.child(&store.root, &Value::Str("input".to_string())) {
                 Ok(Some(input_node)) => {
-                    for (k, v) in restored_input {
-                        store.set_leaf(&input_node, k, v);
+                    // `cof run --resume` (#584): named before any key is
+                    // overwritten, so the warning below can still say
+                    // what each one held *before* this run's own `-e`
+                    // changed it -- `cli/app.py`'s own `saved_input`
+                    // snapshot, taken the same way, right before its own
+                    // `apply_inline_overrides` call.
+                    let old_values: indexmap::IndexMap<Value, Value> = if req.resume {
+                        restored_input
+                            .keys()
+                            .map(|k| (k.clone(), peeked_value(&store, &input_node, k)))
+                            .collect()
+                    } else {
+                        indexmap::IndexMap::new()
+                    };
+                    for (k, v) in &restored_input {
+                        store.set_leaf(&input_node, k.clone(), v.clone());
+                    }
+                    if req.resume {
+                        warn_resumed_input_changes(&loaded.document, &old_values, &restored_input);
                     }
                 }
                 _ => state::replace_input_namespace(&store, restored_input),

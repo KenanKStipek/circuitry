@@ -1000,3 +1000,179 @@ async fn an_e_override_merges_onto_the_resumed_input_namespace() {
     assert_eq!(child(input, "name"), Value::Str("Grace".to_string()));
     assert_eq!(child(input, "other"), Value::Str("kept".to_string()));
 }
+
+#[tokio::test]
+async fn a_finished_reflector_is_skipped_on_resume() {
+    // issue #585: a successful reflector now records meta.completed_at
+    // like any other effect, so --resume skips it whole, along with
+    // the chain step after it staying skipped too (never reruns just
+    // because an earlier positional pivot moved past it).
+    let dir = temp_dir("reflector-resume");
+    let replies_path = write(
+        &dir,
+        "scripted-replies.yaml",
+        "prime.plan_it.inner.propose_steps:\n  - text: |\n      done: true\n",
+    );
+    let config = write(
+        &dir,
+        "config.json",
+        &format!(
+            r#"{{"runtime": {{"adapters": {{"scripted": {{"replies_file": "{}"}}}}}}}}"#,
+            replies_path.display()
+        ),
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        "adapter: scripted\nmodel: test\neffects:\n  - type: reflector\n    name: plan_it\n    \
+         prime_template: \"Plan it.\"\n    effects:\n      - type: prompt\n        \
+         name: propose_steps\n        template: \"propose\"\n  - name: after\n    type: tool\n    \
+         provider: uuid\n",
+    );
+
+    let first = run(&request(config.clone(), doc.clone())).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_completed_at = child(at_mut(&mut state, "prime.plan_it.meta"), "completed_at");
+    assert_ne!(saved_completed_at, Value::None);
+    let saved_after = child(at_mut(&mut state, "prime.after"), "value");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let resumed_completed_at = child(at_mut(&mut resumed, "prime.plan_it.meta"), "completed_at");
+    assert_eq!(
+        resumed_completed_at, saved_completed_at,
+        "the reflector is skipped whole, not rerun"
+    );
+    let resumed_iterations = at_mut(&mut resumed, "prime.plan_it.meta.iterations").clone();
+    let saved_iterations = at_mut(&mut state, "prime.plan_it.meta.iterations").clone();
+    assert_eq!(
+        resumed_iterations, saved_iterations,
+        "skipped whole: no second planning call appended a second iteration"
+    );
+    let resumed_after = child(at_mut(&mut resumed, "prime.after"), "value");
+    assert_eq!(
+        resumed_after, saved_after,
+        "and the chain step after it is skipped too"
+    );
+}
+
+#[tokio::test]
+async fn a_use_whose_resolved_inputs_changed_reruns_along_with_what_follows_it() {
+    // issue #584: a finished `use`'s inputs, resolved against the
+    // resumed run's own inputs, are checked against its recorded
+    // `meta.inputs` -- changed, it reruns (a fresh `uuid` value), and
+    // so does the chain step after it, by the usual positional rule.
+    let dir = temp_dir("use-changed-inputs");
+    let config = write(&dir, "config.json", "{}");
+    let child_doc = write(
+        &dir,
+        "child.yml",
+        "interface:\n  inputs:\n    x: {type: string, required: true}\n\
+         effects:\n  - name: inner\n    type: tool\n    provider: uuid\n",
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "interface:\n  inputs:\n    x: {{type: string, default: a}}\n\
+             effects:\n  - name: part\n    type: use\n    path: {}\n    \
+             inputs: {{x: {{from: input.x}}}}\n  - name: after\n    type: tool\n    \
+             provider: uuid\n",
+            child_doc.display()
+        ),
+    );
+
+    let mut first_req = request(config.clone(), doc.clone());
+    first_req.inputs.insert("x".to_string(), "a".to_string());
+    let first = run(&first_req).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_inner = child(at_mut(&mut state, "prime.part.inner"), "value");
+    let saved_after = child(at_mut(&mut state, "prime.after"), "value");
+    assert_eq!(
+        child(at_mut(&mut state, "prime.part.meta.inputs"), "x"),
+        Value::Str("a".to_string())
+    );
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+    req.inputs.insert("x".to_string(), "b".to_string());
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let resumed_inner = child(at_mut(&mut resumed, "prime.part.inner"), "value");
+    assert_ne!(resumed_inner, saved_inner, "changed inputs: part reruns");
+    let resumed_after = child(at_mut(&mut resumed, "prime.after"), "value");
+    assert_ne!(
+        resumed_after, saved_after,
+        "and so does the chain step after it"
+    );
+    assert_eq!(
+        child(at_mut(&mut resumed, "prime.part.meta.inputs"), "x"),
+        Value::Str("b".to_string())
+    );
+}
+
+#[tokio::test]
+async fn a_use_whose_resolved_inputs_are_unchanged_stays_skipped() {
+    // issue #584's other half: an unchanged `-e`/run input leaves a
+    // finished `use` -- and the chain step after it -- skipped whole,
+    // as before this issue.
+    let dir = temp_dir("use-unchanged-inputs");
+    let config = write(&dir, "config.json", "{}");
+    let child_doc = write(
+        &dir,
+        "child.yml",
+        "interface:\n  inputs:\n    x: {type: string, required: true}\n\
+         effects:\n  - name: inner\n    type: tool\n    provider: uuid\n",
+    );
+    let doc = write(
+        &dir,
+        "doc.yml",
+        &format!(
+            "interface:\n  inputs:\n    x: {{type: string, default: a}}\n\
+             effects:\n  - name: part\n    type: use\n    path: {}\n    \
+             inputs: {{x: {{from: input.x}}}}\n  - name: after\n    type: tool\n    \
+             provider: uuid\n",
+            child_doc.display()
+        ),
+    );
+
+    let mut first_req = request(config.clone(), doc.clone());
+    first_req.inputs.insert("x".to_string(), "a".to_string());
+    let first = run(&first_req).await;
+    assert!(first.ok, "{:?}", first.error);
+    let mut state = first.state.unwrap();
+    let saved_inner = child(at_mut(&mut state, "prime.part.inner"), "value");
+    let saved_after = child(at_mut(&mut state, "prime.after"), "value");
+
+    let state_path = write_state(&dir, "state.json", &state);
+    let mut req = request(config, doc);
+    req.state_path = Some(state_path);
+    req.resume = true;
+    req.inputs.insert("x".to_string(), "a".to_string());
+
+    let second = run(&req).await;
+    assert!(second.ok, "{:?}", second.error);
+    let mut resumed = second.state.unwrap();
+    let resumed_inner = child(at_mut(&mut resumed, "prime.part.inner"), "value");
+    assert_eq!(
+        resumed_inner, saved_inner,
+        "unchanged inputs: part stays skipped"
+    );
+    let resumed_after = child(at_mut(&mut resumed, "prime.after"), "value");
+    assert_eq!(
+        resumed_after, saved_after,
+        "and so does the chain step after it"
+    );
+}

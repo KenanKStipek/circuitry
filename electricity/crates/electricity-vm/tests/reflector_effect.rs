@@ -325,9 +325,11 @@ async fn done_true_with_stop_on_done_never_runs_the_generated_plan() {
     );
 
     let meta = as_dict(get(refl, "meta").unwrap());
-    // Success never writes created_at/completed_at.
+    // Success writes completed_at, like any other effect (#585) --
+    // never created_at, which only the actual run of a generated plan
+    // writes.
     assert!(get(meta, "created_at").is_none());
-    assert!(get(meta, "completed_at").is_none());
+    assert!(get(meta, "completed_at").is_some());
 }
 
 #[tokio::test]

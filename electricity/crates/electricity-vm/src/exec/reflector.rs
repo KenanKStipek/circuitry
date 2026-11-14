@@ -28,9 +28,10 @@
 //! unnamed `if` inside a loop) keeps its own earlier content, so
 //! `meta.iterations` keeps growing across passes and a stale
 //! `meta.error` from an earlier failed pass survives a later successful
-//! one. Success leaves `meta` as `{"iterations": [...]}` only -- no
-//! `created_at`/`completed_at` ever, on success (`--resume` is out of
-//! scope for M1; a successful reflector always reruns from scratch).
+//! one. Success leaves `meta` as `{"iterations": [...], "completed_at":
+//! ...}` -- `completed_at` set like any other effect's (#585), so
+//! `--resume` skips a finished reflector whole; never `created_at`,
+//! which only the actual run of a generated plan writes.
 //!
 //! **Fatal errors, never absorbed, never wrapped** (`VmError::is_fatal`).
 //! [`VmError::Cancelled`] propagates with *no* record at all -- not
@@ -150,6 +151,7 @@ pub(crate) async fn execute_reflector(
 
         if rec.stop {
             store.set_leaf(&node, key("value"), Value::Bool(true));
+            store.set_leaf(&meta_node, key("completed_at"), Value::Str(now_iso()));
             observer.effect_complete(
                 &effect_path,
                 instance,
@@ -162,6 +164,7 @@ pub(crate) async fn execute_reflector(
     }
 
     store.set_leaf(&node, key("value"), Value::Bool(true));
+    store.set_leaf(&meta_node, key("completed_at"), Value::Str(now_iso()));
     observer.effect_complete(
         &effect_path,
         instance,
