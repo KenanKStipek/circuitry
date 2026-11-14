@@ -298,7 +298,10 @@ def maybe_decompose(
     base["yaml"] = plan.yaml
 
     problems = _validate_plan(
-        plan, max_chunks=dset.max_chunks, runtime_config=runtime_config, node_path=node_path
+        plan,
+        max_chunks=dset.max_chunks,
+        runtime_config=runtime_config,
+        generating_effect_path=f"decomposition of '{node_path}'",
     )
     if problems:
         return _failure(base, dset, "invalid_plan", "; ".join(problems), fallback)
@@ -605,7 +608,11 @@ def _run_planner(
 
 
 def _validate_plan(
-    plan: _Plan, *, max_chunks: int, runtime_config: Mapping[str, Any], node_path: str = ""
+    plan: _Plan,
+    *,
+    max_chunks: int,
+    runtime_config: Mapping[str, Any],
+    generating_effect_path: str = "",
 ) -> list[str]:
     """Everything wrong with the plan; an empty list is the licence to run it."""
     problems: list[str] = []
@@ -630,14 +637,21 @@ def _validate_plan(
         )
     problems.extend(
         _validate_generated_yaml(
-            plan.yaml, plan.result_path, runtime_config=runtime_config, node_path=node_path
+            plan.yaml,
+            plan.result_path,
+            runtime_config=runtime_config,
+            generating_effect_path=generating_effect_path,
         )
     )
     return problems
 
 
 def _validate_generated_yaml(
-    yaml_text: str, result_path: str, *, runtime_config: Mapping[str, Any], node_path: str = ""
+    yaml_text: str,
+    result_path: str,
+    *,
+    runtime_config: Mapping[str, Any],
+    generating_effect_path: str = "",
 ) -> list[str]:
     """The five checks every generated plan — planned (score trigger) or
     deterministically generated (size trigger) — must pass before it runs:
@@ -653,7 +667,9 @@ def _validate_generated_yaml(
         *_check_merge_contract(yaml_text, result_path),
         *_check_allowlists(yaml_text, runtime_config),
         *_check_capability_ceiling(yaml_text, runtime_config),
-        *_check_generated_tool_ceiling(yaml_text, runtime_config, node_path=node_path),
+        *_check_generated_tool_ceiling(
+            yaml_text, runtime_config, generating_effect_path=generating_effect_path
+        ),
     ]
 
 
@@ -707,7 +723,7 @@ def _check_capability_ceiling(yaml_text: str, runtime_config: Mapping[str, Any])
 
 
 def _check_generated_tool_ceiling(
-    yaml_text: str, runtime_config: Mapping[str, Any], *, node_path: str = ""
+    yaml_text: str, runtime_config: Mapping[str, Any], *, generating_effect_path: str = ""
 ) -> list[str]:
     """A decomposition plan is always generated (#772): its own
     'allowed_commands' never widen past the host config and the enclosing
@@ -740,7 +756,7 @@ def _check_generated_tool_ceiling(
     return generated_document_errors(
         parsed,
         allowed_providers=allowed_providers,
-        generating_effect_path=f"decomposition of '{node_path}'" if node_path else "",
+        generating_effect_path=generating_effect_path,
         allowed_shell_commands=current_shell_allowlist(runtime_config),
         allow_tools_available=False,
     )
@@ -1308,7 +1324,10 @@ def _maybe_split(
     base["result_path"] = result_path
 
     problems = _validate_generated_yaml(
-        plan_yaml, result_path, runtime_config=runtime_config, node_path=node_path
+        plan_yaml,
+        result_path,
+        runtime_config=runtime_config,
+        generating_effect_path=f"split of '{node_path}'",
     )
     if problems:
         logger.warning(

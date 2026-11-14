@@ -252,6 +252,26 @@ impl Frame {
     /// a release build still falls back to the unresolved *path*
     /// rather than panicking a real run over a cosmetic one.
     pub fn effect_path(&self, path: &EffectPath) -> EffectPath {
+        let resolved = self.local_effect_path(path);
+        if self.prefix.0.is_empty() {
+            return resolved;
+        }
+        let mut segments = self.prefix.0.clone();
+        segments.extend(resolved.without_child_root().0);
+        EffectPath(segments)
+    }
+
+    /// *path*'s own pass placeholders resolved and [`Frame::rebase`]
+    /// applied, but *without* this frame's own [`Frame::prefix`] composed
+    /// on top -- [`Frame::effect_path`]'s own first half, broken out for
+    /// a caller that specifically wants the path *this* document's own
+    /// text would show it (`core/store/store.py::Store.effect_path`'s own
+    /// semantics on a `use`/decomposition child's fresh, unprefixed
+    /// store): naming the effect that generated a document (#772) in a
+    /// refusal, which Python names from the *local* document regardless
+    /// of how deep a `use` chain put it in the overall run, never the
+    /// globally-namespaced path [`Frame::effect_path`] gives `--events`.
+    pub fn local_effect_path(&self, path: &EffectPath) -> EffectPath {
         let resolved = path
             .resolve_passes(&self.pass_indices)
             .unwrap_or_else(|loop_id| {
@@ -263,13 +283,7 @@ impl Frame {
                 );
                 path.clone()
             });
-        let resolved = self.apply_rebase(resolved);
-        if self.prefix.0.is_empty() {
-            return resolved;
-        }
-        let mut segments = self.prefix.0.clone();
-        segments.extend(resolved.without_child_root().0);
-        EffectPath(segments)
+        self.apply_rebase(resolved)
     }
 
     /// [`Frame::rebase`]'s own prefix swap, applied to an already

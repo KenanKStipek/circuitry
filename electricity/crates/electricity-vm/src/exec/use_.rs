@@ -955,7 +955,7 @@ async fn attempt_once<R: ParamsCtx>(
                 let generating_effect_path = use_op
                     .generating_effect_path_override
                     .clone()
-                    .unwrap_or_else(|| frame.effect_path(&op.path).to_string());
+                    .unwrap_or_else(|| frame.local_effect_path(&op.path).to_string());
                 let mut errors = Vec::new();
                 let overreach: std::collections::BTreeSet<String> = use_op
                     .allow_tools
