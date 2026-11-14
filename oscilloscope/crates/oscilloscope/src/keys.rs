@@ -312,6 +312,13 @@ pub struct App {
     /// no-op while this is false, since a pane the screen never
     /// draws has nothing to focus or scroll.
     pub tape_detail_visible: bool,
+    /// Issue #684: whether `tui::draw_tape_list`'s last draw found
+    /// the Now band's own row outside the window it actually drew --
+    /// only ever set while `follow` is false, since the centred
+    /// window always keeps the Now band in view while following.
+    /// The status line reads this to tell the user Now is off
+    /// screen and name the key (`f`) that brings it back.
+    pub tape_now_out_of_view: bool,
 }
 
 impl App {
@@ -365,6 +372,7 @@ impl App {
             tape_list_start: None,
             tape_detail_bottom: usize::MAX,
             tape_detail_visible: true,
+            tape_now_out_of_view: false,
         }
     }
 

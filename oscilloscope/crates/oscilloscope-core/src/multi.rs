@@ -677,6 +677,8 @@ pub fn build_tile(
                 None,
                 None,
                 now,
+                true,
+                &Default::default(),
             );
             signal.tile_finished_labels = signal_tile_finished_labels(
                 &rendered.rows,
