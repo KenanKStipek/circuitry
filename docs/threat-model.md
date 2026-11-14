@@ -655,7 +655,9 @@ document than the author wrote must never pass as the author's own just
 because the surrounding structure still matches. A parse failure (the
 common case — the whole `inline:` is one `{{{...}}}` tag) or a shape
 mismatch anywhere means some or all of the document only exists because it
-was rendered: generated. A reflector's plan has no author template of its
+was rendered: generated. An unquoted tag where YAML expects a value
+(`seconds: {{seconds}}` reads as a nested flow mapping) is such a parse
+failure too. A reflector's plan has no author template of its
 own to compare against at all — it is always generated. **Generated-ness
 is inherited**: every effect textually inside an already-generated
 document is itself generated too, whatever its own shape looks like — a

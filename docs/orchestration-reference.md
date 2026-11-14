@@ -1742,7 +1742,12 @@ to limits an author-written document isn't:
 
 Telling a generated document from an author's own: an author-written
 `inline:` whose *structure* is literal, with only scalar values templated
-in, is unaffected and keeps working exactly as before. A reflector's plan
+in, is unaffected and keeps working exactly as before. That needs the
+unrendered template to parse as YAML on its own, so quote a tag that stands
+for a value (`seconds: "{{seconds}}"`): an unquoted `{{seconds}}` is a YAML
+flow mapping, the template then doesn't parse before rendering, and the whole
+child counts as generated. When the value has to stay a number, name the tools
+the child needs in the `use` effect's `allow_tools:` instead. A reflector's plan
 has no author template to compare against at all, and is always generated.
 A value is still generated, even in an otherwise-literal structure, at a
 security-sensitive field (`type`, `provider`, `allow_tools`,
