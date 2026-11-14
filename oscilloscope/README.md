@@ -10,14 +10,13 @@ processing. A terminal UI comes first; a GUI can reuse the same core later.
 CYBERDINER_TOKEN=... osi do-thing.yml config.json
 ```
 
-**This is a preview.** Milestone O-1 (issue #424) filled in the core: `osi
-<orchestration>` launches and supervises `cof` or `electricity` and exits
-with the engine's own exit code; `osi watch <dir>` attaches to a run `osi`
-didn't start. Milestone O-2 (issue #434) adds the terminal UI below.
-electricity's own run path, `--events` and `--live-state` give
-`--engine electricity` the same live view `cof` does for the content it
-runs — see [`electricity/README.md`](../electricity/README.md)'s preview
-section for exactly what runs today. Anything it doesn't support yet is
+**This is a preview.** `osi <orchestration>` launches and supervises `cof`
+or `electricity` and exits with the engine's own exit code; `osi watch
+<dir>` attaches to a run `osi` didn't start. Both launch forms show the
+same terminal UI below. electricity's own run path, `--events` and
+`--live-state` give `--engine electricity` the same live view `cof` does
+for the content it runs — see [`electricity/README.md`](../electricity/README.md)'s
+preview section for exactly what runs today. Anything it doesn't support yet is
 refused up front, with a message naming the preview marker, before any
 state is written. See [`DESIGN.md`](DESIGN.md) §4.2.
 
@@ -73,10 +72,14 @@ own `run_start`/state, which such an engine never writes it into.
   `--config`/`-e` for the same reason, independent of whatever the
   watched run itself was started with, and gets the same discovery with
   neither.
-- `--engine electricity` needs a config (electricity has no config
-  discovery yet). For a document outside electricity's current scope, it
-  shows electricity's own preview-marker refusal and exit code, the same
-  way osi shows any other pre-execution failure.
+- `--engine electricity` still needs a config on this command line: osi
+  launches it with the legacy `electricity <config.json> <orchestration.yml>`
+  form, which always takes its config as an explicit argument, rather than
+  the `electricity run` subcommand, which has the same config discovery as
+  `cof run` (#728) -- see [`electricity/README.md`](../electricity/README.md).
+  For a document outside electricity's current scope, it shows electricity's
+  own preview-marker refusal and exit code, the same way osi shows any other
+  pre-execution failure.
 - Run files (`state.live.json`, `state.json`, `events.jsonl`, `stdout.txt`,
   `stderr.txt`) go to a fresh temporary directory by default, printed when
   the run ends; `--out-dir DIR` keeps them in a chosen directory instead —

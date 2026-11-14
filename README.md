@@ -1,6 +1,5 @@
 # Circuitry
 
-[![PyPI version](https://img.shields.io/pypi/v/circuitry-cof.svg)](https://pypi.org/project/circuitry-cof/)
 [![CI](https://github.com/kenankstipek/circuitry/actions/workflows/quality.yml/badge.svg)](https://github.com/kenankstipek/circuitry/actions/workflows/quality.yml)
 [![Python](https://img.shields.io/badge/python-3.10%E2%80%933.13-blue.svg)](https://github.com/kenankstipek/circuitry)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -115,7 +114,7 @@ Seven effects, in three kinds:
 - **Structure composes:** `dynamic` runs effects in sequence (`chain`) or in parallel (`tree`).
 - **Cybernetic effects steer:** `if`, `loop` and `reflector` read the shadow state and decide what runs next: a branch, another pass, a new plan.
 
-Out of the box: 29 model providers (Ollama, llama.cpp and vLLM locally; OpenAI, Anthropic, Gemini and OpenRouter hosted) and 72 tool plugins (git, GitHub, files, HTTP, shell, pytest, ffmpeg, ImageMagick, MCP, …). Models, adapters, tools and limits live in config, not in the document, so the same orchestration runs against a local 8B model or a hosted one. An optional complexity layer scores each prompt, routes it to the cheapest capable model and splits what is too big.
+Out of the box: <!-- doc-counts:start provider-count -->32<!-- doc-counts:end provider-count --> model providers (Ollama, llama.cpp and vLLM locally; OpenAI, Anthropic, Gemini and OpenRouter hosted) and <!-- doc-counts:start tool-plugin-count -->76<!-- doc-counts:end tool-plugin-count --> tool plugins (git, GitHub, files, HTTP, shell, pytest, ffmpeg, ImageMagick, MCP, …). Models, adapters, tools and limits live in config, not in the document, so the same orchestration runs against a local 8B model or a hosted one. An optional complexity layer scores each prompt, routes it to the cheapest capable model and splits what is too big.
 
 ## From Python, or from Claude
 
@@ -137,6 +136,8 @@ print(result.ok, result.state["prime"]["reply"]["value"])
 | [Grammar](docs/guidebook/grammar.md) | the formal grammar |
 | [Architecture](docs/architecture.md) | how it is built, design principles, and where the code lives |
 | [docs/index.md](docs/index.md) | everything else: routing, profiles, the TUI, plugins, persistence, security |
+| [electricity](electricity/README.md) | a preview Rust runner for the same orchestrations, aiming at the same final state as `cof run` |
+| [oscilloscope](oscilloscope/README.md) | `osi`, a preview terminal UI that watches an orchestration run on either engine |
 
 ## Project
 
