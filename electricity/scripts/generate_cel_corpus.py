@@ -1087,18 +1087,93 @@ def build_corpus() -> list[dict]:
     # gaps -- out of range, a uint index (in range and absurdly out of
     # it), a wrong index type, a non-container operand, a missing map
     # key outside `has()`, a non-ASCII string index, bytes out of
-    # range, and indexing a comprehension's own result.
+    # range, and indexing a comprehension's own result. The ones that
+    # error are exact text now (issue #629): a key/index/type-mismatch
+    # message is Circuitry's own wording in both engines, never a
+    # container's contents.
     cases += [
-        condition("state.l[5] == 1", {"l": [1]}),
-        condition("state.l[18446744073709551615u] == 1", {"l": [1]}),
+        condition("state.l[5] == 1", {"l": [1]}, exact_error=True),
+        condition(
+            "state.l[18446744073709551615u] == 1", {"l": [1]}, exact_error=True
+        ),
         condition("state.l[0u] == 1", {"l": [1]}),
-        condition("state.l['a'] == 1", {"l": [1]}),
-        condition("state.m[1.0] == 'a'", {"m": {"a": "a"}}),
-        condition("state.n[0] == 1", {"n": 1}),
-        condition("state.m['missing'] == 1", {"m": {"a": 1}}),
+        condition("state.l['a'] == 1", {"l": [1]}, exact_error=True),
+        condition("state.m[1.0] == 'a'", {"m": {"a": "a"}}, exact_error=True),
+        condition("state.n[0] == 1", {"n": 1}, exact_error=True),
+        condition("state.m['missing'] == 1", {"m": {"a": 1}}, exact_error=True),
         condition("state.s[1] == '\u00e9'", {"s": "h\u00e9llo"}),
-        condition("state.b[-4] == 97", {"b": b"abc"}),
+        condition("state.b[-4] == 97", {"b": b"abc"}, exact_error=True),
         condition("state.l.map(x, x)[0] == 1", {"l": [1]}),
+    ]
+
+    # --- issue #629: every row of the error-text table, exact in both
+    # engines -- a missing map key (string and int), a list index out
+    # of range, a list indexed by a string, an int indexed by an int,
+    # division and modulus by zero, and one case of each through
+    # `expect()` (the `cel` tool shares this same evaluator, #735). A
+    # negative list index and float division by zero still give no
+    # error in either engine, unaffected by this issue.
+    cases += [
+        condition(
+            "state.m['zz'] == 1",
+            {"m": {"a": 1, "b": [1, 2]}},
+            exact_error=True,
+        ),
+        condition(
+            "state.m[7] == 1", {"m": {"a": 1, "b": [1, 2]}}, exact_error=True
+        ),
+        condition("state.l[5] == 1", {"l": [1, 2, 3]}, exact_error=True),
+        condition("state.l['a'] == 1", {"l": [1, 2, 3]}, exact_error=True),
+        condition("state.n[0] == 1", {"n": 5}, exact_error=True),
+        condition("1 / 0 == 1", {}, exact_error=True),
+        condition("1 % 0 == 1", {}, exact_error=True),
+        condition("state.l[-1] == 3", {"l": [1, 2, 3]}),
+        condition("1.0 / 0.0 == 1.0", {}),
+        # From the issue's own follow-up: an unset read that doesn't
+        # decide the result reports its own error (division by zero)
+        # instead of quietly being False.
+        condition(
+            "(state.m.x == 1 || true) && 1/0 == 1",
+            {"m": {"a": 1, "b": [1, 2]}},
+            exact_error=True,
+        ),
+        # A type mismatch on a relational operator cel-python's own
+        # base evaluator raises on, not one `_StateEvaluator` gives its
+        # own text for -- cel-python's underlying `TypeError` embeds
+        # both operands' own repr for this one, so it is exact here
+        # too, confirming the generic cleanup catches it.
+        condition("state.n < state.m", {"n": 5, "m": {"a": 1}}, exact_error=True),
+        expect("value[5] == 1", value=[1, 2, 3], exact_error=True),
+        expect("1 / value == 1", value=0, exact_error=True),
+    ]
+
+    # --- issue #629: every other cel-python error that embeds a
+    # Python class repr or value -- an int/uint overflow (add and
+    # multiply), a map literal's duplicate key and an invalid key
+    # type, field selection on a non-map, `in`'s own two mismatch
+    # shapes, and a map key of a mismatched integer type (celpy's own
+    # `IntType`/`UintType.__eq__` being `@type_matched`, raising rather
+    # than missing when the probe's hash collides with an existing key
+    # of a different exact type) -- exact in both engines, mapped to
+    # the same wording arm by arm against `evaluation_error_text`.
+    cases += [
+        condition("9223372036854775807 + 1 == 1", {}, exact_error=True),
+        condition("9223372036854775807 * 2 == 1", {}, exact_error=True),
+        condition("18446744073709551615u + 1u == 1u", {}, exact_error=True),
+        condition("18446744073709551615u * 2u == 1u", {}, exact_error=True),
+        condition("{'a': 1, 'a': 2}.a == 1", {}, exact_error=True),
+        condition("{[1]: 2} == {}", {}, exact_error=True),
+        condition("[1, 2].zz == 1", {}, exact_error=True),
+        condition("5 in 5", {}, exact_error=True),
+        condition("1 in [1.0]", {}, exact_error=True),
+        condition("state.n + state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("state.n * state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("1.5 % 2.0 == 1", {}, exact_error=True),
+        condition("state.n / state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("state.n - state.l == 1", {"n": 5, "l": [1, 2, 3]}, exact_error=True),
+        condition("state.m[1u] == 1", {"m": {1: "a"}}, exact_error=True),
+        condition("state.m[true] == 1", {"m": {1: "a"}}, exact_error=True),
+        condition("state.m[5u] == 1", {"m": {1: "a"}}, exact_error=True),
     ]
 
     # --- issue #400: ordering's remaining gaps -- string/string
