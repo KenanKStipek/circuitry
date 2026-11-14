@@ -9680,6 +9680,137 @@
     "unset_path": null
   },
   {
+    "expr": "state.l + state.m == state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.l + state.m == state.l': cannot apply '+' to a list and a map"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "m"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "int",
+                  "v": "2"
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.l + state.s == state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.l + state.s == state.l': cannot apply '+' to a list and a string"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "s"
+          },
+          {
+            "t": "str",
+            "v": "x"
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.l + state.n == state.l",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": "CEL evaluation failed for 'state.l + state.n == state.l': cannot apply '+' to a list and an int"
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "l"
+          },
+          {
+            "t": "list",
+            "v": [
+              {
+                "t": "int",
+                "v": "1"
+              }
+            ]
+          }
+        ],
+        [
+          {
+            "t": "str",
+            "v": "n"
+          },
+          {
+            "t": "int",
+            "v": "1"
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
     "expr": "state.a < state.b",
     "mode": "condition",
     "outcome": {

@@ -1,0 +1,6 @@
+ERROR: CEL evaluation failed for expr "[1] + {'a': 2} == [1]": cannot apply '+' to a list and a map
+WARNING: Conditional 'list_plus_map': condition failed (CEL evaluation failed for "[1] + {'a': 2} == [1]": cannot apply '+' to a list and a map); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr "[1] + 'x' == [1]": cannot apply '+' to a list and a string
+WARNING: Conditional 'list_plus_string': condition failed (CEL evaluation failed for "[1] + 'x' == [1]": cannot apply '+' to a list and a string); on_error=continue, taking the else branch
+ERROR: CEL evaluation failed for expr '[1] + 1 == [1]': cannot apply '+' to a list and an int
+WARNING: Conditional 'list_plus_int': condition failed (CEL evaluation failed for '[1] + 1 == [1]': cannot apply '+' to a list and an int); on_error=continue, taking the else branch
