@@ -138,6 +138,8 @@ pub fn interpret_outcome(
         raw,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         finish_reason: None,
         warnings: crate::ignored_options_warning(name, options, &[]),
         cost_usd: None,

@@ -226,6 +226,8 @@ struct AgentTurn {
     tool_calls: i64,
     tokens_sent: Option<i64>,
     tokens_received: Option<i64>,
+    tokens_cached_in: Option<i64>,
+    tokens_cache_write: Option<i64>,
     cost_usd: Option<f64>,
 }
 
@@ -424,6 +426,8 @@ async fn run_pi_turn(
         tool_calls,
         tokens_sent: parsed.tokens_sent,
         tokens_received: parsed.tokens_received,
+        tokens_cached_in: parsed.tokens_cached_in,
+        tokens_cache_write: parsed.tokens_cache_write,
         cost_usd: parsed.cost_usd,
     })
 }
@@ -546,6 +550,8 @@ async fn run_claude_turn(
         tool_calls,
         tokens_sent: result.tokens_sent,
         tokens_received: result.tokens_received,
+        tokens_cached_in: result.tokens_cached_in,
+        tokens_cache_write: result.tokens_cache_write,
         cost_usd: result.cost_usd,
     })
 }
@@ -558,6 +564,8 @@ struct SessionState {
     tool_calls: i64,
     tokens_sent: Option<i64>,
     tokens_received: Option<i64>,
+    tokens_cached_in: Option<i64>,
+    tokens_cache_write: Option<i64>,
     cost_usd: Option<f64>,
     repair_turn: bool,
     turn_completed: bool,
@@ -578,6 +586,12 @@ impl SessionState {
         }
         if let Some(received) = turn.tokens_received {
             self.tokens_received = Some(self.tokens_received.unwrap_or(0) + received);
+        }
+        if let Some(cached_in) = turn.tokens_cached_in {
+            self.tokens_cached_in = Some(self.tokens_cached_in.unwrap_or(0) + cached_in);
+        }
+        if let Some(cache_write) = turn.tokens_cache_write {
+            self.tokens_cache_write = Some(self.tokens_cache_write.unwrap_or(0) + cache_write);
         }
         if let Some(cost) = turn.cost_usd {
             self.cost_usd = Some(self.cost_usd.unwrap_or(0.0) + cost);
@@ -645,6 +659,8 @@ impl SessionState {
             stdout_parsed: false,
             tokens_sent: self.tokens_sent,
             tokens_received: self.tokens_received,
+            tokens_cached_in: self.tokens_cached_in,
+            tokens_cache_write: self.tokens_cache_write,
             cost_usd: self.cost_usd,
         }
     }
@@ -892,6 +908,8 @@ async fn run_agent_session(
         tool_calls: 0,
         tokens_sent: None,
         tokens_received: None,
+        tokens_cached_in: None,
+        tokens_cache_write: None,
         cost_usd: None,
         repair_turn: false,
         turn_completed: false,

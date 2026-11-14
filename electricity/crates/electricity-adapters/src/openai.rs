@@ -197,12 +197,19 @@ pub fn interpret_outcome(
     let tokens_received = coerce_token_count(
         usage_dict.and_then(|d| d.get(&Value::Str("completion_tokens".to_string()))),
     )?;
+    let tokens_cached_in = usage_dict
+        .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
+        .and_then(Value::as_dict)
+        .and_then(|d| d.get(&Value::Str("cached_tokens".to_string())))
+        .and_then(|v| electricity_value::pycompat::py_int(v).ok());
 
     Ok(GenerateResult {
         text,
         raw,
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write: None,
         finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
@@ -245,11 +252,18 @@ pub fn interpret_streaming_outcome(
         let tokens_received = coerce_token_count(
             usage_dict.and_then(|d| d.get(&Value::Str("completion_tokens".to_string()))),
         )?;
+        let tokens_cached_in = usage_dict
+            .and_then(|d| d.get(&Value::Str("prompt_tokens_details".to_string())))
+            .and_then(Value::as_dict)
+            .and_then(|d| d.get(&Value::Str("cached_tokens".to_string())))
+            .and_then(|v| electricity_value::pycompat::py_int(v).ok());
         return Ok(GenerateResult {
             text,
             raw,
             tokens_sent,
             tokens_received,
+            tokens_cached_in,
+            tokens_cache_write: None,
             finish_reason,
             warnings: Vec::new(),
             cost_usd: None,
@@ -298,7 +312,7 @@ pub fn interpret_streaming_outcome(
         });
     }
 
-    let (tokens_sent, tokens_received) = usage_tokens(parsed.usage.as_ref());
+    let (tokens_sent, tokens_received, tokens_cached_in) = usage_tokens(parsed.usage.as_ref());
     let mut message_dict = Dict::new();
     message_dict.insert(
         Value::Str("content".to_string()),
@@ -328,6 +342,8 @@ pub fn interpret_streaming_outcome(
         raw: Value::Dict(raw),
         tokens_sent,
         tokens_received,
+        tokens_cached_in,
+        tokens_cache_write: None,
         finish_reason: parsed.finish_reason,
         warnings: Vec::new(),
         cost_usd: None,
