@@ -768,3 +768,400 @@ def test_a_finished_use_whose_resolved_inputs_changed_reruns_on_resume(
         unchanged_state["prime"]["part"]["meta"]["created_at"]
         == first_unchanged_created_at
     )
+
+
+#: issue #584: a `use` whose own `after` sibling in the same chain
+#: finished *successfully* the first time -- unlike `later` above,
+#: which always fails the first run regardless of whether the fix
+#: works, `after` here is the `uuid` tool (never cof's `CountingAdapter`
+#: reply, never electricity's own `uuid` provider mock: both engines
+#: ship a real `uuid` tool), so a changed `value` after `--resume`
+#: proves it actually reran, not merely that it failed before.
+def _write_use_followed_by_uuid_case(case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    _write(case_dir / "config.json", _PLAIN_CONFIG)
+    _write(case_dir / "child.yml", _CHANGED_INPUTS_CHILD)
+    _write(
+        case_dir / "orchestration.yml",
+        _CHANGED_INPUTS_ORCHESTRATION
+        + "  - type: tool\n    name: after\n    provider: uuid\n",
+    )
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("first_engine", ENGINES)
+def test_a_finished_step_after_a_changed_use_reruns_too(
+    tmp_path: Path, electricity_binary: Path, first_engine: str, resume_engine: str,
+) -> None:
+    """issue #584: `after` already finished *successfully* on the first
+    run (never failed the way `later` elsewhere in this module does),
+    so only `part`'s own changed inputs -- never a prior failure -- can
+    explain a fresh `after` value on resume. Proves the positional
+    "everything after it reruns too" rule on a step that has nothing
+    else driving it to rerun, on every engine pair.
+    """
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / "case"
+    _write_use_followed_by_uuid_case(case_dir)
+
+    first = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=case_dir, env=env,
+    )
+    assert first.returncode == 0, (first_engine, first.stdout, first.stderr)
+    first_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    first_after = first_state["prime"]["after"]["value"]
+
+    changed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=b",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert changed.returncode == 0, (resume_engine, changed.stdout, changed.stderr)
+    assert _RESUMED_INPUT_WARNING in changed.stderr, (resume_engine, changed.stderr)
+    changed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert changed_state["prime"]["part"]["meta"]["inputs"] == {"x": "b"}
+    assert changed_state["prime"]["after"]["value"] != first_after, (
+        first_engine, resume_engine, "the step after the changed use did not rerun"
+    )
+
+    # Unchanged: neither reruns.
+    unchanged_dir = tmp_path / "unchanged"
+    _write_use_followed_by_uuid_case(unchanged_dir)
+    first_unchanged = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=unchanged_dir, env=env,
+    )
+    assert first_unchanged.returncode == 0, (
+        first_engine, first_unchanged.stdout, first_unchanged.stderr,
+    )
+    first_unchanged_state = json.loads(
+        (unchanged_dir / "out.json").read_text(encoding="utf-8")
+    )
+    unchanged = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=a",
+        ],
+        cwd=unchanged_dir, env=env,
+    )
+    assert unchanged.returncode == 0, (resume_engine, unchanged.stdout, unchanged.stderr)
+    assert "Resuming with changed input(s)" not in unchanged.stderr, (
+        resume_engine, unchanged.stderr,
+    )
+    unchanged_state = json.loads((unchanged_dir / "out.json").read_text(encoding="utf-8"))
+    assert (
+        unchanged_state["prime"]["after"]["value"]
+        == first_unchanged_state["prime"]["after"]["value"]
+    )
+
+
+#: issue #584: a `use` inside a named chain-flow loop's own single
+#: pass, followed by a step that fails unless `proceed` already
+#: exists -- the same deterministic, signal-free interrupt technique
+#: `_failing_shell_effect` already gives this module, needed here so
+#: the loop's own top node (and so the whole loop) isn't itself
+#: `effect_completed_ok` after the first run, which would skip the
+#: loop whole on resume and never descend into the pass body at all.
+def _write_use_in_loop_pass_case(case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    _write(case_dir / "config.json", _PLAIN_CONFIG)
+    _write(case_dir / "child.yml", _CHANGED_INPUTS_CHILD)
+    after = _failing_shell_effect("after", indent="      ")
+    _write(
+        case_dir / "orchestration.yml",
+        "interface:\n  inputs:\n    x: {type: string, default: a}\n    items: {default: [0]}\n"
+        "effects:\n  - type: loop\n    name: lp\n"
+        "    each: {in: input.items, as: item}\n    body:\n"
+        "      - type: use\n        name: part\n        path: child.yml\n"
+        "        inputs: {x: {from: input.x}}\n"
+        f"{after}",
+    )
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("first_engine", ENGINES)
+def test_a_use_inside_a_named_loop_pass_whose_inputs_changed_reruns_along_with_what_follows(
+    tmp_path: Path, electricity_binary: Path, first_engine: str, resume_engine: str,
+) -> None:
+    """issue #584: a `use` that is the first effect of a named loop's
+    own unfinished pass gets the same changed-inputs check a top-level
+    chain step does -- `part`'s own recorded inputs no longer match,
+    so it (and `after`, right after it in the same pass) reruns.
+    """
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / "case"
+    _write_use_in_loop_pass_case(case_dir)
+
+    first = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=case_dir, env=env,
+    )
+    assert first.returncode == 1, (first_engine, first.stdout, first.stderr)
+    first_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert first_state["prime"]["lp"]["iter_0"]["part"]["meta"]["inputs"] == {"x": "a"}
+
+    (case_dir / "proceed").write_text("")
+    changed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=b",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert changed.returncode == 0, (resume_engine, changed.stdout, changed.stderr)
+    assert _RESUMED_INPUT_WARNING in changed.stderr, (resume_engine, changed.stderr)
+    changed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    iter_0 = changed_state["prime"]["lp"]["iter_0"]
+    assert iter_0["part"]["meta"]["inputs"] == {"x": "b"}, (first_engine, resume_engine)
+    assert iter_0["after"]["meta"]["exit_code"] == 0
+
+    # Unchanged: the pass is skipped whole once the first run actually
+    # finishes (unlike above, nothing here left it unfinished).
+    unchanged_dir = tmp_path / "unchanged"
+    _write_use_in_loop_pass_case(unchanged_dir)
+    (unchanged_dir / "proceed").write_text("")
+    first_unchanged = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=unchanged_dir, env=env,
+    )
+    assert first_unchanged.returncode == 0, (
+        first_engine, first_unchanged.stdout, first_unchanged.stderr,
+    )
+    first_unchanged_state = json.loads(
+        (unchanged_dir / "out.json").read_text(encoding="utf-8")
+    )
+    first_created_at = first_unchanged_state["prime"]["lp"]["iter_0"]["part"]["meta"][
+        "created_at"
+    ]
+    unchanged = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=a",
+        ],
+        cwd=unchanged_dir, env=env,
+    )
+    assert unchanged.returncode == 0, (resume_engine, unchanged.stdout, unchanged.stderr)
+    assert "Resuming with changed input(s)" not in unchanged.stderr, (
+        resume_engine, unchanged.stderr,
+    )
+    unchanged_state = json.loads((unchanged_dir / "out.json").read_text(encoding="utf-8"))
+    assert (
+        unchanged_state["prime"]["lp"]["iter_0"]["part"]["meta"]["created_at"]
+        == first_created_at
+    )
+
+
+#: issue #584: a `use` inside a named `if`'s own branch, followed by a
+#: step that fails unless `proceed` already exists -- same technique
+#: and same reason as the loop-pass case above (the `if`'s own node
+#: must not be `effect_completed_ok` after the first run).
+def _write_use_in_if_branch_case(case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    _write(case_dir / "config.json", _PLAIN_CONFIG)
+    _write(case_dir / "child.yml", _CHANGED_INPUTS_CHILD)
+    after = _failing_shell_effect("after", indent="      ")
+    _write(
+        case_dir / "orchestration.yml",
+        "interface:\n  inputs:\n    x: {type: string, default: a}\n"
+        "effects:\n  - type: if\n    name: gate\n"
+        "    if: {mode: cel, expr: \"true\"}\n    then:\n"
+        "      - type: use\n        name: part\n        path: child.yml\n"
+        "        inputs: {x: {from: input.x}}\n"
+        f"{after}",
+    )
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("first_engine", ENGINES)
+def test_a_use_inside_a_named_if_branch_whose_inputs_changed_reruns_along_with_what_follows(
+    tmp_path: Path, electricity_binary: Path, first_engine: str, resume_engine: str,
+) -> None:
+    """issue #584: a `use` that is the first effect of a named `if`'s
+    own unfinished branch gets the same changed-inputs check a
+    top-level chain step does.
+    """
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / "case"
+    _write_use_in_if_branch_case(case_dir)
+
+    first = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=case_dir, env=env,
+    )
+    assert first.returncode == 1, (first_engine, first.stdout, first.stderr)
+    first_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    assert first_state["prime"]["gate"]["part"]["meta"]["inputs"] == {"x": "a"}
+
+    (case_dir / "proceed").write_text("")
+    changed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=b",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert changed.returncode == 0, (resume_engine, changed.stdout, changed.stderr)
+    assert _RESUMED_INPUT_WARNING in changed.stderr, (resume_engine, changed.stderr)
+    changed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    gate = changed_state["prime"]["gate"]
+    assert gate["part"]["meta"]["inputs"] == {"x": "b"}, (first_engine, resume_engine)
+    assert gate["after"]["meta"]["exit_code"] == 0
+
+    # Unchanged: the branch is skipped whole once the first run finishes.
+    unchanged_dir = tmp_path / "unchanged"
+    _write_use_in_if_branch_case(unchanged_dir)
+    (unchanged_dir / "proceed").write_text("")
+    first_unchanged = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=unchanged_dir, env=env,
+    )
+    assert first_unchanged.returncode == 0, (
+        first_engine, first_unchanged.stdout, first_unchanged.stderr,
+    )
+    first_unchanged_state = json.loads(
+        (unchanged_dir / "out.json").read_text(encoding="utf-8")
+    )
+    first_created_at = first_unchanged_state["prime"]["gate"]["part"]["meta"]["created_at"]
+    unchanged = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=a",
+        ],
+        cwd=unchanged_dir, env=env,
+    )
+    assert unchanged.returncode == 0, (resume_engine, unchanged.stdout, unchanged.stderr)
+    assert "Resuming with changed input(s)" not in unchanged.stderr, (
+        resume_engine, unchanged.stderr,
+    )
+    unchanged_state = json.loads((unchanged_dir / "out.json").read_text(encoding="utf-8"))
+    assert (
+        unchanged_state["prime"]["gate"]["part"]["meta"]["created_at"]
+        == first_created_at
+    )
+
+
+#: issue #584: a tree-flow `dynamic` whose only branch is a `use`
+#: reading a declared run input -- its own skip check is independent
+#: of the chain's positional one, so a changed run input must never
+#: rerun it.
+def _write_tree_dynamic_use_branch_case(case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    _write(case_dir / "config.json", _PLAIN_CONFIG)
+    _write(case_dir / "child.yml", _CHANGED_INPUTS_CHILD)
+    _write(
+        case_dir / "orchestration.yml",
+        "interface:\n  inputs:\n    x: {type: string, default: a}\n"
+        "effects:\n  - type: dynamic\n    name: outer\n    flow: tree\n"
+        "    effects:\n      - type: use\n        name: part\n"
+        "        path: child.yml\n        inputs: {x: {from: input.x}}\n",
+    )
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("first_engine", ENGINES)
+def test_a_tree_dynamics_use_branch_stays_skipped_despite_changed_run_inputs(
+    tmp_path: Path, electricity_binary: Path, first_engine: str, resume_engine: str,
+) -> None:
+    """issue #584: unaffected by design -- a tree-flow branch has its
+    own, independent skip check, never the chain's positional one a
+    top-level or named-pass/branch `use` gets.
+    """
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / "case"
+    _write_tree_dynamic_use_branch_case(case_dir)
+
+    first = _run_to_completion(
+        first_engine, electricity_binary,
+        ["orchestration.yml", "--config", "config.json", "--out", "out.json", "-e", "x=a"],
+        cwd=case_dir, env=env,
+    )
+    assert first.returncode == 0, (first_engine, first.stdout, first.stderr)
+    first_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    first_created_at = first_state["prime"]["outer"]["part"]["meta"]["created_at"]
+    assert first_state["prime"]["outer"]["part"]["meta"]["inputs"] == {"x": "a"}
+
+    resumed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force", "-e", "x=b",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert resumed.returncode == 0, (resume_engine, resumed.stdout, resumed.stderr)
+    assert _RESUMED_INPUT_WARNING.replace("'a' -> 'b'", "'a' -> 'b'") in resumed.stderr
+    resumed_state = json.loads((case_dir / "out.json").read_text(encoding="utf-8"))
+    part = resumed_state["prime"]["outer"]["part"]
+    assert part["meta"]["inputs"] == {"x": "a"}, (
+        first_engine, resume_engine, "a tree branch must stay skipped despite changed inputs"
+    )
+    assert part["meta"]["created_at"] == first_created_at, (first_engine, resume_engine)
+
+
+#: issue #584: two declared inputs plus one undeclared -- pins the
+#: warning's own ordering rule (declared, in interface order, then
+#: undeclared, sorted) across every engine pair, never with only one
+#: input to order.
+_ORDER_ORCHESTRATION = (
+    "interface:\n  inputs:\n    first: {type: string, default: a}\n"
+    "    second: {type: string, default: a}\n"
+    "effects:\n  - type: tool\n    name: noop\n    provider: uuid\n"
+)
+_ORDER_WARNING = (
+    "WARNING: Resuming with changed input(s): first: 'a' -> 'b', second: 'a' -> 'b', "
+    "zzz: 'a' -> 'b'. Other finished effects keep their saved results."
+)
+
+
+@pytest.mark.parametrize("resume_engine", ENGINES)
+@pytest.mark.parametrize("first_engine", ENGINES)
+def test_the_resume_warning_orders_declared_inputs_then_undeclared_sorted(
+    tmp_path: Path, electricity_binary: Path, first_engine: str, resume_engine: str,
+) -> None:
+    """issue #584: `first`/`second` are declared, in that order; `zzz`
+    is not declared at all -- the warning names `first`, then `second`,
+    then `zzz`, on the exact same text on both engines, regardless of
+    the order the matching `-e` flags were given in on either run.
+    """
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / "case"
+    case_dir.mkdir(parents=True)
+    _write(case_dir / "config.json", _PLAIN_CONFIG)
+    _write(case_dir / "orchestration.yml", _ORDER_ORCHESTRATION)
+
+    first = _run_to_completion(
+        first_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "-e", "first=a", "-e", "second=a", "-e", "zzz=a",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert first.returncode == 0, (first_engine, first.stdout, first.stderr)
+
+    resumed = _run_to_completion(
+        resume_engine, electricity_binary,
+        [
+            "orchestration.yml", "--config", "config.json", "--out", "out.json",
+            "--state", "out.json", "--resume", "state", "--force",
+            "-e", "zzz=b", "-e", "second=b", "-e", "first=b",
+        ],
+        cwd=case_dir, env=env,
+    )
+    assert resumed.returncode == 0, (resume_engine, resumed.stdout, resumed.stderr)
+    assert _ORDER_WARNING in resumed.stderr, (first_engine, resume_engine, resumed.stderr)
