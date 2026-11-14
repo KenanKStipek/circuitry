@@ -45,6 +45,10 @@ type Builder = fn(&Value) -> Result<Box<dyn ToolPlugin>, ToolError>;
 
 fn builders() -> HashMap<&'static str, Builder> {
     let mut map: HashMap<&'static str, Builder> = HashMap::new();
+    // doc-counts:electricity-tools:start -- every name inserted below, up to
+    // the `#[cfg(feature = "test-tools")]` block, is a tool provider
+    // electricity actually runs today; scripts/sync-doc-counts.py reads this
+    // list to keep the README in sync (#777).
     map.insert(
         "json",
         |_cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> {
@@ -158,6 +162,7 @@ fn builders() -> HashMap<&'static str, Builder> {
         "agent",
         |cfg: &Value| -> Result<Box<dyn ToolPlugin>, ToolError> { crate::agent::make_plugin(cfg) },
     );
+    // doc-counts:electricity-tools:end
     #[cfg(feature = "test-tools")]
     {
         map.insert(
