@@ -212,7 +212,7 @@ def test_attempts_is_reset_on_a_reused_node(tmp_path, monkeypatch: pytest.Monkey
     assert "attempts" not in store.state["run_child"]["meta"]
 
 
-def test_attempts_interrupt_during_backoff_leaves_no_entry_for_the_in_flight_attempt(
+def test_attempts_interrupt_during_backoff_records_error_but_leaves_no_entry_for_the_in_flight_attempt(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counter_file = tmp_path / "attempts.txt"
@@ -241,7 +241,14 @@ def test_attempts_interrupt_during_backoff_leaves_no_entry_for_the_in_flight_att
     attempts = store.state["run_child"]["meta"]["attempts"]
     assert len(attempts) == 2
     assert [a["value"] for a in attempts] == [{"attempt": "1"}, {"attempt": "2"}]
-    assert store.state["run_child"]["meta"].get("completed_at") is None
+    # #796: an interrupted `use` now records the error and `completed_at`
+    # on its own node, like an interrupted `dynamic`/named loop -- but
+    # `completed_at` alone never means `--resume` would skip it, since
+    # `error` is set alongside it (`resume.effect_completed_ok` requires
+    # both truthy `completed_at` *and* no `error`).
+    meta = store.state["run_child"]["meta"]
+    assert meta.get("completed_at") is not None
+    assert meta.get("error") == "run cancelled"
 
 
 # ── inputs: {from: prime.<name>.meta.attempts}, record_children, full-namespace ──

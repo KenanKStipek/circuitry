@@ -91,7 +91,10 @@ ENGINES = ("cof", "electricity")
 #: legitimately smaller than a from-scratch baseline's; checked there
 #: only for having something ok to show, not for exact equality.
 _EXPECT_IDENTICAL_EVENTS = frozenset(
-    {"chain_loop", "tree_loop", "named_if", "use_restart", "reflector_interrupted"}
+    {
+        "chain_loop", "tree_loop", "named_if", "use_default_resume", "use_restart",
+        "reflector_interrupted",
+    }
 )
 
 
@@ -387,6 +390,24 @@ def _scenario(name: str) -> _Scenario:
             config=_RECORD_CHILDREN_CONFIG, blocking_name="blocking",
             wait_mode="marker_file",
         )
+    if name == "use_default_resume":
+        # #796: an interrupted `use` reruns on `--resume` -- this stayed
+        # true once an interrupted `use` started recording its own error
+        # and `completed_at` (`resume.effect_completed_ok` requires *no*
+        # error too, so a `use` interrupted mid-child never reads as
+        # "finished"). Unlike `use_record_children` above, this scenario's
+        # config has no `record_children`, so there is no saved child
+        # record to continue inside even if the engine wanted to -- the
+        # whole `use` (both `quick` and `blocking`) must run again from
+        # scratch, the same as `use_restart`.
+        quick = _quick_step("quick", indent="  ")
+        blocking = _blocking_shell_effect("blocking", indent="  ")
+        return _Scenario(
+            orchestration="effects:\n  - type: use\n    name: step\n    path: child.yml\n",
+            child=f"effects:\n{quick}{blocking}",
+            config=_PLAIN_CONFIG, blocking_name="blocking",
+            wait_mode="marker_file",
+        )
     if name == "named_if":
         branch = _blocking_shell_effect("step", indent="      ")
         return _Scenario(
@@ -467,7 +488,8 @@ def _scenario(name: str) -> _Scenario:
 
 SCENARIOS = (
     "chain_loop", "tree_loop", "tree_dynamic", "use_record_children", "use_restart",
-    "named_if", "finally", "reflector_finished", "reflector_interrupted",
+    "use_default_resume", "named_if", "finally", "reflector_finished",
+    "reflector_interrupted",
 )
 
 

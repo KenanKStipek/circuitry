@@ -16,7 +16,7 @@ from typing import Any, Literal
 from ..adapters import Adapter
 from ..adapters._retry import RetryInfo, next_backoff_delay_ms
 from ..output import console as _console
-from .cancellation import get_token
+from .cancellation import RunCancelledBySignal, get_token
 from .document_check import structural_errors
 from .effect_identity import model_call, nested_container
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
@@ -1525,6 +1525,25 @@ class UseRuntime:
                 )
 
         except Exception as e:
+            # A real signal never reaches a tree-flow branch's own worker
+            # thread directly (`core.cancellation`'s own module
+            # docstring) -- cancelling it kills its tracked subprocess
+            # instead, which surfaces here as an perfectly ordinary
+            # nonzero-exit `Exception`, not the `BaseException` the
+            # `except` below is built for. Checking the token directly
+            # catches that case too (#796): reported, and recorded, the
+            # same way an interrupted `use` anywhere else is, rather than
+            # as a plain failure whose `on_error` might even swallow it.
+            if get_token().is_set():
+                from .dynamic import _error_text
+
+                cancelled = RunCancelledBySignal()
+                if record_children and child_store is not None:
+                    _graft_child_record(node, child_store.state)
+                meta["error"] = _error_text(cancelled)
+                meta["completed_at"] = _now_iso()
+                raise cancelled from e
+
             error_msg = str(e)
             meta["error"] = error_msg
             meta["completed_at"] = _now_iso()
@@ -1570,12 +1589,23 @@ class UseRuntime:
                 # must not let that pass's value survive next to this
                 # pass's error (#260).
                 node["value"] = None
-        except BaseException:
+        except BaseException as e:
             # An interrupt (Ctrl-C, SIGTERM, a cancelled run) is not an
             # Exception, but what the child finished before it is exactly
-            # what `cof run --resume` continues from (#567).
+            # what `cof run --resume` continues from (#567). Recording the
+            # error and `completed_at` here (#796) makes an interrupted
+            # `use` behave like an interrupted `dynamic`/named loop: its own
+            # `end` event is `ok: false`, and it counts toward
+            # `effects_run`. `completed_at` is set *alongside* the error,
+            # never instead of it -- `resume.effect_completed_ok` requires
+            # both `completed_at` truthy *and* no `error`, so `--resume`
+            # still reruns this `use` rather than skipping it.
+            from .dynamic import _error_text
+
             if record_children and child_store is not None:
                 _graft_child_record(node, child_store.state)
+            meta["error"] = _error_text(e)
+            meta["completed_at"] = _now_iso()
             raise
         finally:
             store.fire_effect_complete(self.defn.name, node)
