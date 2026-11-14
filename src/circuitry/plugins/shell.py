@@ -75,6 +75,7 @@ class ShellPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
         on_live: Callable[[dict[str, Any] | None], None] | None = None,
+        scrub_secrets: Callable[[str], str] | None = None,
     ) -> ToolResult:
         command = params.get("command")
         if not isinstance(command, str) or not command.strip():
@@ -151,6 +152,7 @@ class ShellPlugin:
             allow_nonzero=_as_bool(params.get("allow_nonzero")),
             parse_json=parse_json,
             on_live=on_live,
+            scrub_secrets=scrub_secrets,
         )
 
     def check(self) -> CheckResult:

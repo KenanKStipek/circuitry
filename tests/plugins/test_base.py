@@ -107,3 +107,17 @@ def test_http_error_excerpt_non_json_body_falls_back_to_raw_text() -> None:
 def test_http_error_excerpt_empty_body_returns_empty_string() -> None:
     assert http_error_excerpt("") == ""
     assert http_error_excerpt("   ") == ""
+
+
+def test_http_error_excerpt_scrub_secrets_runs_on_the_decoded_message() -> None:
+    """#600 item 2: a raw-text scrub before this function can't catch a
+    JSON-escaped secret; scrub_secrets runs after decoding too, when it is
+    given."""
+    body = '{"error": "bad token: sec\\/ret"}'
+
+    def scrub(text: str) -> str:
+        return text.replace("sec/ret", "[secret:api]")
+
+    assert http_error_excerpt(body, scrub_secrets=scrub) == "bad token: [secret:api]"
+    # Without it, the decoded message still carries the literal value.
+    assert http_error_excerpt(body) == "bad token: sec/ret"

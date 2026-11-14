@@ -20,6 +20,25 @@ fn has_forbidden_char(text: &str) -> bool {
     text.contains('\r') || text.contains('\n') || text.contains('\0')
 }
 
+/// `secrets.py::_json_escaped_variants` (issue #600): how *text* can
+/// appear inside a JSON string literal a server wrote -- `json.dumps`'s
+/// own escaping (which also turns a non-ASCII character into `\uXXXX`),
+/// and that same form with `/` additionally escaped to `\/`, a choice
+/// `json.dumps` doesn't make but some encoders do. A plain, unescaped
+/// match for *text* never matches either form, so a secret a JSON error
+/// body echoes this way would otherwise survive the scrub.
+fn json_escaped_variants(text: &str) -> [String; 2] {
+    let dumped = electricity_json::dumps(
+        &Value::Str(text.to_string()),
+        electricity_json::WriteMode::COMPACT,
+    )
+    .expect("a plain string is always JSON-serializable");
+    // Strip the surrounding quotes `dumps` always wraps a string in.
+    let escaped = dumped[1..dumped.len() - 1].to_string();
+    let escaped_slash = escaped.replace('/', "\\/");
+    [escaped, escaped_slash]
+}
+
 fn runtime_error(message: impl Into<String>) -> ToolError {
     ToolError {
         py_class: PyExc::RuntimeError,
@@ -288,14 +307,15 @@ impl SecretValues {
     }
 
     fn add(&mut self, text: String, placeholder: String) {
-        if self
-            .replacements
-            .iter()
-            .any(|(t, p)| t == &text && p == &placeholder)
-        {
-            return;
+        for variant in std::iter::once(text.clone()).chain(json_escaped_variants(&text)) {
+            if !self
+                .replacements
+                .iter()
+                .any(|(t, p)| t == &variant && p == &placeholder)
+            {
+                self.replacements.push((variant, placeholder.clone()));
+            }
         }
-        self.replacements.push((text, placeholder));
         self.replacements
             .sort_by_key(|(text, _)| std::cmp::Reverse(text.len()));
     }

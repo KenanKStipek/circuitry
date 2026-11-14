@@ -208,6 +208,20 @@ def test_scrub_replaces_prefixed_and_bare_values() -> None:
     }
 
 
+def test_scrub_matches_a_secrets_json_escaped_forms() -> None:
+    """#600 item 2: a secret with a character JSON escapes (here ``/``) is
+    also scrubbed in its escaped forms -- a plain, unescaped match alone
+    would miss a secret a server echoes inside a JSON string literal."""
+    values = SecretValues()
+    runtime = {
+        "secrets": {"api": {"command": [sys.executable, "-c", "print('sec/ret-600')"]}}
+    }
+    assert values.resolve(SecretRef("api"), runtime) == "sec/ret-600"
+    assert values.scrub("bare: sec/ret-600, escaped: sec\\/ret-600") == (
+        "bare: [secret:api], escaped: [secret:api]"
+    )
+
+
 def test_scrub_live_tail_drops_a_line_carrying_part_of_a_multiline_secret() -> None:
     """#741: ``scrub_live_tail`` is a second pass, on top of ``scrub``'s
     own exact-value replace, for a multi-line secret value only part of
@@ -443,6 +457,44 @@ def test_a_token_that_straddles_the_error_excerpts_cut_leaves_no_part_behind(
         result.error or "",
     ):
         assert TOKEN[:10] not in text
+
+
+def test_a_json_escaped_secret_in_an_error_body_is_still_scrubbed(
+    tmp_path: Path, servers: ServerPair, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#600 item 2: a server that JSON-escapes the token (a backslash
+    before a literal slash) defeats a raw-text-only scrub, since the
+    exact, unescaped value never appears in the raw text for it to
+    match; the parsed ``error`` this picks out, and the escaped form
+    still in ``raw.body``, are both still scrubbed."""
+    slash_token = "sec/ret-600-tok3n"
+    monkeypatch.setenv("SLASH_TOKEN_VAR", slash_token)
+    body = '{"error": "bad token: sec\\/ret-600-tok3n"}'
+    servers.routes["/fail"] = Route(400, {"Content-Type": "application/json"}, body)
+    result = run(
+        RunRequest(
+            orchestration_path=_http_doc(tmp_path, f"{servers.http}/fail"),
+            state_path=None,
+            out_path=None,
+            events_path=tmp_path / "events.jsonl",
+            dry_run=False,
+            validate_only=False,
+            config=_config({"api": {"env": "SLASH_TOKEN_VAR"}}),
+            skip_preflight=True,
+            trust_document=True,
+        )
+    )
+    assert not result.ok
+    meta = result.state["prime"]["call"]["meta"]
+    assert meta["error"] == "HTTP 400: Bad Request: bad token: [secret:api]"
+    assert meta["raw"]["body"] == body.replace("sec\\/ret-600-tok3n", "[secret:api]")
+    for text in (
+        json.dumps(result.state),
+        (tmp_path / "events.jsonl").read_text(),
+        result.error or "",
+    ):
+        assert slash_token not in text
+        assert "sec\\/ret-600-tok3n" not in text
 
 
 def test_a_failing_command_secret_fails_the_effect_naming_it(
@@ -1055,3 +1107,61 @@ effects:
     )
     for text in (events.read_text(), json.dumps(result.state)):
         _assert_no_token(text)
+
+
+def test_a_secret_straddling_the_parse_json_excerpts_cut_leaves_no_part_behind(
+    tmp_path: Path, fake_bin: Path
+) -> None:
+    """#600 item 1: the scrub runs on the whole stdout before the 200-char
+    excerpt is cut, so a secret printed starting just before the cut never
+    leaves its first part in the error."""
+    fake_awk = tmp_path / "fake-awk"
+    fake_awk.write_text(
+        f"""#!{sys.executable}
+import os
+print("x" * 190 + os.environ["SERVICE_TOKEN"] + "more", end="")
+""",
+        encoding="utf-8",
+    )
+    fake_awk.chmod(0o755)
+    doc = _write(
+        tmp_path,
+        "doc.yml",
+        """
+effects:
+  - type: tool
+    name: run_it
+    provider: awk
+    params: {args: ["{print}"], parse: json}
+""",
+    )
+    events = tmp_path / "events.jsonl"
+    result = run(
+        RunRequest(
+            orchestration_path=doc,
+            state_path=None,
+            out_path=None,
+            events_path=events,
+            dry_run=False,
+            validate_only=False,
+            config=_config(
+                _KEYCHAIN,
+                plugins={
+                    "awk": {
+                        "binary": str(fake_awk),
+                        "env": {"SERVICE_TOKEN": {"secret": "api"}},
+                    }
+                },
+            ),
+            skip_preflight=True,
+            trust_document=True,
+        )
+    )
+    assert not result.ok
+    meta = result.state["prime"]["run_it"]["meta"]
+    # The excerpt keeps the first 200 characters; the full placeholder itself
+    # straddles that cut here, same as the http excerpt test above -- what
+    # matters is that no part of the raw token survives it.
+    assert "[secret:ap" in meta["error"]
+    for text in (events.read_text(), json.dumps(result.state), result.error or ""):
+        assert TOKEN[:10] not in text

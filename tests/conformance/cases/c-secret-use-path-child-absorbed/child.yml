@@ -1,0 +1,12 @@
+runtime:
+  plugins:
+    awk:
+      env:
+        TOKEN: {secret: "bad name!"}
+effects:
+  - type: tool
+    name: hello
+    provider: json
+    params:
+      mode: parse
+      input: "{\"a\": 1}"

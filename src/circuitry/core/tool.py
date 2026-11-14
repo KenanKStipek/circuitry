@@ -984,6 +984,14 @@ class ToolRuntime:
                     from ..plugins.http import reject_limited_save_to
 
                     reject_limited_save_to(params)
+                if self.defn.limited and self.defn.provider.strip().lower() == "comfyui":
+                    from ..plugins.comfyui import reject_limited_image_output
+
+                    reject_limited_image_output(params)
+                if self.defn.limited and self.defn.provider.strip().lower() == "s3":
+                    from ..plugins.s3_tool import reject_limited_get_path
+
+                    reject_limited_get_path(params)
 
                 rendered = {**top_level, **params}
                 plugin_params = rendered
@@ -1175,6 +1183,7 @@ class ToolRuntime:
                                 params=plugin_params,
                                 timeout_seconds=timeout_seconds,
                                 on_live=_on_live if store.on_write is not None else None,
+                                scrub_secrets=dispatch_secrets.scrub if dispatch_secrets else None,
                             )
                         else:
                             result = plugin.execute(

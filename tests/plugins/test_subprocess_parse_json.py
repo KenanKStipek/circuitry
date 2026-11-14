@@ -97,6 +97,31 @@ def test_empty_stdout_is_an_error(tmp_path: Path, stdout: str) -> None:
         tool.execute(params={"args": [], "parse": "json"})
 
 
+def test_scrub_secrets_runs_on_the_whole_stdout_before_the_excerpt_is_cut(
+    tmp_path: Path,
+) -> None:
+    """#600 item 1: a secret straddling the 200-character cut leaves no
+    fragment once ``scrub_secrets`` is given -- scrubbing the excerpt
+    alone, after the cut, could never find the whole value to replace."""
+    secret = "sk-straddle-600"
+    stdout = "x" * 190 + secret + "more"
+    tool = _generic(_script(tmp_path, stdout))
+    with pytest.raises(ValueError) as excinfo:
+        tool.execute(
+            params={"args": [], "parse": "json"},
+            scrub_secrets=lambda text: text.replace(secret, "[secret:x]"),
+        )
+    message = str(excinfo.value)
+    assert secret[:10] not in message
+    assert "[secret:x]" in message
+
+
+def test_without_scrub_secrets_the_excerpt_is_unaffected(tmp_path: Path) -> None:
+    tool = _generic(_script(tmp_path, "not json"))
+    with pytest.raises(ValueError, match="not json"):
+        tool.execute(params={"args": [], "parse": "json"})
+
+
 def test_unknown_parse_mode_is_rejected_before_the_process_runs(
     tmp_path: Path,
 ) -> None:
@@ -167,6 +192,20 @@ def test_shell_allowlist_is_checked_before_parse_mode() -> None:
         ShellPlugin().execute(
             params={"command": "rm", "args": ["x"], "parse": "toml"}
         )
+
+
+def test_shell_scrub_secrets_runs_on_the_whole_stdout_before_the_excerpt_is_cut() -> None:
+    """#600 item 1, for `shell` too."""
+    secret = "sk-straddle-600-shell"
+    stdout = "x" * 190 + secret
+    with pytest.raises(ValueError) as excinfo:
+        ShellPlugin().execute(
+            params={"command": "echo", "args": ["-n", stdout], "parse": "json"},
+            scrub_secrets=lambda text: text.replace(secret, "[secret:x]"),
+        )
+    message = str(excinfo.value)
+    assert secret[:10] not in message
+    assert "[secret:x]" in message
 
 
 def test_tool_effect_value_is_parsed_and_raw_stdout_is_on_meta() -> None:

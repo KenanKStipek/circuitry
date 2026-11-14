@@ -1,0 +1,12 @@
+name: c-secret-reflector-plan-never-absorbed
+adapter: scripted
+model: test
+effects:
+  - type: reflector
+    name: plan_it
+    on_error: continue
+    prime_template: "Plan it."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

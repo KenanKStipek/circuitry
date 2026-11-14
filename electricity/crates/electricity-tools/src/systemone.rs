@@ -1363,7 +1363,7 @@ impl SystemOnePlugin {
                 )
             } else {
                 let mut message = format!("systemone HTTP {status} ({kind})");
-                let excerpt = crate::http::http_error_excerpt(&text, 500);
+                let excerpt = crate::http::http_error_excerpt(&text, 500, None);
                 if !excerpt.is_empty() {
                     message = format!("{message}: {excerpt}");
                 }

@@ -480,15 +480,31 @@ fn python_bytes_ctor(value: &Value) -> Result<Vec<u8>, ToolError> {
 /// else the redacted body itself (object or scalar), sliced to
 /// *max_chars* Unicode scalar values (never split bytes), never the
 /// unredacted raw text.
-pub fn http_error_excerpt(body: &str, max_chars: usize) -> String {
+/// *scrub*, when given (issue #600), also replaces a resolved secret
+/// with its placeholder in whichever field this returns: a raw-text
+/// scrub of *body* before it ever reaches this function (as every
+/// caller already does) still misses a secret the server wrote with
+/// JSON escapes (`\/` for a literal `/`, `\uXXXX` for a non-ASCII
+/// character) -- decoding undoes the escaping, so the parsed
+/// `error.message` this picks out can hold the literal value even
+/// when the undecoded raw text never matched.
+pub fn http_error_excerpt(
+    body: &str,
+    max_chars: usize,
+    scrub: Option<&dyn Fn(&str) -> String>,
+) -> String {
     let text = py_strip(body);
     if text.is_empty() {
         return String::new();
     }
     let slice_chars = |s: &str| -> String {
-        match s.char_indices().nth(max_chars) {
+        let sliced = match s.char_indices().nth(max_chars) {
             Some((byte_idx, _)) => s[..byte_idx].to_string(),
             None => s.to_string(),
+        };
+        match scrub {
+            Some(f) => f(&sliced),
+            None => sliced,
         }
     };
     let parsed = match electricity_json::loads(text) {
@@ -1827,7 +1843,7 @@ fn finalize_response_save(
             // Issue #725: scrubbed *before* the cut, so no part of a
             // secret survives it (`plugins/http.py::HttpPlugin.execute`).
             let scrubbed = scrub.map(|f| f(&text)).unwrap_or(text);
-            let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
+            let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS, scrub);
             if excerpt.is_empty() {
                 base
             } else {
@@ -1941,7 +1957,7 @@ fn finalize_response(
         // Issue #725: scrubbed *before* the cut, so no part of a secret
         // survives it (`plugins/http.py::HttpPlugin.execute`).
         let scrubbed = scrub.map(|f| f(&text)).unwrap_or_else(|| text.clone());
-        let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS);
+        let excerpt = http_error_excerpt(&scrubbed, ERROR_EXCERPT_MAX_CHARS, scrub);
         if excerpt.is_empty() {
             base
         } else {

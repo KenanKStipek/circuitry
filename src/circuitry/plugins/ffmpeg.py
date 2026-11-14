@@ -100,7 +100,12 @@ class FfmpegPlugin:
         params: dict[str, Any],
         timeout_seconds: int = 300,
         on_live: Callable[[dict[str, Any] | None], None] | None = None,
+        scrub_secrets: Callable[[str], str] | None = None,
     ) -> ToolResult:
+        # ffmpeg has no `parse: json` and resolves no secret of its own, so
+        # there is nothing for *scrub_secrets* to do here (accepted only to
+        # match the other two plugins core/tool.py dispatches this way to).
+        del scrub_secrets
         input_path = params.get("input")
         if not input_path or not isinstance(input_path, str):
             raise ValueError("FfmpegPlugin requires params['input'] as a non-empty string.")

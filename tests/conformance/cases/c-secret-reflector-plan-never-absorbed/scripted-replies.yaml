@@ -1,0 +1,12 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      done: false
+      effects:
+        - type: tool
+          name: call
+          provider: http
+          params:
+            url: http://127.0.0.1:1/
+            headers: {Authorization: {secret: api, prefix: "Bearer "}}
+    tokens_sent: 10
+    tokens_received: 20

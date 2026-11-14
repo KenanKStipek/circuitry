@@ -1,0 +1,12 @@
+name: c-secret-use-path-child-absorbed
+effects:
+  - type: use
+    name: child
+    path: child.yml
+    on_error: continue
+  - type: tool
+    name: after
+    provider: json
+    params:
+      mode: parse
+      input: "{\"ok\": true}"

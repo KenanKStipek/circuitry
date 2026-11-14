@@ -941,6 +941,19 @@ for the CLI walkthrough. Each provider's capability tag
 | `fs-write` | `agent`, `fs`, `tar`, `zip`, `gzip`, `vector_search`, `gdrive`, `screenshot` |
 | `network` | `agent`, `comfyui`, `http`, `email_smtp`, `port_check`, `dns`, `whois`, `rss`, `wikipedia`, `webhook`, `web_fetch`, `web_search`, `weather`, `s3`, `surrealdb`, `systemone`, `mcp`, `linear`, `slack`, `discord`, `github`, `jira`, `notion`, `gcalendar`, `gdrive`, `playwright`, `screenshot`, `docker`, `kubectl`, `gh`, `git`, `yt_dlp`, `ping`, `traceroute`, `service` |
 
+Two `network`-only providers also save a file as a side effect, under
+params none of the four capabilities names on its own (#604) — only a
+document run by path may use them that way, the same rule `http`'s
+`save_to` follows (#602): `comfyui`'s `image_output` (default `path`; see
+[its params reference](#tool)) and `s3`'s `mode: get` with `path` (the
+LLM-callable tool, `plugins/s3_tool.py`, not the
+[runtime `s3` plugin](./runtime-plugins.md) that persists run state). A
+limited document's effect fails `cof check` when the literal params
+already show it, and fails at dispatch otherwise (a rendered template,
+`params_json`, or a profile that switches the provider to one of them);
+electricity doesn't implement either provider yet, so it refuses both
+with the preview marker regardless.
+
 A provider absent from every row needs no consent: it only reads its own
 parameters and returns a value (`cel`, `math`, `regex`, `json`, `clock`, `hash`,
 `uuid`, `base64`, ...).
@@ -1068,6 +1081,14 @@ are equivalent; `on_error: fail` (the default) re-raises either way,
 | `seed` | integer | random | Seed; auto-generated if absent or negative |
 | `negative_prompt` | string | `""` | Negative prompt |
 | `workflow` | object | — | Optional: full custom ComfyUI workflow (overrides built-in) |
+
+- **Trust (#604).** `image_output` defaults to `path`, which saves the
+  image to `image_dir` — only a document run by path may use `image_output:
+  path` (or leave it unset) or name `image_dir` at all; a limited document
+  must pass `image_output: base64` or `image_output: url`. A literal value
+  fails `cof check`; a templated one, or one `params_json` sets, fails at
+  dispatch instead. electricity doesn't implement `comfyui` yet, so it
+  refuses it with the preview marker regardless of this rule.
 
 #### `cel`: a value computed with CEL
 

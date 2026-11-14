@@ -26,6 +26,11 @@ Image generation, illustration, visual content creation, style transfer, image-t
 - `params.image_output` (string: `path`|`base64`|`url`, default `path`) — output format
 - `params.image_dir` (string, default `./output/images`) — output directory for path mode
 
+`image_output: path` (the default) saves the image locally, under `network`
+capability consent alone — only a document run by path may use it, or leave
+`image_output` unset, or name `image_dir`. A limited document must pass
+`image_output: base64` or `image_output: url` explicitly.
+
 ## Examples
 
 Text-to-image:
