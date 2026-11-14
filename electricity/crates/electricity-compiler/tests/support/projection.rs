@@ -483,6 +483,15 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "expect": project_expect(&use_op.expect),
                 "enabled": op.enabled,
                 "parent_trusted": use_op.parent_trusted,
+                "allow_tools": Json::Array(
+                    use_op.allow_tools.iter().cloned().map(Json::String).collect(),
+                ),
+                "force_generated": use_op.force_generated,
+                "generating_effect_path_override": use_op
+                    .generating_effect_path_override
+                    .clone()
+                    .map(Json::String)
+                    .unwrap_or(Json::Null),
             })
         }
         LeafKind::Yield(yield_op) => json!({
@@ -524,6 +533,9 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
             "stop_on_done": reflector.stop_on_done,
             "prime_template": template_source_or_marker(&reflector.prime_template.source),
             "max_effects": reflector.max_effects,
+            "allow_tools": Json::Array(
+                reflector.allow_tools.iter().cloned().map(Json::String).collect(),
+            ),
             "enabled": op.enabled,
         }),
     }

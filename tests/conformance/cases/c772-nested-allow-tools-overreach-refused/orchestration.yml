@@ -1,0 +1,18 @@
+name: c772-nested-allow-tools-overreach-refused
+interface:
+  inputs:
+    outer_plan:
+      type: string
+      default: |
+        effects:
+          - type: yield
+            name: seed
+            template: "effects:\n  - type: tool\n    name: t\n    provider: awk\n    params:\n      program: '{print}'\n      args: []\n"
+          - type: use
+            name: inner
+            allow_tools: [awk]
+            inline: "{{{prime.seed.value}}}"
+effects:
+  - type: use
+    name: outer
+    inline: "{{{input.outer_plan}}}"

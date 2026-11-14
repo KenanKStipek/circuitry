@@ -290,6 +290,22 @@ pub struct UseOp {
     pub retries: RetryPolicy,
     pub expect: Option<ExpectCondition>,
     pub description: Option<String>,
+    /// `UseDefinition.allow_tools` (#772): tool providers a generated
+    /// child may use beyond what the enclosing document uses itself,
+    /// statically. Literal only -- checked at compile time.
+    pub allow_tools: std::collections::BTreeSet<String>,
+    /// `UseDefinition.force_generated` (#772): true only for the
+    /// synthetic 'use' a reflector builds for its own generated plan,
+    /// which has no author template of its own to compare against and
+    /// so is unconditionally generated.
+    pub force_generated: bool,
+    /// `UseDefinition.generating_effect_path_override` (#772): the
+    /// dotted state path of the effect that actually generated this
+    /// child, named in a generated-document refusal so the fix is
+    /// actionable. `None` for an ordinary 'use' effect (its own node
+    /// path is the generating effect); `Some` for the reflector's own
+    /// synthetic 'use', set to the reflector's own path.
+    pub generating_effect_path_override: Option<String>,
 }
 
 /// `YieldDefinition`, minus `name`/`on_error`/`enabled`.
@@ -349,4 +365,8 @@ pub struct ReflectorOp {
     pub prime_template: TemplateText,
     /// Default `8`.
     pub max_effects: u32,
+    /// `ReflectorDefinition.allow_tools` (#772): tool providers the
+    /// generated plan may use beyond what the enclosing document uses
+    /// itself, statically.
+    pub allow_tools: std::collections::BTreeSet<String>,
 }

@@ -298,7 +298,10 @@ def maybe_decompose(
     base["yaml"] = plan.yaml
 
     problems = _validate_plan(
-        plan, max_chunks=dset.max_chunks, runtime_config=runtime_config
+        plan,
+        max_chunks=dset.max_chunks,
+        runtime_config=runtime_config,
+        generating_effect_path=f"decomposition of '{node_path}'",
     )
     if problems:
         return _failure(base, dset, "invalid_plan", "; ".join(problems), fallback)
@@ -439,9 +442,12 @@ def _planner_path(runtime_config: Mapping[str, Any]) -> Path:
     )
 
 
-def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
+def _planner_runtime_config(
+    runtime_config: dict[str, Any], planner_orch: Mapping[str, Any]
+) -> dict[str, Any]:
     """The planner's runtime: the caller's, with both decomposition triggers
-    switched off.
+    switched off, and running as its own literal document rather than
+    inheriting the caller's generated-document ceiling (#772).
 
     The planner's own planning prompt scores off the chart by construction —
     left on, decomposition would recurse into itself before the first plan
@@ -452,7 +458,30 @@ def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
     under ``splitting.on_failure: fail`` would turn every over-threshold
     decomposition attempt into a planner failure. Scoring and routing are
     left as configured.
+
+    The planner itself is a document the project ships, not one the model
+    wrote — decomposing inside an already-generated document previously ran
+    the planner (and the ``validate_yaml``/``json`` tool effects it uses to
+    check its own output) under the *caller's* ceiling, which routinely
+    lacks either provider, so decomposition inside a generated document
+    always failed its own self-check. The planner gets a fresh ceiling
+    computed from its own text instead, the same way any other non-generated
+    document does (``core.use.UseRuntime._check_generated_document``'s
+    ``_fresh_ceiling``); the plan it goes on to emit is unaffected and still
+    runs under the caller's inherited ceiling (:func:`_plan_tool_ceiling_overlay`).
     """
+    from ..generated_doc import (
+        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY,
+        GENERATED_DOCUMENT_GENERATING_PATH_KEY,
+        GENERATED_DOCUMENT_IS_GENERATED_KEY,
+        GENERATED_DOCUMENT_PROVIDERS_KEY,
+        GENERATED_DOCUMENT_SHELL_COMMANDS_KEY,
+        host_shell_pin,
+        resolved_shell_allowlist,
+        static_shell_allowed_commands,
+        static_tool_providers,
+    )
+
     out = dict(runtime_config)
     complexity = runtime_config.get("complexity")
     if isinstance(complexity, Mapping):
@@ -461,6 +490,18 @@ def _planner_runtime_config(runtime_config: dict[str, Any]) -> dict[str, Any]:
             "decomposition": {"enabled": False},
             "splitting": {"enabled": False},
         }
+    out[GENERATED_DOCUMENT_IS_GENERATED_KEY] = False
+    out[GENERATED_DOCUMENT_PROVIDERS_KEY] = sorted(static_tool_providers(planner_orch))
+    out[GENERATED_DOCUMENT_SHELL_COMMANDS_KEY] = sorted(
+        resolved_shell_allowlist(
+            static_shell_allowed_commands(planner_orch),
+            host_pin=host_shell_pin(runtime_config),
+        )
+    )
+    out[GENERATED_DOCUMENT_GENERATING_PATH_KEY] = ""
+    # A literal document again, so its own use/reflector effects may name
+    # allow_tools, as electricity's planner frame allows.
+    out[GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY] = True
     return out
 
 
@@ -575,7 +616,7 @@ def _run_planner(
             node_path=node_path,
             adapter=adapter,
             model=model,
-            runtime_config=_planner_runtime_config(runtime_config),
+            runtime_config=_planner_runtime_config(runtime_config, planner_orch),
             timeout_seconds=timeout_seconds,
             verbose=verbose,
             display_depth=display_depth,
@@ -605,7 +646,11 @@ def _run_planner(
 
 
 def _validate_plan(
-    plan: _Plan, *, max_chunks: int, runtime_config: Mapping[str, Any]
+    plan: _Plan,
+    *,
+    max_chunks: int,
+    runtime_config: Mapping[str, Any],
+    generating_effect_path: str = "",
 ) -> list[str]:
     """Everything wrong with the plan; an empty list is the licence to run it."""
     problems: list[str] = []
@@ -629,19 +674,29 @@ def _validate_plan(
             f"the plan has {len(plan.chunks)} chunks; the budget is {max_chunks}"
         )
     problems.extend(
-        _validate_generated_yaml(plan.yaml, plan.result_path, runtime_config=runtime_config)
+        _validate_generated_yaml(
+            plan.yaml,
+            plan.result_path,
+            runtime_config=runtime_config,
+            generating_effect_path=generating_effect_path,
+        )
     )
     return problems
 
 
 def _validate_generated_yaml(
-    yaml_text: str, result_path: str, *, runtime_config: Mapping[str, Any]
+    yaml_text: str,
+    result_path: str,
+    *,
+    runtime_config: Mapping[str, Any],
+    generating_effect_path: str = "",
 ) -> list[str]:
-    """The four checks every generated plan — planned (score trigger) or
+    """The five checks every generated plan — planned (score trigger) or
     deterministically generated (size trigger) — must pass before it runs:
-    the schema, the allowlists, the capability ceiling, and the merge
-    contract (#672). Shared so the size trigger's own, never-planned plan
-    runs through exactly the same gate as the score trigger's planner output.
+    the schema, the allowlists, the capability ceiling, the tool-provider
+    ceiling (#772), and the merge contract (#672). Shared so the size
+    trigger's own, never-planned plan runs through exactly the same gate as
+    the score trigger's planner output.
     """
     ok, errors = _validate_inline_yaml(yaml_text)
     if not ok:
@@ -650,6 +705,9 @@ def _validate_generated_yaml(
         *_check_merge_contract(yaml_text, result_path),
         *_check_allowlists(yaml_text, runtime_config),
         *_check_capability_ceiling(yaml_text, runtime_config),
+        *_check_generated_tool_ceiling(
+            yaml_text, runtime_config, generating_effect_path=generating_effect_path
+        ),
     ]
 
 
@@ -700,6 +758,98 @@ def _check_capability_ceiling(yaml_text: str, runtime_config: Mapping[str, Any])
         "the plan needs capabilities beyond this document's consented ones: "
         + ", ".join(sorted(beyond))
     ]
+
+
+def _check_generated_tool_ceiling(
+    yaml_text: str, runtime_config: Mapping[str, Any], *, generating_effect_path: str = ""
+) -> list[str]:
+    """A decomposition plan is always generated (#772): its own
+    'allowed_commands' never widen past the host config and the enclosing
+    document's own literal shell effects, a 'service' effect's 'shell:
+    true' is always refused, and it is held to a tool-provider ceiling like
+    a 'use'/'reflector' generated child -- except that it has no
+    generating effect of its own to carry a literal 'allow_tools:'.
+
+    The ceiling is the enclosing context's own limits when it already has
+    any (the plan runs inside an already-generated document): never
+    widened by ``DECOMPOSITION_SAFE_PROVIDERS`` there, since that would
+    grant a nested plan something its already-generated enclosing document
+    was not itself allowed. Otherwise (the enclosing document is a plain,
+    literal one) the ceiling is its own providers plus
+    ``DECOMPOSITION_SAFE_PROVIDERS``: the planner's own 'merge' step
+    commonly needs a side-effect-free data tool (json, say) the enclosing
+    document never uses itself, and none of that fixed set can reach
+    anything outside the process.
+    """
+    import yaml as _yaml
+
+    from ..generated_doc import current_shell_allowlist, generated_document_errors
+
+    try:
+        parsed = _yaml.safe_load(yaml_text or "")
+    except _yaml.YAMLError:
+        return []  # already reported by the schema check
+    if not isinstance(parsed, dict):
+        return []
+    return generated_document_errors(
+        parsed,
+        allowed_providers=_decomposition_allowed_providers(runtime_config),
+        generating_effect_path=generating_effect_path,
+        allowed_shell_commands=current_shell_allowlist(runtime_config),
+        allow_tools_available=False,
+    )
+
+
+def _decomposition_allowed_providers(runtime_config: Mapping[str, Any]) -> frozenset[str]:
+    """The tool-provider ceiling a decomposition plan runs under (#772): the
+    enclosing context's own limits unchanged when it already has any,
+    otherwise its providers plus ``DECOMPOSITION_SAFE_PROVIDERS`` (see
+    :func:`_check_generated_tool_ceiling`'s doc comment).
+    """
+    from ..generated_doc import (
+        DECOMPOSITION_SAFE_PROVIDERS,
+        GENERATED_DOCUMENT_IS_GENERATED_KEY,
+        GENERATED_DOCUMENT_PROVIDERS_KEY,
+    )
+
+    enclosing = frozenset(runtime_config.get(GENERATED_DOCUMENT_PROVIDERS_KEY) or ())
+    if runtime_config.get(GENERATED_DOCUMENT_IS_GENERATED_KEY):
+        return enclosing
+    return enclosing | DECOMPOSITION_SAFE_PROVIDERS
+
+
+def _plan_tool_ceiling_overlay(
+    runtime_config: Mapping[str, Any], *, generating_effect_path: str
+) -> dict[str, Any]:
+    """The ``runtime_config`` keys a decomposition plan's own execution
+    needs (#772): the plan itself is generated, and becomes the "enclosing
+    document" for any ``use``/``reflector`` effect of its own, and for any
+    tool effect of its own that a dispatch-time check
+    (:func:`circuitry.generated_doc.dispatch_errors`) reads limits for --
+    allowed the tool providers it was just checked against in
+    :func:`_check_generated_tool_ceiling` (:func:`_decomposition_allowed_providers`),
+    never recomputed from its own, model-written text. A further-nested
+    decomposition (one level deeper, bounded by ``max_depth``) inherits
+    this same ceiling unchanged, the same inheritance a nested ``use``/
+    ``reflector`` effect gets; the shell-allowlist key is left alone
+    entirely, inheriting through the ``**runtime_config`` spread at each
+    call site. ``allow_tools`` is never available to name as the fix for a
+    decomposition plan -- it has no such field of its own.
+    """
+    from ..generated_doc import (
+        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY,
+        GENERATED_DOCUMENT_GENERATING_PATH_KEY,
+        GENERATED_DOCUMENT_IS_GENERATED_KEY,
+        GENERATED_DOCUMENT_PROVIDERS_KEY,
+    )
+
+    allowed = _decomposition_allowed_providers(runtime_config)
+    return {
+        GENERATED_DOCUMENT_IS_GENERATED_KEY: True,
+        GENERATED_DOCUMENT_PROVIDERS_KEY: sorted(allowed),
+        GENERATED_DOCUMENT_GENERATING_PATH_KEY: generating_effect_path,
+        GENERATED_DOCUMENT_ALLOW_TOOLS_AVAILABLE_KEY: False,
+    }
 
 
 def _check_merge_contract(yaml_text: str, result_path: str) -> list[str]:
@@ -790,6 +940,9 @@ def _execute_plan(
         **runtime_config,
         "_use_call_stack": [*parent_stack, identity],
         _DEPTH_KEY: depth + 1,
+        **_plan_tool_ceiling_overlay(
+            runtime_config, generating_effect_path=f"decomposition of '{node_path}'"
+        ),
     }
 
     # A *copy* of the effect's own render context — loop overlays and
@@ -1233,7 +1386,12 @@ def _maybe_split(
     base["yaml"] = plan_yaml
     base["result_path"] = result_path
 
-    problems = _validate_generated_yaml(plan_yaml, result_path, runtime_config=runtime_config)
+    problems = _validate_generated_yaml(
+        plan_yaml,
+        result_path,
+        runtime_config=runtime_config,
+        generating_effect_path=f"split of '{node_path}'",
+    )
     if problems:
         logger.warning(
             "Generated split plan for prompt %r failed validation: %s",
@@ -1874,6 +2032,9 @@ def _execute_split_plan(
         **runtime_config,
         "_use_call_stack": [*parent_stack, identity],
         _DEPTH_KEY: depth + 1,
+        **_plan_tool_ceiling_overlay(
+            runtime_config, generating_effect_path=f"split of '{node_path}'"
+        ),
     }
 
     # A *copy* of the effect's own render context, exactly like the score

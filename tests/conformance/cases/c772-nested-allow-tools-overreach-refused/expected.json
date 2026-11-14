@@ -1,0 +1,3 @@
+{
+  "error": "prime.outer: use 'outer' -> inline: prime.inner: use 'inner' -> inline: generated effect 'prime.inner' sets allow_tools to include ['awk'], which the document that generated it was not itself allowed to use; a document generated at run time can't grant its own nested effects anything new this way.; generated effect 't' uses tool provider 'awk', which the document that generated it doesn't use; add 'awk' to allow_tools on prime.inner to allow it."
+}

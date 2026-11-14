@@ -5,6 +5,7 @@ effects:
   - type: reflector
     name: plan_it
     on_error: continue
+    allow_tools: [http]
     prime_template: "Plan it."
     effects:
       - type: prompt

@@ -775,8 +775,15 @@ fn mid_run_live_state_shows_a_use_childs_own_running_step() {
 /// makes the slow pass's own overlay vanish right along with the fast
 /// one's, and `prime.job.slow` never shows as running again for the
 /// rest of the slow pass's own run.
+///
+/// `job`'s own `allow_tools: [sleep]` is required (#772): `{{s}}`
+/// inside a flow-style `params: {...}` breaks the unrendered `inline:`
+/// text as YAML on its own (a flow mapping can't have another flow
+/// mapping as a key), so the generated-document ceiling can't recognize
+/// this as the author's own literal structure with just a scalar
+/// templated in, and treats the whole child as generated.
 const CONCURRENT_USE_CHILDREN_SHARE_A_PATH_DOC: &str = "\
-effects:\n  - name: seconds\n    type: tool\n    provider: json\n    params: {mode: parse, input: '[0.1, 1.5]'}\n  - type: loop\n    flow: tree\n    max_concurrency: 2\n    each:\n      in: prime.seconds.value\n      as: s\n    body:\n      - type: use\n        name: job\n        inline: |\n          effects:\n            - name: quick\n              type: tool\n              provider: json\n              params: {mode: stringify, value: {a: 1}}\n            - name: slow\n              type: tool\n              provider: sleep\n              params: {seconds: {{s}}}\n";
+effects:\n  - name: seconds\n    type: tool\n    provider: json\n    params: {mode: parse, input: '[0.1, 1.5]'}\n  - type: loop\n    flow: tree\n    max_concurrency: 2\n    each:\n      in: prime.seconds.value\n      as: s\n    body:\n      - type: use\n        name: job\n        allow_tools: [sleep]\n        inline: |\n          effects:\n            - name: quick\n              type: tool\n              provider: json\n              params: {mode: stringify, value: {a: 1}}\n            - name: slow\n              type: tool\n              provider: sleep\n              params: {seconds: {{s}}}\n";
 
 #[test]
 fn mid_run_live_state_keeps_a_use_childs_running_step_visible_after_a_sibling_graft_clears() {

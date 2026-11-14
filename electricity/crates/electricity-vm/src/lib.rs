@@ -25,6 +25,7 @@ pub mod compose;
 pub mod decompose;
 pub mod exec;
 pub mod frame;
+pub mod generated_doc;
 pub mod limiter;
 pub mod observer;
 pub mod params;
@@ -417,7 +418,20 @@ pub async fn execute_root(
         Value::None => Vec::new(),
         other => vec![exec::CtxSource::Frozen(other.clone())],
     };
-    let frame = Frame::root();
+    // The root document is the first "enclosing document" a nested
+    // use/reflector effect's generated child is judged against (#772),
+    // never itself generated.
+    let host_pin = crate::generated_doc::host_shell_pin(run_ctx.runtime_config);
+    let frame = Frame::root().with_document_tool_providers(
+        crate::generated_doc::static_tool_providers_from_op(&program.root),
+        crate::generated_doc::resolved_shell_allowlist(
+            &crate::generated_doc::static_shell_allowed_commands_from_op(&program.root),
+            host_pin.as_ref(),
+        ),
+        false,
+        String::new(),
+        true,
+    );
     exec::dynamic::execute_dynamic(
         &program.root,
         store,

@@ -201,6 +201,9 @@ mod python_type_name_tests {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }))))
             .python_type_name(),
             "UseDefinition"
@@ -226,6 +229,7 @@ mod python_type_name_tests {
                 stop_on_done: true,
                 prime_template: TemplateText::new("", false, Escape::None),
                 max_effects: 8,
+                allow_tools: std::collections::BTreeSet::new(),
             }))))
             .python_type_name(),
             "ReflectorDefinition"

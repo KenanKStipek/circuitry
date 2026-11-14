@@ -1,0 +1,28 @@
+name: c772-author-service-shell-by-reference-accepted
+interface:
+  inputs:
+    service_command:
+      type: string
+      default: sleep 5
+    use_shell:
+      type: boolean
+      default: true
+runtime:
+  plugins:
+    service:
+      state_dir: "~/.c772-conformance-service-state"
+effects:
+  - type: tool
+    name: start
+    provider: service
+    params:
+      action: start
+      name: c772-author-svc
+      command: {from: input.service_command}
+      shell: {from: input.use_shell}
+  - type: tool
+    name: stop
+    provider: service
+    params:
+      action: stop
+      name: c772-author-svc

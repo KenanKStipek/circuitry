@@ -504,7 +504,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -562,7 +565,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -700,7 +706,8 @@
           "stop_on_done": true,
           "prime_template": "<REFLECTOR_PRIME>",
           "max_effects": 8,
-          "enabled": true
+          "enabled": true,
+          "allow_tools": []
         }
       ],
       "flow": "chain",
@@ -2086,7 +2093,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -2681,7 +2691,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -6768,7 +6781,8 @@
           "stop_on_done": true,
           "prime_template": "<REFLECTOR_PRIME>",
           "max_effects": 8,
-          "enabled": true
+          "enabled": true,
+          "allow_tools": []
         }
       ],
       "flow": "chain",
@@ -8222,7 +8236,8 @@
           "stop_on_done": true,
           "prime_template": "Plan {goal}: {{#unclosed",
           "max_effects": 8,
-          "enabled": true
+          "enabled": true,
+          "allow_tools": []
         }
       ],
       "flow": "chain",
@@ -8445,7 +8460,8 @@
           "stop_on_done": true,
           "prime_template": "<REFLECTOR_PRIME>",
           "max_effects": 8,
-          "enabled": true
+          "enabled": true,
+          "allow_tools": []
         }
       ],
       "flow": "chain",
@@ -8539,7 +8555,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8600,7 +8619,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8662,7 +8684,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8726,7 +8751,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8788,7 +8816,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8851,7 +8882,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8912,7 +8946,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",
@@ -8974,7 +9011,10 @@
           "retries": null,
           "expect": null,
           "enabled": true,
-          "parent_trusted": true
+          "parent_trusted": true,
+          "allow_tools": [],
+          "force_generated": false,
+          "generating_effect_path_override": null
         }
       ],
       "flow": "chain",

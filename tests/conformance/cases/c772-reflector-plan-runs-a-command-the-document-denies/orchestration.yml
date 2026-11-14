@@ -1,0 +1,16 @@
+name: c772-reflector-plan-runs-a-command-the-document-denies
+adapter: scripted
+model: test
+effects:
+  - type: tool
+    name: seed
+    provider: shell
+    params:
+      command: echo
+      args: ["seed"]
+  - type: reflector
+    name: planner
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "Plan."

@@ -1,0 +1,22 @@
+name: c772-root-providers-reflect-profile-override
+interface:
+  inputs:
+    plan:
+      type: string
+      default: |
+        effects:
+          - type: tool
+            name: x
+            provider: json
+            params: {mode: parse, input: '"ok"'}
+effects:
+  - type: tool
+    name: t
+    provider: shell
+    on_error: continue
+    params:
+      command: echo
+  - type: use
+    name: child
+    on_error: continue
+    inline: "{{{input.plan}}}"

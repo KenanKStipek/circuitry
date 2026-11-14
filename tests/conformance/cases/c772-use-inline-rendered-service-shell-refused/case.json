@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #772",
+  "description": "A generated document's service effect sets shell: true -- refused the same way a generated shell effect's own allowed_commands is, before any of the generated document's effects run.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

@@ -1,0 +1,14 @@
+name: c772-allow-tools-from-ref-whole-rejected
+interface:
+  inputs:
+    tools:
+      type: array
+      default: [shell]
+effects:
+  - type: reflector
+    name: plan_it
+    allow_tools: {from: input.tools}
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

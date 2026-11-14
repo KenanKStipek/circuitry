@@ -20,6 +20,7 @@ from ..adapters._retry import (
     status_is_retryable,
 )
 from ..cli.redaction import redact
+from ..generated_doc import dispatch_errors
 from ..output import console as _console
 from ..output import live_region as _live_region
 from ..plugins._subprocess import GenericSubprocessTool
@@ -378,8 +379,19 @@ def _deep_merge_params(base: dict[str, Any], overlay: dict[str, Any]) -> dict[st
 #: plugin's allowlist). Honoured only from a document's literal, unrendered
 #: ``params`` block — never ``params_json`` (runtime-built, can carry
 #: model-generated content) and never a templated value within the literal
-#: block, so neither can widen what a document is allowed to run.
+#: block, so neither can widen what a document is allowed to run. A
+#: generated document's own ``service`` ``shell`` boundary is enforced
+#: separately, by ``generated_doc`` against the *resolved* value, the same
+#: string-aware way the plugin itself coerces it -- not by this check, which
+#: would otherwise also refuse an author's own ``{from: ...}`` reference to
+#: a value the author controls themselves (#772, #781).
 _SECURITY_SENSITIVE_PARAM_KEYS: frozenset[str] = frozenset({"allowed_commands"})
+
+#: Keys ``params_json`` can never set, in any document, generated or not
+#: (#772) -- wider than :data:`_SECURITY_SENSITIVE_PARAM_KEYS` because
+#: ``params_json`` is runtime-built and can carry model-generated content
+#: regardless of which document it's in.
+_PARAMS_JSON_FORBIDDEN_KEYS: frozenset[str] = frozenset({"allowed_commands", "shell"})
 
 
 def _reject_templated_security_params(raw_params: dict[str, Any]) -> None:
@@ -425,7 +437,7 @@ def _reject_params_json_security_overrides(overlay: dict[str, Any]) -> None:
     model-generated content (#203) — so it must never be the source of a
     plugin's own allowlist; only a document's literal ``params`` block is.
     """
-    overridden = _SECURITY_SENSITIVE_PARAM_KEYS & overlay.keys()
+    overridden = _PARAMS_JSON_FORBIDDEN_KEYS & overlay.keys()
     if overridden:
         raise ValueError(
             f"params_json must not set {sorted(overridden)}: security-sensitive "
@@ -925,6 +937,7 @@ class ToolRuntime:
             timeout_unresolved = False
             prompt_file_unread = False
             secret_unresolved = False
+            dispatch_refused = False
             # Set only on the ok=False path below, from the plugin's own
             # response headers — an exception never reached a response, so
             # it never has one to read.
@@ -1036,6 +1049,22 @@ class ToolRuntime:
                 if prompt_file_read is not None:
                     meta["template_files"] = [prompt_file_read.record]
                 mtag = _model_tag(rendered)
+
+                # The authoritative check (#772): right before this tool
+                # effect dispatches, on every attempt, against its final
+                # provider and params -- after Mustache rendering and the
+                # params_json merge above, which the compile-time check on
+                # the parsed child document (core.use.UseRuntime._check_generated_document)
+                # never sees. A no-op when this document carries no limits.
+                dispatch_violations = dispatch_errors(
+                    provider=self.defn.provider,
+                    params=plugin_params,
+                    runtime_config=self.runtime_config,
+                    effect_label=self.defn.name,
+                )
+                if dispatch_violations:
+                    dispatch_refused = True
+                    raise ValueError("; ".join(dispatch_violations))
 
                 # Per attempt, from the state this attempt sees (#564). A
                 # reference that can't resolve is not retried: a retry reads
@@ -1206,6 +1235,7 @@ class ToolRuntime:
                     not timeout_unresolved
                     and not prompt_file_unread
                     and not secret_unresolved
+                    and not dispatch_refused
                     and self._is_retryable_failure(status_code=None, failure=e)
                 )
                 if dispatch_secrets:

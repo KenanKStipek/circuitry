@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #772",
+  "description": "A reflector's generated plan uses the json tool, which this document doesn't use anywhere itself. A reflector's plan is always generated -- refused up front by the generated-document ceiling, naming the effect, the provider, and the allow_tools field that would permit it.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

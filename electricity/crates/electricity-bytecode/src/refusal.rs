@@ -885,6 +885,9 @@ mod tests {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }),
         )
     }
@@ -1831,6 +1834,9 @@ mod tests {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }),
         );
         let program = program_with_root(root_block(vec![use_op]));
@@ -1912,6 +1918,9 @@ mod tests {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }),
         );
         let if_op = Op {
@@ -2139,6 +2148,9 @@ mod tests {
                     template: TemplateText::new("ok?", false, Escape::None),
                 }),
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }),
         );
         let program = program_with_root(root_block(vec![use_op]));
@@ -2164,6 +2176,9 @@ mod tests {
                     template: TemplateText::new("ok?", false, Escape::None),
                 }),
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }),
         );
         let program = program_with_root(root_block(vec![use_op]));
@@ -2308,6 +2323,9 @@ mod tests {
                 retries: RetryPolicy::default(),
                 expect: None,
                 description: None,
+                allow_tools: std::collections::BTreeSet::new(),
+                force_generated: false,
+                generating_effect_path_override: None,
             }),
         );
         let program = program_with_root(root_block(vec![prompt, use_op]));
@@ -2387,6 +2405,7 @@ mod tests {
                 stop_on_done: true,
                 prime_template: TemplateText::new("", false, Escape::None),
                 max_effects: 8,
+                allow_tools: std::collections::BTreeSet::new(),
             }),
         );
         let program = program_with_root(root_block(vec![reflector_op]));
