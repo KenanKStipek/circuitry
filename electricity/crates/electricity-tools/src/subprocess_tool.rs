@@ -687,7 +687,8 @@ mod tests {
 
     #[test]
     fn parse_json_stdout_replaces_value_and_keeps_raw_stdout() {
-        let parsed = parse_json_stdout(result_with_stdout("{\"ok\": true}\n", 3), "/x", None).unwrap();
+        let parsed =
+            parse_json_stdout(result_with_stdout("{\"ok\": true}\n", 3), "/x", None).unwrap();
         let mut expected = DictType::new();
         expected.insert(Value::from("ok"), Value::Bool(true));
         assert_eq!(parsed.value, Value::Dict(expected));

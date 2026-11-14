@@ -15,10 +15,14 @@ import pytest
 
 from circuitry.plugins.comfyui import (
     reject_limited_image_output,
+)
+from circuitry.plugins.comfyui import (
     static_param_errors as comfyui_param_errors,
 )
 from circuitry.plugins.s3_tool import (
     reject_limited_get_path,
+)
+from circuitry.plugins.s3_tool import (
     static_param_errors as s3_param_errors,
 )
 
