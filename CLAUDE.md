@@ -22,7 +22,10 @@ python scripts/generate-man-pages.py --check
 for g in electricity/scripts/generate_*.py; do python "$g" --check || echo "STALE: $g"; done
 ```
 CI is `.github/workflows/quality.yml` (pytest matrix 3.10–3.13, ruff, mypy,
-smoke). A PR is shippable when every check is green.
+smoke). A PR is shippable when every check is green. A draft PR runs only the
+quick jobs (ruff, mypy, smoke, the generated-files check); the pytest matrix,
+the man-page check, the Rust workflows and the integration workflows run once
+it is marked ready, and on every push after that.
 
 The last line checks the files `electricity/` copies from, or generates with,
 Circuitry's own code (its schemas, and expected outputs from its own loaders,
@@ -151,7 +154,8 @@ Runs can die at any moment; a pushed branch with no PR is invisible work.
    `**WIP — run in progress**` marker in the body.
 2. Keep committing and pushing small increments so partial progress survives.
 3. On completion, finalize with `gh pr edit` (full summary, acceptance-criteria
-   status, test plan, deviations — remove the WIP marker), then `gh pr ready`.
+   status, test plan, deviations — remove the WIP marker), then `gh pr ready`,
+   which starts the full CI run.
    Comment on the issue and swap its labels in the same breath.
 4. If a previous run already opened a PR for this issue, resume that branch —
    never open a duplicate.

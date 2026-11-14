@@ -2,6 +2,9 @@ name: oscilloscope
 
 on:
   pull_request:
+    # Jobs with the draft condition below skip on a draft PR;
+    # ready_for_review runs them once the PR is marked ready.
+    types: [opened, synchronize, reopened, ready_for_review]
     paths:
       - "oscilloscope/**"
       - "electricity/crates/**"
@@ -33,6 +36,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     steps:
@@ -60,6 +64,7 @@ jobs:
 
   msrv:
     name: MSRV check
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -81,6 +86,7 @@ jobs:
 
   e2e-cof:
     name: end-to-end with cof
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ubuntu-latest
     # P2-3: a hard ceiling on the whole job, independent of each
     # test's own in-process timeout (which only ever fires once the
@@ -117,6 +123,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     runs-on: ${{ matrix.os }}
     # Issue #431's lane E2: same hard ceiling as e2e-cof, for the
     # same reason -- a hang in the build or in electricity itself
@@ -150,6 +157,7 @@ jobs:
 
   build:
     name: release build (no publish)
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     uses: ./.github/workflows/rust-release-build.yml
     permissions:
       contents: read
