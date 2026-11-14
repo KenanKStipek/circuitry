@@ -831,15 +831,15 @@ impl RunObserver for Observer<'_> {
         }
     }
 
-    fn graft_child_write(&self, node_path: &EffectPath, snapshot: &Value) {
+    fn register_child_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.graft_child_write(node_path, snapshot);
+            mirror.register_child_graft(node_path, child_root);
         }
     }
 
-    fn clear_graft(&self, node_path: &EffectPath) {
+    fn clear_graft(&self, node_path: &EffectPath, child_root: &electricity_vm::NodeRef) {
         if let Some(mirror) = self.live_state {
-            mirror.clear_graft(node_path);
+            mirror.clear_graft(node_path, child_root);
         }
     }
 
@@ -853,15 +853,6 @@ impl RunObserver for Observer<'_> {
         if let Some(mirror) = self.live_state {
             mirror.clear_tree_branches(node_path, branches);
         }
-    }
-
-    // R4's own refinement on PR #472's review: `graft_child_write`
-    // above is a no-op without a mirror, so a caller that would
-    // otherwise snapshot a child store purely to call it should never
-    // do so either -- true exactly when a `--live-state` mirror is
-    // actually running.
-    fn wants_child_snapshots(&self) -> bool {
-        self.live_state.is_some()
     }
 
     // A report never fires effect_start/effect_complete, so it never
