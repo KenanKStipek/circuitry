@@ -31,7 +31,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: `` @ `` followed by a URL. The marker clause (after `;`) is stripped
 #: before this is applied, so a legitimate environment marker containing an
 #: unrelated `@` can't trip it.
-DIRECT_REFERENCE_RE = re.compile(r"^[A-Za-z0-9][\w.-]*\s*(?:\[[^\]]*\])?\s*@\s+\S")
+DIRECT_REFERENCE_RE = re.compile(r"^[A-Za-z0-9][\w.-]*\s*(?:\[[^\]]*\])?\s*@\s*\S")
 
 
 def requires_dist_from_metadata(text: str) -> list[str]:

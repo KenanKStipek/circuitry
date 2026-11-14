@@ -57,6 +57,12 @@ def test_direct_references_flags_direct_reference_with_extras():
     assert check_direct_references.direct_references(lines) == lines
 
 
+def test_direct_references_flags_no_space_after_at():
+    # PEP 508 allows no whitespace around `@` at all.
+    lines = ['somepkg@https://example.com/somepkg-1.0.tar.gz']
+    assert check_direct_references.direct_references(lines) == lines
+
+
 # ---------------------------------------------------------------------------
 # Built distributions
 # ---------------------------------------------------------------------------
