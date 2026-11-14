@@ -393,6 +393,29 @@ def test_a_generated_shell_command_beyond_the_document_literal_allowlist_is_refu
     assert "runtime.plugins.shell.allowed_commands" in errors[0]
 
 
+def test_a_bad_command_containing_a_single_quote_gets_pythons_double_quote_repr() -> None:
+    """#772 item 6: repr(['a single-quote command']) switches to double
+    quotes for an entry containing ' and no " -- electricity's own
+    refusal text must match this, not always single-quote the name."""
+    orch = {
+        "effects": [
+            {
+                "type": "tool",
+                "name": "t",
+                "provider": "shell",
+                "params": {"command": "it's", "allowed_commands": ["it's"]},
+            }
+        ]
+    }
+    errors = generated_document_errors(
+        orch,
+        allowed_providers=frozenset({"shell"}),
+        generating_effect_path="prime.plan_it",
+    )
+    assert errors
+    assert '["it\'s"]' in errors[0]
+
+
 # ── static_tool_providers_from_definitions (rule 9) ──────────────────────
 
 

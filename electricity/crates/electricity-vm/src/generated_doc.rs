@@ -976,14 +976,15 @@ fn walk_generated_errors(
     }
 }
 
-/// Python's own `repr()` of a sorted list of plain strings -- single
-/// quotes, exactly matching `f"{sorted(x)!r}"` for a `set[str]`/
-/// `list[str]` of ASCII command names (every shell command name this
-/// module ever sees).
+/// Python's own `repr()` of a sorted list of plain strings -- each
+/// rendered through [`Value::py_repr`], which already picks the
+/// double-quote form for an entry containing a `'` (and no `"`) the same
+/// way CPython's own `repr` does, exactly matching `f"{sorted(x)!r}"` for
+/// a `set[str]`/`list[str]` of command names.
 fn py_repr_str_list(items: &BTreeSet<String>) -> String {
     let inner = items
         .iter()
-        .map(|s| format!("'{s}'"))
+        .map(|s| Value::Str(s.clone()).py_repr())
         .collect::<Vec<_>>()
         .join(", ");
     format!("[{inner}]")
@@ -1321,6 +1322,21 @@ mod tests {
         assert!(errors[0].contains("'rm'"));
         assert!(!errors[0].contains("node"));
         assert!(errors[0].contains("runtime.plugins.shell.allowed_commands"));
+    }
+
+    #[test]
+    fn a_bad_command_containing_a_single_quote_gets_pythons_double_quote_repr() {
+        // #772 item 6: Python's own repr switches to double quotes for a
+        // string containing a ' and no " -- the refusal text must match
+        // byte-for-byte on both engines, not always single-quote the name.
+        let orch = parse(
+            "effects:\n  - type: tool\n    name: t\n    provider: shell\n    params:\n      \
+             command: \"it's\"\n      allowed_commands: [\"it's\"]\n",
+        );
+        let allowed = BTreeSet::from(["shell".to_string()]);
+        let errors = generated_document_errors(&orch, Some(&allowed), "prime.plan_it");
+        assert_eq!(errors.len(), 1);
+        assert!(errors[0].contains("[\"it's\"]"), "{}", errors[0]);
     }
 
     #[test]
