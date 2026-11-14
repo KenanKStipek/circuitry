@@ -1,4 +1,4 @@
-name: c772-allow-tools-from-state-rejected
+name: c772-allow-tools-from-ref-list-entry-rejected
 interface:
   inputs:
     tool:
@@ -7,7 +7,7 @@ interface:
 effects:
   - type: reflector
     name: plan_it
-    allow_tools: ["{{input.tool}}"]
+    allow_tools: [{from: input.tool}]
     effects:
       - type: prompt
         name: propose_steps

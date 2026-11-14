@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #772",
+  "description": "A reflector's allow_tools: list has a '{from: ...}' reference as one entry, not a plain string -- rejected at compile time: allow_tools must be a literal list of plain strings, never a rendered value, params_json, or state.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}
