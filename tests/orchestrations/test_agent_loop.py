@@ -239,7 +239,7 @@ def test_stops_at_max_steps_without_an_answer(tmp_path: Path, workdir: Path) -> 
     assert result.state["prime"]["agent"]["value"]["iterations"] == 2
     assert _output(result, "answer").startswith("No answer: max_steps ran out")
     text = transcript.read_text(encoding="utf-8")
-    assert "['README.md', 'src']" in text
+    assert '["README.md", "src"]' in text
     assert "## Step 2" not in text
 
 
