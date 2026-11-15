@@ -628,14 +628,10 @@ fn orchestration_errors_engine(document: &electricity_value::Value) -> Option<Ve
     if engine::take_recursion_exceeded() || engine::take_python_exception().is_some() {
         return None;
     }
-    // `core/document_check.py::schema_errors` sorts the *raw* errors
-    // (`sorted(validator.iter_errors(orch), key=str)`) before ever
-    // calling `_describe_schema_error` -- so the sort key is each
-    // violation's own raw, un-substituted, un-suffixed message, not the
-    // text `describe_schema_error_engine` ultimately displays. The two
-    // can disagree (a `{}`/`[]`-repr message sorts differently from its
-    // own "value"-substituted spelling), so this keeps them separate
-    // rather than sorting by the displayed `SchemaError.message`.
+    // Issue #778's own step 5: `core/document_check.py::schema_errors`
+    // now sorts by `(path, message)` -- each violation's own displayed
+    // `SchemaError.location`/`.message` -- rather than `sorted(
+    // validator.iter_errors(orch), key=str)`'s own `str(err)` order.
     //
     // Still under `with_draft7_mode`: [`engine::render`] (a `contains`
     // violation's own message) and [`engine::keyword_name`]/[`engine::
@@ -643,20 +639,17 @@ fn orchestration_errors_engine(document: &electricity_value::Value) -> Option<Ve
     // this scope before they run would silently render every message
     // as if the schema were 2020-12 again (caught directly: a draft-07
     // `contains` failure rendered 2020-12's text until this moved).
-    let mut errors: Vec<(SchemaError, String, String, String, &str)> =
-        engine::with_draft7_mode(|| {
-            violations
-                .iter()
-                .map(|violation| {
-                    let raw_message = engine::render(violation);
-                    let (error, schema_path_text, path_text, keyword) =
-                        describe_schema_error_engine(violation, &raw_message);
-                    (error, raw_message, schema_path_text, path_text, keyword)
-                })
-                .collect()
-        });
-    errors.sort_by(|a, b| (&a.1, a.4, &a.2, &a.3).cmp(&(&b.1, b.4, &b.2, &b.3)));
-    Some(errors.into_iter().map(|(error, ..)| error).collect())
+    let mut errors: Vec<SchemaError> = engine::with_draft7_mode(|| {
+        violations
+            .iter()
+            .map(|violation| {
+                let raw_message = engine::render(violation);
+                describe_schema_error_engine(violation, &raw_message).0
+            })
+            .collect()
+    });
+    errors.sort_by(|a, b| (&a.location, &a.message).cmp(&(&b.location, &b.message)));
+    Some(errors)
 }
 
 /// One [`engine::Violation`] rendered as Circuitry's own
