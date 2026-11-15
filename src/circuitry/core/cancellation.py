@@ -707,6 +707,22 @@ def get_token() -> CancellationToken:
     return _token
 
 
+def raise_if_interrupted_outside_cleanup() -> None:
+    """Re-raise this run's own interrupt in place of a failure an
+    ``on_error: skip``/``continue``/``break`` is about to absorb (#799).
+
+    Every such absorption site must call this right before it would
+    otherwise swallow a failure and move on: once the token is set, the
+    run has to end interrupted no matter which failure an ``on_error``
+    happened to be the one degrading at the time. Inert inside a
+    ``finally:``'s own :meth:`CancellationToken.cleanup` scope, exactly
+    like :meth:`CancellationToken.check` -- a signal there is parked, not
+    yet live, until the outermost cleanup scope is done.
+    """
+    if get_token().is_set() and not get_token().in_cleanup():
+        raise RunCancelledBySignal()
+
+
 #: Main-thread-only (never touched off it, and never locked -- see
 #: `deferred_signal_region`'s own docstring): how many nested deferral
 #: regions are currently active.

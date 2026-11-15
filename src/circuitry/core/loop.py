@@ -19,6 +19,7 @@ from .cancellation import (
     copy_signal_outranked_tag,
     deferred_signal_region,
     get_token,
+    raise_if_interrupted_outside_cleanup,
     submit_with_context,
     wait_for_cancelled_branches,
 )
@@ -822,6 +823,11 @@ class LoopRuntime:
                             termination_reason = "error"
                         # continue: keep the truncation/exhaustion reason
                         # computed above — errors don't change it.
+                        # Every branch already finished running (tree flow
+                        # dispatches them all at once) — an interrupt one
+                        # of them hit is never lost just because on_error
+                        # degraded its own failure (#799).
+                        raise_if_interrupted_outside_cleanup()
                 else:
                     # Sequential iteration (default)
                     total = len(collection)
@@ -927,6 +933,11 @@ class LoopRuntime:
                                     raise
                                 if self.defn.on_error == "break":
                                     termination_reason = "error"
+                                # An interrupt during this pass's own
+                                # handling is never lost just because
+                                # on_error degraded its failure (#799).
+                                raise_if_interrupted_outside_cleanup()
+                                if self.defn.on_error == "break":
                                     break
                                 # continue: skip this iteration
                         else:
@@ -1149,6 +1160,11 @@ class LoopRuntime:
                                 raise
                             if self.defn.on_error == "break":
                                 termination_reason = "error"
+                            # An interrupt during this pass's own handling
+                            # is never lost just because on_error
+                            # degraded its failure (#799).
+                            raise_if_interrupted_outside_cleanup()
+                            if self.defn.on_error == "break":
                                 break
                             # continue: skip this iteration
                             iteration_count += 1

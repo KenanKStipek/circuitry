@@ -22,6 +22,7 @@ from .cancellation import (
     deferred_signal_region,
     get_token,
     mark_signal_outranked_by_failure,
+    raise_if_interrupted_outside_cleanup,
     submit_with_context,
     wait_for_cancelled_branches,
 )
@@ -772,12 +773,11 @@ class DynamicRuntime:
                 body_exc,
                 self.defn.on_error,
             )
-            # ...unless `finally_exc` is itself a cancellation (#799): a
-            # signal landing while this dynamic's own `finally:` ran is
-            # never lost just because on_error degraded the body's own,
-            # unrelated, already-handled failure.
-            if finally_exc is not None and not isinstance(finally_exc, Exception):
-                raise finally_exc
+            # A signal landing while this dynamic's own `finally:` ran, or
+            # anywhere else in this run, is never lost just because
+            # on_error degraded the body's own, unrelated, already-handled
+            # failure (#799).
+            raise_if_interrupted_outside_cleanup()
             return
 
         if finally_exc is not None:
@@ -796,6 +796,7 @@ class DynamicRuntime:
                 finally_exc,
                 self.defn.on_error,
             )
+            raise_if_interrupted_outside_cleanup()
             return
 
     def _await_tree_branches(

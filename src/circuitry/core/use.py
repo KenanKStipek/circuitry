@@ -20,6 +20,7 @@ from .cancellation import (
     RunCancelledBySignal,
     get_token,
     mark_signal_outranked_by_failure,
+    raise_if_interrupted_outside_cleanup,
     signal_outranked_by_failure,
 )
 from .document_check import structural_errors
@@ -1798,6 +1799,11 @@ class UseRuntime:
                 # must not let that pass's value survive next to this
                 # pass's error (#260).
                 node["value"] = None
+                # The interrupt is never lost just because this `use`'s
+                # own on_error degraded a failure a nested effect's
+                # `on_error: fail` had already explicitly let win over
+                # the very same signal (#799).
+                raise_if_interrupted_outside_cleanup()
         except BaseException as e:
             # An interrupt (Ctrl-C, SIGTERM, a cancelled run) is not an
             # Exception, but what the child finished before it is exactly
