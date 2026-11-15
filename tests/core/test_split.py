@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from circuitry.core.complexity import _estimate_tokens as scorer_estimate_tokens
@@ -32,16 +34,16 @@ def test_split_list_every_part_fits_the_room() -> None:
     parts = split_list(items, room=room)
 
     for part in parts:
-        assert estimate_tokens(str(part)) <= room
+        assert estimate_tokens(json.dumps(part, ensure_ascii=False, default=str)) <= room
 
 
 def test_split_list_is_balanced_not_just_room_filled() -> None:
-    # 20 single-digit ints: str(list) is "[0, 1, ..., 19]" — picking room=10
-    # must not cram as many items as fit (room) into every part but the
-    # last; it should come out close to even.
+    # 20 single-digit ints: the JSON text of the list is "[0, 1, ..., 19]"
+    # — picking room=10 must not cram as many items as fit (room) into
+    # every part but the last; it should come out close to even.
     items = list(range(20))
     parts = split_list(items, room=10)
-    sizes = [estimate_tokens(str(p)) for p in parts]
+    sizes = [estimate_tokens(json.dumps(p, ensure_ascii=False, default=str)) for p in parts]
 
     assert max(sizes) - min(sizes) <= 1 or len(parts) == 1
 

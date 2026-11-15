@@ -1696,10 +1696,10 @@ fn prepare_split(
     }
 
     let value = dotted_get(ctx, &reference);
-    let (kind, empty): (&'static str, Value) = match &value {
-        Value::Str(_) => ("string", Value::Str(String::new())),
-        Value::Dict(_) => ("mapping", Value::Dict(Dict::new())),
-        Value::List(_) => ("list", Value::List(Vec::new())),
+    let kind: &'static str = match &value {
+        Value::Str(_) => "string",
+        Value::Dict(_) => "mapping",
+        Value::List(_) => "list",
         _ => {
             return Err(format!(
                 "the split reference {} is not a list, mapping, or string",
@@ -1708,8 +1708,15 @@ fn prepare_split(
         }
     };
 
+    // The split reference's own tag(s) count toward each part's own
+    // rendered size (added back once per occurrence via `room`); the
+    // fixed text is everything else, so the reference renders as ""
+    // here regardless of kind -- falsy and zero tokens either way, never
+    // the kind's own empty container (`[]`/`{}` would double-count the
+    // reference's own brackets, which every part's own size already
+    // carries).
     let path_segments: Vec<&str> = reference.split('.').collect();
-    let fixed_ctx = set_dotted_copy(ctx, &path_segments, empty);
+    let fixed_ctx = set_dotted_copy(ctx, &path_segments, Value::Str(String::new()));
     let mut merged_dict = fixed_ctx.as_dict().cloned().unwrap_or_default();
     for (extra_key, extra_value) in &extra_state {
         merged_dict.insert(
@@ -1807,7 +1814,10 @@ fn prepare_split(
         .iter()
         .map(|part| match part {
             Value::Str(text) => crate::split::estimate_tokens(text),
-            other => crate::split::estimate_tokens(&other.py_repr()),
+            other => crate::split::estimate_tokens(
+                &electricity_template::json_splice(other)
+                    .expect("a split part always serializes to JSON"),
+            ),
         })
         .collect();
 

@@ -27,7 +27,6 @@
 //!    [`HiddenOverlay`] -- never a whole-context snapshot: the overlay
 //!    wraps whatever [`ScopeRoot`] *ctx* already is, live or not.
 
-use electricity_json::{Separators, WriteMode};
 use electricity_template::ScopeRoot;
 use electricity_value::Value;
 use indexmap::IndexMap;
@@ -207,22 +206,9 @@ fn resolve_effect_text<R: ScopeRoot>(
 /// renders through [`electricity_value::Value::py_str`].
 fn stringify_effect_value(value: &Value) -> Result<String, String> {
     match value {
-        Value::List(_) | Value::Dict(_) => json_splice(value),
+        Value::List(_) | Value::Dict(_) => electricity_template::json_splice(value),
         other => Ok(other.py_str()),
     }
-}
-
-fn json_splice(value: &Value) -> Result<String, String> {
-    electricity_json::dumps_default_str(
-        value,
-        WriteMode {
-            indent: None,
-            sort_keys: false,
-            ensure_ascii: false,
-            separators: Separators::Default,
-        },
-    )
-    .map_err(|err| err.to_string())
 }
 
 /// `core/prompt_compose.py::_expand` -- *template*, with every

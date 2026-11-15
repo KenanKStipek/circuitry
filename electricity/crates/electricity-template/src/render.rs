@@ -23,7 +23,7 @@ use crate::tokenizer::Tag;
 /// default=str)` would produce — matching every Mustache render site,
 /// not `Value::py_repr`'s Python `str()` — and never collapsed to `""`
 /// when empty, so `{{x}}` against `[]`/`{}` still prints `"[]"`/`"{}"`.
-fn json_splice(value: &Value) -> Result<String, String> {
+pub fn json_splice(value: &Value) -> Result<String, String> {
     electricity_json::dumps_default_str(
         value,
         WriteMode {

@@ -10,15 +10,17 @@ lists/mappings differently (`electricity_value::Value` vs. Python's own
 list/dict).
 
 Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
-3.11 in CI, `-c electricity/scripts/generator-constraints.txt`): `str()`/
-`repr()` on a container drives every measurement here, and that text's
-own shape is part of what this corpus pins.
+3.11 in CI, `-c electricity/scripts/generator-constraints.txt`):
+`json.dumps(value, ensure_ascii=False, default=str)` on a container
+drives every measurement here, and that text's own shape is part of
+what this corpus pins.
 
 Usage: python3 generate_split_corpus.py [--check]
 """
 
 from __future__ import annotations
 
+import datetime
 import json
 import struct
 import sys
@@ -49,6 +51,8 @@ def encode(value: object) -> dict:
         return {"t": "float", "bits": format(bits, "016x")}
     if isinstance(value, str):
         return {"t": "str", "v": value}
+    if isinstance(value, datetime.date):
+        return {"t": "date", "v": value.isoformat()}
     if isinstance(value, list):
         return {"t": "list", "v": [encode(item) for item in value]}
     if isinstance(value, dict):
@@ -120,6 +124,34 @@ def build_cases() -> list[dict[str, Any]]:
     cases.append(list_case("list_mixed_types", ["a", 1, 2.5, True, None, [1, 2], {"k": "v"}], 4))
     cases.append(list_case("list_one_item_too_big", ["x", "y" * 400], 2))
     cases.append(list_case("list_strings_unicode", ["café", "日本語", "a" * 20], 4))
+    # A string made entirely of `"` characters: JSON escapes each one
+    # (`\"`, two characters); `repr()` would quote the whole string with
+    # `'` instead and leave every `"` alone -- measuring by `repr()`
+    # (electricity's own imitation before this fix) found room for a
+    # single item JSON measurement refuses outright (circuitry#778).
+    cases.append(list_case("list_quote_heavy_strings_json_vs_repr", ['""""""'] * 4, 3))
+    # Control characters (`\x01`, `\x02`, `\x1f`): JSON escapes each as
+    # `\u00XX` (6 characters); `repr()` uses its own shorter `\xXX` escape
+    # (4 characters) -- measuring by `repr()` packs all three items into
+    # one part where JSON measurement needs three.
+    cases.append(
+        list_case("list_control_chars_json_vs_repr", ["a\x01b", "c\x02d", "e\x1fg"], 8)
+    )
+    # `datetime.date` values: JSON (`default=str`) renders the short ISO
+    # text (`"2020-01-02"`); `repr()` renders the much longer
+    # `datetime.date(2020, 1, 2)` -- measuring by `repr()` refuses a
+    # single item JSON measurement fits three of.
+    cases.append(
+        list_case(
+            "list_date_values_json_vs_repr",
+            [
+                datetime.date(2020, 1, 2),
+                datetime.date(2021, 3, 4),
+                datetime.date(2022, 5, 6),
+            ],
+            6,
+        )
+    )
 
     # --- mappings --------------------------------------------------------
     cases.append(mapping_case("mapping_empty", {}, 10))
@@ -146,6 +178,10 @@ def build_cases() -> list[dict[str, Any]]:
             6,
         )
     )
+    # Non-string (`int`) keys: JSON stringifies a key (`"1"`, quoted);
+    # `repr()` prints an int key bare (`1`) -- measuring by `repr()` packs
+    # all three entries into one part where JSON measurement needs three.
+    cases.append(mapping_case("mapping_int_keys_json_vs_repr", {1: "a", 2: "bb", 3: "ccc"}, 7))
 
     # --- text: each level of the structural cascade ---------------------
     cases.append(text_case("text_empty", "", 10))

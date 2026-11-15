@@ -91,7 +91,7 @@ mod render;
 mod tokenizer;
 
 pub use electricity_value::Value;
-pub use render::{ScopeRoot, step};
+pub use render::{ScopeRoot, json_splice, step};
 
 use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 
