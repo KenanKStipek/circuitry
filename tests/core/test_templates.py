@@ -98,6 +98,130 @@ def test_a_section_over_a_list_is_unaffected_by_json_rendering() -> None:
     assert render_template("{{#items}}x{{/items}}", {"items": []}) == ""
 
 
+def test_an_empty_list_or_dict_is_still_falsy_in_a_section() -> None:
+    assert render_template("{{#x}}seen{{/x}}", {"x": []}) == ""
+    assert render_template("{{#x}}seen{{/x}}", {"x": {}}) == ""
+
+
+def test_an_empty_list_or_dict_still_renders_an_inverted_section() -> None:
+    assert render_template("{{^x}}empty{{/x}}", {"x": []}) == "empty"
+    assert render_template("{{^x}}empty{{/x}}", {"x": {}}) == "empty"
+
+
+def test_a_value_nested_hundreds_of_levels_deep_elsewhere_in_ctx_does_not_fail_an_unrelated_render() -> (
+    None
+):
+    """Wrapping used to walk *every* node of ``ctx`` recursively on every
+    render, regardless of which tag a template actually read; a state
+    value nested deeply enough anywhere in ``ctx`` made every later render
+    fail with a recursion error, not just one reading that value. Lazy,
+    lookup-time wrapping only ever walks as deep as a template's own tags
+    go.
+    """
+    deep: dict[str, Any] = {}
+    cursor = deep
+    for _ in range(600):
+        cursor["next"] = {}
+        cursor = cursor["next"]
+    ctx = {"unrelated": deep, "x": 1}
+    assert render_template("{{x}}", ctx) == "1"
+
+
+def test_rendering_cost_does_not_grow_with_an_unrelated_sibling_values_size() -> None:
+    """A render used to wrap ``ctx`` recursively, top to bottom, before
+    chevron ever saw it (#778 step 3's first cut) -- the whole cost #268
+    removed for a tree loop's own per-iteration copy, paid again here on
+    every single render. Lazy, lookup-time wrapping
+    (:func:`circuitry.core.templates._wrap_container`) only wraps the
+    node a tag actually reaches, so the number of wraps a render performs
+    is the same no matter how large an unrelated sibling value is.
+    """
+    import circuitry.core.templates as templates_mod
+
+    calls = 0
+    original = templates_mod._wrap_container
+
+    def counting_wrap(value: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    small_ctx = {"item": {"id": 1}, "sibling": list(range(5))}
+    big_ctx = {"item": {"id": 1}, "sibling": [{"n": i} for i in range(5000)]}
+
+    templates_mod._wrap_container = counting_wrap
+    try:
+        calls = 0
+        render_template("{{item.id}}", small_ctx)
+        small_calls = calls
+
+        calls = 0
+        render_template("{{item.id}}", big_ctx)
+        big_calls = calls
+    finally:
+        templates_mod._wrap_container = original
+
+    assert small_calls == big_calls
+
+
+def test_a_chain_loops_growing_shared_state_does_not_make_later_iterations_render_more() -> None:
+    """A ``flow: chain`` loop records every finished iteration's own
+    result into the same shared state every later iteration's own
+    template render sees as ``ctx`` -- so state genuinely grows over the
+    loop's lifetime, the realistic shape #268's own shallow-overlay test
+    (``test_loop_tree_each_shallow_overlay.py``) exercises for the tree
+    flow's per-iteration copy. The number of wraps one iteration's own
+    render performs must not grow with how many earlier iterations have
+    already piled results into that shared state.
+    """
+    import circuitry.core.templates as templates_mod
+
+    calls = 0
+    original = templates_mod._wrap_container
+
+    def counting_wrap(value: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    n = 60
+    items = [{"id": i, "payload": list(range(50))} for i in range(n)]
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "work",
+                "flow": "chain",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "tool",
+                        "name": "step",
+                        "provider": "json",
+                        "params": {"mode": "stringify", "input": "{{item.id}}"},
+                    }
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    state = {"input": {"items": items}}
+
+    templates_mod._wrap_container = counting_wrap
+    try:
+        DynamicRuntime(root, adapter=RecordingAdapter(), model="unit-test").execute(
+            store=Store(state)
+        )
+    finally:
+        templates_mod._wrap_container = original
+
+    # A per-render cost that grows with the loop's own history would blow
+    # past this well before n=60 (quadratic in n, not linear): a handful
+    # of wraps per iteration (one per dotted path segment, plus the root),
+    # times n, with slack for the loop machinery's own templates.
+    assert calls < n * 20, calls
+
+
 def test_splice_text_matches_what_a_bare_tag_would_render() -> None:
     assert splice_text(["a", "b"]) == '["a", "b"]'
     assert splice_text({"k": 1}) == '{"k": 1}'

@@ -79,7 +79,7 @@ def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
     exactly as before.
     """
     if key == ".":
-        return scopes[0]
+        return _wrap_container(scopes[0])
 
     for outer_scope in scopes:
         current = outer_scope
@@ -100,6 +100,7 @@ def _get_key(key: str, scopes: list[Any], warn: bool = False) -> Any:
                         else:
                             allowed = False
                         current = attr if allowed else current[int(child)]
+                current = _wrap_container(current)
 
             if current in (0, False):
                 return current
@@ -128,13 +129,20 @@ class TemplateError(ValueError):
     """A Mustache template could not be parsed or rendered."""
 
 
+def _json_text(value: Any) -> str:
+    """The JSON text ``params_json`` already produces for *value* — the
+    one call site every list/dict-as-JSON path in this module shares.
+    """
+    return json.dumps(value, ensure_ascii=False, default=str)
+
+
 class _JsonAwareDict(dict):
     """A dict that stringifies as JSON so chevron's ``{{{...}}}`` splices real JSON, not repr()."""
 
     _CHEVRON_return_scope_when_falsy = True
 
     def __str__(self) -> str:
-        return json.dumps(self, ensure_ascii=False, default=str)
+        return _json_text(self)
 
 
 class _JsonAwareList(list):
@@ -143,27 +151,35 @@ class _JsonAwareList(list):
     _CHEVRON_return_scope_when_falsy = True
 
     def __str__(self) -> str:
-        return json.dumps(self, ensure_ascii=False, default=str)
+        return _json_text(self)
 
 
-def _json_aware_ctx(value: Any) -> Any:
-    """Recursively wrap every dict/list node so any template renders a whole
-    list or dict the same way ``{{...}}``/``{{{...}}}`` already render
-    ``params_json``: as JSON text, not Python's ``repr()``.
+def _wrap_container(value: Any) -> Any:
+    """Wrap *value* in :class:`_JsonAwareDict`/:class:`_JsonAwareList` if it
+    is a plain ``dict``/``list`` — one level deep only, never a whole
+    state tree. Called from :func:`_get_key` at the exact points chevron
+    would otherwise see a raw value: every lookup result (so a section's
+    pushed scope, and a further ``{{x.y}}`` step into it, are wrapped too,
+    one level at a time, as they are reached) and the root scope
+    (``{{.}}``/:func:`render_template`'s own *ctx*).
 
-    Chevron's ``{{{...}}}`` calls plain ``str()`` on whatever it finds, which
-    turns a real Python list/dict into its repr (e.g. ``['AAPL', 'MSFT']``),
-    not JSON. State values produced by array/object prompts, the json
-    plugin, MCP structuredContent, surrealdb results, and loop items are all
-    native lists/dicts, so this wrapping is what makes those the common case.
-    A section (``{{#x}}``/``{{^x}}``) is unaffected: both wrapper types
-    subclass ``dict``/``list`` exactly, so iteration and truthiness (an
-    empty list/dict stays falsy) are unchanged.
+    Chevron's ``{{{...}}}`` calls plain ``str()`` on whatever it finds,
+    which turns a real Python list/dict into its repr (e.g.
+    ``['AAPL', 'MSFT']``), not JSON; :class:`_JsonAwareDict`/
+    :class:`_JsonAwareList`'s own ``__str__`` fixes that for whichever
+    node chevron actually stringifies. ``json.dumps`` already walks a
+    plain nested dict/list on its own, so wrapping only the node chevron
+    is about to touch — rather than recursively wrapping *value*'s own
+    contents up front — renders the exact same JSON text, without paying
+    to walk the whole tree on every render (a tool call's state can be
+    large, and this runs once per ``{{...}}`` tag) or recursing through
+    it (a very deeply nested value would otherwise exhaust the stack
+    before a template ever got to see it).
     """
-    if isinstance(value, dict):
-        return _JsonAwareDict((k, _json_aware_ctx(v)) for k, v in value.items())
-    if isinstance(value, list):
-        return _JsonAwareList(_json_aware_ctx(v) for v in value)
+    if isinstance(value, dict) and not isinstance(value, _JsonAwareDict):
+        return _JsonAwareDict(value)
+    if isinstance(value, list) and not isinstance(value, _JsonAwareList):
+        return _JsonAwareList(value)
     return value
 
 
@@ -179,7 +195,7 @@ def splice_text(value: Any) -> str:
     too.
     """
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False, default=str)
+        return _json_text(value)
     return str(value)
 
 
@@ -243,17 +259,18 @@ def render_template(
     carries. Every other template — tool params, ``params_json``, ``use``
     inputs/``inline``, asset refs — keeps the default.
 
-    *ctx* is wrapped with :func:`_json_aware_ctx` before chevron ever sees
-    it, so a whole list or dict inserted anywhere by this one render path —
-    every call site in this codebase — renders as JSON text, matching
-    ``params_json``, instead of Python's ``repr()``.
+    *ctx* (and, lazily, every list/dict :func:`_get_key` resolves while
+    rendering) is wrapped with :func:`_wrap_container` before chevron ever
+    sees it, so a whole list or dict inserted anywhere by this one render
+    path — every call site in this codebase — renders as JSON text,
+    matching ``params_json``, instead of Python's ``repr()``.
     """
     token = _NO_ESCAPE.set(not escape)
     try:
         _reject_partials(template)
         return str(
             chevron.render(
-                template, _json_aware_ctx(ctx), partials_dict={}, partials_path=None
+                template, _wrap_container(ctx), partials_dict={}, partials_path=None
             )
         )
     except ChevronError as exc:

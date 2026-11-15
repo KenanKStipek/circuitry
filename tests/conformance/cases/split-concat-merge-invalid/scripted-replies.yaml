@@ -1,8 +1,6 @@
 prime.big.parts.iter_0.map:
-- text: '["aa", "bb"]'
+- text: '["aa", "bb", "cc"]'
 prime.big.parts.iter_1.map:
-- text: '["cc", "dd"]'
-prime.big.parts.iter_2.map:
-- text: '["ee", "aa"]'
+- text: '["dd", "ee", "aa"]'
 prime.big:
 - text: '["aa", "bb", "cc", "dd", "ee", "ff"]'
