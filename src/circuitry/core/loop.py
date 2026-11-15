@@ -503,6 +503,9 @@ class LoopRuntime:
                     termination_detail = str(bounds_error)
                     if meta:
                         meta["error"] = str(bounds_error)
+                    # An interrupt is never lost just because on_error
+                    # degraded this loop's own bounds error (#799).
+                    raise_if_interrupted_outside_cleanup()
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
                     # Each thread gets a shallow overlay of ctx, the same
@@ -1085,6 +1088,10 @@ class LoopRuntime:
                                 termination_reason = "condition_error"
                                 if meta:
                                     meta["error"] = str(exc)
+                                # An interrupt is never lost just because
+                                # on_error degraded this condition's own
+                                # failure (#799).
+                                raise_if_interrupted_outside_cleanup()
                                 break
 
                         if not should_continue and iteration_count >= self.defn.min_iterations:
