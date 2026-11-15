@@ -459,6 +459,12 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 UseSource::Inline(text) => {
                     (Json::Null, Json::Null, Json::String(text.source.clone()))
                 }
+                // Only ever built by `exec::reflector`'s own synthetic
+                // `use`, at run time -- never part of a statically
+                // compiled tree this golden-compile projection walks.
+                UseSource::InlineDocument(_) => unreachable!(
+                    "a compiled document never carries a reflector's own generated plan"
+                ),
             };
             json!({
                 "name": op.name,
@@ -466,6 +472,10 @@ fn project_leaf(op: &Op, leaf: &LeafKind) -> Json {
                 "path": path,
                 "orchestration": orchestration,
                 "inline": inline,
+                // `UseDefinition.inline_document` (#778): never set on a
+                // statically compiled document -- only `exec::reflector`'s
+                // own synthetic `use`, at run time, ever carries one.
+                "inline_document": Json::Null,
                 "inputs": use_op.inputs.as_ref().map(param_node_to_json).unwrap_or(Json::Null),
                 "outputs": use_op.outputs.as_ref().map(|m| {
                     let mut map = Map::new();

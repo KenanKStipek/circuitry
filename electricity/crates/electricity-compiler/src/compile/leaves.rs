@@ -1212,6 +1212,40 @@ pub(crate) fn compile_report(
     })
 }
 
+/// `core/reflector.py::prime_template_str_format_error` -- the name of
+/// the first leftover `str.format` placeholder (`{goal}`/`{context}`/
+/// `{max_effects}` in single braces, not part of a `{{...}}` tag) in
+/// *template*, in the order it appears; `None` if there isn't one.
+fn prime_template_str_format_placeholder(template: &str) -> Option<&'static str> {
+    let mut best: Option<(usize, &'static str)> = None;
+    for name in ["goal", "context", "max_effects"] {
+        let token = format!("{{{name}}}");
+        let mut start = 0;
+        while let Some(found) = template[start..].find(&token) {
+            let idx = start + found;
+            let before_ok = idx == 0 || template.as_bytes()[idx - 1] != b'{';
+            let after = idx + token.len();
+            let after_ok = after >= template.len() || template.as_bytes()[after] != b'}';
+            if before_ok && after_ok {
+                if best.is_none_or(|(best_idx, _)| idx < best_idx) {
+                    best = Some((idx, name));
+                }
+                break;
+            }
+            start = idx + 1;
+        }
+    }
+    best.map(|(_, name)| name)
+}
+
+/// The message [`prime_template_str_format_placeholder`] pairs with --
+/// identical on both engines (`core/compiler.py`'s own port).
+fn prime_template_str_format_message(name: &str) -> String {
+    let old = format!("{{{name}}}");
+    let new = format!("{{{{{name}}}}}");
+    format!("uses the str.format placeholder '{old}'; write '{new}' instead.")
+}
+
 pub(crate) fn compile_reflector(
     ctx: &mut Ctx,
     effect: &Dict,
@@ -1303,13 +1337,22 @@ pub(crate) fn compile_reflector(
         .unwrap_or_else(|| electricity_bytecode::defaults::GENERATED_KEY.to_string());
     let stop_on_done = get_bool_default(effect, "stop_on_done", true);
 
-    // `prime_template` is a Python `str.format` string (reflector.py),
-    // never a Mustache template -- `_compile_reflector` does
-    // `str(prime_template)` with no syntax check at all, so neither
-    // branch here runs one.
+    // `prime_template` renders with Mustache (issue #778) -- a custom
+    // override is checked here the way any other template field is
+    // (`core/compiler.py::_compile_reflector`'s own port); the built-in
+    // default never needs checking, it is a trusted constant.
     let prime_template_raw = optional_str(effect, "prime_template");
     let prime_template = match prime_template_raw {
-        Some(raw) => electricity_bytecode::TemplateText::new(raw, false, Escape::None),
+        Some(raw) => {
+            let text = template_text(&raw, effect_path, "prime_template", false, Escape::None)?;
+            if let Some(name) = prime_template_str_format_placeholder(&raw) {
+                return Err(CompileError(format!(
+                    "{effect_path}.prime_template: {}",
+                    prime_template_str_format_message(name)
+                )));
+            }
+            text
+        }
         None => electricity_bytecode::TemplateText::new(
             crate::reflector_prime::REFLECTOR_PRIME,
             false,
@@ -1345,4 +1388,40 @@ pub(crate) fn compile_reflector(
         enabled: true,
         resume_mode: electricity_bytecode::ResumeMode::Continue,
     })
+}
+
+#[cfg(test)]
+mod prime_template_tests {
+    use super::*;
+
+    #[test]
+    fn str_format_placeholder_catches_each_name() {
+        for name in ["goal", "context", "max_effects"] {
+            let template = format!("Plan {{{name}}}");
+            assert_eq!(prime_template_str_format_placeholder(&template), Some(name));
+        }
+    }
+
+    #[test]
+    fn str_format_placeholder_ignores_the_mustache_form() {
+        assert_eq!(
+            prime_template_str_format_placeholder("Plan {{goal}} {{context}} {{max_effects}}"),
+            None
+        );
+    }
+
+    #[test]
+    fn str_format_placeholder_ignores_an_unrelated_single_brace() {
+        assert_eq!(
+            prime_template_str_format_placeholder("literal: { not a field }"),
+            None
+        );
+    }
+
+    #[test]
+    fn str_format_message_names_the_fix() {
+        let message = prime_template_str_format_message("goal");
+        assert!(message.contains("'{goal}'"));
+        assert!(message.contains("'{{goal}}'"));
+    }
 }

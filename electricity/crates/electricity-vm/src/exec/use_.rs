@@ -404,6 +404,69 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// `core/use.py::_canonical_json_digest` -- a reflector-generated
+/// document's own `meta.orchestration_sha256` (#778): sha256 of its
+/// canonical JSON text, sorted keys and compact separators, so the
+/// digest never depends on the model's own key order.
+pub fn canonical_json_digest(value: &Value) -> Result<String, String> {
+    let mode = electricity_json::WriteMode {
+        indent: None,
+        sort_keys: true,
+        ensure_ascii: false,
+        separators: electricity_json::Separators::Compact,
+    };
+    let canonical = electricity_json::dumps_default_str(value, mode).map_err(|e| e.to_string())?;
+    Ok(sha256_hex(canonical.as_bytes()))
+}
+
+/// `core/use.py::_render_inline_document` -- renders every string leaf
+/// of *value* through [`crate::compose::render_with_composition`], the
+/// same composition an ordinary `inline:` field's own text gets as a
+/// whole, applied leaf by leaf since there is no whole text here to
+/// render (a reflector's generated plan is handed over already parsed,
+/// #778).
+fn render_inline_document<R: electricity_template::ScopeRoot>(
+    value: &Value,
+    ctx: &R,
+    declared_prompts: &IndexMap<String, String>,
+    effect_names: &BTreeSet<String>,
+) -> Result<Value, String> {
+    match value {
+        Value::Str(s) => crate::compose::render_with_composition(
+            s,
+            ctx,
+            declared_prompts,
+            effect_names,
+            "inline",
+            true,
+        )
+        .map(Value::Str),
+        Value::Dict(dict) => {
+            let mut rendered = Dict::new();
+            for (k, v) in dict {
+                rendered.insert(
+                    k.clone(),
+                    render_inline_document(v, ctx, declared_prompts, effect_names)?,
+                );
+            }
+            Ok(Value::Dict(rendered))
+        }
+        Value::List(items) => {
+            let mut rendered = Vec::with_capacity(items.len());
+            for item in items {
+                rendered.push(render_inline_document(
+                    item,
+                    ctx,
+                    declared_prompts,
+                    effect_names,
+                )?);
+            }
+            Ok(Value::List(rendered))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
 /// `core/outputs.py::normalize_one_output`, against a raw interface-
 /// outputs *spec* value directly (not nested under an effect's own
 /// `outputs:` key the way `electricity-compiler::compile::leaves`'s
@@ -758,6 +821,47 @@ async fn load_child<R: ParamsCtx>(
                 resolved_path: None,
             })
         }
+        UseSource::InlineDocument(doc) => {
+            // Every string leaf composes against *ctx* exactly as an
+            // ordinary 'inline:' field's own text does -- the parsed
+            // document is new (#778), but the plan's own effects still
+            // see the reflector's enclosing scope the same way.
+            let rendered =
+                render_inline_document(doc, ctx, run_ctx.declared_prompts, run_ctx.effect_names)?;
+            let document = if validate {
+                if let Err(errors) = validate_inline_yaml(&rendered) {
+                    return Err(format!(
+                        "Inline orchestration validation failed:\n{}",
+                        errors
+                            .iter()
+                            .map(|e| format!("  - {e}"))
+                            .collect::<Vec<_>>()
+                            .join("\n")
+                    ));
+                }
+                rendered
+            } else {
+                if rendered.as_dict().is_none() {
+                    return Err(
+                        "Inline orchestration must be a YAML mapping with an 'effects' key."
+                            .to_string(),
+                    );
+                }
+                rendered
+            };
+            let digest = canonical_json_digest(&document)?;
+            let identity = format!("inline:{}", &digest[..16]);
+            let document_dir = run_ctx.orchestration_dir.to_path_buf();
+            Ok(LoadedChild {
+                document,
+                label: "inline".to_string(),
+                identity,
+                digest,
+                document_dir,
+                origin: electricity_compiler::DocumentOrigin::Generated,
+                resolved_path: None,
+            })
+        }
         UseSource::Path(raw) | UseSource::Orchestration(raw) => {
             let legacy = matches!(source, UseSource::Orchestration(_));
             let resolved = resolve_path_child(name, raw, run_ctx.orchestration_dir, legacy)?;
@@ -1086,6 +1190,11 @@ async fn attempt_once<R: ParamsCtx>(
                 || use_op.force_generated
                 || crate::generated_doc::is_generated_inline(&text.source, &loaded.document)
         }
+        // Only ever built by the reflector's own synthetic `use`,
+        // always alongside `force_generated: true` -- never reaches
+        // `is_generated_inline` (there is no unrendered template of its
+        // own to compare the rendered document's shape against).
+        UseSource::InlineDocument(_) => own_doc_is_generated || use_op.force_generated,
     };
     let (child_is_generated, child_tool_providers, child_shell_commands, child_generating_path) =
         if !generated {
@@ -1791,9 +1900,12 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
 
     let legacy_ref = match &use_op.source {
         UseSource::Path(s) | UseSource::Orchestration(s) => Some(s.clone()),
-        UseSource::Inline(_) => None,
+        UseSource::Inline(_) | UseSource::InlineDocument(_) => None,
     };
-    let is_inline = matches!(use_op.source, UseSource::Inline(_));
+    let is_inline = matches!(
+        use_op.source,
+        UseSource::Inline(_) | UseSource::InlineDocument(_)
+    );
     let mut label = legacy_ref.clone().unwrap_or_else(|| "inline".to_string());
 
     set_leaf(store, &meta_node, "created_at", now_iso());

@@ -1,11 +1,12 @@
 //! `reflector` effect execution (`core/reflector.py`) -- issue #506's
 //! lane L1. A reflector runs an inner planning `dynamic` whose plan
-//! step gets a "prime directive" prepended (`render_reflector_prime`),
-//! reads the plan step's text as YAML, normalizes it
-//! (`extract_done_flag`: the `done:` flag, the `steps:`/`plan:`
-//! spellings, a bare list), re-serializes it with [`electricity_yaml::dump`],
-//! and runs the result as a synthesized `use: inline` child under
-//! `<reflector>.<generated_key>.iter_<i>` (lane I's own
+//! step gets a "prime directive" prepended (`render_reflector_prime`,
+//! rendered with Mustache -- issue #778), reads the plan step's text as
+//! YAML, normalizes it (`extract_done_flag`: the `done:` flag, the
+//! `steps:`/`plan:` spellings, a bare list), and runs the parsed
+//! document straight as a synthesized `use: inline` child's own source
+//! (`UseSource::InlineDocument`, never dumped back to YAML and
+//! reparsed) under `<reflector>.<generated_key>.iter_<i>` (lane I's own
 //! [`super::use_::execute_use_with_ctx`]), for up to `max_iterations`
 //! cycles.
 //!
@@ -14,8 +15,7 @@
 //! through [`super::dynamic::execute_dynamic`] like any other nested
 //! `dynamic`), and the generated document is an ordinary inline `use`
 //! child (lane I). This module is the glue between them, plus the
-//! pieces only the reflector needs: the prime renderer
-//! ([`electricity_value::pycompat::py_str_format`]), the plan
+//! pieces only the reflector needs: the prime renderer, the plan
 //! normalizer, and [`crate::Frame::rebased`] (the inner dynamic's own
 //! paths -- compiled at `<refl>.<step>`, never `<refl>.inner.<step>`,
 //! `electricity-compiler::compile::leaves::compile_reflector`'s own
@@ -60,7 +60,7 @@ use electricity_bytecode::{
     Escape, LeafKind, NodeKind, OnError, Op, PromptContent, ReflectorOp, Region, RetryPolicy,
     TemplateText, UseOp, UseSource,
 };
-use electricity_value::pycompat::{py_str_format, py_strip};
+use electricity_value::pycompat::py_strip;
 use electricity_value::{Dict, Value};
 
 /// `_render_reflector_prime`'s own four fixed lines, verbatim.
@@ -222,7 +222,19 @@ async fn run_iteration(
         ("context", Value::Str(context)),
         ("max_effects", Value::from(i64::from(reflector.max_effects))),
     ];
-    let prime_text = render_reflector_prime(&reflector.prime_template.source, &fields);
+    let prime_text = match render_reflector_prime(&reflector.prime_template.source, &fields) {
+        Ok(text) => text,
+        // Unreachable for any `prime_template` that compiled: a
+        // malformed Mustache template is a document error at compile
+        // time (`electricity-compiler::compile::leaves::compile_reflector`),
+        // and goal/context/max_effects are plain scalars no render of
+        // theirs can fail on. Recorded the same way as any other phase
+        // failure rather than special-cased further.
+        Err(e) => {
+            rec.error = Some(format!("prime_render_failed: {e}"));
+            return Ok(rec);
+        }
+    };
 
     // ── Phase 2: inner dynamic, with the prime prepended ──────────
     let prepared_inner =
@@ -302,7 +314,7 @@ async fn run_iteration(
     }
 
     // ── Phase 4: done flag + normalize ────────────────────────────
-    let (done, plan_yaml) = match extract_done_flag(&plan_text) {
+    let (done, parsed_plan) = match extract_done_flag(&plan_text) {
         Ok(v) => v,
         Err(e) => {
             rec.error = Some(format!("parse_failed: {e}"));
@@ -311,36 +323,34 @@ async fn run_iteration(
     };
     rec.done = done;
 
-    if py_strip(&plan_yaml).is_empty() {
+    let Some(parsed_plan) = parsed_plan else {
         rec.stop = true;
         return Ok(rec);
-    }
+    };
 
     let stopping = done && reflector.stop_on_done;
 
-    if let Ok(parsed_check) = electricity_yaml::load_yaml_last_key_wins(&plan_yaml) {
-        let effects_value = match &parsed_check {
-            Value::Dict(d) => d
-                .get(&Value::Str("effects".to_string()))
-                .cloned()
-                .unwrap_or(Value::List(Vec::new())),
-            _ => Value::List(Vec::new()),
-        };
-        rec.parsed = Some(parsed_check);
-        if !py_truthy(&effects_value) {
-            rec.stop = true;
-            return Ok(rec);
-        }
-        if !stopping {
-            if let Value::List(items) = &effects_value {
-                if items.len() > reflector.max_effects as usize {
-                    rec.error = Some(format!(
-                        "invalid_plan: generated plan has {} top-level effects, exceeds max_effects ({})",
-                        items.len(),
-                        reflector.max_effects
-                    ));
-                    return Ok(rec);
-                }
+    let effects_value = match &parsed_plan {
+        Value::Dict(d) => d
+            .get(&Value::Str("effects".to_string()))
+            .cloned()
+            .unwrap_or(Value::List(Vec::new())),
+        _ => Value::List(Vec::new()),
+    };
+    rec.parsed = Some(parsed_plan.clone());
+    if !py_truthy(&effects_value) {
+        rec.stop = true;
+        return Ok(rec);
+    }
+    if !stopping {
+        if let Value::List(items) = &effects_value {
+            if items.len() > reflector.max_effects as usize {
+                rec.error = Some(format!(
+                    "invalid_plan: generated plan has {} top-level effects, exceeds max_effects ({})",
+                    items.len(),
+                    reflector.max_effects
+                ));
+                return Ok(rec);
             }
         }
     }
@@ -357,7 +367,7 @@ async fn run_iteration(
     let use_op = UseOp {
         resume_mode: electricity_bytecode::ResumeMode::Continue,
         parent_trusted: false,
-        source: UseSource::Inline(TemplateText::new(plan_yaml, true, Escape::Html)),
+        source: UseSource::InlineDocument(parsed_plan),
         inputs: None,
         outputs: None,
         validate: true,
@@ -488,19 +498,25 @@ fn append_iteration_record(store: &Store, meta_node: &NodeRef, rec: &IterationRe
 }
 
 /// `_render_reflector_prime`: the four fixed warning lines, plus
-/// `prime_template.format(max_effects=..., goal=..., context=...).strip()`,
-/// plus `"\n\n"`. On a format failure, falls back to the raw template
-/// (still stripped) and logs the same fixed warning line G's own
-/// channel uses (`log::warn!`, M1 settled question: first line only,
-/// no traceback reproduced).
-fn render_reflector_prime(template: &str, fields: &[(&str, Value)]) -> String {
-    match py_str_format(template, fields) {
-        Ok(rendered) => format!("{CRITICAL_WARNING}{}\n\n", py_strip(&rendered)),
-        Err(_) => {
-            log::warn!("Reflector prime template formatting failed; using raw template");
-            format!("{CRITICAL_WARNING}{}\n\n", py_strip(template))
-        }
+/// *template* rendered with Mustache against exactly `goal`, `context`
+/// and `max_effects` (no HTML escaping, the same rule as any other
+/// prompt template), stripped, plus `"\n\n"`. There is no fallback to
+/// the raw template -- a malformed Mustache `prime_template` is a
+/// document error at compile time
+/// (`electricity-compiler::compile::leaves::compile_reflector`).
+fn render_reflector_prime(template: &str, fields: &[(&str, Value)]) -> Result<String, String> {
+    let mut root = Dict::new();
+    for (name, value) in fields {
+        root.insert(Value::Str((*name).to_string()), value.clone());
     }
+    let rendered = electricity_template::render_template_with_escape(
+        template,
+        &Value::Dict(root),
+        "reflector prime_template",
+        false,
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(format!("{CRITICAL_WARNING}{}\n\n", py_strip(&rendered)))
 }
 
 /// `_best_effort_goal`: `root["prime"]["goal"]["value"]` at *store*'s
@@ -677,33 +693,25 @@ fn py_truthy(value: &Value) -> bool {
 
 /// `_extract_done_flag`: [`clean_yaml_fences`] (lane I's own port, now
 /// fixed to Python `splitlines`/`strip` semantics), blank -> `(true,
-/// "")`, a YAML parse error -> `(false, cleaned)` un-dumped, a bare
-/// list -> `(false, dump({"effects": parsed}))`, any other non-dict ->
-/// `(false, cleaned)`; a dict gets `done` extracted (Python
-/// truthiness), `effects` filled from `steps`/`plan.effects`/`plan` in
-/// that order, `done` popped, and is re-dumped
-/// (`electricity_yaml::dump`, `sort_keys: true` -- `yaml.dump`'s own
-/// default, matching `_extract_done_flag`'s own un-keyworded call).
-fn extract_done_flag(plan_text: &str) -> Result<(bool, String), String> {
+/// None)`. Any YAML parse failure -- ordinary syntax or a calendar-
+/// invalid timestamp's own semantic error (issue #528's own comment)
+/// alike -- propagates to the caller as `parse_failed: {e}`: there is
+/// no raw text left to hand `use(inline)` to diagnose instead, now that
+/// this function hands over a parsed document rather than YAML text
+/// (#778). A bare list becomes `Some({"effects": parsed})`; any other
+/// non-dict is returned as-is, for `use(inline)`'s own validation to
+/// reject. A dict gets `done` extracted (Python truthiness), `effects`
+/// filled from `steps`/`plan.effects`/`plan` in that order, and `done`
+/// popped -- never dumped back to YAML and reparsed, so the plan keeps
+/// its keys in the order the model wrote them.
+fn extract_done_flag(plan_text: &str) -> Result<(bool, Option<Value>), String> {
     let cleaned = clean_yaml_fences(plan_text);
     if py_strip(&cleaned).is_empty() {
-        return Ok((true, String::new()));
+        return Ok((true, None));
     }
-    let parsed = match electricity_yaml::load_yaml_last_key_wins(&cleaned) {
-        // `_extract_done_flag`'s own `except _yaml.YAMLError:` -- a
-        // calendar-invalid timestamp's bare `ValueError` (issue #528's
-        // own comment) is never one, so it escapes uncaught, past
-        // `_extract_done_flag` entirely, to its one caller's own outer
-        // `except Exception as e: rec["error"] = f"parse_failed: {e}"`
-        // -- never this function's own "let use(inline) handle it"
-        // swallow, which only an *ordinary* `yaml.YAMLError` gets.
-        Err(electricity_yaml::YamlError::InvalidTimestampValue { message, .. }) => {
-            return Err(message);
-        }
-        Err(_) => return Ok((false, cleaned)),
-        Ok(v) => v,
-    };
-    let dump_opts = electricity_yaml::DumpOptions { sort_keys: true };
+    let parsed =
+        electricity_yaml::load_yaml_last_key_wins(&cleaned).map_err(|e| e.cof_message())?;
+
     let mut dict: Dict = if let Some(d) = parsed.as_dict() {
         d.clone()
     } else if let Some(items) = parsed.as_list() {
@@ -712,11 +720,9 @@ fn extract_done_flag(plan_text: &str) -> Result<(bool, String), String> {
             Value::Str("effects".to_string()),
             Value::List(items.to_vec()),
         );
-        let dumped =
-            electricity_yaml::dump(&Value::Dict(wrapper), &dump_opts).map_err(|e| e.to_string())?;
-        return Ok((false, dumped));
+        return Ok((false, Some(Value::Dict(wrapper))));
     } else {
-        return Ok((false, cleaned));
+        return Ok((false, Some(parsed)));
     };
 
     let done_key = Value::Str("done".to_string());
@@ -750,16 +756,14 @@ fn extract_done_flag(plan_text: &str) -> Result<(bool, String), String> {
                     dict.shift_remove(&plan_key);
                     dict.insert(effects_key.clone(), Value::List(items));
                 } else {
-                    return Ok((done, cleaned));
+                    return Ok((done, Some(Value::Dict(dict))));
                 }
             }
         }
     }
 
     dict.shift_remove(&done_key);
-    let dumped =
-        electricity_yaml::dump(&Value::Dict(dict), &dump_opts).map_err(|e| e.to_string())?;
-    Ok((done, dumped))
+    Ok((done, Some(Value::Dict(dict))))
 }
 
 /// Replays `tests/golden/reflector_corpus.json`
@@ -767,6 +771,62 @@ fn extract_done_flag(plan_text: &str) -> Result<(bool, String), String> {
 /// for `_clean_yaml_fences`/`_extract_done_flag`/`_render_reflector_prime`
 /// and the redact/`json.dumps`/truncate transform `_best_effort_context`
 /// wraps, compared against this module's own ports.
+#[cfg(test)]
+mod prime_tests {
+    use super::*;
+
+    #[test]
+    fn renders_the_default_prime_byte_for_byte() {
+        let fields: [(&str, Value); 3] = [
+            ("goal", Value::Str("Summarize the project.".to_string())),
+            (
+                "context",
+                Value::Str(
+                    "{\n  \"adapter\": \"scripted\",\n  \"model\": \"test\",\n  \"plugins\": []\n}"
+                        .to_string(),
+                ),
+            ),
+            ("max_effects", Value::from(8_i64)),
+        ];
+        let rendered = render_reflector_prime(
+            electricity_compiler::reflector_prime::REFLECTOR_PRIME,
+            &fields,
+        )
+        .unwrap();
+        assert!(
+            rendered.starts_with("CRITICAL: The next system will parse your response as YAML.")
+        );
+        assert!(
+            rendered.contains("Goal:\nSummarize the project."),
+            "{rendered}"
+        );
+        assert!(rendered.contains("\"adapter\": \"scripted\""));
+        assert!(rendered.contains("<= 8."));
+        assert!(rendered.ends_with("\n\n"));
+    }
+
+    #[test]
+    fn renders_mustache_without_html_escaping() {
+        let fields: [(&str, Value); 3] = [
+            ("goal", Value::Str("a & b < c".to_string())),
+            ("context", Value::Str(String::new())),
+            ("max_effects", Value::from(1_i64)),
+        ];
+        let rendered = render_reflector_prime("Goal: {{goal}}", &fields).unwrap();
+        assert!(rendered.contains("Goal: a & b < c"));
+    }
+
+    #[test]
+    fn has_no_fallback_for_a_malformed_template() {
+        let fields: [(&str, Value); 3] = [
+            ("goal", Value::Str("g".to_string())),
+            ("context", Value::Str("c".to_string())),
+            ("max_effects", Value::from(1_i64)),
+        ];
+        assert!(render_reflector_prime("{{#unclosed", &fields).is_err());
+    }
+}
+
 #[cfg(test)]
 mod corpus_tests {
     use super::*;
@@ -844,17 +904,20 @@ mod corpus_tests {
                     let input = case["input"].as_str().unwrap();
                     let ok = case["ok"].as_bool().unwrap();
                     match extract_done_flag(input) {
-                        Ok((done, plan_yaml)) if ok => {
+                        Ok((done, parsed)) if ok => {
                             let expected_done = case["done"].as_bool().unwrap();
-                            let expected_plan = case["plan_yaml"].as_str().unwrap();
-                            if done != expected_done || plan_yaml != expected_plan {
+                            let expected_parsed = match &case["parsed"] {
+                                serde_json::Value::Null => None,
+                                other => Some(json_to_value(other)),
+                            };
+                            if done != expected_done || parsed != expected_parsed {
                                 failures.push(format!(
-                                    "case {i} (extract_done): expected ({expected_done}, {expected_plan:?}), got ({done}, {plan_yaml:?})"
+                                    "case {i} (extract_done): expected ({expected_done}, {expected_parsed:?}), got ({done}, {parsed:?})"
                                 ));
                             }
                         }
-                        Ok((done, plan_yaml)) => failures.push(format!(
-                            "case {i} (extract_done): expected an error, got Ok(({done}, {plan_yaml:?}))"
+                        Ok((done, parsed)) => failures.push(format!(
+                            "case {i} (extract_done): expected an error, got Ok(({done}, {parsed:?}))"
                         )),
                         Err(e) if ok => failures.push(format!(
                             "case {i} (extract_done): expected success, got Err({e})"
@@ -872,28 +935,27 @@ mod corpus_tests {
                         ("context", Value::Str(context)),
                         ("max_effects", Value::from(max_effects)),
                     ];
-                    let got = render_reflector_prime(template, &fields);
-                    // A documented divergence (DESIGN.md §13): `py_str_format`
-                    // never does attribute/index access, so it falls back
-                    // where Python's own `.format()` would have succeeded.
-                    // Only check that *our own* output took that fallback
-                    // branch (the raw template text survives unexpanded),
-                    // never Python's own (here, deterministic) text.
-                    if case["divergence"].as_bool().unwrap_or(false) {
-                        let expected_fallback =
-                            format!("{CRITICAL_WARNING}{}\n\n", py_strip(template));
-                        if got != expected_fallback {
-                            failures.push(format!(
-                                "case {i} (prime, divergence): expected the raw-template fallback, got {got:?}"
-                            ));
+                    let ok = case["ok"].as_bool().unwrap();
+                    match render_reflector_prime(template, &fields) {
+                        Ok(got) if ok => {
+                            let expected = case["rendered"].as_str().unwrap();
+                            if got != expected {
+                                failures.push(format!(
+                                    "case {i} (prime): expected {expected:?}, got {got:?}"
+                                ));
+                            }
                         }
-                        continue;
-                    }
-                    let expected = case["rendered"].as_str().unwrap();
-                    if got != expected {
-                        failures.push(format!(
-                            "case {i} (prime): expected {expected:?}, got {got:?}"
-                        ));
+                        Ok(got) => failures.push(format!(
+                            "case {i} (prime): expected an error, got Ok({got:?})"
+                        )),
+                        Err(_) if ok => failures
+                            .push(format!("case {i} (prime): expected success, got an error")),
+                        // Not compared text-for-text: a malformed-template
+                        // error's own wording is this module's own
+                        // (`core.templates.render_template`'s Python text,
+                        // not reproduced verbatim), only that it refuses
+                        // the same inputs Python does.
+                        Err(_) => {}
                     }
                 }
                 "context" => {
