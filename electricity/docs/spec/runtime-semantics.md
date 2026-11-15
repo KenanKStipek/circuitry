@@ -492,19 +492,26 @@ escaping):
 | `42` (int) | `42` |
 | `1.0` (float) | `1.0` |
 | `1e-05` (float) | `1e-05` |
-| `[1, 2, 3]` (list) | `[1, 2, 3]` (Python `repr`-ish via `str()`) |
-| `{"a": 1}` (dict) | `{'a': 1}` (Python `str()`, single-quoted — **not** JSON) |
+| `[1, 2, 3]` (list) | `[1, 2, 3]` (JSON text) |
+| `{"a": 1}` (dict) | `{"a": 1}` (JSON text, double-quoted) |
 
-A list/dict in an ordinary Mustache context renders via plain `str()` —
-Python repr syntax, not JSON — **unless** the value was wrapped by
-`core/tool.py`'s `_JsonAwareDict`/`_JsonAwareList` (`core/tool.py:195`),
-which override `__str__` to emit real `json.dumps(..., default=str)`. That
-wrapping is applied **only** to the context used for rendering a tool's
-`params_json` template (`_json_aware_ctx`, `core/tool.py:208`) — a plain
-`template:`/`messages[].content` prompt field, or a tool's ordinary `params`
-leaves, get the Python-`repr` rendering for any list/dict value that reaches
-a `{{{...}}}` splice. This asymmetry is deliberate and must be preserved
-exactly — see §9 Quirk Q2.
+A whole list or dict reaching any Mustache splice — `{{x}}`, `{{{x}}}`, a
+declared prompt/partial's own `{{> name}}` effect reference, a tool's
+`params_json` — renders the same JSON text `json.dumps(value,
+ensure_ascii=False, default=str)` would produce: `["a", "b"]`, not Python's
+`['a', 'b']` (circuitry#778 step 3). `core/templates.py`'s `render_template`
+wraps whichever list/dict node a lookup actually reaches, lazily, in
+`_JsonAwareDict`/`_JsonAwareList` (overriding `__str__` to emit that JSON
+text) — the same wrapping that used to apply only to a tool's `params_json`
+context now applies everywhere a template renders. Nested values inside a
+wrapped list/dict follow JSON too: a nested bool/`None` renders
+`true`/`false`/`null`, not `True`/`False`/*(empty string)*, and a date/
+datetime renders its ISO text (`str()`, the `default=str` fallback), not its
+`repr()`. A scalar value (the rows above `[1, 2, 3]`) is unaffected: no
+wrapping to do. An empty list/dict is still falsy in a section —
+`{{#x}}...{{/x}}`/`{{^x}}...{{/x}}` are unchanged — but a bare splice of one
+still renders its JSON text (`"[]"`/`"{}"`), never collapsed to `""` by the
+usual falsy-value-renders-empty rule.
 
 ### 3.3 Render errors
 
@@ -2135,18 +2142,6 @@ normalize it (bare form always works, or never works). Copying it exactly is
 what byte-identical parity requires; normalizing it is a deliberate,
 documented divergence from `cof`.
 
-**Q2 — `params_json`'s JSON-aware rendering vs. every other template site's
-Python-`repr` rendering of lists/dicts.** A `{{{val}}}` splice of a native
-list/dict renders as Python `str()` (`['a', 'b']`, `{'a': 1}` — single-quoted,
-not valid JSON) **everywhere except** inside a tool's `params_json` field,
-where the whole context is first wrapped in `_JsonAwareDict`/`_JsonAwareList`
-so the same splice yields real `json.dumps` output. Minimal repro: a prompt
-`template: "{{{mylist}}}"` with `mylist: [1, "a"]` in context renders
-`[1, 'a']` (Python repr, invalid JSON) rather than `[1, "a"]`. **Decision
-needed**: reproduce this asymmetry exactly (two different stringification
-paths depending on which field is rendering) or unify on one (likely
-JSON-everywhere, which would be a deliberate, documented improvement but a
-parity break).
 
 **Q3 — `use.inline`'s template renders against the *parent's* context,
 before the child orchestration even exists; `use.inputs` has no effect on
@@ -2240,7 +2235,7 @@ the run is fully deterministic.
 | C2 | Document with `on/off/yes/no`, `017`, `0x1A`, `1:30:00`, a `<<` merge, a duplicate top-level key | none (load-only, `validate_only`) | YAML 1.1 value types (§1.1); duplicate key raises with exact message |
 | C3 | Two effects with the same name in one scope; an effect named `value` | n/a | Compile-time `ValueError` with exact message (§1.4) |
 | C4 | Prompt with `template` referencing `{{missing}}`, `{{a.b.c}}` on a partial dict, `{{#list}}...{{/list}}`, `{{^flag}}...{{/flag}}` | scripted echo | `meta.prompt_sent` matches Mustache semantics table exactly (§3.1–3.2) |
-| C5 | Tool `params_json` splicing a native list from a prior prompt's `array` output, vs. the same list spliced via `{{{...}}}` in an ordinary `template:` | scripted JSON array reply | `params_rendered`/`prompt_sent` show the JSON-vs-repr asymmetry (Q2) |
+| C5 | Tool `params_json` splicing a native list from a prior prompt's `array` output, vs. the same list spliced via `{{{...}}}` in an ordinary `template:` | scripted JSON array reply | `params_rendered`/`prompt_sent` show the same JSON text for both (§3.2) |
 | C6 | `if: {mode: cel, expr: "has(state.input.x) && state.input.x > 1"}` run with `x` absent, `x: 0`, `x: 5`; same with `strict: true` | n/a | `condition_result` / raised-error exactly matches the absent-path table (§4.4) |
 | C7 | `if`/`while` CEL: `1 == true`, `1.0 == 1`, `"a" == 1` | n/a | Heterogeneous-equality results (§4.3) |
 | C8 | Named `each` loop, `flow: chain`, body reads `prime.<loop>.prev.<step>.value` on pass 2; a profile overlay disables the `collect:` step for every pass (a profile override applies to the whole effect, never just one pass) | scripted tool replies, 3 items | `prev` absent on pass 0, correct on later passes; each pass's own `executed_effects[]` record for the disabled step carries `disabled: true`; `collected` is `{value: []}` (§2.3, §2.4, Q7) |

@@ -374,13 +374,13 @@ outright; listed in `electricity-template`'s own "Known divergences from chevron
 resolution (`a.b.c`) is an ordinary loop over a `.`-split name, never recursion, so it needs no
 limit of its own regardless of how long a dotted name is.
 
-**The `params_json` asymmetry (Q2) is preserved exactly, not unified.** Every ordinary template
-site renders a spliced list/dict via `py_str`. Only the context used for a tool's `params_json`
-field is wrapped so the *same* splice syntax instead emits real `json.dumps` output
-(runtime-semantics §3.2, Quirk Q2). electricity's template crate exposes two context wrapper
-types for exactly this purpose — `PlainCtx` (default, `py_str` rendering) and `JsonAwareCtx`
-(used only by the tool-effect compiler when rendering `params_json`) — rather than a single mode
-flag, so the two call sites can never accidentally share behavior by a future refactor.
+**A spliced list or dict renders as JSON everywhere, not only for `params_json`
+(circuitry#778 step 3).** Every ordinary template site, and `params_json`, render a spliced
+list/dict through the same JSON serializer (`electricity-json`'s `dumps_default_str`,
+`electricity_template::json_splice`) rather than `py_str` — matching `core/templates.py`'s own
+single code path. `split`/`decompose`'s own part-size estimates measure that same JSON text,
+not `py_repr`, so the two engines split the same input into the same number of parts
+(runtime-semantics §3.2).
 
 ### 3.4 JSON: a `json.dumps`-exact writer (and reader)
 
@@ -634,7 +634,7 @@ A `dynamic`/document-root `finally:` list compiles into a `TryFinally` region wr
 | Effect | Compiles to | Notes |
 |---|---|---|
 | `prompt` | `NodeKind::Leaf(LeafKind::Prompt)` | Carries the resolved `(adapter, model)` attempt chain *shape* (not resolved values — those are runtime, scoring/routing-dependent) and the pre-rendered template/messages AST. |
-| `tool` | `NodeKind::Leaf(LeafKind::Tool)` | Carries the provider name, the params AST (template nodes + `{from:}` markers + the security-sensitive-key literal check already passed), and the `params_json` template (if any) tagged for `JsonAwareCtx` rendering (§3.3). |
+| `tool` | `NodeKind::Leaf(LeafKind::Tool)` | Carries the provider name, the params AST (template nodes + `{from:}` markers + the security-sensitive-key literal check already passed), and the `params_json` template (if any), rendered the same way every other template is (§3.3). |
 | `use` | `NodeKind::Leaf(LeafKind::Use)` | Carries the resolution mode (`path`/`inline`), the inputs AST, and — for `inline` — the **uncompiled** template text (compiled to an IR subtree only at *run time*, after rendering produces YAML text, §5.3). A `path:` child resolves in a fixed order — absolute path first, then relative to the current working directory, then relative to the **parent orchestration's own directory** — and that last fallback is re-rooted per nesting level: a `use` nested inside an already-loaded child resolves its own `path:` relative to *that child's* directory, not the original root document's, so composition can descend through several directories of `use` children without every one needing a path relative to wherever the top-level document happened to live. |
 | `loop` | `NodeKind::Control(Region::Loop { .. })` | `each`-chain/`each`-tree/`while` captured in `LoopSpec`/`LoopFlow` (above); an unnamed loop compiles identically but dispatches writes into the enclosing scope at run time rather than a child node. |
 | `dynamic` | `NodeKind::Control(Region::Block { .. })` (chain) or `NodeKind::Control(Region::Parallel { .. })` (tree), wrapped in `Region::TryFinally` if `finally:` is present | The document root itself is a `dynamic` named `"prime"` with no scope-overlay semantics (runtime-semantics §2.4's "top-level root is not a scope-overlay container" — compiled into the IR as a `Block` whose child ops read `ctx` by reference, never through `scope_ctx`). |
@@ -1645,9 +1645,8 @@ scope overlay applies, §6.3) through `electricity-template` (runtime-semantics 
 
 prompt `template`; every `messages[].content`; tool `prompt`; every string leaf of tool `params`
 recursively (except a `{from: ...}` leaf, which is a typed reference, never rendered — §7.1.1);
-tool `params_json` — rendered as **one** whole-string template through the `JsonAwareCtx`
-wrapper (§3.3), then parsed as JSON and deep-merged onto the rendered `params` (`params_json`
-keys win, nested dicts merge recursively); `use.inline` — rendered **once**, against the
+tool `params_json` — rendered as **one** whole-string template (§3.3), then parsed as JSON and
+deep-merged onto the rendered `params` (`params_json` keys win, nested dicts merge recursively); `use.inline` — rendered **once**, against the
 *parent's* context, before the result is even parsed as YAML (Quirk Q3, §5.3); every string leaf
 of `use.inputs` that is not a `{from:...}` reference; `if.template`/`while.template` (model-mode
 conditions); `expect.template` (model-mode expect); asset `ref` (image paths/URLs).
@@ -2877,7 +2876,6 @@ divergence.
 | # | Quirk / risk | Recommendation | Owner decision needed? |
 |---|---|---|---|
 | Q1 | Bare sibling references (`{{first.value}}`) resolve inside a loop body/`if` branch but **not** at plain top level or inside a plain `dynamic` — only the `prime.`-prefixed form works there. | **Copy.** This is the single most load-bearing parity assertion in the whole suite (conformance case C27) — silently "fixing" it would change which existing documents even compile the same way. | **No — settled 2026-10-06**: confirmed no production document relies on the bare-form failing silently in a way a fix would surface as a new error; copied exactly, no owner question remains. |
-| Q2 | `params_json` renders spliced lists/dicts as real JSON; every other template site (including `{{{...}}}` elsewhere) renders them via Python `str()` (single-quoted, not valid JSON). | **Copy**, via the two-context-type design (§3.3) rather than a mode flag, so the asymmetry can't be accidentally unified by a later refactor. | No — this is a clean two-path implementation, not a judgment call. |
 | Q3 | `use.inline`'s template renders once, against the **parent's** context, before the child orchestration exists — `use.inputs` has no effect on what the inline template text itself can reference. | **Copy.** "Fixing" this (rendering `inline` twice, once per scope) would be a new, undocumented behavior change, not a bugfix — out of scope for electricity to invent unilaterally. | **No — moot**: no document in the first production document sets uses `use: {inline: ...}` at all, so this quirk's behavior has nothing to apply to yet. |
 | Q4 | `while`'s condition sees `iter.index = count - 1` (post-pass, −1 before any pass); the body sees `iter.index = count` (uncompensated) — a deliberate one-line asymmetry. | **Copy**, with an explicit conformance case asserting both sides (C10). | No — documented as deliberate in the reference's own source commentary. |
 | Q5 | `allowed_commands`'s literal-only rule is enforced **twice** (compile time and dispatch time) by two separate checks. | **Copy both checks** — the duplication is intentional defense-in-depth (dispatch time catches a `use`-/reflector-generated document the static compile pass never statically checked). | No. |
