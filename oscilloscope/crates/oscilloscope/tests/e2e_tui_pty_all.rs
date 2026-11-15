@@ -4,10 +4,12 @@
 //! and `cof` on `PATH`, a temporary `HOME`, stripped credentials, a
 //! hard per-test timeout, and this file's own lock, for the same
 //! `ps`-scan-sensitivity reason that module's own doc comment gives.
+//! Every `osi`/`cof` a test here spawns is wrapped in
+//! [`support::AutoKill`] from the moment it's spawned; see that
+//! struct's own doc comment for why.
 
 mod support;
 
-use std::process::Child;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -729,14 +731,19 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
     // before the fourth, live one even starts -- run in parallel,
     // since each is its own independent `cof` with nothing to
     // contend over.
-    let mut seeds: Vec<(Child, tempfile::TempDir)> = Vec::new();
+    let mut seed_guards: Vec<AutoKill> = Vec::new();
+    let mut seeds: Vec<tempfile::TempDir> = Vec::new();
     for _ in 0..3 {
         let out = tempfile::tempdir().unwrap();
         let child = launch_osi_log(&home, work.path(), &doc, &config, out.path());
-        seeds.push((child, out));
+        seed_guards.push(AutoKill::new(child));
+        seeds.push(out);
     }
-    for (child, _out) in &mut seeds {
-        let status = child.wait().expect("a seed run should run to completion");
+    for guard in seed_guards.drain(..) {
+        let status = guard
+            .into_inner()
+            .wait()
+            .expect("a seed run should run to completion");
         assert!(status.success(), "a seed run should exit 0, got {status:?}");
     }
 
@@ -852,7 +859,7 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
     drop(other_child);
     assert_no_leftover_process(out_live.path());
     assert_no_leftover_process(out_other.path());
-    for (_, out) in &seeds {
+    for out in &seeds {
         assert_no_leftover_process(out.path());
     }
 }
