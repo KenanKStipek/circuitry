@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use support::{
     ELECTRICITY_CONFIG, TestHome, assert_no_leftover_process, drain_continuously, open_pty,
-    send_bytes, spawn_osi_on_pty_with_env, wait_for_screen_text, wait_with_timeout, write_doc,
+    send_bytes, spawn_osi_on_pty_with_env, wait_for_screen_text, wait_for_screen_texts,
+    wait_with_timeout, write_doc,
 };
 
 /// A fake engine standing in for `electricity`, run through Python
@@ -324,10 +325,14 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
     send_bytes(&mut master_a, b"q");
     let status_a = wait_with_timeout(child_a, Duration::from_secs(30));
     assert!(status_a.success(), "osi should exit 0, got {status_a:?}");
-    let final_text_a = String::from_utf8_lossy(&captured_a.lock().unwrap()).into_owned();
-    assert!(
-        final_text_a.contains("run ticket 42") && final_text_a.contains("ok"),
-        "expected the exit summary to name the run by its label:\n{final_text_a}"
+    // Waited for rather than read straight off `captured_a`: osi's
+    // exit here only means the engine's own exec has returned, not
+    // that the draining thread has caught up on the exit summary it
+    // writes to the scrollback on the way out.
+    wait_for_screen_texts(
+        &captured_a,
+        &["run ticket 42", "ok"],
+        Duration::from_secs(5),
     );
 
     // B's own engine is still running (it never got a finish file),

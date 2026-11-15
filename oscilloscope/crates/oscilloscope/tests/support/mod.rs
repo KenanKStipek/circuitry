@@ -392,10 +392,12 @@ pub fn assert_no_leftover_process(needle: &Path) {
 }
 
 /// Replays raw terminal output onto a blank character grid: cursor positioning (`CSI r;cH` / `f`,
-/// `CSI nA/B/C/D`), carriage return and line feed move the cursor, every other escape sequence
-/// (colours, attributes, clears, cursor visibility, alternate screen) is skipped, and printable text
-/// lands at the cursor. Each returned line is one row, trailing blanks trimmed, so a test can look for
-/// the text a screen actually shows rather than for bytes that a styled run may split with escapes.
+/// `CSI nA/B/C/D`), carriage return and line feed move the cursor, clears (`CSI J`/`K`) erase the
+/// cells they target, entering or leaving the alternate screen (`CSI ?1049h`/`l`) clears the whole
+/// grid, every other escape sequence (colours, attributes, cursor visibility) is skipped, and
+/// printable text lands at the cursor. Each returned line is one row, trailing blanks trimmed, so a
+/// test can look for the text a screen actually shows rather than for bytes that a styled run may
+/// split with escapes.
 pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
     let text = String::from_utf8_lossy(bytes);
     let mut grid = vec![vec![' '; cols]; rows];
@@ -489,17 +491,28 @@ pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
                             }
                         }
                     }
-                    // Entering or leaving the alternate screen
-                    // (`\x1b[?1049h`/`l`) -- a real terminal gives
-                    // the program a screen of its own, blank, not
-                    // the primary one's own leftover content (osi's
-                    // pre-alt-screen warning line, say, still sitting
-                    // at row 0 otherwise). Not just another `J`: no
-                    // program ever has to ask for this clear itself,
-                    // so a caller that waits for text on literally
-                    // the alternate screen's first frame must still
-                    // find it, not whatever stale primary-screen text
-                    // happened to share its row and column.
+                    // Entering the alternate screen (`\x1b[?1049h`)
+                    // -- a real terminal gives the program a screen
+                    // of its own, blank, not the primary one's own
+                    // leftover content (osi's pre-alt-screen warning
+                    // line, say, still sitting at row 0 otherwise).
+                    // Not just another `J`: no program ever has to
+                    // ask for this clear itself, so a caller that
+                    // waits for text on literally the alternate
+                    // screen's first frame must still find it, not
+                    // whatever stale primary-screen text happened to
+                    // share its row and column.
+                    //
+                    // Leaving it (`\x1b[?1049l`) is cleared the same
+                    // way here, which is *not* what a real terminal
+                    // does -- it restores the primary screen's own
+                    // prior content, which this replay never kept a
+                    // separate copy of to restore. A simplification
+                    // that still gives a caller waiting for whatever
+                    // osi prints to the scrollback right after `q`
+                    // (the exit summary) a blank slate to read that
+                    // against, rather than the alternate screen's own
+                    // stale last frame bleeding through underneath.
                     'h' | 'l' if params.trim_start_matches('?') == "1049" => {
                         for line in grid.iter_mut() {
                             line.iter_mut().for_each(|c| *c = ' ');
@@ -780,6 +793,7 @@ pub fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
 /// screen that never actually showed it: a caller that genuinely
 /// wants "whatever the screen shows right now", timeout or not, reads
 /// `captured_buf` directly instead, and says why at its own call site.
+#[track_caller]
 pub fn wait_for_screen_text(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     needle: &str,
@@ -805,6 +819,7 @@ pub fn wait_for_screen_text(
 /// overlay (its title, say) can still be missing the rows below it;
 /// waiting for everything a test then asserts on keeps it from
 /// reading a half-drawn frame.
+#[track_caller]
 pub fn wait_for_screen_texts(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     needles: &[&str],
@@ -830,6 +845,7 @@ pub fn wait_for_screen_texts(
 /// for a screen change, wait for what the new screen shows, not only
 /// for the old text to go: a frame that has cleared the old screen
 /// but not drawn the new one yet shows neither.
+#[track_caller]
 pub fn wait_for_screen(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     timeout: Duration,
@@ -852,6 +868,7 @@ pub fn wait_for_screen(
 /// [`wait_for_screen_text`], but waiting for `needle` to disappear
 /// instead, and panicking (with `needle` and the whole replayed
 /// screen) if it's still there once `timeout` runs out.
+#[track_caller]
 pub fn wait_for_screen_text_gone(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     needle: &str,

@@ -56,8 +56,10 @@ fn find_text(grid: &[String], needle: &str) -> Option<(usize, usize)> {
 }
 
 /// Waits until `pattern` has appeared anywhere in `buf` so far, or
-/// panics (with `pattern` and everything drawn so far) once `timeout`
-/// runs out without it.
+/// panics (with `pattern` and the replayed screen) once `timeout`
+/// runs out without it. `#[track_caller]` so that panic points at
+/// the call site, not this function's own `panic!`.
+#[track_caller]
 fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
@@ -66,10 +68,10 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
             return;
         }
         if Instant::now() >= deadline {
+            let screen = screen_grid(&whole, 200, 60).join("\n");
             panic!(
-                "{:?} never appeared within {timeout:?}; got:\n{:?}",
-                String::from_utf8_lossy(pattern),
-                String::from_utf8_lossy(&whole)
+                "{:?} never appeared within {timeout:?}; screen:\n{screen}",
+                String::from_utf8_lossy(pattern)
             );
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -85,6 +87,7 @@ fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration
 /// under test ever runs -- scanning the whole buffer would let that
 /// stale match satisfy this wait immediately, before the real thing
 /// has happened at all.
+#[track_caller]
 fn wait_for_pattern_since(
     buf: &Arc<Mutex<Vec<u8>>>,
     since_len: usize,
@@ -101,10 +104,10 @@ fn wait_for_pattern_since(
             return;
         }
         if Instant::now() >= deadline {
+            let screen = screen_grid(&whole, 200, 60).join("\n");
             panic!(
-                "{:?} never appeared within {timeout:?}; got:\n{:?}",
-                String::from_utf8_lossy(pattern),
-                String::from_utf8_lossy(&whole[since_len..])
+                "{:?} never appeared within {timeout:?}; screen:\n{screen}",
+                String::from_utf8_lossy(pattern)
             );
         }
         std::thread::sleep(Duration::from_millis(20));
@@ -154,6 +157,7 @@ fn wait_for_run_end(events_path: &Path, timeout: Duration) {
 /// this function's own chunk boundaries at all), so a second call
 /// waiting for a later pattern must still be able to see bytes this
 /// call already consumed from the fd but had no reason to return.
+#[track_caller]
 fn wait_for_pattern_on_master(
     master: &mut File,
     carry: &mut Vec<u8>,
@@ -189,10 +193,8 @@ fn wait_for_pattern_on_master(
             Err(_) => break,
         }
     }
-    panic!(
-        "pattern {pattern:?} never appeared within {timeout:?}; got:\n{:?}",
-        String::from_utf8_lossy(carry)
-    );
+    let screen = screen_grid(carry, 200, 60).join("\n");
+    panic!("pattern {pattern:?} never appeared within {timeout:?}; screen:\n{screen}");
 }
 
 #[test]
@@ -243,11 +245,9 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
     wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     send_bytes(&mut master, b"q");
 
-    // Above the two waits' own worst case (20s + 20s) with margin:
-    // this cap bounds how long osi itself takes to notice `q` and
-    // exit, not those waits, but a smaller number would make a
-    // timeout here read as "osi hung" when it could just as well be
-    // this test's own earlier waits having eaten most of it.
+    // This bounds only how long osi itself takes to notice `q` and
+    // exit from here, not the two waits above -- their own clock
+    // has already run out by the time this one starts.
     let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(status.success(), "osi should exit 0, got {status:?}");
 
@@ -727,61 +727,24 @@ fn screen_keys_switch_screens_during_a_live_run() {
         "prime.slow",
         Duration::from_secs(20),
     );
-    std::thread::sleep(SIGNAL_DELAY);
+    // Default is the Tape; this run is still live.
+    wait_for_screen_texts(
+        &captured_buf,
+        &["Run Started", "Totals"],
+        Duration::from_secs(10),
+    );
 
-    // Default is the Tape; this run is still live. Checked against
-    // the whole buffer so far, since nothing has been sent yet for a
-    // key press to have changed anything after.
-    {
-        let captured = captured_buf.lock().unwrap().clone();
-        let rendered = String::from_utf8_lossy(&captured);
-        assert!(
-            rendered.contains("Run Started") && rendered.contains("Totals"),
-            "expected the Tape's own list and Totals row on screen; got:\n{rendered:?}"
-        );
-    }
-
-    // Every check from here on reads only what arrived *after* its
-    // own key -- "flow" is in the header's own tab on every screen,
-    // so searching the whole cumulative buffer again for it could
-    // never actually fail, key press or not.
-    let before_2 = captured_buf.lock().unwrap().len();
+    // `Flow ·` is the rail pane's own title, drawn only on the Flow
+    // screen -- waited for on the rendered screen rather than a
+    // fixed delay, since a key press only redraws the cells that
+    // changed and a styled run is split by escapes in the raw
+    // stream.
     send_bytes(&mut master, b"2");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        // A key press only redraws the cells that changed (the `· 0/2 · ▰ = 50 t` part of the title
-        // keeps its columns from the Tape's own title), and a styled run is split by escapes in the raw
-        // stream, so neither the bytes after the key nor the raw bytes can be searched for the title:
-        // replay everything drawn so far onto a screen and read that. `Flow ·` is the rail pane's
-        // own title, drawn only on the Flow screen.
-        assert!(
-            captured_buf.lock().unwrap().len() > before_2,
-            "pressing 2 drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Flow \u{b7}"),
-            "expected the Flow screen's own rail pane after pressing 2; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "Flow \u{b7}", Duration::from_secs(10));
 
-    let before_0 = captured_buf.lock().unwrap().len();
+    // Same reasoning; `Tape ·` is the Tape's own pane title.
     send_bytes(&mut master, b"0");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        // Same replay; `Tape ·` is the Tape's own pane title (the Totals row is on every screen now).
-        assert!(
-            captured_buf.lock().unwrap().len() > before_0,
-            "pressing 0 drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Tape \u{b7}"),
-            "expected the Tape's own list back after pressing 0; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "Tape \u{b7}", Duration::from_secs(10));
 
     // `q` while still running asks first; confirming both cancels
     // and leaves once the engine actually exits.
@@ -877,47 +840,25 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
     // never going to be redrawn at all. Waited for on the rendered
     // screen grid instead, for the cursor actually being on the row
     // it belongs on.
+    // `wait_for_screen` only ever returns once its own predicate has
+    // held, and panics with the screen otherwise, so there is
+    // nothing left here for a further assert to check.
     send_bytes(&mut master, b"\x1b[B");
-    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
         screen
             .lines()
             .any(|l| l.contains('❯') && l.contains("again"))
     });
-    assert!(
-        screen
-            .lines()
-            .any(|l| l.contains('❯') && l.contains("again")),
-        "expected ↓ to move the table's own cursor onto `again`; screen:\n{screen}"
-    );
 
     send_bytes(&mut master, b"\x1b[A");
-    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
         screen
             .lines()
             .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again"))
     });
-    assert!(
-        screen
-            .lines()
-            .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again")),
-        "expected ↑ to move the table's own cursor back onto `ask`; screen:\n{screen}"
-    );
 
-    let before_enter = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\r");
-    std::thread::sleep(Duration::from_millis(400));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_enter,
-            "pressing ⏎ drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Selected"),
-            "expected ⏎ to open the selected store's own step full-screen; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "Selected", Duration::from_secs(10));
     send_bytes(&mut master, b"\x1b");
     std::thread::sleep(Duration::from_millis(400));
 
@@ -992,48 +933,29 @@ fn resizing_the_store_screen_drops_readings_below_30_rows() {
         Duration::from_secs(10),
     );
 
+    // Checked against new bytes actually having arrived, not just
+    // the condition below -- it already holds from the first wait
+    // at the top of this test, so a resize that drew nothing at all
+    // (`resize_pty` silently doing nothing) would otherwise still
+    // read as the TUI having picked it up.
     let before_resize = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 120, 24);
-    std::thread::sleep(Duration::from_millis(600));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_resize,
-            "resizing to 120x24 drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            !screen.contains("Readings"),
-            "expected the Readings pane gone below 30 rows; screen:\n{screen}"
-        );
-        assert!(
-            screen.contains("Largest Stores"),
-            "expected the table still shown below 30 rows; screen:\n{screen}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_resize
+            && !screen.contains("Readings")
+            && screen.contains("Largest Stores")
+    });
 
     // 80-99 columns drops Readings too, on width alone -- back to 30
     // rows (plenty), but narrow enough that the chart/table pane no
     // longer has room for a second pane beside it.
     let before_narrow = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 90, 30);
-    std::thread::sleep(Duration::from_millis(600));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_narrow,
-            "resizing to 90x30 drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            !screen.contains("Readings"),
-            "expected the Readings pane gone below 100 columns; screen:\n{screen}"
-        );
-        assert!(
-            screen.contains("Largest Stores"),
-            "expected the table still shown below 100 columns; screen:\n{screen}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_narrow
+            && !screen.contains("Readings")
+            && screen.contains("Largest Stores")
+    });
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
@@ -1185,31 +1107,10 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
         "pressing → drew nothing at all"
     );
     send_bytes(&mut master, b"\x1b[D");
-    std::thread::sleep(Duration::from_millis(400));
-    {
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Following"),
-            "expected follow to be back on after ← lands Now back in view; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "Following", Duration::from_secs(10));
 
-    let before_enter = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\r");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_enter,
-            "pressing ⏎ drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Selected"),
-            "expected ⏎ to open the selection full-screen; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "Selected", Duration::from_secs(10));
     send_bytes(&mut master, b"\r");
     std::thread::sleep(Duration::from_millis(500));
 
@@ -1220,39 +1121,17 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     // real PTY to observe; the off state itself is a buffer-level
     // unit test (`keys::tests::flow_left_right_scroll_and_turn_
     // follow_off`).
-    let before_f = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"f");
     std::thread::sleep(Duration::from_millis(300));
     send_bytes(&mut master, b"f");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_f,
-            "expected f to redraw the title"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Following"),
-            "expected f twice to net back to the same title; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "Following", Duration::from_secs(10));
 
-    let before_help = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"?");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_help,
-            "pressing ? drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("Help") && screen.contains("select a station"),
-            "expected ? to open the Flow's own Help; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_texts(
+        &captured_buf,
+        &["Help", "select a station"],
+        Duration::from_secs(10),
+    );
     send_bytes(&mut master, b"\x1b");
     std::thread::sleep(Duration::from_millis(500));
 
@@ -1324,21 +1203,8 @@ fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
 
     // `+` opens three lanes; the fork then draws real lane content
     // (a station per open lane) instead of the folded band alone.
-    let before_plus = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"+");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_plus,
-            "pressing + drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("slow"),
-            "expected an open lane's own station after pressing +; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "slow", Duration::from_secs(10));
 
     // `↓` selects the next lane; `↑` selects back.
     send_bytes(&mut master, b"\x1b[B");
@@ -1347,21 +1213,8 @@ fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
     std::thread::sleep(Duration::from_millis(400));
 
     // `-` folds the lanes back into their own band.
-    let before_minus = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"-");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_minus,
-            "pressing - drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            screen.contains("lanes +"),
-            "expected the folded band back after pressing -; screen:\n{screen}"
-        );
-    }
+    wait_for_screen_text(&captured_buf, "lanes +", Duration::from_secs(10));
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
@@ -1573,25 +1426,16 @@ fn resizing_the_flow_screen_drops_the_story_pane_then_bounces_to_the_tape() {
     send_bytes(&mut master, b"2");
     wait_for_pattern_since(&captured_buf, before_2, b"Story", Duration::from_secs(10));
 
+    // Checked against new bytes having actually arrived since this
+    // resize, not just the condition below -- a previous frame could
+    // already happen to show no Story pane.
     let before_80 = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 80, 24);
-    std::thread::sleep(Duration::from_millis(600));
-    {
-        assert!(
-            captured_buf.lock().unwrap().len() > before_80,
-            "resizing to 80x24 drew nothing at all"
-        );
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        assert!(
-            !screen.contains("Story"),
-            "expected the Story pane gone at 80x24; screen:\n{screen}"
-        );
-        assert!(
-            screen.contains("slow"),
-            "expected the running station's own name still shown at 80x24; screen:\n{screen}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_80
+            && !screen.contains("Story")
+            && screen.contains("slow")
+    });
 
     let before_60 = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 60, 24);
@@ -1735,21 +1579,16 @@ fn resizing_the_signal_screen_drops_readings_at_80_columns() {
     send_bytes(&mut master, b"1");
     wait_for_pattern(&captured_buf, b"Readings", Duration::from_secs(10));
 
+    // Checked against new bytes having actually arrived since this
+    // resize, not just the condition below -- a previous frame could
+    // already happen to show no Readings pane.
     let before_80 = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 80, 24);
-    std::thread::sleep(Duration::from_millis(600));
-    {
-        let after = captured_buf.lock().unwrap()[before_80..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            !rendered.contains("Readings"),
-            "expected the Readings pane gone at 80x24; got:\n{rendered:?}"
-        );
-        assert!(
-            rendered.contains("slow"),
-            "expected the running row's own name still shown at 80x24; got:\n{rendered:?}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_80
+            && !screen.contains("Readings")
+            && screen.contains("slow")
+    });
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
@@ -1951,7 +1790,8 @@ fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
     wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     send_bytes(&mut master, b"q");
 
-    // Above the two waits' own worst case (20s + 20s) with margin.
+    // Bounds only osi's own time to exit from here, not the two
+    // waits above, whose own clock has already run out.
     let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(
         status.success(),
@@ -2022,7 +1862,8 @@ fn a_forwarded_sigterm_on_the_finished_screen_still_exits_promptly() {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    // Above the two waits' own worst case (20s + 20s) with margin.
+    // Bounds only osi's own time to exit from here, not the two
+    // waits above, whose own clock has already run out.
     let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(
         status.success(),
@@ -2394,7 +2235,8 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
     let closed_at = Instant::now();
     drop(master);
 
-    // Above the two waits' own worst case (20s + 20s) with margin.
+    // Bounds only osi's own time to exit from here, not the two
+    // waits above, whose own clock has already run out.
     let status = wait_with_timeout(child, Duration::from_secs(45));
     let elapsed = closed_at.elapsed();
     // The run itself finished fine before the terminal went away, so
@@ -2530,7 +2372,8 @@ fn osi_watch_renders_in_the_tui_and_exits_cleanly() {
     wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     send_bytes(&mut master, b"q");
 
-    // Above the two waits' own worst case (20s + 20s) with margin.
+    // Bounds only osi's own time to exit from here, not the two
+    // waits above, whose own clock has already run out.
     let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(status.success(), "osi watch should exit 0, got {status:?}");
 
@@ -2934,16 +2777,7 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
     // it sits inside.
     let before_len = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"2");
-    std::thread::sleep(Duration::from_millis(300));
-    let after_switch = {
-        let buf = captured_buf.lock().unwrap();
-        buf[before_len..].to_vec()
-    };
-    let rendered_after_switch = String::from_utf8_lossy(&after_switch);
-    assert!(
-        rendered_after_switch.contains("2/2"),
-        "screen 2's own orchestration pane title never showed the real final count; got:\n{rendered_after_switch:?}"
-    );
+    wait_for_pattern_since(&captured_buf, before_len, b"2/2", Duration::from_secs(10));
 
     send_bytes(&mut master, b"q");
     let status = wait_with_timeout(child, Duration::from_secs(30));
@@ -3012,12 +2846,19 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
 
     // Waited for on the header's own `Failed`, not a fixed delay:
     // `q` while the engine double hasn't yet written its final state
-    // opens a confirm-cancel dialog this test never answers.
+    // opens a confirm-cancel dialog this test never answers. Checked
+    // against the header row alone (the first line of the replayed
+    // screen), not the whole screen: the selected step's own Status
+    // line also draws `Failed`, and that can show before the engine
+    // double's own exit has actually reached the header.
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    wait_for_pattern(&captured_buf, b"Failed", Duration::from_secs(10));
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        screen.lines().next().is_some_and(|l| l.contains("Failed"))
+    });
     send_bytes(&mut master, b"q");
 
-    // Above the two waits' own worst case (20s + 10s) with margin.
+    // Bounds only osi's own time to exit from here, not the two
+    // waits above, whose own clock has already run out.
     let status = wait_with_timeout(child, Duration::from_secs(40));
     assert_eq!(status.code(), Some(1), "got {status:?}");
 
@@ -3138,40 +2979,23 @@ fn pressing_p_on_the_tape_toggles_previews() {
         "prime.slow",
         Duration::from_secs(20),
     );
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_screen_text(&captured_buf, "\u{203a}", Duration::from_secs(10));
 
-    {
-        let captured = captured_buf.lock().unwrap().clone();
-        let rendered = String::from_utf8_lossy(&captured);
-        assert!(
-            rendered.contains('\u{203a}'),
-            "expected a preview line (\u{203a}) with previews on by default; got:\n{rendered:?}"
-        );
-    }
-
+    // Checked against new bytes having actually arrived since `p`,
+    // not just the condition below -- the preview line is already on
+    // screen beforehand, so its absence alone cannot tell this apart
+    // from a `p` that drew nothing at all.
     let before_p = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"p");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        let after = captured_buf.lock().unwrap()[before_p..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            !rendered.contains('\u{203a}'),
-            "expected no preview line after turning previews off; got:\n{rendered:?}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_p && !screen.contains('\u{203a}')
+    });
 
     let before_p2 = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"p");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        let after = captured_buf.lock().unwrap()[before_p2..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains('\u{203a}'),
-            "expected the preview line back after pressing p again; got:\n{rendered:?}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_p2 && screen.contains('\u{203a}')
+    });
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
@@ -3228,28 +3052,12 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
         "prime.slow",
         Duration::from_secs(20),
     );
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_screen_text(&captured_buf, "\u{25b0}", Duration::from_secs(10));
 
-    {
-        let captured = captured_buf.lock().unwrap().clone();
-        let rendered = String::from_utf8_lossy(&captured);
-        assert!(
-            rendered.contains('\u{25b0}'),
-            "expected the fixed-scale bar by default; got:\n{rendered:?}"
-        );
-    }
-
-    let before_t = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"t");
-    std::thread::sleep(Duration::from_millis(500));
-    {
-        let after = captured_buf.lock().unwrap()[before_t..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains("vs Usual") || rendered.contains('\u{2014}'),
-            "expected the deviation view's own title or dash after pressing t; got:\n{rendered:?}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        screen.contains("vs Usual") || screen.contains('\u{2014}')
+    });
 
     send_bytes(&mut master, b"q");
     std::thread::sleep(Duration::from_millis(200));
@@ -3874,27 +3682,15 @@ fn resizing_through_the_tapes_four_size_classes_and_back() {
 
     let before_80 = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 80, 24);
-    std::thread::sleep(Duration::from_millis(600));
-    {
-        let after = captured_buf.lock().unwrap()[before_80..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            !rendered.contains("Selected"),
-            "expected the detail pane gone at 80x24; got:\n{rendered:?}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_80 && !screen.contains("Selected")
+    });
 
     let before_60 = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 60, 24);
-    std::thread::sleep(Duration::from_millis(600));
-    {
-        let after = captured_buf.lock().unwrap()[before_60..].to_vec();
-        let rendered = String::from_utf8_lossy(&after);
-        assert!(
-            rendered.contains("slow"),
-            "expected the running row's own name at 60x24; got:\n{rendered:?}"
-        );
-    }
+    wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        captured_buf.lock().unwrap().len() > before_60 && screen.contains("slow")
+    });
 
     let before_too_small = captured_buf.lock().unwrap().len();
     resize_pty(&slave_path, 60, 16);
