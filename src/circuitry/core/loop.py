@@ -16,8 +16,10 @@ from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
 from .cancellation import (
     as_completed_promptly,
+    copy_signal_outranked_tag,
     deferred_signal_region,
     get_token,
+    raise_if_interrupted_outside_cleanup,
     submit_with_context,
     wait_for_cancelled_branches,
 )
@@ -501,6 +503,9 @@ class LoopRuntime:
                     termination_detail = str(bounds_error)
                     if meta:
                         meta["error"] = str(bounds_error)
+                    # An interrupt is never lost just because on_error
+                    # degraded this loop's own bounds error (#799).
+                    raise_if_interrupted_outside_cleanup()
                 elif self.defn.flow == "tree":
                     # Parallel iteration: submit all at once, collect results in order.
                     # Each thread gets a shallow overlay of ctx, the same
@@ -821,6 +826,11 @@ class LoopRuntime:
                             termination_reason = "error"
                         # continue: keep the truncation/exhaustion reason
                         # computed above — errors don't change it.
+                        # Every branch already finished running (tree flow
+                        # dispatches them all at once) — an interrupt one
+                        # of them hit is never lost just because on_error
+                        # degraded its own failure (#799).
+                        raise_if_interrupted_outside_cleanup()
                 else:
                     # Sequential iteration (default)
                     total = len(collection)
@@ -926,6 +936,11 @@ class LoopRuntime:
                                     raise
                                 if self.defn.on_error == "break":
                                     termination_reason = "error"
+                                # An interrupt during this pass's own
+                                # handling is never lost just because
+                                # on_error degraded its failure (#799).
+                                raise_if_interrupted_outside_cleanup()
+                                if self.defn.on_error == "break":
                                     break
                                 # continue: skip this iteration
                         else:
@@ -1073,6 +1088,10 @@ class LoopRuntime:
                                 termination_reason = "condition_error"
                                 if meta:
                                     meta["error"] = str(exc)
+                                # An interrupt is never lost just because
+                                # on_error degraded this condition's own
+                                # failure (#799).
+                                raise_if_interrupted_outside_cleanup()
                                 break
 
                         if not should_continue and iteration_count >= self.defn.min_iterations:
@@ -1148,6 +1167,11 @@ class LoopRuntime:
                                 raise
                             if self.defn.on_error == "break":
                                 termination_reason = "error"
+                            # An interrupt during this pass's own handling
+                            # is never lost just because on_error
+                            # degraded its failure (#799).
+                            raise_if_interrupted_outside_cleanup()
+                            if self.defn.on_error == "break":
                                 break
                             # continue: skip this iteration
                             iteration_count += 1
@@ -1849,7 +1873,9 @@ Should the loop continue? Answer (yes/no):"""
                 # path (#269 item 12 follow-up).
                 effect_name = getattr(effect, "name", None)
                 if isinstance(effect_name, str) and effect_name:
-                    raise RuntimeError(f"{effect_name}: {_body_exc}") from _body_exc
+                    wrapped = RuntimeError(f"{effect_name}: {_body_exc}")
+                    copy_signal_outranked_tag(_body_exc, wrapped)
+                    raise wrapped from _body_exc
                 raise
             finally:
                 # A tree iteration's writes stay in its own store until the

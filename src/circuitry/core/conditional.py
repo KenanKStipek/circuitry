@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, Literal, Union
 from ..adapters import Adapter
 from ..output import console as _console
 from .answers import parse_boolean_answer
+from .cancellation import copy_signal_outranked_tag
 from .disabled import is_enabled
 from .effect_identity import model_call
 from .resume import effect_completed_ok
@@ -524,7 +525,9 @@ class ConditionalRuntime:
                     # with nothing saying which effect in the branch failed.
                     effect_name = getattr(effect, "name", None)
                     if isinstance(effect_name, str) and effect_name:
-                        raise RuntimeError(f"{effect_name}: {_branch_exc}") from _branch_exc
+                        wrapped = RuntimeError(f"{effect_name}: {_branch_exc}")
+                        copy_signal_outranked_tag(_branch_exc, wrapped)
+                        raise wrapped from _branch_exc
                     raise
 
                 executed_effects.append(effect_record)

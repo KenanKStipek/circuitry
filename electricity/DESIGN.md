@@ -913,13 +913,24 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
 - a `TryFinally` region's `finally:` still runs, exactly as the unconditional-propagation rule
   above already states; a signal that lands while one of `finally:`'s own steps is itself running
   does not cut that step short either — it finishes, the rest of `finally:` runs after it, and
-  only then does the cancellation continue unwinding. Circuitry has this fix since #796 (it
-  previously killed that step's own process group on the first signal, the same as any other
-  running leaf, which this list's first bullet still does for a leaf outside `finally:`);
+  only then does the cancellation continue unwinding -- even when the dynamic's own body already
+  failed and `on_error: continue`/`skip` absorbed that failure, and nothing runs after this
+  dynamic: the run still ends interrupted, never reported `ok: true` (#799). Circuitry has this
+  fix since #796 (it previously killed that step's own process group on the first signal, the
+  same as any other running leaf, which this list's first bullet still does for a leaf outside
+  `finally:`);
   electricity already behaved this way without a dedicated fix of its own, since its cooperative
   `CancellationToken` is suppressed for the whole `TryFinally` region regardless of what is
   running inside it; #796's own tests for this are cross-engine CLI parity tests, not
-  conformance cases. A genuine *second* signal still ends a `finally:` step's own tracked
+  conformance cases. The same rule holds no matter which container's `on_error` is the one
+  that would otherwise absorb the failure left over from a signal detected this way -- a
+  `use`, a `dynamic` with no `finally:` of its own, or a loop with `on_error: break` or
+  `continue` -- every `Skip`/`Continue`/`Break` site in
+  `exec::dynamic`/`exec::use_`/`exec::loop_` returns
+  `VmError::Cancelled` once the token is set outside a `finally:`'s own disconnected scope,
+  and `exec::dynamic` reports a `finally:` step's own later ordinary failure as the
+  interrupt too, once a signal already landed there first (#799). A genuine *second* signal
+  still ends a `finally:` step's own tracked
   process, same as any other running leaf -- electricity's own version of this (its
   `TryFinally` region's `finally:` runs against a token fully disconnected from the real one,
   so nothing on it would otherwise ever see *any* signal) keeps a separate, process-wide

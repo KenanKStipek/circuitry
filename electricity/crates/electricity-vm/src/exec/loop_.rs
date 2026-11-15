@@ -534,6 +534,7 @@ fn handle_loop_bounds_error(
     on_error: OnError,
     state: &mut RunState,
     bounds_text: String,
+    token: &CancellationToken,
 ) -> Result<(), VmError> {
     match on_error {
         OnError::Fail => Err(VmError::Raised {
@@ -552,6 +553,11 @@ fn handle_loop_bounds_error(
             state.termination_detail = Some(bounds_text.clone());
             if let Some(m) = meta {
                 store.set_leaf(m, key("error"), Value::Str(bounds_text));
+            }
+            // An interrupt is never lost just because on_error degraded
+            // this loop's own bounds error (#799).
+            if token.is_set() {
+                return Err(VmError::Cancelled);
             }
             Ok(())
         }
@@ -625,6 +631,7 @@ async fn run_loop_body<'a>(
                                 on_error,
                                 state,
                                 bounds_text,
+                                token,
                             );
                         }
                     }
@@ -1315,9 +1322,19 @@ async fn run_each_chain<'a>(
                     }
                     OnError::Break => {
                         state.termination_reason = "error".to_string();
+                        // An interrupt during this pass's own handling is
+                        // never lost just because on_error degraded its
+                        // failure (#799).
+                        if token.is_set() {
+                            return Err(VmError::Cancelled);
+                        }
                         return Ok(());
                     }
-                    OnError::Continue => {}
+                    OnError::Continue => {
+                        if token.is_set() {
+                            return Err(VmError::Cancelled);
+                        }
+                    }
                     OnError::Skip => unreachable!("a loop's own on_error is never skip"),
                 }
             }
@@ -1574,6 +1591,12 @@ async fn run_each_tree<'a>(
             OnError::Continue => {}
             OnError::Skip => unreachable!("a loop's own on_error is never skip"),
         }
+        // Every branch already finished running (tree flow dispatches
+        // them all at once) -- an interrupt one of them hit is never
+        // lost just because on_error degraded its own failure (#799).
+        if token.is_set() {
+            return Err(VmError::Cancelled);
+        }
     }
     Ok(())
 }
@@ -1690,6 +1713,12 @@ async fn run_while<'a>(
                                 if let Some(m) = meta {
                                     store.set_leaf(m, key("error"), Value::Str(e.to_string()));
                                 }
+                                // An interrupt is never lost just because
+                                // on_error degraded this condition's own
+                                // failure (#799).
+                                if token.is_set() {
+                                    return Err(VmError::Cancelled);
+                                }
                                 break;
                             }
                             OnError::Skip => unreachable!("a loop's own on_error is never skip"),
@@ -1771,6 +1800,12 @@ async fn run_while<'a>(
                                     state.termination_reason = "condition_error".to_string();
                                     if let Some(m) = meta {
                                         store.set_leaf(m, key("error"), Value::Str(e.to_string()));
+                                    }
+                                    // An interrupt is never lost just
+                                    // because on_error degraded this
+                                    // condition's own failure (#799).
+                                    if token.is_set() {
+                                        return Err(VmError::Cancelled);
                                     }
                                     break;
                                 }
@@ -1871,10 +1906,19 @@ async fn run_while<'a>(
                     }
                     OnError::Break => {
                         state.termination_reason = "error".to_string();
+                        // An interrupt during this pass's own handling
+                        // is never lost just because on_error degraded
+                        // its failure (#799).
+                        if token.is_set() {
+                            return Err(VmError::Cancelled);
+                        }
                         break;
                     }
                     OnError::Continue => {
                         iteration_count += 1;
+                        if token.is_set() {
+                            return Err(VmError::Cancelled);
+                        }
                     }
                     OnError::Skip => unreachable!("a loop's own on_error is never skip"),
                 }
