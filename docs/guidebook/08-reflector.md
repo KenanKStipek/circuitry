@@ -38,7 +38,7 @@ Reflector ::= { type: 'reflector', name: NAME, effects: Effect+,   — the plann
 
 Each planning cycle runs in five phases:
 
-1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with `max_effects` and two slots, a **goal** and a **context**, both read from the run's root state — not the reflector's own node — filled from the run's root `goal` effect and its effective settings, not from whatever the rest of the run has produced so far: see [what the planner can see](#what-the-planner-can-see) below.
+1. **Render the prime directive.** A planning instruction — Circuitry ships a versioned default, `REFLECTOR_PRIME_V1` — is rendered with Mustache, seeing exactly `{{max_effects}}` and two slots, a **goal** and a **context**, both read from the run's root state — not the reflector's own node — filled from the run's root `goal` effect and its effective settings, not from whatever the rest of the run has produced so far: see [what the planner can see](#what-the-planner-can-see) below. A custom `prime_template` using the old, single-brace `{goal}`/`{context}`/`{max_effects}` form is a `cof check`/`cof run` error naming the fix.
 2. **Run the inner dynamic** with the rendered prime prepended to the planning prompt's template. The planner sees the directive, then whatever the template says — which is why the example above writes the situation into the template itself.
 3. **Extract the plan** from the planning step's output: a YAML document with a `done` flag and an `effects` list. Code fences are tolerated; markdown is not.
 4. **Decide whether to stop.** An empty `effects` list stops. `done: true` stops when `stop_on_done` is set (the default) — *without executing that cycle's effects*. `done` means "there is nothing left to do", so a planner that still has work to run must say `done: false`; the last useful plan is always a `done: false` one, and the cycle after it says `done: true` with nothing to run.
@@ -72,6 +72,8 @@ Every generated effect is an ordinary effect — the plan is a Circuitry orchest
 
 The directive also fixes the plan's *language*: [ASD-STE100 Simplified Technical English](https://www.asd-ste100.org/) — one instruction per sentence, active voice, imperative mood, a twenty-word ceiling on procedural sentences, one meaning per word, no vague verbs, articles never dropped — applied to the plan's step descriptions and to every generated `template`. A narrowed output distribution is what makes generated plans predictable to validate and small planner models sufficient to write them. `prime_template:` replaces the directive wholesale, and with it the constraint; it is the author's choice to keep it.
 
+The plan runs with its keys in the order the model wrote them: nothing dumps it back to YAML and parses it again first. Its own `meta.orchestration_sha256` (under `prime.<name>.generated.iter_<cycle>.meta`) is the SHA-256 of its canonical JSON text, not of any YAML text — there is none.
+
 ## Isolation, and what the plan can see
 
 A generated plan runs as a child with **isolated state**: like any `use` child, it cannot read the parent's `prime` or `input` namespaces. A generated template that references `{{prime.context.search.value}}` renders empty. This is by design — the plan is a self-contained document, and everything its prompts need must be in their templates — and it is why the planning template should carry the specifics: the planner writes them into the plan.
@@ -90,9 +92,9 @@ Generated effects are addressable at exactly the paths their names dictate, one 
 
 ### What the planner can see
 
-Today: the directive's `{goal}` and `{context}` slots (see above), the literal text of its own template, and the reflector's own node. One thing that looks like a channel into the rest of the run is not:
+Today: the directive's `{{goal}}` and `{{context}}` slots (see above), the literal text of its own template, and the reflector's own node. One thing that looks like a channel into the rest of the run is not:
 
-- **Root references in the planning prompt.** The inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` written into `propose_steps` render empty. The directive's own `{goal}`/`{context}` slots are the one documented way around this — they are filled in automatically, from the run's root state, before `propose_steps` ever runs; `propose_steps` itself still cannot reference `{{prime.goal.value}}`.
+- **Root references in the planning prompt.** The inner planning dynamic is rendered against the reflector's own node rather than the run's root, so `{{prime.…}}` and `{{input.…}}` written into `propose_steps` render empty. The directive's own `{{goal}}`/`{{context}}` slots are the one documented way around this — they are filled in automatically, from the run's root state, before `propose_steps` ever runs; `propose_steps` itself still cannot reference `{{prime.goal.value}}`.
 
 The node itself is readable, with paths relative to it. From the second cycle on, `{{{inner.propose_steps.value}}}` is the previous plan (triple-stache: it is YAML), and `{{generated.iter_0.reproduce.value}}` is what one of its effects produced. That is how a planner works "with the results in hand": name what the last cycle ran, and ask what comes next.
 

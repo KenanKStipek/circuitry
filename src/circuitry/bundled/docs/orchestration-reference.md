@@ -746,7 +746,7 @@ The built-in prime constrains the plan's step descriptions and every generated e
 | `stop_on_done` | boolean | no | `true` | Stop when plan signals completion |
 | `max_effects` | integer | no | `8` | Max top-level effects per planning cycle. Enforced: a generated plan over the cap is an invalid plan (same path as a plan that fails to parse), with an error naming the count and the cap. Never truncated. |
 | `max_steps` | integer | no | `8` | Alias for `max_effects` |
-| `prime_template` | string | no | built-in | Custom prime template for planning. The built-in prime enforces ASD-STE100 Simplified Technical English on generated plan text; supplying your own opts out |
+| `prime_template` | string | no | built-in | Custom prime template for planning, rendered with Mustache (see below). The built-in prime enforces ASD-STE100 Simplified Technical English on generated plan text; supplying your own opts out |
 | `allow_tools` | array of string | no | `[]` | Literal list of tool-plugin provider names the generated plan may use beyond what this document already uses itself, statically. A reflector's plan is always generated, so it is checked against a tool-provider allowance: the providers this document already uses (`type: tool` effects anywhere in it, including a literal `use: inline:` child's own text) plus this list. Must be a literal list of plain strings naming known providers — a Mustache template, a `{from: ...}` reference, or an unknown name is a `cof check` error. See [Generated documents and tools](#generated-documents-and-tools). |
 
 **Example:**
@@ -768,25 +768,30 @@ A reflector is the effect most worth switching off for a single run: a profile
 with `effects.goal.enabled: false` turns agentic planning off while leaving the
 rest of the orchestration intact — see [Disabling Effects](#disabling-effects).
 
-**The `{goal}` and `{context}` prime slots.** The built-in prime (and any custom
-`prime_template` that keeps these placeholders) is rendered with two values
-read from the run's root state, not from the reflector's own node:
+**`prime_template` renders with Mustache** — the same rule as any other prompt
+template (no HTML escaping) — and sees exactly three variables, read from the
+run's root state, not from the reflector's own node:
 
-- `{goal}` — the value of a top-level effect named `goal` (commonly a
+- `{{goal}}` — the value of a top-level effect named `goal` (commonly a
   `prompt`), i.e. `prime.goal.value` at the run root. Empty when the
   orchestration has no such effect, or it hasn't produced a value yet.
-- `{context}` — a concise, redacted summary of `runtime.effective_settings`:
+- `{{context}}` — a concise, redacted summary of `runtime.effective_settings`:
   the run's `model`, `adapter`, and enabled `plugins`, as JSON. It is passed
   through the same redaction `runtime.effective_settings` itself gets before
   being embedded in state, and capped at 2000 characters, so it stays a
   planning hint rather than a full settings dump and never carries a secret.
   Empty when `runtime.effective_settings` hasn't been recorded yet.
+- `{{max_effects}}` — this effect's own `max_effects`/`max_steps` value.
 
-Both are best-effort: a reflector nested under a loop, dynamic, or
+All three are best-effort: a reflector nested under a loop, dynamic, or
 conditional still reads the run's true root, not its immediate container —
 including a reflector that is a branch of a `flow: tree` dynamic or a
 parallel loop, where the branch's own state is otherwise isolated from the
 rest of the run.
+
+A malformed Mustache template, or one that still writes a `str.format`-style
+single-brace placeholder (`{goal}`, `{context}`, or `{max_effects}`, not part
+of a `{{...}}` tag), is a `cof check`/`cof run` error naming the fix.
 
 ---
 
@@ -1570,7 +1575,7 @@ Every `use` node also records, whether or not the setting is on:
 | Field | Meaning |
 |-------|---------|
 | `meta.inputs` | What the child received: rendered strings, referenced values, literals |
-| `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) |
+| `meta.orchestration_sha256` | SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML) — except a reflector's own generated plan, never dumped to YAML: its digest is the SHA-256 of its canonical JSON text (sorted keys, compact separators) instead |
 
 #### Every attempt (meta.attempts)
 
