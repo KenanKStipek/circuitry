@@ -16,8 +16,8 @@ use std::time::Duration;
 
 use support::{
     ELECTRICITY_CONFIG, TestHome, assert_no_leftover_process, drain_continuously, open_pty,
-    send_bytes, spawn_osi_on_pty_with_env, wait_for_screen_text, wait_for_screen_texts,
-    wait_with_timeout, write_doc,
+    send_bytes, spawn_osi_on_pty_with_env, wait_for_registry_entries, wait_for_screen_text,
+    wait_for_screen_texts, wait_with_timeout, write_doc,
 };
 
 /// A fake engine standing in for `electricity`, run through Python
@@ -290,7 +290,11 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
     // Both runs are still alive now -- bare `osi`, with no document
     // of its own, discovers both through the shared registry (same
     // `TestHome`, so the same `OSI_RUNS_DIR`) and shows the Select
-    // screen's own running list, never attaching to just one.
+    // screen's own running list, never attaching to just one. B's
+    // header shows its label from the first frame, before B's registry
+    // entry exists, so wait for both entries: with only A's, bare `osi`
+    // would attach to A directly.
+    wait_for_registry_entries(&home.path().join("runs"), 2, Duration::from_secs(20));
     let (master_c, slave_c) = open_pty();
     let mut master_c = master_c;
     let captured_c = drain_continuously(master_c.try_clone().expect("dup pty master c"));
