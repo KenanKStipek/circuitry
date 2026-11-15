@@ -306,6 +306,15 @@ pub(crate) fn execute_dynamic<'a>(
                 error_text(&be, token),
                 on_error_str(op.on_error)
             );
+            // ...unless `finally_exc` is itself fatal (#799): a signal
+            // landing while this dynamic's own `finally:` ran is never
+            // lost just because on_error degraded the body's own,
+            // unrelated, already-handled failure.
+            if let Some(fe) = finally_exc {
+                if fe.is_fatal() {
+                    return Err(fe);
+                }
+            }
             return Ok(());
         }
         if let Some(fe) = finally_exc {
