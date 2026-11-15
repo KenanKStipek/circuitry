@@ -248,6 +248,17 @@ pub(crate) fn execute_dynamic<'a>(
         let body_exc = body_result.err();
         let finally_exc = match finally_result {
             None => None,
+            // A cleanup step's own ordinary failure, arriving once a
+            // signal landed during `finally:` that nothing else already
+            // raised for, is reported as the interrupt, not as itself
+            // (#799) -- the same replacement `was_set_before_finally &&
+            // token.is_set()` already makes below for a `finally:` that
+            // raised nothing at all. Never for a failure that is already
+            // fatal (`is_fatal`): a second signal, or this cleanup's own
+            // cancellation, keeps its own identity.
+            Some(Err(e)) if !was_set_before_finally && token.is_set() && !e.is_fatal() => {
+                Some(VmError::Cancelled)
+            }
             Some(Err(e)) => Some(e),
             Some(Ok(())) if !was_set_before_finally && token.is_set() => Some(VmError::Cancelled),
             Some(Ok(())) => None,
@@ -306,14 +317,12 @@ pub(crate) fn execute_dynamic<'a>(
                 error_text(&be, token),
                 on_error_str(op.on_error)
             );
-            // ...unless `finally_exc` is itself fatal (#799): a signal
-            // landing while this dynamic's own `finally:` ran is never
-            // lost just because on_error degraded the body's own,
-            // unrelated, already-handled failure.
-            if let Some(fe) = finally_exc {
-                if fe.is_fatal() {
-                    return Err(fe);
-                }
+            // An interrupt is never lost just because on_error degraded
+            // the body's own, unrelated, already-handled failure (#799)
+            // -- inert while *token* is a `finally:`'s own disconnected
+            // scope, exactly like every other check against it.
+            if token.is_set() {
+                return Err(VmError::Cancelled);
             }
             return Ok(());
         }
@@ -331,6 +340,9 @@ pub(crate) fn execute_dynamic<'a>(
                 error_text(&fe, token),
                 on_error_str(op.on_error)
             );
+            if token.is_set() {
+                return Err(VmError::Cancelled);
+            }
             return Ok(());
         }
         Ok(())
