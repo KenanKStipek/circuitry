@@ -1122,7 +1122,21 @@ impl AutoKill {
     /// returns -- `run_dir` is also the needle [`Drop::drop`]'s own
     /// fallback checks for in that pid's command line before ever
     /// signalling it.
+    /// Checked here, the moment the pid is read back off the
+    /// registry, rather than left to [`Drop::drop`]'s own fallback
+    /// to discover 60s later: a pid already gone by the time the
+    /// caller reads it back isn't this guard's problem (the engine
+    /// may simply have finished first), but a pid that's still alive
+    /// and doesn't name *info.1* means the caller's own needle is
+    /// wrong, not a race.
     pub fn set_engine_pid(&mut self, info: (u32, PathBuf)) {
+        let alive = unsafe { libc::kill(info.0 as i32, 0) == 0 };
+        assert!(
+            !alive || pid_still_names(info.0, &info.1),
+            "engine pid {} is alive but its own command line doesn't name {:?}",
+            info.0,
+            info.1,
+        );
         self.engine_pid = Some(info.0);
         self.engine_owns = Some(info.1);
     }
@@ -1173,6 +1187,14 @@ impl Drop for AutoKill {
 /// command line (a plain `ps -o args=` truncates it on Linux); a
 /// `ps` that fails outright, or reports no such pid at all, answers
 /// `false` -- there is nothing there this guard could still own.
+///
+/// Checks *needle* both as given and canonicalized: the registry's
+/// own `run_dir` is canonicalized before it's written, but the
+/// engine's command line carries whichever form the test originally
+/// passed as `--out-dir`, uncanonicalized -- on a machine whose temp
+/// directory is itself a symlink (macOS's `/tmp` -> `/private/tmp`)
+/// those two forms differ, and a caller holding either one should
+/// still match.
 fn pid_still_names(pid: u32, needle: &Path) -> bool {
     let Ok(output) = Command::new("ps")
         .arg("-ww")
@@ -1187,19 +1209,40 @@ fn pid_still_names(pid: u32, needle: &Path) -> bool {
     if !output.status.success() {
         return false;
     }
-    String::from_utf8_lossy(&output.stdout).contains(&needle.to_string_lossy().into_owned())
+    let args = String::from_utf8_lossy(&output.stdout);
+    if args.contains(&needle.to_string_lossy().into_owned()) {
+        return true;
+    }
+    match needle.canonicalize() {
+        Ok(canonical) if canonical != needle => {
+            args.contains(&canonical.to_string_lossy().into_owned())
+        }
+        _ => false,
+    }
 }
 
-/// The `pid` and `run_dir` of whichever registry entry under
-/// *runs_dir* has *out_dir* as its own run directory -- read back
-/// once a launcher's own run has registered, to give that launcher's
-/// own [`AutoKill`] the engine pid (and the run directory
-/// [`AutoKill::set_engine_pid`]'s own fallback checks the engine's
-/// command line for) it needs. Matched by *out_dir* rather than by
-/// the document's own name: two launchers of the very same document
-/// and config (issue #717's own test) still each get their own
-/// distinct `--out-dir`, so this always finds the right one, where
-/// matching by document name alone could not.
+/// The `pid` of whichever registry entry under *runs_dir* has
+/// *out_dir* as its own run directory, paired with *out_dir* itself
+/// as the needle [`AutoKill::set_engine_pid`]'s own fallback checks
+/// the engine's command line for -- read back once a launcher's own
+/// run has registered, to give that launcher's own [`AutoKill`] the
+/// engine pid it needs. Matched by *out_dir* rather than by the
+/// document's own name: two launchers of the very same document and
+/// config (issue #717's own test) still each get their own distinct
+/// `--out-dir`, so this always finds the right one, where matching
+/// by document name alone could not.
+///
+/// The registry's own `run_dir` is canonicalized (symlinks resolved,
+/// made absolute) before it's written, so it's matched against a
+/// likewise canonicalized *out_dir* here -- but the needle handed
+/// back is *out_dir* exactly as the caller gave it, uncanonicalized,
+/// because that's the form the engine's own command line carries:
+/// `osi` passes `--out-dir` straight through to the engine it
+/// spawns, never resolving it first. [`pid_still_names`] also tries
+/// the canonicalized form on its own, so either needle would do by
+/// itself; handing back the uncanonicalized one here means the
+/// common case (same filesystem, no symlinked temp dir) matches on
+/// the first, plain `contains` check.
 pub fn engine_pid_for_doc(runs_dir: &Path, out_dir: &Path) -> (u32, PathBuf) {
     let want = out_dir
         .canonicalize()
@@ -1219,7 +1262,7 @@ pub fn engine_pid_for_doc(runs_dir: &Path, out_dir: &Path) -> (u32, PathBuf) {
         };
         if Path::new(run_dir) == want {
             let pid = value["pid"].as_u64().expect("registry entry has a pid") as u32;
-            return (pid, PathBuf::from(run_dir));
+            return (pid, out_dir.to_path_buf());
         }
     }
     panic!("no registry entry under {runs_dir:?} has run_dir {out_dir:?}");
