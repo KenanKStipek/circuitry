@@ -68,6 +68,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import json
 import logging
 import re
 from collections.abc import Mapping, Sequence
@@ -1734,7 +1735,9 @@ def _prepare_split(
         raise _NoSplitPointError(str(exc)) from exc
 
     sizes = [
-        _estimate_tokens(str(part)) if not isinstance(part, str) else _estimate_tokens(part)
+        _estimate_tokens(part)
+        if isinstance(part, str)
+        else _estimate_tokens(json.dumps(part, ensure_ascii=False, default=str))
         for part in parts
     ]
     return _SplitPrep(

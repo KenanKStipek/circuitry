@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextvars
 import datetime
+import json
 from typing import Any
 
 import chevron  # type: ignore[import-untyped]
@@ -127,6 +128,45 @@ class TemplateError(ValueError):
     """A Mustache template could not be parsed or rendered."""
 
 
+class _JsonAwareDict(dict):
+    """A dict that stringifies as JSON so chevron's ``{{{...}}}`` splices real JSON, not repr()."""
+
+    _CHEVRON_return_scope_when_falsy = True
+
+    def __str__(self) -> str:
+        return json.dumps(self, ensure_ascii=False, default=str)
+
+
+class _JsonAwareList(list):
+    """A list that stringifies as JSON so chevron's ``{{{...}}}`` splices real JSON, not repr()."""
+
+    _CHEVRON_return_scope_when_falsy = True
+
+    def __str__(self) -> str:
+        return json.dumps(self, ensure_ascii=False, default=str)
+
+
+def _json_aware_ctx(value: Any) -> Any:
+    """Recursively wrap every dict/list node so any template renders a whole
+    list or dict the same way ``{{...}}``/``{{{...}}}`` already render
+    ``params_json``: as JSON text, not Python's ``repr()``.
+
+    Chevron's ``{{{...}}}`` calls plain ``str()`` on whatever it finds, which
+    turns a real Python list/dict into its repr (e.g. ``['AAPL', 'MSFT']``),
+    not JSON. State values produced by array/object prompts, the json
+    plugin, MCP structuredContent, surrealdb results, and loop items are all
+    native lists/dicts, so this wrapping is what makes those the common case.
+    A section (``{{#x}}``/``{{^x}}``) is unaffected: both wrapper types
+    subclass ``dict``/``list`` exactly, so iteration and truthiness (an
+    empty list/dict stays falsy) are unchanged.
+    """
+    if isinstance(value, dict):
+        return _JsonAwareDict((k, _json_aware_ctx(v)) for k, v in value.items())
+    if isinstance(value, list):
+        return _JsonAwareList(_json_aware_ctx(v) for v in value)
+    return value
+
+
 def _describe(exc: Exception) -> str:
     # chevron's messages span several lines ("Trying to close tag ...\nlast
     # open tag is ..."); one line reads better inside a list of errors.
@@ -186,12 +226,19 @@ def render_template(
     only corrupts quoted text, code, JSON and XML-style tags a prompt commonly
     carries. Every other template — tool params, ``params_json``, ``use``
     inputs/``inline``, asset refs — keeps the default.
+
+    *ctx* is wrapped with :func:`_json_aware_ctx` before chevron ever sees
+    it, so a whole list or dict inserted anywhere by this one render path —
+    every call site in this codebase — renders as JSON text, matching
+    ``params_json``, instead of Python's ``repr()``.
     """
     token = _NO_ESCAPE.set(not escape)
     try:
         _reject_partials(template)
         return str(
-            chevron.render(template, ctx, partials_dict={}, partials_path=None)
+            chevron.render(
+                template, _json_aware_ctx(ctx), partials_dict={}, partials_path=None
+            )
         )
     except ChevronError as exc:
         raise TemplateError(

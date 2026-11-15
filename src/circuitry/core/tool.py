@@ -296,41 +296,6 @@ def _render_params(
     return {k: _render_value(v, f"params.{k}") for k, v in params.items()}
 
 
-class _JsonAwareDict(dict):
-    """A dict that stringifies as JSON so chevron's ``{{{...}}}`` splices real JSON, not repr()."""
-
-    _CHEVRON_return_scope_when_falsy = True
-
-    def __str__(self) -> str:
-        return json.dumps(self, ensure_ascii=False, default=str)
-
-
-class _JsonAwareList(list):
-    """A list that stringifies as JSON so chevron's ``{{{...}}}`` splices real JSON, not repr()."""
-
-    _CHEVRON_return_scope_when_falsy = True
-
-    def __str__(self) -> str:
-        return json.dumps(self, ensure_ascii=False, default=str)
-
-
-def _json_aware_ctx(value: Any) -> Any:
-    """Recursively wrap dict/list nodes so a native state value (not just a
-    pre-serialized JSON string) splices into a params_json template as JSON.
-
-    Chevron's ``{{{...}}}`` calls plain str() on whatever it finds, which
-    turns a real Python list/dict into its repr (e.g. ``['AAPL', 'MSFT']``),
-    not JSON. State values produced by array/object prompts, the json
-    plugin, MCP structuredContent, surrealdb results, and loop items are all
-    native lists/dicts, so this wrapping is what makes those the common case.
-    """
-    if isinstance(value, dict):
-        return _JsonAwareDict((k, _json_aware_ctx(v)) for k, v in value.items())
-    if isinstance(value, list):
-        return _JsonAwareList(_json_aware_ctx(v) for v in value)
-    return value
-
-
 def _render_params_json(
     template: str,
     ctx: dict[str, Any],
@@ -347,7 +312,7 @@ def _render_params_json(
     """
     rendered_text = render_with_composition(
         template,
-        _json_aware_ctx(ctx),
+        ctx,
         declared=declared,
         known_effect_names=known_names,
         label="params_json",
