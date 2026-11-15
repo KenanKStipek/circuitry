@@ -99,9 +99,12 @@ pub struct EngineCaps {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EngineError {
-    /// electricity has no config discovery (DESIGN.md §4.2): osi
-    /// refuses rather than inventing an empty `{}` config, which would
-    /// silently drop settings `cof` would have applied.
+    /// osi still launches electricity with the legacy
+    /// `electricity <config.json> <orchestration.yml>` form (DESIGN.md
+    /// §4.2), which always takes its config as an explicit argument --
+    /// `electricity run`'s own config discovery (#728) isn't used here
+    /// yet. osi refuses rather than inventing an empty `{}` config,
+    /// which would silently drop settings `cof` would have applied.
     MissingConfig(String),
 }
 

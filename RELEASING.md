@@ -19,6 +19,12 @@ nothing publishes anywhere (PyPI, ghcr.io, the GitHub release) unless
 every artifact built, and a failed PyPI upload leaves no image behind. osi
 has no container image.
 
+## After the first release
+
+The root `README.md` has no PyPI badge yet, because `circuitry-cof` isn't
+published. Once the first release lands on PyPI, add one back next to the
+CI badge: `[![PyPI version](https://img.shields.io/pypi/v/circuitry-cof.svg)](https://pypi.org/project/circuitry-cof/)`.
+
 ## One-time setup (per repository)
 
 PyPI trusted publishing must be configured **once**. After it's set

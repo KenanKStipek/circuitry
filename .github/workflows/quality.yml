@@ -120,6 +120,9 @@ jobs:
       - name: Run type checks
         run: mypy src
 
+      - name: Check doc counts are current
+        run: python scripts/sync-doc-counts.py --check
+
   smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 10
