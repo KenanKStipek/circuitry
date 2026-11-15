@@ -16,6 +16,7 @@ from ..output import live_region as _live_region
 from .answers import parse_boolean_answer
 from .cancellation import (
     as_completed_promptly,
+    copy_signal_outranked_tag,
     deferred_signal_region,
     get_token,
     submit_with_context,
@@ -1849,7 +1850,9 @@ Should the loop continue? Answer (yes/no):"""
                 # path (#269 item 12 follow-up).
                 effect_name = getattr(effect, "name", None)
                 if isinstance(effect_name, str) and effect_name:
-                    raise RuntimeError(f"{effect_name}: {_body_exc}") from _body_exc
+                    wrapped = RuntimeError(f"{effect_name}: {_body_exc}")
+                    copy_signal_outranked_tag(_body_exc, wrapped)
+                    raise wrapped from _body_exc
                 raise
             finally:
                 # A tree iteration's writes stay in its own store until the

@@ -87,6 +87,59 @@ class RunCancelledBySignal(BaseException):
     """
 
 
+#: Attribute name set on an exception a ``dynamic``'s own ``on_error:
+#: fail`` (the default) deliberately let win over a signal detected at
+#: the very same point — a signal that arrived during that dynamic's own
+#: ``finally:``, right after its body already failed (#799). See
+#: :func:`mark_signal_outranked_by_failure`.
+_SIGNAL_OUTRANKED_ATTR = "_circuitry_signal_outranked_by_failure"
+
+
+def mark_signal_outranked_by_failure(exc: BaseException) -> None:
+    """Tag *exc* as an ordinary failure a ``dynamic``'s own ``on_error:
+    fail`` chose over a signal detected at the same point (#799's own
+    row 3: the existing rule that a failure isn't masked by a later
+    signal) — checked by :func:`signal_outranked_by_failure`.
+
+    Mutates *exc* in place (a plain attribute, not a wrapt) so the same
+    exception instance re-raised unchanged by every ancestor in between
+    (``except BaseException as e: ... raise e`` — the common shape
+    every container's own cancellation handling uses) carries the tag
+    all the way up without each one needing to re-apply it.
+    """
+    setattr(exc, _SIGNAL_OUTRANKED_ATTR, True)
+
+
+def signal_outranked_by_failure(exc: BaseException) -> bool:
+    """True once :func:`mark_signal_outranked_by_failure` tagged *exc*.
+
+    An ancestor's own ``CancellationToken.is_set()`` fallback (`use.py`'s
+    own tree-branch case, #796: a killed subprocess surfaces as an
+    ordinary ``Exception``, not the ``BaseException`` a real signal
+    raises, so that fallback re-detects it from the token directly) must
+    not re-convert a *tagged* exception back into a cancellation: the
+    decision that this exact failure outranks the very signal the token
+    still reports as set was already made where *exc* was raised, and
+    has to stick all the way to the root (#799) — re-detecting it here
+    too would mask that decision exactly the way issue #799 itself was
+    filed on.
+    """
+    return bool(getattr(exc, _SIGNAL_OUTRANKED_ATTR, False))
+
+
+def copy_signal_outranked_tag(src: BaseException, dst: BaseException) -> None:
+    """Copy :func:`mark_signal_outranked_by_failure`'s own tag from *src*
+    onto *dst*, if present — every ``raise RuntimeError(f"{path}: {e}")
+    from e`` a chain/tree/loop/named ``if`` container wraps a child's
+    own failure in (so its own `meta.error` names the child's path) would
+    otherwise create a brand-new exception that silently drops the tag,
+    even though it is the *same* already-settled "failure outranks the
+    signal" decision travelling one level further up (#799).
+    """
+    if signal_outranked_by_failure(src):
+        mark_signal_outranked_by_failure(dst)
+
+
 def kill_process_group(proc: subprocess.Popen[str] | subprocess.Popen[bytes]) -> None:
     """Best-effort SIGKILL of *proc*'s whole process group.
 
