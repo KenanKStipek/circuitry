@@ -29,7 +29,8 @@ use support::{
     SCRIPTED_CONFIG, SELECT_SLOW_DOC, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
     drain_continuously, e2e_enabled, launch_osi_log, open_pty, osi_command, scripted_config,
     send_bytes, spawn_osi_on_pty, wait_for_registry_entries, wait_for_screen_text,
-    wait_for_step_start, wait_with_timeout, wait_with_timeout_capturing_stdout, write_doc,
+    wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
+    wait_with_timeout_capturing_stdout, write_doc,
 };
 
 /// Serialises every test in this file against every other (see the
@@ -52,21 +53,46 @@ static SELECT_LOCK: Mutex<()> = Mutex::new(());
 /// `Child` taken that way is on its own again, same as it always
 /// was, which is exactly the point right before this file's own
 /// explicit, final `wait_with_timeout`.
-struct AutoKill(Option<Child>);
+///
+/// [`Self::set_engine_pid`] names the engine (`cof`) this launcher's
+/// own forwarded SIGTERM is meant to reach, once the caller has read
+/// it back off this run's own registry entry -- a drop that has to
+/// fall back to killing the launcher outright (its own SIGTERM, left
+/// unanswered for this guard's whole deadline) still reaches that
+/// engine directly, by its own pid, rather than leaving it an orphan
+/// underneath a launcher that's now gone. Found about once in 200
+/// runs under load: the launcher's own SIGTERM-forward-and-wait can
+/// legitimately take longer than this guard's own prior 10s deadline
+/// when the engine has a subprocess of its own still live to kill
+/// first (the same headroom a live-run cancel needs elsewhere in
+/// this suite) -- without an engine pid to fall back on, that made
+/// this guard's own fallback kill the launcher alone, orphaning the
+/// engine underneath it.
+struct AutoKill {
+    child: Option<Child>,
+    engine_pid: Option<u32>,
+}
 
 impl AutoKill {
     fn new(child: Child) -> Self {
-        AutoKill(Some(child))
+        AutoKill {
+            child: Some(child),
+            engine_pid: None,
+        }
+    }
+
+    fn set_engine_pid(&mut self, pid: u32) {
+        self.engine_pid = Some(pid);
     }
 
     fn into_inner(mut self) -> Child {
-        self.0.take().expect("AutoKill still holds its child")
+        self.child.take().expect("AutoKill still holds its child")
     }
 }
 
 impl Drop for AutoKill {
     fn drop(&mut self) {
-        let Some(mut child) = self.0.take() else {
+        let Some(mut child) = self.child.take() else {
             return;
         };
         if child.try_wait().ok().flatten().is_some() {
@@ -75,12 +101,17 @@ impl Drop for AutoKill {
         unsafe {
             libc::kill(child.id() as i32, libc::SIGTERM);
         }
-        let deadline = Instant::now() + Duration::from_secs(10);
+        let deadline = Instant::now() + Duration::from_secs(60);
         loop {
             if child.try_wait().ok().flatten().is_some() {
                 return;
             }
             if Instant::now() >= deadline {
+                if let Some(pid) = self.engine_pid {
+                    unsafe {
+                        libc::kill(pid as i32, libc::SIGKILL);
+                    }
+                }
                 let _ = child.kill();
                 let _ = child.wait();
                 return;
@@ -88,6 +119,35 @@ impl Drop for AutoKill {
             std::thread::sleep(Duration::from_millis(50));
         }
     }
+}
+
+/// The `pid` field of whichever registry entry under `runs_dir` names
+/// *doc_name* as its own orchestration -- read back once a launcher's
+/// own run has registered, to give that launcher's own [`AutoKill`]
+/// the engine pid its drop's own fallback needs.
+fn engine_pid_for_doc(runs_dir: &Path, doc_name: &str) -> u32 {
+    for entry in std::fs::read_dir(runs_dir)
+        .expect("read runs_dir")
+        .flatten()
+    {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(orchestration) = value.get("orchestration").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if Path::new(orchestration)
+            .file_name()
+            .and_then(|n| n.to_str())
+            == Some(doc_name)
+        {
+            return value["pid"].as_u64().expect("registry entry has a pid") as u32;
+        }
+    }
+    panic!("no registry entry under {runs_dir:?} names {doc_name:?}");
 }
 
 /// A quick, allow-listed document (an `echo` tool) that finishes at
@@ -167,14 +227,14 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
-    let child_a = AutoKill::new(launch_osi_log(
+    let mut child_a = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_a,
         &config_a,
         out_a.path(),
     ));
-    let child_b = AutoKill::new(launch_osi_log(
+    let mut child_b = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_b,
@@ -194,6 +254,11 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     );
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if `AutoKill`'s drop ever has to fall back to
+    // killing the launcher outright.
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, "a.yml"));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, "b.yml"));
     assert_eq!(
         std::fs::read_dir(&runs_dir)
             .map(|rd| rd.flatten().count())
@@ -213,7 +278,11 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["SELECT", "a.yml", "b.yml"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("a.yml") && screen.contains("b.yml"),
         "expected both runs listed on Select:\n{screen}"
@@ -233,7 +302,11 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     // `terminal.clear()` alone would already satisfy "TAPE gone" on
     // the very next, still-blank frame, well before Select's own
     // content is back on screen.
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["SELECT", "a.yml", "b.yml"],
+        Duration::from_secs(20),
+    );
     assert!(
         !screen.contains("TAPE"),
         "expected esc to leave no stray Tape text behind on Select:\n{screen}"
@@ -339,14 +412,14 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     let config_b = write_doc(work.path(), "config-b.json", &scripted_config(&replies_b));
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
-    let child_a = AutoKill::new(launch_osi_log(
+    let mut child_a = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_a,
         &config_a,
         out_a.path(),
     ));
-    let child_b = AutoKill::new(launch_osi_log(
+    let mut child_b = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_b,
@@ -366,6 +439,13 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     );
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if its launcher's own forwarded SIGTERM ever goes
+    // unanswered long enough for `AutoKill`'s drop to fall back to
+    // killing the launcher outright (the leak this test once hit
+    // about once in 200 runs under load).
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, "a.yml"));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, "b.yml"));
     let cursor_doc = earliest_registered_document(&runs_dir);
     // The finished prompt's own tokens land in the run's live state,
     // polled on its own tick -- a plain event wait only proves the
@@ -379,7 +459,11 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["SELECT", "a.yml", "b.yml"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("SELECT") && screen.contains("a.yml") && screen.contains("b.yml"),
         "expected both runs listed on Select:\n{screen}"
@@ -398,7 +482,11 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     // leaf tile must carry a bright-black fill, the only way its
     // area reads against the pane in this theme.
     send_bytes(&mut master, b"3");
-    let screen = wait_for_screen_text(&captured_buf, "STORE", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["STORE", "ask · 400 t"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("STORE") && screen.contains("ask · 400 t"),
         "expected the Store screen with the finished prompt's own tile:\n{screen}"
@@ -512,7 +600,7 @@ fn bare_osi_attaches_at_once_with_exactly_one_live_run() {
     let doc = write_doc(work.path(), "a.yml", SELECT_SLOW_DOC);
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
     let out = tempfile::tempdir().unwrap();
-    let launcher = AutoKill::new(launch_osi_log(
+    let mut launcher = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc,
@@ -527,6 +615,7 @@ fn bare_osi_attaches_at_once_with_exactly_one_live_run() {
     );
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 1, Duration::from_secs(10));
+    launcher.set_engine_pid(engine_pid_for_doc(&runs_dir, "a.yml"));
 
     let (master, slave_path) = open_pty();
     let mut master = master;
@@ -594,7 +683,11 @@ fn bare_osi_shows_the_empty_select_with_a_recorded_run() {
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "Recent Runs", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Recent Runs", "quick.yml"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("quick.yml"),
         "expected the finished run on the empty Select's own Recent Runs table:\n{screen}"
