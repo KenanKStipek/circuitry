@@ -884,15 +884,30 @@ impl gen::CELVisitorCompat<'_> for Parser {
                 IdedExpr::default()
             }
             Some(member) => {
+                // Whichever branch runs, `target`'s own id -- the single
+                // node this whole run of `!` resolves to either way --
+                // carries the run's full length as a nesting-depth
+                // override: cof's own grammar nests one level per `!`
+                // with no cancellation, so a consumer counting nesting
+                // depth from the AST alone (which has at most one
+                // LogicalNot node here, or none at all if the run
+                // cancels) needs the true count recorded against it.
                 if ctx.ops.len() % 2 == 0 {
                     // Even number of `!` operators cancel — pass through without
                     // wrapping in a LogicalNot call.  Visiting once here and
                     // returning avoids the double-visit that would otherwise
                     // cause exponential work on deeply nested expressions.
-                    return self.visit(member.as_ref());
+                    let target = self.visit(member.as_ref());
+                    self.helper
+                        .source_info
+                        .add_nesting_override(target.id, ctx.ops.len());
+                    return target;
                 }
                 let op_id = self.helper.next_id(&ctx.ops[0]);
                 let target = self.visit(member.as_ref());
+                self.helper
+                    .source_info
+                    .add_nesting_override(target.id, ctx.ops.len());
                 self.global_call_or_macro(op_id, operators::LOGICAL_NOT.to_string(), vec![target])
             }
         }
@@ -904,13 +919,36 @@ impl gen::CELVisitorCompat<'_> for Parser {
                 self.report_error::<ParseError, _>(&ctx.start(), None, "No `MemberContextAll`!")
             }
             Some(member) => {
+                // As above, but `-` also merges into a directly adjacent
+                // numeric literal (`cel`'s own grammar: `literal: sign=MINUS?
+                // tok=NUM_INT | ...`), the same way cof's lexer does --
+                // always exactly the last `-` of an unbroken run, never
+                // more than one, and never across a grouping parenthesis
+                // (`nesting_override(target.id)` is nonzero then, from
+                // `visit_Nested` above, so this run never reached the
+                // literal at all): one fewer level than the run's own
+                // length in that one case, its full length otherwise.
+                let last_op_stop = ctx.ops[ctx.ops.len() - 1].stop;
                 if ctx.ops.len() % 2 == 0 {
-                    // Even number of `-` operators cancel — pass through without
-                    // wrapping in a Negate call.
-                    return self.visit(member.as_ref());
+                    let target = self.visit(member.as_ref());
+                    let extra = negate_run_depth(
+                        &target,
+                        ctx.ops.len(),
+                        last_op_stop,
+                        &self.helper.source_info,
+                    );
+                    self.helper.source_info.add_nesting_override(target.id, extra);
+                    return target;
                 }
                 let op_id = self.helper.next_id(&ctx.ops[0]);
                 let target = self.visit(member.as_ref());
+                let extra = negate_run_depth(
+                    &target,
+                    ctx.ops.len(),
+                    last_op_stop,
+                    &self.helper.source_info,
+                );
+                self.helper.source_info.add_nesting_override(target.id, extra);
                 self.global_call_or_macro(op_id, operators::NEGATE.to_string(), vec![target])
             }
         }
@@ -1080,7 +1118,20 @@ impl gen::CELVisitorCompat<'_> for Parser {
                 );
                 IdedExpr::default()
             }
-            Some(e) => self.visit(e.as_ref()),
+            Some(e) => {
+                let inner = self.visit(e.as_ref());
+                // A grouping parenthesis has no node of its own -- `(((1)))`
+                // parses to exactly the same tree as `1` -- so a consumer
+                // counting nesting depth from the AST alone needs this
+                // recorded against whatever id the inner expression
+                // resolves to. One layer per `visit_Nested` call, and a
+                // nested `((x))` visits this twice for the same inner id,
+                // once per layer.
+                self.helper
+                    .source_info
+                    .add_nesting_override(inner.id, 1);
+                inner
+            }
         }
     }
 
@@ -1165,8 +1216,11 @@ impl gen::CELVisitorCompat<'_> for Parser {
                 Ok(v) => v,
                 Err(e) => return self.report_error(token, Some(e), "invalid int literal"),
             };
-            self.helper
-                .next_expr(token, Expr::Literal(LiteralValue::Int(val.into())))
+            let result = self
+                .helper
+                .next_expr(token, Expr::Literal(LiteralValue::Int(val.into())));
+            record_unmerged_sign(&mut self.helper.source_info, &ctx.sign, token, result.id);
+            result
         } else {
             self.report_error::<ParseError, _>(&ctx.start(), None, "Incomplete Int!")
         }
@@ -1195,9 +1249,13 @@ impl gen::CELVisitorCompat<'_> for Parser {
         let string = ctx.get_text();
         if let Some(token) = ctx.tok.as_ref() {
             match string.parse::<f64>() {
-                Ok(d) if d.is_finite() => self
-                    .helper
-                    .next_expr(token, Expr::Literal(LiteralValue::Double(d.into()))),
+                Ok(d) if d.is_finite() => {
+                    let result = self
+                        .helper
+                        .next_expr(token, Expr::Literal(LiteralValue::Double(d.into())));
+                    record_unmerged_sign(&mut self.helper.source_info, &ctx.sign, token, result.id);
+                    result
+                }
                 Err(e) => self.report_error(token, Some(e), "invalid double literal"),
                 _ => self.report_error(token, None::<ParseError>, "invalid double literal"),
             }
@@ -1334,6 +1392,63 @@ impl ParserHelper {
             id: self.next_id_for(id),
             expr,
         }
+    }
+}
+
+/// Whether *sign*, the `literal` grammar rule's own optional leading
+/// `-` (`CEL.g4`: `literal: sign=MINUS? tok=NUM_INT | ...`, read only
+/// for `Int`/`Double` -- `Uint` has none), left a gap in the *source
+/// text* (not the token stream, where whitespace never appears at
+/// all) before *tok*: cof's own lexer, a single regex over raw
+/// characters, only merges a `-` into a numeric literal when the two
+/// are directly adjacent with nothing, not even whitespace, between
+/// them -- `cel`'s own grammar merges `sign` into the literal
+/// regardless of any such gap (whitespace is already gone by the time
+/// the parser sees either token), so a consumer matching cof's own
+/// count needs this recorded: the one level cof would still count for
+/// an un-merged single `-`, which this grammar's own tree, with
+/// *tok*'s literal as its only node either way, otherwise has no trace
+/// of at all.
+fn record_unmerged_sign<'a>(
+    source_info: &mut SourceInfo,
+    sign: &Option<impl Deref<Target = CommonToken<'a>>>,
+    tok: &CommonToken<'a>,
+    literal_id: u64,
+) {
+    if let Some(sign) = sign {
+        if sign.stop + 1 != tok.start {
+            source_info.add_nesting_override(literal_id, 1);
+        }
+    }
+}
+
+/// The nesting-depth override a `-` run of *ops_len* resolves to, for a
+/// target that run's own `visit_Negate` just produced (always *ops_len*
+/// >= 2 -- a single `-` directly adjacent, in the token stream, to a
+/// numeric literal is `literal`'s own leading sign instead,
+/// [`record_unmerged_sign`]'s own case, and never reaches here at all):
+/// *ops_len* minus one if *target* is a bare numeric literal, with no
+/// grouping parenthesis of its own already, directly adjacent in the
+/// *source text* to *last_op_stop* (the last `-` of the run cof's own
+/// lexer would merge into it) -- *ops_len* unchanged otherwise.
+fn negate_run_depth(
+    target: &IdedExpr,
+    ops_len: usize,
+    last_op_stop: isize,
+    source_info: &SourceInfo,
+) -> usize {
+    let is_adjacent_numeric_literal = matches!(
+        target.expr,
+        Expr::Literal(LiteralValue::Int(_))
+            | Expr::Literal(LiteralValue::UInt(_))
+            | Expr::Literal(LiteralValue::Double(_))
+    ) && source_info.nesting_override(target.id) == 0
+        && source_info.offset_for(target.id).map(|(start, _)| start as isize)
+            == Some(last_op_stop + 1);
+    if is_adjacent_numeric_literal {
+        ops_len - 1
+    } else {
+        ops_len
     }
 }
 

@@ -251,14 +251,13 @@ _CASE_JSON_KEYS = frozenset(
 #: `case.json`'s own `python_runner_versions` key -- a case whose expected
 #: output depends on the CPython version running cof lists the exact
 #: `"major.minor"` version(s) its `expected.json`/`expected.warnings.txt`
-#: hold for: cof's CEL nesting limits come from CPython's recursion handling,
-#: which differs between versions (3.12 in particular changed it
-#: substantially), and some exception messages changed wording between
-#: versions (3.10's `ZeroDivisionError` for `%`, for one). The Python runner
+#: hold for: some exception messages changed wording between versions
+#: (3.10's `ZeroDivisionError` for `%`, for one). The Python runner
 #: (`test_python_runner.py`) skips the case on any other interpreter; the
 #: electricity runner ignores this key entirely, since electricity's own
-#: limits and texts are fixed, not derived from whatever interpreter is
-#: running the test.
+#: texts are fixed, not derived from whatever interpreter is running the
+#: test. CEL's own nesting limit is an explicit constant on both engines,
+#: not a case of this at all any more.
 _PYTHON_VERSION_PATTERN = re.compile(r"[1-9][0-9]*\.[0-9]+")
 
 

@@ -1,0 +1,12 @@
+name: cel-nesting-generated-document-over-limit
+effects:
+  - type: use
+    name: child
+    inline: |
+      effects:
+        - type: if
+          name: gate
+          if:
+            mode: cel
+            expr: "((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))"
+          then: []

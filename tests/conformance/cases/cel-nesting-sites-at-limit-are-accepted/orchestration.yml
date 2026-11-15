@@ -1,0 +1,26 @@
+name: cel-nesting-sites-at-limit-are-accepted
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "state.input.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a"
+    then:
+      - type: loop
+        name: w
+        max_iterations: 1
+        while:
+          mode: cel
+          expr: "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true"
+        body:
+          - type: tool
+            name: step
+            provider: json
+            params: {mode: stringify, input: {ok: true}}
+            expect: "((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))"
+      - type: tool
+        name: computed
+        provider: cel
+        params:
+          expr: "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
+    else: []

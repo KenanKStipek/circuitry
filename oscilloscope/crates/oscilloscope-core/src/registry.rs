@@ -17,14 +17,17 @@
 //! `history`/`config_discovery` already follow.
 //!
 //! A pid alone can be fooled by a recycled pid; [`read_entries`]
-//! prunes an entry whose pid is dead *or* whose command line no
-//! longer names `cof`/`electricity`, through the injectable
-//! [`Liveness`] trait -- no test ever checks a fixture pid against
-//! the real machine. `cof` is a pip console script, so a real `cof
-//! run`'s own command line (`ps -o args=`) names the Python
-//! interpreter first and `cof` second; [`command_line_names_engine`]
-//! recognises both shapes, and the same recognition is shared with
-//! the process scan ([`crate::discovery::match_scanned_process`]).
+//! prunes an entry whose pid is positively [`PidLiveness::Gone`] or
+//! [`PidLiveness::Recycled`] (its command line no longer names
+//! `cof`/`electricity`), through the injectable [`Liveness`] trait --
+//! no test ever checks a fixture pid against the real machine. A
+//! [`PidLiveness::Unknown`] answer (the check couldn't tell either
+//! way) never prunes an entry on its own. `cof` is a pip console
+//! script, so a real `cof run`'s own command line (`ps -o args=`)
+//! names the Python interpreter first and `cof` second;
+//! [`command_line_names_engine`] recognises both shapes, and the
+//! same recognition is shared with the process scan
+//! ([`crate::discovery::match_scanned_process`]).
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -54,27 +57,63 @@ pub struct RegistryEntry {
     pub started_at: String,
 }
 
+/// A liveness check's own answer about one pid -- four outcomes,
+/// not a bool, because "couldn't tell" must never read the same as
+/// a positive "it's gone": [`read_entries`] prunes an entry only on
+/// [`Gone`](PidLiveness::Gone) or [`Recycled`](PidLiveness::Recycled);
+/// [`Unknown`](PidLiveness::Unknown) leaves it in place, same as
+/// [`Alive`](PidLiveness::Alive).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PidLiveness {
+    /// `ps` exits 0 and the command line still names `cof` or
+    /// `electricity`.
+    Alive,
+    /// `ps` exits non-zero with empty stdout and empty stderr --
+    /// what macOS and procps both print for a pid that doesn't
+    /// exist -- or `kill(pid, 0)` reports `ESRCH`.
+    Gone,
+    /// `ps` exits 0, but the command line no longer names an engine:
+    /// the pid exists, but it's been recycled for an unrelated
+    /// process.
+    Recycled,
+    /// Anything else -- `ps` couldn't even start, a non-zero exit
+    /// came with something on stderr (not the clean "no such
+    /// process" shape), and `kill(pid, 0)` didn't report `ESRCH`
+    /// either. An entry is never pruned on this alone.
+    Unknown,
+}
+
 /// Whether a pid named in a registry entry (or found by a process
 /// scan) is still a real, running `cof`/`electricity` -- behind a
 /// trait so a test injects the answer rather than ever checking a
 /// fixture's pid against the real machine.
 pub trait Liveness {
-    fn is_alive(&self, pid: u32) -> bool;
+    fn check(&self, pid: u32) -> PidLiveness;
 }
 
-/// [`Liveness`] backed by a real `ps -ww -o args= -p <pid>` call: alive
-/// means the pid exists *and* its command line still names `cof` or
-/// `electricity` -- a bare `kill(pid, 0)` can be fooled by a recycled
-/// pid, but `ps` always reports whatever process actually holds that
-/// pid right now, recycled or not. When `ps` itself can't be run at
-/// all, this can't tell either way, so it answers `true` -- an
-/// entry is never pruned on "couldn't check" alone.
+/// [`Liveness`] backed by a real `ps -ww -o args= -p <pid>` call,
+/// corroborated by `kill(pid, 0)` for the shapes `ps` alone can't
+/// settle -- see [`PidLiveness`] for exactly which outcome each
+/// combination produces. A bare `kill(pid, 0)` on its own can be
+/// fooled by a recycled pid, but `ps` always reports whatever
+/// process actually holds that pid right now, recycled or not.
 pub struct RealLiveness;
 
 impl Liveness for RealLiveness {
-    fn is_alive(&self, pid: u32) -> bool {
-        is_alive_from_ps_result(liveness_ps_command(pid).output())
+    fn check(&self, pid: u32) -> PidLiveness {
+        pid_liveness_from_ps_result(liveness_ps_command(pid).output(), kill_reports_esrch(pid))
     }
+}
+
+/// `kill(pid, 0)`'s own answer to "is this pid definitely gone" --
+/// sends no signal, and only `ESRCH` is a confirmed death (anything
+/// else, most commonly success or `EPERM`, means the pid is still
+/// held by *some* process).
+fn kill_reports_esrch(pid: u32) -> bool {
+    if unsafe { libc::kill(pid as i32, 0) } == 0 {
+        return false;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH)
 }
 
 /// The liveness check's own `ps` call. `-ww` keeps the whole command
@@ -88,18 +127,54 @@ pub fn liveness_ps_command(pid: u32) -> std::process::Command {
     command
 }
 
-/// [`RealLiveness::is_alive`]'s own decision, pulled out so a test
-/// can hand it a synthesized "couldn't even run `ps`" error without
-/// touching `PATH` or any other process-wide state a parallel test
-/// run shares.
-fn is_alive_from_ps_result(result: std::io::Result<std::process::Output>) -> bool {
+/// [`RealLiveness::check`]'s own decision, pulled out so a test can
+/// hand it a synthesized `ps` result (and kill answer) for every
+/// shape without touching `PATH` or any other process-wide state a
+/// parallel test run shares.
+fn pid_liveness_from_ps_result(
+    result: std::io::Result<std::process::Output>,
+    kill_reports_esrch: bool,
+) -> PidLiveness {
     let Ok(output) = result else {
-        return true;
+        return if kill_reports_esrch {
+            PidLiveness::Gone
+        } else {
+            PidLiveness::Unknown
+        };
     };
-    if !output.status.success() {
-        return false;
+    if output.status.success() {
+        let command_line = String::from_utf8_lossy(&output.stdout);
+        if command_line_names_engine(&command_line) {
+            return PidLiveness::Alive;
+        }
+        // A placeholder in place of the command line means `ps` couldn't
+        // read this process's arguments, not that the pid now belongs to
+        // something else: BSD `ps` prints the process name in parentheses
+        // (`(python3.11)`) and procps prints it in brackets (`[python3]`).
+        if is_placeholder_command_line(&command_line) {
+            return PidLiveness::Unknown;
+        }
+        return PidLiveness::Recycled;
     }
-    command_line_names_engine(&String::from_utf8_lossy(&output.stdout))
+    // Only a `ps` that exited (not one killed by a signal) with nothing to
+    // say has looked the pid up and found nothing.
+    if output.status.code().is_some() && output.stdout.is_empty() && output.stderr.is_empty() {
+        return PidLiveness::Gone;
+    }
+    if kill_reports_esrch {
+        PidLiveness::Gone
+    } else {
+        PidLiveness::Unknown
+    }
+}
+
+/// Whether `ps` printed a placeholder name instead of a process's real
+/// command line: `(name)` from BSD `ps`, `[name]` from procps, either
+/// alone or followed by procps's ` <defunct>`.
+fn is_placeholder_command_line(command_line: &str) -> bool {
+    let first = command_line.split_whitespace().next().unwrap_or("");
+    (first.starts_with('(') && first.ends_with(')'))
+        || (first.starts_with('[') && first.ends_with(']'))
 }
 
 /// The basename of one command-line token.
@@ -254,12 +329,15 @@ pub fn remove_entry(dir: &Path, run_id: &str) -> std::io::Result<()> {
     }
 }
 
-/// Every entry in `dir` whose pid is still alive (per `liveness`),
-/// oldest `started_at` first -- a corrupt, partial or otherwise
-/// unparseable file is skipped, not an error, the same tolerance
-/// [`crate::history::read_records`] already gives a bad line. An
-/// entry whose pid is *not* alive is removed from disk right here,
-/// not just left out of the returned list.
+/// Every entry in `dir` whose pid isn't positively gone (per
+/// `liveness`), oldest `started_at` first -- a corrupt, partial or
+/// otherwise unparseable file is skipped, not an error, the same
+/// tolerance [`crate::history::read_records`] already gives a bad
+/// line. An entry is removed from disk right here, not just left out
+/// of the returned list, only on a [`PidLiveness::Gone`] or
+/// [`PidLiveness::Recycled`] answer; [`PidLiveness::Unknown`] keeps
+/// the entry, on disk and in the returned list, exactly like
+/// [`PidLiveness::Alive`] (issue #807).
 pub fn read_entries(dir: &Path, liveness: &dyn Liveness) -> Vec<RegistryEntry> {
     let Ok(read_dir) = fs::read_dir(dir) else {
         return Vec::new();
@@ -274,10 +352,11 @@ pub fn read_entries(dir: &Path, liveness: &dyn Liveness) -> Vec<RegistryEntry> {
         let Ok(entry) = serde_json::from_slice::<RegistryEntry>(&bytes) else {
             continue;
         };
-        if liveness.is_alive(entry.pid) {
-            entries.push(entry);
-        } else {
-            let _ = fs::remove_file(&path);
+        match liveness.check(entry.pid) {
+            PidLiveness::Gone | PidLiveness::Recycled => {
+                let _ = fs::remove_file(&path);
+            }
+            PidLiveness::Alive | PidLiveness::Unknown => entries.push(entry),
         }
     }
     entries.sort_by(|a, b| a.started_at.cmp(&b.started_at));
@@ -328,10 +407,18 @@ mod tests {
         );
     }
 
-    struct FixedLiveness(std::collections::HashSet<u32>);
+    /// A pid not named here answers [`PidLiveness::Gone`] -- most
+    /// tests only care about one or two pids, and "anything else is
+    /// gone" matches [`FixedLiveness`]'s old, bool-shaped behaviour.
+    struct FixedLiveness(std::collections::HashMap<u32, PidLiveness>);
+    impl FixedLiveness {
+        fn alive(pids: impl IntoIterator<Item = u32>) -> Self {
+            FixedLiveness(pids.into_iter().map(|p| (p, PidLiveness::Alive)).collect())
+        }
+    }
     impl Liveness for FixedLiveness {
-        fn is_alive(&self, pid: u32) -> bool {
-            self.0.contains(&pid)
+        fn check(&self, pid: u32) -> PidLiveness {
+            self.0.get(&pid).copied().unwrap_or(PidLiveness::Gone)
         }
     }
 
@@ -366,7 +453,7 @@ mod tests {
             & 0o777;
         assert_eq!(file_mode, 0o600);
 
-        let liveness = FixedLiveness([4242].into_iter().collect());
+        let liveness = FixedLiveness::alive([4242]);
         let entries = read_entries(&dir, &liveness);
         assert_eq!(entries, vec![entry]);
 
@@ -389,7 +476,7 @@ mod tests {
         write_entry(&dir, &sample_entry("dead", 999, "2026-01-01T00:00:00Z")).unwrap();
         write_entry(&dir, &sample_entry("alive", 1000, "2026-01-01T00:00:01Z")).unwrap();
 
-        let liveness = FixedLiveness([1000].into_iter().collect());
+        let liveness = FixedLiveness::alive([1000]);
         let entries = read_entries(&dir, &liveness);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].run_id, "alive");
@@ -400,18 +487,31 @@ mod tests {
 
     #[test]
     fn read_entries_prunes_a_recycled_pid_that_is_alive_but_not_an_engine() {
-        // The same pid as a live entry, but `FixedLiveness` here
-        // stands in for a pid that exists yet whose command line no
-        // longer names `cof`/`electricity` (a recycled pid) -- from
-        // this module's own point of view that is indistinguishable
-        // from "not alive" at all: [`Liveness::is_alive`] already
-        // folds that check in, so a `false` answer prunes either way.
         let base = tempfile::tempdir().unwrap();
         let dir = base.path().join("runs");
         write_entry(&dir, &sample_entry("recycled", 555, "2026-01-01T00:00:00Z")).unwrap();
-        let liveness = FixedLiveness(std::collections::HashSet::new());
+        let liveness = FixedLiveness([(555, PidLiveness::Recycled)].into_iter().collect());
         assert!(read_entries(&dir, &liveness).is_empty());
         assert!(!registry_file_path(&dir, "recycled").exists());
+    }
+
+    #[test]
+    fn read_entries_keeps_an_entry_on_unknown_and_removes_it_on_gone() {
+        let base = tempfile::tempdir().unwrap();
+        let dir = base.path().join("runs");
+        write_entry(&dir, &sample_entry("unclear", 1, "2026-01-01T00:00:00Z")).unwrap();
+        write_entry(&dir, &sample_entry("gone", 2, "2026-01-01T00:00:01Z")).unwrap();
+
+        let liveness = FixedLiveness(
+            [(1, PidLiveness::Unknown), (2, PidLiveness::Gone)]
+                .into_iter()
+                .collect(),
+        );
+        let entries = read_entries(&dir, &liveness);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].run_id, "unclear");
+        assert!(registry_file_path(&dir, "unclear").exists());
+        assert!(!registry_file_path(&dir, "gone").exists());
     }
 
     #[test]
@@ -422,7 +522,7 @@ mod tests {
         fs::write(dir.join("broken.json"), b"{not json").unwrap();
         write_entry(&dir, &sample_entry("ok", 1, "2026-01-01T00:00:00Z")).unwrap();
 
-        let liveness = FixedLiveness([1].into_iter().collect());
+        let liveness = FixedLiveness::alive([1]);
         let entries = read_entries(&dir, &liveness);
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].run_id, "ok");
@@ -435,7 +535,7 @@ mod tests {
         write_entry(&dir, &sample_entry("later", 2, "2026-01-01T00:00:05Z")).unwrap();
         write_entry(&dir, &sample_entry("earlier", 1, "2026-01-01T00:00:00Z")).unwrap();
 
-        let liveness = FixedLiveness([1, 2].into_iter().collect());
+        let liveness = FixedLiveness::alive([1, 2]);
         let entries = read_entries(&dir, &liveness);
         assert_eq!(
             entries
@@ -510,13 +610,149 @@ mod tests {
         assert!(!command_line_names_engine("/usr/bin/python3.11"));
     }
 
+    fn fake_ps_output(success: bool, stdout: &str, stderr: &str) -> std::process::Output {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::Output {
+            status: std::process::ExitStatus::from_raw(if success { 0 } else { 1 << 8 }),
+            stdout: stdout.as_bytes().to_vec(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
     #[test]
-    fn is_alive_from_ps_result_treats_a_ps_that_could_not_even_run_as_alive() {
+    fn pid_liveness_from_ps_result_is_unknown_when_ps_prints_a_placeholder_name() {
+        for placeholder in ["(python3.11)\n", "(cof)", "[python3]", "[cof] <defunct>"] {
+            let output = fake_ps_output(true, placeholder, "");
+            assert_eq!(
+                pid_liveness_from_ps_result(Ok(output), false),
+                PidLiveness::Unknown,
+                "{placeholder:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_unknown_when_ps_is_killed_by_a_signal() {
+        use std::os::unix::process::ExitStatusExt;
+        let killed = || std::process::Output {
+            status: std::process::ExitStatus::from_raw(libc::SIGKILL),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(killed()), false),
+            PidLiveness::Unknown
+        );
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(killed()), true),
+            PidLiveness::Gone
+        );
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_alive_when_ps_succeeds_and_names_an_engine() {
+        let output = fake_ps_output(true, "cof run doc.yml", "");
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(output), false),
+            PidLiveness::Alive
+        );
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_recycled_when_ps_succeeds_but_names_no_engine() {
+        let output = fake_ps_output(true, "some_other_tool --flag", "");
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(output), false),
+            PidLiveness::Recycled
+        );
+        // Even a kill(pid, 0) that (wrongly, for a live pid) reports
+        // ESRCH can't override a `ps` that actually succeeded.
+        let output = fake_ps_output(true, "some_other_tool --flag", "");
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(output), true),
+            PidLiveness::Recycled
+        );
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_gone_when_ps_fails_with_empty_output() {
+        // The "no such process" shape macOS and procps both print:
+        // non-zero exit, nothing on stdout or stderr.
+        let output = fake_ps_output(false, "", "");
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(output), false),
+            PidLiveness::Gone
+        );
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_gone_when_kill_confirms_esrch_despite_an_unclear_ps() {
+        // `ps` failed, but not in the clean empty/empty shape --
+        // `kill(pid, 0)` reporting ESRCH still settles it.
+        let output = fake_ps_output(false, "", "ps: some platform-specific error\n");
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(output), true),
+            PidLiveness::Gone
+        );
+        // Same for `ps` not starting at all.
+        let err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
+        assert_eq!(
+            pid_liveness_from_ps_result(Err(err), true),
+            PidLiveness::Gone
+        );
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_unknown_when_ps_could_not_even_run() {
         // `Command::output` itself failing (no `ps` on `PATH` at
         // all) must never read as "the pid is dead": that would
         // prune a live entry on nothing more than a missing `ps`.
         let err = std::io::Error::new(std::io::ErrorKind::NotFound, "no such file");
-        assert!(is_alive_from_ps_result(Err(err)));
+        assert_eq!(
+            pid_liveness_from_ps_result(Err(err), false),
+            PidLiveness::Unknown
+        );
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_unknown_when_ps_fails_with_stderr_and_kill_does_not_confirm()
+    {
+        let output = fake_ps_output(false, "", "ps: some platform-specific error\n");
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(output), false),
+            PidLiveness::Unknown
+        );
+    }
+
+    #[test]
+    fn real_ps_reports_a_process_named_cof_as_alive() {
+        // This test binary's own pid isn't named `cof`/`electricity`,
+        // so this spawns `/bin/sleep` with its argv[0] overridden to
+        // `cof` -- a real `ps` reports exactly that overridden argv
+        // (not the binary's real path), on both macOS and Linux.
+        use std::os::unix::process::CommandExt;
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg0("cof")
+            .arg("5")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert_eq!(RealLiveness.check(pid), PidLiveness::Alive);
+        child.kill().unwrap();
+        child.wait().unwrap();
+    }
+
+    #[test]
+    fn real_ps_reports_a_reaped_pid_as_gone() {
+        // A pid this process spawned and already reaped: guaranteed
+        // not to be held by this process any more, so a real `ps`
+        // (and `kill(pid, 0)`) see exactly the "no such process"
+        // case this issue is about.
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert_eq!(RealLiveness.check(pid), PidLiveness::Gone);
     }
 
     #[test]

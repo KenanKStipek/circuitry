@@ -3187,10 +3187,19 @@ process with `std::process::exit` rather than a plain return, which
 skips every other value's own `Drop` still on the stack: those two
 call the handle's own removal explicitly, right before. A pid alone
 can be fooled by a recycled one, so liveness (behind an injectable
-`Liveness` trait) means the pid exists *and* `ps -o args= -p <pid>`
-still names `cof` or `electricity`; an entry whose pid fails that
-check is pruned (removed from disk, not just skipped) the next time
-anything reads the registry.
+`Liveness` trait) answers one of four outcomes for a pid, not a
+bool: *alive* (`ps -ww -o args= -p <pid>` exits 0 and still names
+`cof` or `electricity`), *gone* (`ps` exits non-zero with empty
+stdout and empty stderr -- what macOS and procps both print for a
+pid that doesn't exist -- or `kill(pid, 0)` reports `ESRCH`),
+*recycled* (`ps` exits 0, but the command line no longer names an
+engine: the pid is held by some unrelated process now), or *unknown*
+(anything else -- `ps` couldn't even start, or a non-zero exit came
+with something on stderr and `kill` didn't confirm `ESRCH` either).
+An entry is pruned (removed from disk, not just skipped) the next
+time anything reads the registry only on a *gone* or *recycled*
+answer; *unknown* never prunes an entry on its own, the same as
+*alive* (issue #807).
 
 `oscilloscope_core::discovery::discover_runs` merges three sources,
 most trusted first: the registry; one `ps -axo pid=,args=` scan per

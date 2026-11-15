@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778: the explicit nesting limit also covers an expression that does not exist until the run compiles it",
+  "description": "The `use: inline` child here is a Mustache template with no CEL of its own to render; it only becomes a document -- and its own `if` expression only gets compiled -- once the parent actually reaches this effect. `cof check` on the parent alone passes, because that expression is not static text it can see yet. Running it fails with the exact same message a statically over-limit expression gets, naming the location inside the child the way every other CEL check error does, wrapped in the `use` effect's own failure the same way any other child-compile error is.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

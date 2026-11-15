@@ -1,16 +1,9 @@
 {
-  "spec_case": "issue #403: an over-limit CEL condition fails the run, same phase (evaluation, not compile) and the same \"maximum recursion depth exceeded\" substring on both engines",
-  "description": "A 239-link index chain over MAX_INDEX_NESTING_DEPTH (238), fed real, resolved data (-e a=<nested list>), fails during evaluation on both engines once the condition actually runs -- not at compile time, and not before the (here, trivially satisfied) unset-path check (issue #403). Circuitry's own text carries a Python-specific, frame-dependent suffix electricity deliberately does not reproduce (DESIGN.md Section 13), so only the shared substring is compared.",
+  "spec_case": "issue #403: an over-limit index chain is rejected at compile time, not evaluation",
+  "description": "A 39-level index chain (state.input.a[0][0]...) is well past the explicit nesting limit (32) both engines now enforce. It is rejected when the document is compiled -- before any effect runs, and before the unset-path/real-data distinction that used to decide whether this shape failed at evaluation or not even mattered. No real data (`-e a=...`) is needed any more: the document never reaches a point where it would be read.",
   "engines": [
     "python",
     "electricity"
   ],
-  "expect": "failure",
-  "cli_args": [
-    "-e",
-    "a=[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]"
-  ],
-  "error_compare": "location",
-  "location_pattern": "maximum recursion depth exceeded",
-  "python_runner_versions": ["3.11"]
+  "expect": "failure"
 }

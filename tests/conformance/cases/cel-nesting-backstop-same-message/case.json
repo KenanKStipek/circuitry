@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778: an expression well past the Rust-only pre-parse safety backstop still fails with the explicit limit's own message",
+  "description": "A 1,001-link `0+1+1+...` addition chain -- more than electricity's own 1,000-link pre-parse safety backstop (its own crate's margin against its parser's real stack-overflow floor, not a parity boundary with cof), but still well under the 4,096-character expression cap -- is rejected with the exact same 'expression is nested too deeply (limit 32)' text any other over-limit expression gets, not a distinct backstop message, since cof's own count rejects it the same way with no backstop of its own needed.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}
