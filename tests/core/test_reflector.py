@@ -12,10 +12,14 @@ import yaml
 
 from circuitry.core.compiler import compile_orchestration
 from circuitry.core.dynamic import DynamicRuntime
+from circuitry.core.primes import REFLECTOR_PRIME_V1
 from circuitry.core.reflector import (
     _extract_done_flag,
+    _render_reflector_prime,
+    prime_template_str_format_error,
 )
 from circuitry.core.store import Store
+from circuitry.core.templates import TemplateError
 
 
 def _mock_adapter(response: str = "mock") -> MagicMock:
@@ -35,9 +39,8 @@ def _mock_adapter(response: str = "mock") -> MagicMock:
 
 def test_extract_done_false() -> None:
     text = yaml.dump({"done": False, "effects": [{"type": "prompt", "name": "a", "template": "hi"}]})
-    done, cleaned = _extract_done_flag(text)
+    done, parsed = _extract_done_flag(text)
     assert done is False
-    parsed = yaml.safe_load(cleaned)
     assert "effects" in parsed
     assert "done" not in parsed
 
@@ -49,32 +52,119 @@ def test_extract_done_true() -> None:
 
 
 def test_extract_done_empty() -> None:
-    done, cleaned = _extract_done_flag("")
+    done, parsed = _extract_done_flag("")
     assert done is True
-    assert cleaned == ""
+    assert parsed is None
 
 
 def test_extract_done_bare_list() -> None:
     text = yaml.dump([{"type": "prompt", "name": "a", "template": "hi"}])
-    done, cleaned = _extract_done_flag(text)
+    done, parsed = _extract_done_flag(text)
     assert done is False
-    parsed = yaml.safe_load(cleaned)
     assert "effects" in parsed
 
 
 def test_extract_done_code_fences() -> None:
     text = "```yaml\ndone: false\neffects:\n  - type: prompt\n    name: a\n    template: hi\n```"
-    done, cleaned = _extract_done_flag(text)
+    done, parsed = _extract_done_flag(text)
     assert done is False
-    assert "```" not in cleaned
+    assert parsed == {"effects": [{"type": "prompt", "name": "a", "template": "hi"}]}
 
 
 def test_extract_done_legacy_steps() -> None:
     text = yaml.dump({"done": False, "steps": [{"type": "prompt", "name": "a", "template": "hi"}]})
-    done, cleaned = _extract_done_flag(text)
+    done, parsed = _extract_done_flag(text)
     assert done is False
-    parsed = yaml.safe_load(cleaned)
     assert "effects" in parsed
+
+
+# ── _render_reflector_prime (Mustache, no fallback) ──────────────────────────
+
+
+def test_render_reflector_prime_default_renders_the_documented_text() -> None:
+    """The default prime renders byte for byte the text it rendered under
+    the old `str.format` rendering (#778)."""
+    import json
+
+    rendered = _render_reflector_prime(
+        prime_template=REFLECTOR_PRIME_V1,
+        max_effects=8,
+        goal="Summarize the project.",
+        context=json.dumps(
+            {"adapter": "scripted", "model": "test", "plugins": []}, indent=2, sort_keys=True
+        ),
+    )
+    assert "CRITICAL: Your output will be parsed by a YAML parser" in rendered
+    assert "Goal:\nSummarize the project." in rendered
+    assert '"adapter": "scripted"' in rendered
+    assert "<= 8." in rendered
+    assert rendered.endswith("\n\n")
+
+
+def test_render_reflector_prime_renders_mustache_without_html_escaping() -> None:
+    rendered = _render_reflector_prime(
+        prime_template="Goal: {{goal}}", max_effects=1, goal="a & b < c", context=""
+    )
+    assert "Goal: a & b < c" in rendered
+
+
+def test_render_reflector_prime_has_no_fallback_for_a_malformed_template() -> None:
+    with pytest.raises(TemplateError):
+        _render_reflector_prime(
+            prime_template="{{#unclosed", max_effects=1, goal="g", context="c"
+        )
+
+
+# ── prime_template_str_format_error ──────────────────────────────────────────
+
+
+@pytest.mark.parametrize("name", ["goal", "context", "max_effects"])
+def test_prime_template_str_format_error_catches_each_name(name: str) -> None:
+    error = prime_template_str_format_error(f"Plan {{{name}}}")
+    assert error is not None
+    assert f"'{{{name}}}'" in error
+    assert f"'{{{{{name}}}}}'" in error
+
+
+def test_prime_template_str_format_error_ignores_the_mustache_form() -> None:
+    assert prime_template_str_format_error("Plan {{goal}} {{context}} {{max_effects}}") is None
+
+
+def test_prime_template_str_format_error_ignores_an_unrelated_single_brace() -> None:
+    assert prime_template_str_format_error("literal: { not a field }") is None
+
+
+# ── compile-time checks on prime_template ────────────────────────────────────
+
+
+def _reflector_orch(prime_template: str) -> dict:
+    return {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "plan_it",
+                "prime_template": prime_template,
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+
+def test_compile_refuses_a_str_format_placeholder_in_prime_template() -> None:
+    with pytest.raises(ValueError, match=r"write '\{\{goal\}\}' instead"):
+        compile_orchestration(orch=_reflector_orch("Plan it. Goal: {goal}"))
+
+
+def test_compile_refuses_a_malformed_mustache_prime_template() -> None:
+    with pytest.raises(ValueError, match="malformed Mustache template"):
+        compile_orchestration(orch=_reflector_orch("Plan it. {{#unclosed"))
+
+
+def test_compile_accepts_a_mustache_prime_template() -> None:
+    root = compile_orchestration(orch=_reflector_orch("Plan it. Goal: {{goal}}"))
+    assert root.effects[0].prime_template == "Plan it. Goal: {{goal}}"
 
 
 # ── ReflectorRuntime end-to-end ──────────────────────────────────────────────
@@ -637,3 +727,84 @@ def test_reflector_generated_plan_with_a_partial_fails_and_reads_no_file(
     planner = store.state["prime"]["planner"]
     assert planner["value"] is False
     assert "LEAKED" not in str(store.state)
+
+
+# ── No YAML round trip: plan key order, canonical-JSON hash (#778) ──────────
+
+
+def test_reflector_plan_runs_with_keys_in_the_order_the_model_wrote_them() -> None:
+    """The generated plan's own effect dict keeps the model's own key
+    order -- never dumped to YAML and reparsed, which would alphabetize it."""
+    plan_text = (
+        "effects:\n"
+        "  - type: tool\n"
+        "    name: check\n"
+        "    provider: json\n"
+        "    params: {mode: parse, input: '{\"ok\": true}'}\n"
+        "done: true\n"
+    )
+    adapter = _mock_adapter(plan_text)
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={})
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    planner = store.state["prime"]["planner"]
+    effect = planner["meta"]["iterations"][0]["parsed"]["effects"][0]
+    assert list(effect.keys()) == ["type", "name", "provider", "params"]
+    assert list(effect["params"].keys()) == ["mode", "input"]
+
+
+def test_reflector_generated_child_orchestration_sha256_is_canonical_json() -> None:
+    """A reflector-generated document's `meta.orchestration_sha256` is the
+    sha256 of its canonical JSON text (sorted keys, compact separators,
+    `ensure_ascii=False`), never of any YAML text (#778)."""
+    import hashlib
+    import json
+
+    plan_text = yaml.dump({
+        "done": False,
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}],
+    })
+    adapter = _mock_adapter(plan_text)
+
+    orch = {
+        "effects": [
+            {
+                "type": "reflector",
+                "name": "planner",
+                "effects": [
+                    {"type": "prompt", "name": "propose_steps", "template": "Plan."},
+                ],
+            }
+        ]
+    }
+
+    root = compile_orchestration(orch=orch)
+    store = Store(state={})
+
+    DynamicRuntime(root, adapter=adapter, model="test-model").execute(store=store)
+
+    planner = store.state["prime"]["planner"]
+    generated_doc = {
+        "effects": [{"type": "prompt", "name": "generated_step", "template": "Do the thing"}]
+    }
+    expected = hashlib.sha256(
+        json.dumps(
+            generated_doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        ).encode("utf-8")
+    ).hexdigest()
+    assert planner["generated"]["iter_0"]["meta"]["orchestration_sha256"] == expected

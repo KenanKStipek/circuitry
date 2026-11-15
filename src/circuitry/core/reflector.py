@@ -8,6 +8,7 @@ wiring between the inner planning prompt and the generated orchestration.
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
 from dataclasses import dataclass, replace
@@ -20,6 +21,7 @@ from ..adapters import Adapter
 from ..cli.redaction import redact
 from .primes import REFLECTOR_PRIME_V1
 from .store import Store
+from .templates import render_template
 from .use import UseDefinition, UseRuntime, _clean_yaml_fences
 
 #: {context} is a summary, not a state dump — capped well under a model's
@@ -242,10 +244,10 @@ class ReflectorRuntime:
 
         # ── Phase 4: Extract done flag and check stop conditions ─────────
         try:
-            done, plan_yaml = _extract_done_flag(plan_text)
+            done, parsed_plan = _extract_done_flag(plan_text)
             rec["done"] = done
 
-            if not plan_yaml.strip():
+            if parsed_plan is None:
                 rec["stop"] = True
                 return rec
 
@@ -257,28 +259,26 @@ class ReflectorRuntime:
             stopping = done and self.defn.stop_on_done
 
             # Check for empty effects list — nothing to execute
-            try:
-                parsed_check = _yaml.safe_load(plan_yaml)
-                effects = parsed_check.get("effects", []) if isinstance(parsed_check, dict) else []
-                rec["parsed"] = parsed_check
-                if not effects:
-                    rec["stop"] = True
-                    return rec
-                # A plan over the cap is invalid, same as one that fails to
-                # parse — never truncated silently (#251 part 2).
-                if (
-                    not stopping
-                    and isinstance(effects, list)
-                    and len(effects) > self.defn.max_effects
-                ):
-                    rec["error"] = (
-                        f"invalid_plan: generated plan has {len(effects)} "
-                        f"top-level effects, exceeds max_effects "
-                        f"({self.defn.max_effects})"
-                    )
-                    return rec
-            except Exception:
-                pass  # let use(inline) handle parse errors
+            effects = (
+                parsed_plan.get("effects", []) if isinstance(parsed_plan, dict) else []
+            )
+            rec["parsed"] = parsed_plan
+            if not effects:
+                rec["stop"] = True
+                return rec
+            # A plan over the cap is invalid, same as one that fails to
+            # parse — never truncated silently (#251 part 2).
+            if (
+                not stopping
+                and isinstance(effects, list)
+                and len(effects) > self.defn.max_effects
+            ):
+                rec["error"] = (
+                    f"invalid_plan: generated plan has {len(effects)} "
+                    f"top-level effects, exceeds max_effects "
+                    f"({self.defn.max_effects})"
+                )
+                return rec
 
             if stopping:
                 rec["stop"] = True
@@ -294,7 +294,11 @@ class ReflectorRuntime:
         try:
             use_defn = UseDefinition(
                 name=iteration_key,
-                inline=plan_yaml,
+                # The parsed, normalized document handed straight to the
+                # child -- never dumped to YAML and reparsed (#778). A deep
+                # copy: `rec["parsed"]` above and whatever the child's own
+                # compile step does with this dict stay independent.
+                inline_document=copy.deepcopy(parsed_plan),
                 validate=True,
                 on_error="fail",
                 allow_tools=self.defn.allow_tools,
@@ -342,6 +346,13 @@ def _ensure_dict(parent: dict[str, Any], key: str) -> dict[str, Any]:
 def _render_reflector_prime(
     *, prime_template: str, max_effects: int, goal: str, context: str
 ) -> str:
+    """Render *prime_template* with Mustache, seeing exactly ``goal``,
+    ``context`` and ``max_effects`` -- the same rule as any other prompt
+    template (no HTML escaping). A malformed template never reaches here:
+    it is a document error at check/compile time
+    (:func:`prime_template_str_format_error`, ``core.compiler``). There is
+    no fallback to the raw template.
+    """
     critical_warning = (
         "CRITICAL: The next system will parse your response as YAML. "
         "If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.\n"
@@ -349,20 +360,57 @@ def _render_reflector_prime(
         "Never use *, **, backticks, headings, or bullet prose outside YAML.\n"
         "Every line must be valid YAML.\n"
     )
-    try:
-        rendered = (
-            (prime_template or "")
-            .format(
-                max_effects=max_effects,
-                goal=goal,
-                context=context,
-            )
-            .strip()
-        )
-        return critical_warning + rendered + "\n\n"
-    except Exception:
-        logger.warning("Reflector prime template formatting failed; using raw template", exc_info=True)
-        return critical_warning + (prime_template or "").strip() + "\n\n"
+    rendered = render_template(
+        prime_template or "",
+        {"max_effects": max_effects, "goal": goal, "context": context},
+        label="reflector prime_template",
+        escape=False,
+    ).strip()
+    return critical_warning + rendered + "\n\n"
+
+
+#: ``goal``, ``context`` and ``max_effects`` -- the only names
+#: :func:`_render_reflector_prime` ever saw rendered with ``str.format``.
+_STR_FORMAT_PLACEHOLDER_NAMES = ("goal", "context", "max_effects")
+
+
+def prime_template_str_format_error(prime_template: str) -> str | None:
+    """None if *prime_template* contains no leftover ``str.format``
+    placeholder; otherwise a message naming the fix, identical on both
+    engines (``core.compiler``, ``electricity-compiler``'s own port).
+
+    A single-brace ``{goal}``/``{context}``/``{max_effects}`` once rendered
+    with ``str.format``; now that ``prime_template`` renders with Mustache,
+    it would render as literal text instead of the planner's goal, its
+    context, or the effect cap -- almost certainly not what the author
+    wants, so it is refused rather than silently kept. A double-braced
+    ``{{goal}}`` (the Mustache form, or a literal ``{{{{goal}}}}``-shaped
+    escape) never matches: the brace immediately before or after it is
+    checked and excluded.
+    """
+    best_pos: int | None = None
+    best_name: str | None = None
+    for name in _STR_FORMAT_PLACEHOLDER_NAMES:
+        token = "{" + name + "}"
+        start = 0
+        while True:
+            idx = prime_template.find(token, start)
+            if idx == -1:
+                break
+            before_ok = idx == 0 or prime_template[idx - 1] != "{"
+            after = idx + len(token)
+            after_ok = after >= len(prime_template) or prime_template[after] != "}"
+            if before_ok and after_ok:
+                if best_pos is None or idx < best_pos:
+                    best_pos = idx
+                    best_name = name
+                break
+            start = idx + 1
+    if best_name is None:
+        return None
+    old = "{" + best_name + "}"
+    new = "{{" + best_name + "}}"
+    return f"uses the str.format placeholder '{old}'; write '{new}' instead."
 
 
 def _best_effort_goal(store: Store) -> str:
@@ -448,31 +496,37 @@ def _get_plan_text(*, node: dict[str, Any], plan_from_step: str) -> str:
     return val if isinstance(val, str) else ""
 
 
-def _extract_done_flag(plan_text: str) -> tuple[bool, str]:
-    """Extract the done flag from plan text and return (done, cleaned_yaml).
+def _extract_done_flag(plan_text: str) -> tuple[bool, Any]:
+    """Extract the done flag from plan text and return (done, parsed_plan).
 
     The plan text from the LLM may include a `done: true/false` field alongside
     `effects: [...]`. We extract the done flag for iteration control, then ensure
-    the YAML has a valid `effects` key for use(inline) to process.
+    the parsed document has a valid `effects` key for use(inline) to process --
+    never dumped back to YAML and reparsed, so the plan runs with its keys in
+    the order the model wrote them (#778).
 
     Returns:
-        (done, cleaned_yaml) where cleaned_yaml is valid orchestration YAML.
+        (done, parsed_plan) where parsed_plan is the parsed document (a dict
+        with an `effects` key, once normalization can find one), or whatever
+        else the plan text parsed to when it couldn't -- a bare list becomes
+        ``{"effects": [...]}``, anything else is returned as-is for
+        use(inline)'s own validation to reject. ``None`` means the plan text
+        was blank.
     """
     cleaned = _clean_yaml_fences(plan_text)
     if not cleaned.strip():
-        return True, ""
+        return True, None
 
-    try:
-        parsed = _yaml.safe_load(cleaned)
-    except _yaml.YAMLError:
-        # If YAML is unparseable, let use(inline) handle the error
-        return False, cleaned
+    # Unparseable YAML (syntax or semantic, e.g. an invalid calendar date)
+    # propagates to the caller as `parse_failed: {e}` -- there is no raw
+    # text left to hand use(inline) to diagnose instead.
+    parsed = _yaml.safe_load(cleaned)
 
     if not isinstance(parsed, dict):
         # A bare list → treat as effects, not done
         if isinstance(parsed, list):
-            return False, _yaml.dump({"effects": parsed}, default_flow_style=False)
-        return False, cleaned
+            return False, {"effects": parsed}
+        return False, parsed
 
     done = bool(parsed.get("done", False))
 
@@ -491,10 +545,10 @@ def _extract_done_flag(plan_text: str) -> tuple[bool, str]:
             parsed["effects"] = parsed["plan"]
             del parsed["plan"]
         else:
-            return done, cleaned
+            return done, parsed
 
     # Remove done from the dict — it's not part of the orchestration schema
     # (additionalProperties: true allows it, but cleaner to strip)
     parsed.pop("done", None)
 
-    return done, _yaml.dump(parsed, default_flow_style=False)
+    return done, parsed

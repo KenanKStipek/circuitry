@@ -23,7 +23,7 @@ effects:
   - type: use
     name: <snake_case>
     ref: <library_name>
-    inputs: {{ ... }}
+    inputs: { ... }
 
 HARD RULES:
 - The top-level YAML MUST be a dict with these keys: done, effects.
@@ -40,7 +40,7 @@ HARD RULES:
     - tool: provider (plugin name)
 - NEVER emit alternative schemas such as:
   - plan:
-  - plan: {{ effects: ... }}
+  - plan: { effects: ... }
   - step_1:
   - id/action/description-only effects
 - NEVER include '*' characters outside of a YAML quoted string (single or double quotes).
@@ -70,14 +70,14 @@ own prose.
 
 CONTEXT:
 Goal:
-{goal}
+{{goal}}
 
 Additional Context (may be empty):
-{context}
+{{context}}
 
 TASK:
 Generate Circuitry effects to advance the Goal.
-- Keep the total number of top-level effects <= {max_effects}.
+- Keep the total number of top-level effects <= {{max_effects}}.
 - Prefer a small number of high-leverage effects.
 - Use prompts to ask for missing info or to produce artifacts.
 - Use dynamics to group related prompts.

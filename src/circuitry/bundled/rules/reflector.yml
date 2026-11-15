@@ -36,7 +36,7 @@ fields:
     note: "State key where generated effects are recorded."
   prime_template:
     type: string
-    note: "Custom prime template driving the planning cycle, overriding the built-in REFLECTOR_PRIME_V1. Usually omitted — the built-in prime is tuned for plan generation and constrains plan language to ASD-STE100 Simplified Technical English; a custom prime_template opts out of that constraint. It is rendered with {goal} and {context} — see constraints below — plus {max_effects}."
+    note: "Custom prime template driving the planning cycle, overriding the built-in REFLECTOR_PRIME_V1. Usually omitted — the built-in prime is tuned for plan generation and constrains plan language to ASD-STE100 Simplified Technical English; a custom prime_template opts out of that constraint. Rendered with Mustache, seeing exactly {{goal}} and {{context}} — see constraints below — plus {{max_effects}}; a leftover single-brace {goal}/{context}/{max_effects} is refused."
   allow_tools:
     type: array
     items: {type: string}

@@ -45,7 +45,7 @@ from .prompt_files import (
     is_dispatch_file,
     resolve_text_or_file,
 )
-from .reflector import ReflectorDefinition
+from .reflector import ReflectorDefinition, prime_template_str_format_error
 from .report import ReportDefinition, report_data_reference
 from .resume import RESUME_MODES, ResumeMode
 from .state_ns import (
@@ -1031,6 +1031,13 @@ def _compile_effect(
         stop_on_done = bool(effect.get("stop_on_done", True))
 
         prime_template = effect.get("prime_template")  # optional override
+        if isinstance(prime_template, str):
+            _check_templates(
+                prime_template, effect_path=effect_path, field="prime_template"
+            )
+            placeholder_error = prime_template_str_format_error(prime_template)
+            if placeholder_error is not None:
+                raise ValueError(f"{effect_path}.prime_template: {placeholder_error}")
         # Support both 'max_effects' (spec) and 'max_steps' (legacy)
         max_effects = int(effect.get("max_effects") or effect.get("max_steps") or 8)
         allow_tools = _compile_allow_tools(effect, label="Reflector", effect_path=effect_path)
