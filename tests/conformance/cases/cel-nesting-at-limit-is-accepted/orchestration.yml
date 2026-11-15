@@ -1,0 +1,17 @@
+name: cel-nesting-at-limit-is-accepted
+effects:
+  - type: if
+    name: gate
+    if:
+      mode: cel
+      expr: "state.input.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}

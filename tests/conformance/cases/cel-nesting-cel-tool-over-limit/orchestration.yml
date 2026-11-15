@@ -1,0 +1,7 @@
+name: cel-nesting-cel-tool-over-limit
+effects:
+  - type: tool
+    name: computed
+    provider: cel
+    params:
+      expr: "state.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a"

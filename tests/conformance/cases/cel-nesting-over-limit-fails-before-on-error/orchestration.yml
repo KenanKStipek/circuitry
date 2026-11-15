@@ -1,0 +1,22 @@
+name: cel-nesting-caps-caught-by-on-error-continue
+effects:
+  - type: if
+    name: gate_paren
+    on_error: continue
+    if:
+      mode: cel
+      expr: "((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))"
+    then:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "then"}}
+    else:
+      - type: tool
+        name: branch
+        provider: json
+        params: {mode: stringify, input: {branch: "else"}}
+  - type: tool
+    name: marker
+    provider: json
+    params: {mode: stringify, input: {reached: true}}

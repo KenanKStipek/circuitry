@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778: a tool's own `expect:` expression is refused the same way as an `if`",
+  "description": "A 33-level grouping-parenthesis chain in a tool's `expect:` -- one past MAX_CEL_NESTING_DEPTH (32) -- is rejected when the document compiles, before the tool ever dispatches, the same way an over-limit `if` expression is.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}
