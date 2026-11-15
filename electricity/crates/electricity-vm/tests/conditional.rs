@@ -666,12 +666,16 @@ async fn a_later_branch_effect_sees_an_earlier_siblings_write_by_bare_name() {
 }
 
 #[tokio::test]
-async fn an_interrupted_named_if_leaves_meta_error_null_and_reports_ok_to_the_observer() {
-    // PR #440's review of issue #431: `decide_and_run`'s own
-    // branch loop re-raises a cancellation with no `value`/`meta.error`
-    // write at all (Python's own outer `except Exception`, never
-    // `BaseException`) -- the `end` event must read that back as `ok:
-    // true`, never the interrupt text.
+async fn an_interrupted_named_if_records_the_interrupt_error_and_reports_ok_false_to_the_observer()
+{
+    // Issue #796: `decide_and_run`'s own branch loop writes both
+    // `meta.error` -- the interrupt's own text, the same every other
+    // cancelled container uses -- and `meta.completed_at` before
+    // re-raising a cancellation, so the `end` event reads this back as
+    // `ok: false`, never `true`. `cof run --resume` only skips a
+    // finished effect once `completed_at` is truthy *and* there is no
+    // error, so the truthy `error` alone already keeps this branch
+    // resumable regardless of `completed_at`.
     let store = Store::new();
     let token = CancellationToken::new();
     let registry = ToolRegistry::new();
@@ -731,13 +735,19 @@ async fn an_interrupted_named_if_leaves_meta_error_null_and_reports_ok_to_the_ob
     let prime = as_dict(get(root_dict, "prime").unwrap());
     let gate = as_dict(get(prime, "gate").unwrap());
     let meta = as_dict(get(gate, "meta").unwrap());
-    assert_eq!(get(meta, "error"), Some(&Value::None));
+    assert_eq!(
+        get(meta, "error"),
+        Some(&Value::Str("Interrupted (Ctrl-C/SIGINT)".to_string()))
+    );
+    assert_ne!(get(meta, "completed_at"), Some(&Value::None));
 
     let events = observer.inner.events();
     assert!(
-        events
-            .iter()
-            .any(|e| matches!(e, Event::Complete(path, None) if path == "prime.gate")),
+        events.iter().any(|e| matches!(
+            e,
+            Event::Complete(path, Some(text))
+                if path == "prime.gate" && text == "Interrupted (Ctrl-C/SIGINT)"
+        )),
         "got {events:?}"
     );
 }

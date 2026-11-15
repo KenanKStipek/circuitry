@@ -244,6 +244,69 @@ def test_tool_runtime_on_error_fail_raises(monkeypatch: pytest.MonkeyPatch) -> N
         ToolRuntime(defn).execute(store=store, ctx={})
 
 
+def test_tool_runtime_killed_subprocess_while_cancelled_raises_uncompleted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#796: a real signal never reaches a tree-flow branch's own worker
+    thread directly -- cancelling it kills its tracked subprocess instead,
+    which surfaces here as an ordinary nonzero-exit exception, not the
+    `BaseException` a real signal raises on the main thread. With the run
+    already cancelled (and not inside a `finally:`), this must still be
+    recognised as an interrupt: no `meta.completed_at`/`meta.error`
+    written at all, and `on_error` (even `skip`/`continue`) never gets a
+    chance to absorb it -- exactly the record a real signal killing this
+    same step on the main thread would leave.
+    """
+    from circuitry.core.cancellation import RunCancelledBySignal, get_token
+
+    def bad_plugin(**kw: Any) -> Any:
+        m = MagicMock()
+        m.execute.side_effect = RuntimeError("killed")
+        return m
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", bad_plugin)
+    monkeypatch.setattr(get_token(), "is_set", lambda: True)
+
+    defn = ToolDefinition(name="killed", provider="shell", params={}, on_error="continue")
+    store = _make_store()
+
+    with pytest.raises(RunCancelledBySignal):
+        ToolRuntime(defn).execute(store=store, ctx={})
+
+    meta = store.state["killed"]["meta"]
+    assert meta.get("completed_at") is None
+    assert meta.get("error") is None
+
+
+def test_tool_runtime_ordinary_failure_during_its_own_finally_stays_ordinary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#796: the check above must not fire for a `tool` step running
+    *inside* a `finally:` (`get_token().in_cleanup()`) -- an
+    already-cancelled run's own cleanup still runs ordinary effects, and
+    an ordinary failure among them must still go through `on_error` as
+    usual."""
+    from circuitry.core.cancellation import get_token
+
+    def bad_plugin(**kw: Any) -> Any:
+        m = MagicMock()
+        m.execute.side_effect = RuntimeError("plugin exploded")
+        return m
+
+    monkeypatch.setattr("circuitry.plugins.factory.build_plugin", bad_plugin)
+    monkeypatch.setattr(get_token(), "is_set", lambda: True)
+
+    defn = ToolDefinition(name="bad", provider="ffmpeg", params={}, on_error="continue")
+    store = _make_store()
+
+    with get_token().cleanup():
+        ToolRuntime(defn).execute(store=store, ctx={})  # should not raise
+
+    meta = store.state["bad"]["meta"]
+    assert meta.get("completed_at") is not None
+    assert "plugin exploded" in meta["error"]
+
+
 # ---------------------------------------------------------------------------
 # #262 part 1: one failure contract — ToolResult.ok, not just exceptions.
 # ---------------------------------------------------------------------------

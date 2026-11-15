@@ -138,6 +138,13 @@ struct KillGroupOnDrop {
     /// process holding it is still alive, so `!reaped.get()` here is
     /// proof *pid* is still this child's own.
     reaped: Rc<Cell<bool>>,
+    /// Whether this process was registered with [`register_cleanup_process`]
+    /// (#796) -- `true` only while `token.is_cleanup_scope()` was set at
+    /// construction, so [`disarm`]/[`Drop::drop`] know to
+    /// [`unregister_cleanup_process`] too.
+    ///
+    /// [`disarm`]: KillGroupOnDrop::disarm
+    cleanup_registered: bool,
 }
 
 impl KillGroupOnDrop {
@@ -152,6 +159,12 @@ impl KillGroupOnDrop {
     /// including a dropped future) leaves the guard armed, so its own
     /// `Drop` below still fires.
     fn disarm(&mut self) {
+        if self.cleanup_registered {
+            if let Some(pid) = self.pid {
+                unregister_cleanup_process(pid);
+            }
+            self.cleanup_registered = false;
+        }
         self.pid = None;
     }
 }
@@ -159,6 +172,11 @@ impl KillGroupOnDrop {
 impl Drop for KillGroupOnDrop {
     // This guard's own version of `run_tracked`'s `except BaseException:` fallback kill (`core/cancellation.py:888-895`).
     fn drop(&mut self) {
+        if self.cleanup_registered {
+            if let Some(pid) = self.pid {
+                unregister_cleanup_process(pid);
+            }
+        }
         let Some(pid) = self.pid else { return };
         if self.isolated {
             // Safe regardless of whether *pid* (the group's own leader)
@@ -549,10 +567,17 @@ pub async fn run_tracked(
     // call's safety net against being torn down mid-await from outside
     // (see the struct's own doc comment above). `mut`: the normal-exit
     // path below calls `disarm()` on it before returning `Ok`.
+    let cleanup_registered = token.is_cleanup_scope();
+    if cleanup_registered {
+        if let Some(pid) = pid {
+            register_cleanup_process(pid, opts.new_session);
+        }
+    }
     let mut kill_on_drop = KillGroupOnDrop {
         pid,
         isolated: opts.new_session,
         reaped: reaped.clone(),
+        cleanup_registered,
     };
 
     if let Some(data) = opts.input.clone() {
@@ -855,6 +880,65 @@ fn utf8_lead_shape(lead: u8) -> Option<(usize, u8, u8)> {
         0xF1..=0xF3 => Some((4, 0x80, 0xBF)),
         0xF4 => Some((4, 0x80, 0x8F)),
         _ => None,
+    }
+}
+
+/// Every process [`run_tracked`] has started against a `finally:`'s own
+/// disconnected [`CancellationToken::new_cleanup_scope`] token (#796)
+/// and not yet finished or been disarmed -- reachable from the signal-
+/// handling thread (`electricity-cli`'s own `arm_signals`), which a
+/// genuine *second* SIGINT/SIGTERM kills outright via
+/// [`kill_every_cleanup_process`] before `std::process::exit`, since
+/// nothing on that disconnected token would otherwise ever see *any*
+/// signal at all -- mirrors `core/cancellation.py::CancellationToken`'s
+/// own `_processes` registry and `kill_cleanup_processes_too`.
+static CLEANUP_PROCESSES: std::sync::OnceLock<std::sync::Mutex<Vec<CleanupProcess>>> =
+    std::sync::OnceLock::new();
+
+#[derive(Clone, Copy)]
+struct CleanupProcess {
+    pid: u32,
+    /// Same meaning as `KillGroupOnDrop::isolated`: `true` means *pid*
+    /// is also its own process-group leader, so `repeat_group_kill` is
+    /// the safe-even-after-reap kill; otherwise `kill_process_group`'s
+    /// own `getpgid(pid)` precheck.
+    isolated: bool,
+}
+
+fn cleanup_processes() -> &'static std::sync::Mutex<Vec<CleanupProcess>> {
+    CLEANUP_PROCESSES.get_or_init(|| std::sync::Mutex::new(Vec::new()))
+}
+
+fn register_cleanup_process(pid: u32, isolated: bool) {
+    cleanup_processes()
+        .lock()
+        .expect("cleanup-process registry lock poisoned")
+        .push(CleanupProcess { pid, isolated });
+}
+
+fn unregister_cleanup_process(pid: u32) {
+    cleanup_processes()
+        .lock()
+        .expect("cleanup-process registry lock poisoned")
+        .retain(|p| p.pid != pid);
+}
+
+/// Kills every process [`register_cleanup_process`] is still tracking --
+/// call only from the signal-handling thread, only for a genuine
+/// *second* SIGINT/SIGTERM, mirroring `core/cancellation.py::
+/// CancellationToken.kill_cleanup_processes_too`.
+pub fn kill_every_cleanup_process() {
+    let procs: Vec<CleanupProcess> = cleanup_processes()
+        .lock()
+        .expect("cleanup-process registry lock poisoned")
+        .drain(..)
+        .collect();
+    for p in procs {
+        if p.isolated {
+            repeat_group_kill(p.pid);
+        } else {
+            kill_process_group(p.pid);
+        }
     }
 }
 

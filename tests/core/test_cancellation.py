@@ -323,6 +323,65 @@ def test_track_does_not_kill_inside_cleanup_even_if_already_cancelled(
     assert killed == []
 
 
+def test_request_spares_a_process_registered_during_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#796: the first signal a `finally:` step's own tracked process
+    sees while it is already running must not kill it -- `request()`
+    only ever kills the processes its own snapshot marks `in_cleanup=
+    False`, and `track()` records that flag at registration time."""
+    token = CancellationToken()
+    killed: list[Any] = []
+    monkeypatch.setattr(cancellation, "kill_process_group", killed.append)
+
+    proc = _FakeTrackedProc()
+    with token.cleanup():
+        with token.track(proc):
+            token.request()
+            assert killed == []
+
+
+def test_kill_cleanup_processes_too_kills_a_spared_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """#796: a *second* signal still ends a `finally:` step's own tracked
+    process -- `cli.interrupts`'s own handler calls
+    `kill_cleanup_processes_too` for that, separately from `request()`
+    (which the first signal already called and which never touches
+    `_event` again)."""
+    token = CancellationToken()
+    killed: list[Any] = []
+    monkeypatch.setattr(cancellation, "kill_process_group", killed.append)
+
+    proc = _FakeTrackedProc()
+    with token.cleanup():
+        with token.track(proc):
+            token.request()
+            assert killed == []
+            token.kill_cleanup_processes_too()
+            assert killed == [proc]
+
+
+def test_cleanup_exit_raises_the_parked_signal_only_once_the_outermost_scope_exits(
+    token: CancellationToken,
+) -> None:
+    """#796: a `finally:` nested inside another one (a dynamic's own
+    `finally:` that itself contains a dynamic with its own `finally:`)
+    must not let the inner scope's own exit raise a signal parked while
+    it ran -- only the outermost `cleanup()` scope's own exit may, once
+    every nested `finally:` is actually done."""
+    parked = RunCancelledBySignal()
+    cancellation.defer_first_signal_exception(parked)
+    reached_after_inner_exit = False
+    with pytest.raises(RunCancelledBySignal) as exc_info:
+        with token.cleanup():
+            with token.cleanup():
+                pass
+            reached_after_inner_exit = True
+    assert reached_after_inner_exit, "the inner scope's own exit must not raise"
+    assert exc_info.value is parked
+
+
 def test_kill_tracked_process_kills_by_pid_only() -> None:
     """#357 follow-up: `python_eval`'s sandboxed child shares cof's own
     process group (it is never started with `start_new_session`), so

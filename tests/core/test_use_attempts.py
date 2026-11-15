@@ -212,7 +212,7 @@ def test_attempts_is_reset_on_a_reused_node(tmp_path, monkeypatch: pytest.Monkey
     assert "attempts" not in store.state["run_child"]["meta"]
 
 
-def test_attempts_interrupt_during_backoff_leaves_no_entry_for_the_in_flight_attempt(
+def test_attempts_interrupt_during_backoff_records_error_but_leaves_no_entry_for_the_in_flight_attempt(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     counter_file = tmp_path / "attempts.txt"
@@ -241,7 +241,96 @@ def test_attempts_interrupt_during_backoff_leaves_no_entry_for_the_in_flight_att
     attempts = store.state["run_child"]["meta"]["attempts"]
     assert len(attempts) == 2
     assert [a["value"] for a in attempts] == [{"attempt": "1"}, {"attempt": "2"}]
-    assert store.state["run_child"]["meta"].get("completed_at") is None
+    # #796: an interrupted `use` now records the error and `completed_at`
+    # on its own node, like an interrupted `dynamic`/named loop -- but
+    # `completed_at` alone never means `--resume` would skip it, since
+    # `error` is set alongside it (`resume.effect_completed_ok` requires
+    # both truthy `completed_at` *and* no `error`). The text is the
+    # signal-name wording the run's own top-level error would use for the
+    # same interrupt, not `RunCancelledBySignal`'s own message ("run
+    # cancelled") -- the token here was never `request()`-ed with a
+    # signal number, so it reads as a plain Ctrl-C/SIGINT.
+    meta = store.state["run_child"]["meta"]
+    assert meta.get("completed_at") is not None
+    assert meta.get("error") == "Interrupted (Ctrl-C/SIGINT)"
+
+
+def test_a_killed_tree_branchs_subprocess_is_still_recognised_as_an_interrupt(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#796: a real signal never reaches a tree-flow branch's own worker
+    thread directly (it only kills that branch's tracked subprocess), so a
+    cancelled run's own `use` effect sees an ordinary nonzero-exit
+    ``Exception`` there, never the ``BaseException`` a signal raises on the
+    main thread. Checking ``get_token().is_set()`` in the ordinary
+    ``except Exception`` branch catches that case too: the failure is
+    still recorded as an interrupt, not an absorbable one -- `on_error:
+    continue` must not swallow it, unlike an *ordinary* nonzero exit.
+    """
+    child_path = _write(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "killed",
+                    "provider": "shell",
+                    "params": {"command": "false", "allowed_commands": ["false"]},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(get_token(), "is_set", lambda: True)
+    monkeypatch.setattr(get_token(), "_signum", 15)  # SIGTERM; `signum` is a read-only property
+
+    defn = UseDefinition(name="run_child", path=str(child_path), on_error="continue")
+    store = Store({})
+    with pytest.raises(RunCancelledBySignal):
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    meta = store.state["run_child"]["meta"]
+    assert meta.get("error") == "Interrupted (SIGTERM)"
+    assert meta.get("completed_at") is not None
+    # No `meta.attempts` entry, and no `child_errors` walk, either -- the
+    # same shape a real `BaseException` interrupt already left (this
+    # module's own interrupt-during-backoff test above): the ordinary
+    # per-attempt bookkeeping never runs for this case.
+    assert "attempts" not in meta
+
+
+def test_a_tree_branchs_ordinary_failure_during_its_own_finally_stays_ordinary(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#796: the tree-branch check above must not fire for a `use`
+    running *inside* a `finally:` (`get_token().in_cleanup()`) -- an
+    already-cancelled run's own cleanup still runs ordinary effects, and
+    an ordinary failure among them must still go through `on_error` as
+    usual, not be reported as this run's own interrupt."""
+    child_path = _write(
+        tmp_path,
+        "child.yml",
+        {
+            "effects": [
+                {
+                    "type": "tool",
+                    "name": "failed",
+                    "provider": "shell",
+                    "params": {"command": "false", "allowed_commands": ["false"]},
+                }
+            ]
+        },
+    )
+    monkeypatch.setattr(get_token(), "is_set", lambda: True)
+
+    defn = UseDefinition(name="run_child", path=str(child_path), on_error="continue")
+    store = Store({})
+    with get_token().cleanup():
+        UseRuntime(defn, adapter=_mock_adapter(), model="m").execute(store=store, ctx={})
+
+    meta = store.state["run_child"]["meta"]
+    assert meta.get("error") not in (None, "Interrupted (SIGTERM)")
+    assert "Interrupted" not in str(meta.get("error"))
 
 
 # ── inputs: {from: prime.<name>.meta.attempts}, record_children, full-namespace ──

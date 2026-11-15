@@ -1659,6 +1659,38 @@ async fn attempt_once<R: ParamsCtx>(
     Ok(())
 }
 
+/// Records this `use` effect's own cancellation (issue #796) --
+/// pairs its `effect_start` with an `end` carrying the interrupt's
+/// error text, and sets `meta.completed_at` alongside it, mirroring
+/// `core/use.py::UseRuntime.execute`'s own `except BaseException`.
+/// Without this, `effect_start` for this `use` is left unpaired (no
+/// `end` event at all) and it never counts toward `runtime.last_run.
+/// totals.effects_run`. `--resume` is unaffected: a later run still
+/// reruns this `use` rather than skipping it, because `completed_at`
+/// is set *alongside* `error`, never instead of it -- the same
+/// resume-eligibility check that already requires both `completed_at`
+/// truthy and no `error` reads this back as unfinished either way.
+fn record_use_cancelled(
+    store: &Store,
+    meta_node: &NodeRef,
+    effect_path: &EffectPath,
+    instance: InstanceId,
+    token: &CancellationToken,
+    observer: &dyn RunObserver,
+) -> VmError {
+    let text = super::interrupted_text(token);
+    set_leaf(store, meta_node, "error", Value::Str(text.clone()));
+    set_leaf(store, meta_node, "completed_at", now_iso());
+    observer.effect_complete(
+        effect_path,
+        instance,
+        Some(&text),
+        super::completed_at_is_truthy(store, meta_node),
+    );
+    observer.write();
+    VmError::Cancelled
+}
+
 /// `core/use.py::UseRuntime.execute` -- see this module's own doc
 /// comment for the overall design. No longer a `live_ctx` snapshot
 /// taken eagerly here (issue #463, PR #482's review): a `use`
@@ -1810,11 +1842,20 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
     for attempt_index in 0..max_attempts {
         if attempt_index > 0 {
             if token.is_set() {
-                return Err(VmError::Cancelled);
+                return Err(record_use_cancelled(
+                    store,
+                    &meta_node,
+                    &effect_path,
+                    instance,
+                    token,
+                    observer,
+                ));
             }
             tokio::select! {
                 () = tokio::time::sleep(std::time::Duration::from_millis(u64::from(next_delay_ms))) => {}
-                () = token.cancelled() => return Err(VmError::Cancelled),
+                () = token.cancelled() => return Err(record_use_cancelled(
+                    store, &meta_node, &effect_path, instance, token, observer,
+                )),
             }
         }
 
@@ -1923,7 +1964,16 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                 observer.write();
                 return Ok(());
             }
-            Err(AttemptProblem::Fatal(VmError::Cancelled)) => return Err(VmError::Cancelled),
+            Err(AttemptProblem::Fatal(VmError::Cancelled)) => {
+                return Err(record_use_cancelled(
+                    store,
+                    &meta_node,
+                    &effect_path,
+                    instance,
+                    token,
+                    observer,
+                ));
+            }
             Err(AttemptProblem::Fatal(refused @ VmError::Refused { .. })) => {
                 let text = refused.to_string();
                 set_leaf(store, &meta_node, "error", Value::Str(text.clone()));

@@ -530,14 +530,17 @@ effects:
     );
 }
 
-/// Issue #469 -- the
+/// Issue #469/#796 -- the
 /// `runtime.state.record_children` config is off here, the common
-/// case: a SIGINT while a `use` child is running must exit 130 and
-/// leave no trace of the child's own effect having run --
-/// `VmError::Cancelled` bypasses `execute_use`'s own output-mapping/
-/// retry bookkeeping entirely (the same rule every other container
-/// follows), so the use node itself never gets a `completed_at`, and
-/// the child's own full-passthrough keys (which only ever land on a
+/// case: a SIGINT while a `use` child is running must exit 130, leave
+/// no trace of the child's own effect having run, and -- since #796 --
+/// record the same `completed_at`/`error` an interrupted `dynamic`
+/// already does, so the use node ends `ok: false` in `--events` and
+/// `--resume` still reruns it (`error` is set *alongside*
+/// `completed_at`, never without it). `VmError::Cancelled` still
+/// bypasses `execute_use`'s own output-mapping/retry bookkeeping
+/// entirely (the same rule every other container follows), so the
+/// child's own full-passthrough keys (which only ever land on a
 /// *successful* child run, or -- separately -- on a `record_children`
 /// graft, exercised by this module's own
 /// `sigint_during_a_use_child_with_record_children_keeps_its_finished_steps`)
@@ -582,8 +585,13 @@ finally:
         serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
     let wrapper = &state["prime"]["wrapper"];
     assert!(
-        wrapper["meta"]["completed_at"].is_null(),
-        "a use node cancelled mid-child must never complete: {state}"
+        !wrapper["meta"]["completed_at"].is_null(),
+        "#796: a use node cancelled mid-child must still record \
+         completed_at, the same way an interrupted dynamic does: {state}"
+    );
+    assert_eq!(
+        wrapper["meta"]["error"], "Interrupted (Ctrl-C/SIGINT)",
+        "got {state}"
     );
     assert!(
         wrapper.get("slow").is_none(),
@@ -597,14 +605,15 @@ finally:
     );
 }
 
-/// Issue #727 follow-up: with `runtime.state.record_children` on, a
+/// Issue #727/#796 follow-up: with `runtime.state.record_children` on, a
 /// `use` cancelled mid-child must keep the same shape
 /// `core/use.py::UseRuntime.execute`'s own `except BaseException`
 /// leaves -- the finished step's record grafted onto the use node
 /// unchanged, the in-progress one grafted with its own meta so far but
 /// no `completed_at`, `meta.child_errors` left `None` (never the
-/// interrupt text), and the use node itself with no `completed_at` of
-/// its own.
+/// interrupt text) -- and, since #796, the use node's own
+/// `completed_at`/`error` recorded the same way an interrupted
+/// `dynamic` already does.
 #[test]
 fn sigint_during_a_use_child_with_record_children_keeps_its_finished_steps() {
     let home = TempHome::new("sigint-use-child-record-children");
@@ -654,8 +663,13 @@ finally:
         serde_json::from_str(&fs::read_to_string(&out).unwrap()).unwrap();
     let wrapper = &state["prime"]["wrapper"];
     assert!(
-        wrapper["meta"]["completed_at"].is_null(),
-        "a use node cancelled mid-child must never complete: {state}"
+        !wrapper["meta"]["completed_at"].is_null(),
+        "#796: a use node cancelled mid-child must still record \
+         completed_at, the same way an interrupted dynamic does: {state}"
+    );
+    assert_eq!(
+        wrapper["meta"]["error"], "Interrupted (Ctrl-C/SIGINT)",
+        "got {state}"
     );
     assert!(
         wrapper["meta"]["child_errors"].is_null(),

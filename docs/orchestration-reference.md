@@ -29,7 +29,7 @@ Top-level fields of an orchestration YAML file:
 | `flow` | string | no | `chain` | Top-level flow for the implicit root dynamic. `chain` or `tree` |
 | `version` | string | no | — | Free-form version string for **this document**, e.g. `"1.2.0"` |
 | `interface` | object | no | — | Declared `inputs` / `outputs` — see [Interface](#interface) |
-| `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
+| `finally` | array | no | — | Cleanup effects, run after `effects` completes — success, failure or cancellation alike. The first signal that arrives while one of these is itself running does not cut it short — see [Resuming a Run](#resuming-a-run-cof-run---resume) below. Also legal on a `dynamic` effect, nowhere else — see [`dynamic`](#dynamic) and [Errors](./guidebook/05-errors.md) |
 | `prompts` | object | no | — | Declared prompts — named text any template in the document can splice in with `{{> name}}`. See [Prompt composition](#prompt-composition) |
 | `label` | string | no | — | Mustache template for this run's label, rendered once when the run starts, against `{{input.*}}` only — see [Labelling a Run](#labelling-a-run) |
 
@@ -355,7 +355,7 @@ A named container that executes child effects sequentially (`chain`) or in paral
 | `on_error` | string | no | `fail` | `fail`, `skip`, `continue` — same meaning as on a leaf effect (see [Errors](guidebook/05-errors.md)): governs whether a failure anywhere inside this dynamic propagates to *its own* parent (`fail`) or is recorded on this dynamic's own `meta.error` and swallowed there, letting the parent continue (`skip`/`continue`, the same degradation for both). |
 | `resume` | string | no | `continue` | `continue` or `restart`: what [`cof run --resume`](#resume-restart) does with this dynamic when its saved node did not finish without error. `continue` goes on at its first unfinished effect; `restart` runs it from its first effect in a fresh state, `finally` as usual. A finished one is skipped either way. Only `dynamic` and `use` take this key. |
 | `labels` | object | no | — | Arbitrary metadata annotations, recorded on `meta.labels` |
-| `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/SIGTERM/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. Also legal at the document root; nowhere else. |
+| `finally` | array | no | — | Cleanup effects. Runs after `effects` completes — success, failure, or a best-effort run on Ctrl-C/SIGTERM/cancellation — always sequentially, regardless of this dynamic's own `flow`; a failing `finally` effect stops the ones listed after it in the same `finally:`, the same way a failing body effect stops the rest of `effects`. Sees state exactly as the body left it (e.g. a started server's own output) — a `finally` effect writes into this dynamic's own node the same way a body effect does (there is no separate `finally` namespace), so it cannot share a name with one of `effects`' own. The original failure (if any) still propagates after `finally` runs — a `finally` failure never hides it, it is added as `meta.finally_error`. On an otherwise-successful run, a `finally` failure fails this dynamic too, unless that `finally` effect has its own `on_error: continue`/`skip`. The first Ctrl-C/SIGTERM/SIGHUP to arrive while a `finally` effect is itself running does not cut it short — see [Resuming a Run](#resuming-a-run-cof-run---resume) below. Also legal at the document root; nowhere else. |
 
 **Flow semantics:**
 - `chain` — sequential: each effect executes after the previous, and sees all prior outputs in state
@@ -2946,7 +2946,10 @@ the terminal this way also means a step that needs one (an `ssh`/`sudo`
 credential prompt, gpg's pinentry-curses) cannot use it. A step's
 own `finally:` still runs in full (and reruns on `--resume`, like any
 other `finally:`) even though the run it is cleaning up from was already
-cancelled; a running parallel step is never merged into its parent —
+cancelled; the first signal to land while a `finally:` step is itself
+running does not kill it either — that step finishes, every `finally:`
+effect after it still runs, and only then does the run stop as
+interrupted. A running parallel step is never merged into its parent —
 exactly as if it had never run — so neither a killed branch nor one that
 never started leaves any trace behind for `--resume` to see, consistent
 with every other way a tree-flow branch disappears on cancellation. A

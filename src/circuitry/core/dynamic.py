@@ -16,6 +16,7 @@ from ..adapters import Adapter
 from ..output import console as _console
 from ..output import live_region as _live_region
 from .cancellation import (
+    RunCancelledBySignal,
     as_completed_promptly,
     deferred_signal_region,
     get_token,
@@ -80,7 +81,15 @@ def _error_text(exc: BaseException) -> str:
     top-level ``RunResult.error`` already uses for the identical case, so a
     container's `meta.error` and the run's own top-level error read the
     same way for the same interrupt.
+
+    A ``RunCancelledBySignal`` a worker thread's own poll raised carries a
+    message of its own ("run cancelled", "run cancelled during backoff"),
+    which would otherwise be read back verbatim. Every container uses the
+    signal-name wording instead, whichever thread noticed the cancellation,
+    the same as the root and as electricity (#796).
     """
+    if isinstance(exc, RunCancelledBySignal):
+        exc = RunCancelledBySignal()
     text = str(exc)
     if text:
         return text
@@ -641,6 +650,14 @@ class DynamicRuntime:
 
         finally_exc: BaseException | None = None
         if self.defn.finally_effects:
+            # Read before `finally:` starts (#796): a real signal handler
+            # still runs (and raises, or kills a tracked process) on the
+            # main thread no matter what `get_token().cleanup()`
+            # suppresses below, so a signal landing *during* an otherwise-
+            # successful `finally:` leaves no exception for the `except`
+            # below to catch -- it must be recognised from the token
+            # itself afterwards instead.
+            was_set_before_finally = get_token().is_set()
             try:
                 # Suppress this run's own cancellation check for the
                 # duration of `finally:` (#356) — a `finally:`
@@ -664,6 +681,34 @@ class DynamicRuntime:
                     )
             except BaseException as fe:
                 finally_exc = fe
+            else:
+                # A signal arriving while this `finally:` ran (#796): the
+                # running cleanup step finished instead of being killed
+                # (`CancellationToken.track`), so nothing inside this
+                # `finally:` ever raised -- but the run still ends
+                # interrupted once cleanup is done, with this signal's
+                # exit code. Never true when the token was *already* set
+                # before `finally:` started (the body's own interruption,
+                # if any, is already `body_exc`).
+                # Never true either while an outer `finally:` is still the
+                # one running this one as one of its own cleanup steps
+                # (`in_cleanup()`): raising here would abandon that outer
+                # `finally:`'s own remaining steps the moment this nested
+                # one returns (#796). The outermost `cleanup()` scope's own
+                # exit raises the parked signal once every nested
+                # `finally:` is actually done.
+                if (
+                    not was_set_before_finally
+                    and get_token().is_set()
+                    and not get_token().in_cleanup()
+                ):
+                    # No message, deliberately: `_error_text` stringifies
+                    # this to `str(exc)` first, and a non-empty message
+                    # here would read back as this dynamic's own
+                    # `meta.error` verbatim instead of the standard
+                    # "Interrupted (SIGTERM)"/... wording every other
+                    # interrupt uses.
+                    finally_exc = RunCancelledBySignal()
 
         if body_exc is not None:
             dyn["value"] = False

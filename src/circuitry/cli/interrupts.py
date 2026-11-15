@@ -144,19 +144,8 @@ class _SignalCount:
 def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
     def _handler(signum: int, frame: FrameType | None) -> None:
         del frame
-        # Counted before touching the token at all: a second signal's
-        # own `request()` call -- which calls `self._event.set()`,
-        # itself a `Condition`-backed call the same way any
-        # `concurrent.futures` lock #555 audited is -- has the identical
-        # exposure if the *first* signal's own handler raised while the
-        # main thread was mid-release of that lock elsewhere
-        # (`sleep_or_raise`'s `Event.wait`, this same `set()` call, ...):
-        # a second signal that then blocks on it would never reach its
-        # own `os._exit`/SIGHUP no-op below. Deciding first-vs-second,
-        # and exiting, before ever calling `request()` again removes
-        # that risk outright for the second signal -- the first one
-        # already requested cancellation, so there is nothing further to
-        # request.
+        # Counted before touching the token at all: this decides
+        # first-vs-second before either branch below does anything else.
         first = signal_count.note()
         if not first:
             if signum == getattr(signal, "SIGHUP", None):
@@ -166,9 +155,16 @@ def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
                 # closed terminal's own double-hangup can't race the first
                 # one's cleanup.
                 return
-            # A second SIGINT/SIGTERM while cleanup from the first is still
-            # running ends the run at once, same exit code, no traceback
-            # (#356) — the first signal's own cleanup gets no further say.
+            # A second SIGINT/SIGTERM kills every tracked process at once
+            # (#796: `kill_cleanup_processes_too` also takes down one a
+            # `finally:` step is still running -- the first signal's own
+            # best-effort cleanup gets no further say) and ends the run
+            # the same way, same exit code, no traceback (#356).
+            # `kill_cleanup_processes_too`, never `request()` again here:
+            # that call's own docstring is why -- it touches `self._event`,
+            # a `Condition`-backed lock a first signal's own handler
+            # raising mid-release of could leave stuck (#404/#555).
+            get_token().kill_cleanup_processes_too()
             os._exit(_EXIT_CODES.get(signum, 128 + signum))
         # Idempotent, and still the only thing that sets the token's flag
         # and kills tracked processes on a platform with no `_SignalWatcher`
@@ -178,19 +174,24 @@ def _make_handler(exc: type[BaseException], signal_count: _SignalCount):
         # now ordinarily beats it to the same `request()`. Only reached
         # for a genuinely first signal (checked above) -- a second one
         # never calls this at all any more.
-        get_token().request(signum=signum)
-        if is_deferring_first_signal():
+        token = get_token()
+        token.request(signum=signum)
+        if is_deferring_first_signal() or token.in_cleanup():
             # The main thread is inside a `core.cancellation.
             # deferred_signal_region` -- ordinarily touching a lock a
-            # worker thread also takes (#555). Raising `exc` here, into
-            # whatever bytecode that is, risks leaking that lock forever
-            # if it lands between the region's own `__exit__` being
-            # entered and the line inside it that actually releases the
-            # lock -- a real, confirmed deadlock, not a theoretical one.
-            # `request()` above already set the token's flag and killed
-            # every tracked process regardless; only *raising this
-            # exception* -- unwinding the call stack -- waits for the
-            # region to exit and do it instead.
+            # worker thread also takes (#555) -- or inside a `finally:`
+            # block's own `CancellationToken.cleanup()` scope (#796):
+            # raising `exc` here, into whatever bytecode that is, either
+            # risks leaking a lock forever (the region case -- a real,
+            # confirmed deadlock, not a theoretical one) or cuts the
+            # `finally:` short mid-step, exactly what cleanup's own "best
+            # effort, in full" promise rules out. `request()` above
+            # already set the token's flag, and killed every *other*
+            # tracked process regardless -- only a process the current
+            # `finally:` step itself started is spared that (`request`'s
+            # own `in_cleanup` check); only *raising this exception* --
+            # unwinding the call stack -- waits for the region, or the
+            # outermost `cleanup()` scope, to exit and do it instead.
             defer_first_signal_exception(exc())
             return
         raise exc

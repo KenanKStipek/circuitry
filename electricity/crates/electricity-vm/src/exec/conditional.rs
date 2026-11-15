@@ -10,8 +10,8 @@
 
 use super::dynamic::now_iso;
 use super::{
-    BoxExecFuture, CtxChain, CtxSource, execute_op, key, normalize_labels, store_err,
-    wrap_effect_error,
+    BoxExecFuture, CtxChain, CtxSource, execute_op, interrupted_text, key, normalize_labels,
+    store_err, wrap_effect_error,
 };
 use crate::{
     CancellationToken, Frame, NodeRef, RunContext, RunObserver, Slot, Store, VmError,
@@ -489,19 +489,41 @@ async fn decide_and_run<'a>(
     }
 
     if let Some(err) = failure {
-        // Python's own outer `except Exception` (never `BaseException`)
-        // around the whole branch loop: a cancellation propagates raw,
-        // with no `value`/`meta.error` write at all. `VmError::Refused`
-        // (M1 lane I, new: no Python equivalent) is fatal the same way
-        // -- never absorbed, never retried -- but is *not* Cancelled:
-        // ruling R1 on PR #462 treats a refusal as a
-        // failure for recording purposes, same as an ordinary one
-        // (`value`/`meta.error`/`completed_at` all written, the `end`
-        // event's own error text read off `meta.error` by the caller's
-        // `node_error` just as for any other failure), and fatal only
-        // for control purposes (`on_error`/retries never catch it, and
-        // it still propagates raw here).
+        // `core/conditional.py::ConditionalRuntime._decide_and_run`'s own
+        // `except BaseException` (#796): both `meta.error` -- the
+        // interrupt's own text, the same every other cancelled container
+        // uses -- and `meta.completed_at` are written, the same pair an
+        // interrupted `dynamic`/`use`/named loop already records, so the
+        // caller's `node_error`/`completed_at_is_truthy` report this
+        // `if`'s own `end` event `ok: false` instead of `true`.
+        // `cof run --resume` only skips a finished effect once
+        // `completed_at` is truthy *and* there is no error, so the
+        // truthy `error` alone already keeps this branch resumable
+        // regardless of `completed_at`. `VmError::Refused` (M1 lane I,
+        // new: no Python equivalent) is fatal the same way -- never
+        // absorbed, never retried -- but is *not* Cancelled: ruling R1
+        // on PR #462 treats a refusal as a failure for recording
+        // purposes, same as an ordinary one (`value`/`meta.error`/
+        // `completed_at` all written, the `end` event's own error text
+        // read off `meta.error` by the caller's `node_error` just as for
+        // any other failure), and fatal only for control purposes
+        // (`on_error`/retries never catch it, and it still propagates
+        // raw here).
         if matches!(err, VmError::Cancelled) {
+            if let Some((node, meta)) = named {
+                // `core/conditional.py::ConditionalRuntime._decide_and_run`'s
+                // own `except BaseException` writes `node["value"]` the
+                // same shape a branch failure's own `except Exception`
+                // already does -- never left `None` the way the earlier
+                // revision of this fix did.
+                store.set_leaf(
+                    node,
+                    key("value"),
+                    branch_value(result, branch_label, executed),
+                );
+                store.set_leaf(meta, key("error"), Value::Str(interrupted_text(token)));
+                store.set_leaf(meta, key("completed_at"), Value::Str(now_iso()));
+            }
             return Err(err);
         }
         if let Some((node, meta)) = named {
