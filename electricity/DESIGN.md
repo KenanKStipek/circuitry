@@ -1818,9 +1818,9 @@ regardless of which underlying crate is used:
   **Depth** counts one level per parenthesis, call, list/map/struct literal, member-access/
   index/method-call link, binary arithmetic/relational/equality/`in` link, logical `&&`/`||`
   link, prefix `!`/`-` occurrence, ternary and macro — every other grammar production is a pure
-  wrapper and adds nothing. A run of more than 32 `||`, `&&` or `+` (or any other binary operator)
-  is refused the same as any other shape: write `x in [...]` to test many alternatives instead of
-  a long `||` chain. `electricity-cel::nesting::ast_nesting_depth` walks `cel`'s own parsed `Expr`
+  wrapper and adds nothing. Each link of a run of `||`, `&&` or `+` (or any other binary operator)
+  counts a level on top of its operands, so a run of more than about 30 terms reaches the limit:
+  write `x in [...]` to test many alternatives instead of a long `||` chain. `electricity-cel::nesting::ast_nesting_depth` walks `cel`'s own parsed `Expr`
   tree, which already matches cof's own left-linear structure for every construct it represents
   that way — a plain recursive `max(children) + 1` reproduces cof's own count with no further
   help. Three constructs don't, and leave no trace of their own true depth in that tree at all: a

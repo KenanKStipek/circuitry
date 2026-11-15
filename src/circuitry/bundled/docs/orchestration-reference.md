@@ -2479,9 +2479,9 @@ from a template, or the `cel` tool's own expression from state) gets the
 same check the first time it compiles, which is when that effect runs,
 not when the parent document is checked.
 
-A run of more than 32 `&&`, `||`, `+` or any other binary operator is
-refused the same way as a deeply bracketed expression — each link in the
-chain counts as one level, not just a parenthesis or a call. Write
+Each link of a run of `&&`, `||`, `+` or any other binary operator counts
+as one level on top of its operands' own depth, the same as a parenthesis
+or a call, so a run of more than about 30 terms reaches the limit. Write
 `x in [a, b, c, ...]` to test many alternatives instead of a long `||`
 chain. A long, flat list or map literal is unaffected: its own elements
 don't nest, however many of them there are.
