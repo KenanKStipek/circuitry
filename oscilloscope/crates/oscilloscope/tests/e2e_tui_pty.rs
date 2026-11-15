@@ -21,11 +21,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use support::{
-    ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
-    screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
-    wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts,
-    wait_for_step_start, wait_with_timeout, write_doc,
+    AutoKill, ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome,
+    assert_no_leftover_process, drain_continuously, e2e_electricity_enabled, e2e_enabled,
+    engine_pid_for_doc, open_pty, osi_command, screen_grid, screen_grid_fg, scripted_config,
+    send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen, wait_for_screen_text,
+    wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -537,9 +538,9 @@ fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
 /// A run this `osi` launched has a registry entry while it's live --
 /// named by its own document and run directory in bare `osi`'s own
 /// non-TTY list too -- and that entry is gone once the run ends.
-/// Every wait here (two 20s pattern waits, a 10s poll, a 10s wait for
-/// `Ended`, a 30s exit wait) is its own named step with its own cap;
-/// none of them is a bare sleep, and none shares a cap with any
+/// Every wait here (two 20s pattern waits, two 10s polls, a 10s wait
+/// for `Ended`, a 30s exit wait) is its own named step with its own
+/// cap; none of them is a bare sleep, and none shares a cap with any
 /// other.
 #[test]
 fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits() {
@@ -571,11 +572,11 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osi_on_pty(
+    let mut child = AutoKill::new(spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
-    );
+    ));
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
     wait_for_step_start(
@@ -616,36 +617,55 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
         entry["launcher"].as_str().unwrap(),
         format!("osi {}", env!("CARGO_PKG_VERSION"))
     );
+    // So this test's own cleanup can kill the engine directly, by its
+    // own pid, if `AutoKill`'s drop ever has to fall back to killing
+    // the launcher outright.
+    child.set_engine_pid(engine_pid_for_doc(&runs_dir, out_dir.path()));
 
     // Bare `osi`, without a TTY, lists this same run while it's
     // still live -- the content check the registry entry's own
     // assertions above can't give: a liveness or process-scan defect
     // that makes a real `cof` run look dead (or unmatched) would
     // prune the entry above right out from under this list, or never
-    // list it via the scan either.
-    let discover = osi_command(&home)
-        .current_dir(work.path())
-        .output()
-        .expect("spawn bare osi");
-    assert!(discover.status.success());
-    let discover_stdout = String::from_utf8_lossy(&discover.stdout);
-    // Matched by this run's own, already-canonicalized orchestration
-    // path (the registry entry's own `orchestration` field), not a
-    // bare "do.yml" -- every pty test in this binary writes a
-    // document of that same name, and `OSI_PROCESS_SCAN` is left on
-    // for this one test (the one that exercises the scan itself), so
-    // a "do.yml" match could just as well land on a different test's
-    // own concurrently-running run.
+    // list it via the scan either. Polled rather than asked once: the
+    // registry entry just confirmed above is read again here through
+    // a *second* liveness check (this one backed by a fresh `ps -p`
+    // of its own, inside the discovery this spawns), and a `ps` under
+    // load can transiently fail to find a pid it would find a moment
+    // later -- the same reason none of this file's other waits is a
+    // single untried assertion.
+    let discover_deadline = Instant::now() + Duration::from_secs(10);
     let own_orchestration = entry["orchestration"].as_str().unwrap();
-    let discover_line = discover_stdout
-        .lines()
-        .find(|l| l.contains(own_orchestration))
-        .unwrap_or_else(|| {
+    let (discover_stdout, discover_line) = loop {
+        let discover = osi_command(&home)
+            .current_dir(work.path())
+            .output()
+            .expect("spawn bare osi");
+        assert!(discover.status.success());
+        let stdout = String::from_utf8_lossy(&discover.stdout).into_owned();
+        // Matched by this run's own, already-canonicalized
+        // orchestration path (the registry entry's own
+        // `orchestration` field), not a bare "do.yml" -- every pty
+        // test in this binary writes a document of that same name,
+        // and `OSI_PROCESS_SCAN` is left on for this one test (the
+        // one that exercises the scan itself), so a "do.yml" match
+        // could just as well land on a different test's own
+        // concurrently-running run.
+        let found = stdout
+            .lines()
+            .find(|l| l.contains(own_orchestration))
+            .map(str::to_string);
+        if let Some(line) = found {
+            break (stdout, line);
+        }
+        if Instant::now() >= discover_deadline {
             panic!(
-                "expected a line naming this run's own document ({own_orchestration}), got:\n{discover_stdout}"
-            )
-        });
-    assert!(discover_line.contains("cof"));
+                "expected a line naming this run's own document ({own_orchestration}), got:\n{stdout}"
+            );
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    };
+    assert!(discover_line.contains("cof"), "stdout:\n{discover_stdout}");
     // The registry always wins over the process scan for a run found
     // by both (discovery.rs's own doc comment: deduplicated by pid,
     // registry entries added first) -- so the run directory bare
@@ -677,7 +697,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     // plan to assert on it.
     wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(10));
     send_bytes(&mut master, b"q");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let status = wait_with_timeout(child.into_inner(), Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));
