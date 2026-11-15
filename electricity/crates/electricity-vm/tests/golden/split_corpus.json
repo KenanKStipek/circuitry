@@ -631,6 +631,138 @@
     "room": 4
   },
   {
+    "error": "item 0",
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "str",
+          "v": "\"\"\"\"\"\""
+        },
+        {
+          "t": "str",
+          "v": "\"\"\"\"\"\""
+        },
+        {
+          "t": "str",
+          "v": "\"\"\"\"\"\""
+        },
+        {
+          "t": "str",
+          "v": "\"\"\"\"\"\""
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_quote_heavy_strings_json_vs_repr",
+    "parts": null,
+    "room": 3
+  },
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "str",
+          "v": "a\u0001b"
+        },
+        {
+          "t": "str",
+          "v": "c\u0002d"
+        },
+        {
+          "t": "str",
+          "v": "e\u001fg"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_control_chars_json_vs_repr",
+    "parts": [
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "a\u0001b"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "c\u0002d"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "str",
+            "v": "e\u001fg"
+          }
+        ]
+      }
+    ],
+    "room": 8
+  },
+  {
+    "error": null,
+    "items": {
+      "t": "list",
+      "v": [
+        {
+          "t": "date",
+          "v": "2020-01-02"
+        },
+        {
+          "t": "date",
+          "v": "2021-03-04"
+        },
+        {
+          "t": "date",
+          "v": "2022-05-06"
+        }
+      ]
+    },
+    "kind": "list",
+    "name": "list_date_values_json_vs_repr",
+    "parts": [
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "date",
+            "v": "2020-01-02"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "date",
+            "v": "2021-03-04"
+          }
+        ]
+      },
+      {
+        "t": "list",
+        "v": [
+          {
+            "t": "date",
+            "v": "2022-05-06"
+          }
+        ]
+      }
+    ],
+    "room": 6
+  },
+  {
     "error": null,
     "kind": "mapping",
     "mapping": {
@@ -1146,6 +1278,94 @@
       }
     ],
     "room": 6
+  },
+  {
+    "error": null,
+    "kind": "mapping",
+    "mapping": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "int",
+            "v": "1"
+          },
+          {
+            "t": "str",
+            "v": "a"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "2"
+          },
+          {
+            "t": "str",
+            "v": "bb"
+          }
+        ],
+        [
+          {
+            "t": "int",
+            "v": "3"
+          },
+          {
+            "t": "str",
+            "v": "ccc"
+          }
+        ]
+      ]
+    },
+    "name": "mapping_int_keys_json_vs_repr",
+    "parts": [
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "int",
+              "v": "1"
+            },
+            {
+              "t": "str",
+              "v": "a"
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "int",
+              "v": "2"
+            },
+            {
+              "t": "str",
+              "v": "bb"
+            }
+          ]
+        ]
+      },
+      {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "int",
+              "v": "3"
+            },
+            {
+              "t": "str",
+              "v": "ccc"
+            }
+          ]
+        ]
+      }
+    ],
+    "room": 7
   },
   {
     "error": null,

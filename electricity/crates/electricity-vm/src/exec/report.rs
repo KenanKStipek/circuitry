@@ -21,7 +21,6 @@ use crate::exec::live_scope::LiveRoot;
 use crate::params::ParamsCtx;
 use crate::{Frame, NodeRef, RunContext, RunObserver, Store};
 use electricity_bytecode::{Op, ParamNode, ReportOp};
-use electricity_template::PlainCtx;
 use electricity_value::{Dict, Value};
 
 fn now_iso() -> Value {
@@ -71,7 +70,6 @@ fn resolve_data<R: ParamsCtx>(
                 declared_prompts,
                 effect_names,
                 &label,
-                &PlainCtx,
                 false,
             )
             .map(Value::Str)
@@ -146,7 +144,6 @@ pub(crate) async fn execute_report(
             run_ctx.declared_prompts,
             run_ctx.effect_names,
             &message_label,
-            &PlainCtx,
             false,
         )?;
         let data = match &report_op.data {

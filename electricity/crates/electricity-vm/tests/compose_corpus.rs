@@ -18,7 +18,7 @@
 //! *live* root that sees the node the same call creates, which a frozen
 //! [`Value`] snapshot can never reproduce.
 
-use electricity_template::{JsonAwareCtx, PlainCtx, ScopeRoot};
+use electricity_template::ScopeRoot;
 use electricity_value::Value;
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -80,7 +80,6 @@ fn escape_cases_match_pythons_render_template() {
         let result = electricity_template::render_template_with_root_and_escape(
             &case.template,
             &root,
-            &PlainCtx,
             &case.label,
             case.escape,
         );
@@ -115,22 +114,8 @@ pub(crate) struct ComposeCase {
     pub(crate) known_effect_names: Vec<String>,
     pub(crate) label: String,
     pub(crate) escape: bool,
-    pub(crate) json_aware: bool,
     pub(crate) ok: Option<String>,
     pub(crate) err: Option<String>,
-}
-
-fn json_aware_splice(value: &Value) -> Result<String, String> {
-    electricity_json::dumps_default_str(
-        value,
-        electricity_json::WriteMode {
-            indent: None,
-            sort_keys: false,
-            ensure_ascii: false,
-            separators: electricity_json::Separators::Default,
-        },
-    )
-    .map_err(|err| err.to_string())
 }
 
 fn run_compose_case<R: ScopeRoot>(
@@ -138,29 +123,14 @@ fn run_compose_case<R: ScopeRoot>(
     root: &R,
     known: &BTreeSet<String>,
 ) -> Result<String, String> {
-    if case.json_aware {
-        let serializer: &dyn Fn(&Value) -> Result<String, String> = &json_aware_splice;
-        let json_ctx = JsonAwareCtx::new(serializer);
-        electricity_vm::compose::render_with_composition(
-            &case.template,
-            root,
-            &case.declared,
-            known,
-            &case.label,
-            &json_ctx,
-            case.escape,
-        )
-    } else {
-        electricity_vm::compose::render_with_composition(
-            &case.template,
-            root,
-            &case.declared,
-            known,
-            &case.label,
-            &PlainCtx,
-            case.escape,
-        )
-    }
+    electricity_vm::compose::render_with_composition(
+        &case.template,
+        root,
+        &case.declared,
+        known,
+        &case.label,
+        case.escape,
+    )
 }
 
 #[test]

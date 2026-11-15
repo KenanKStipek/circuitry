@@ -4,8 +4,10 @@
 //! string) and a *room* budget in estimated tokens, [`split_list`]/
 //! [`split_mapping`]/[`split_text`] produce whole-unit, in-order parts,
 //! each of which -- rendered the same way Mustache renders a bare
-//! `{{{x}}}`/`{{x}}` tag, i.e. `str(value)` for a non-string value, the
-//! value itself for a string -- estimates to no more than *room* tokens.
+//! `{{{x}}}`/`{{x}}` tag, i.e. `electricity_template::json_splice` (JSON
+//! text) for a list/dict, [`Value::py_str`] for any other non-string
+//! value, the value itself for a string -- estimates to no more than
+//! *room* tokens.
 //!
 //! [`estimate_tokens`] duplicates `core/complexity.py::_estimate_tokens`'s
 //! own ceiling-division-by-4, exactly like `core/split.py::estimate_tokens`
@@ -128,7 +130,10 @@ pub fn split_list(items: &[Value], room: i64) -> Result<Vec<Vec<Value>>, NoSplit
     if room < 1 {
         return Err(NoSplitPoint("item 0".to_string()));
     }
-    let render_slice = |start: usize, end: usize| Value::List(items[start..end].to_vec()).py_repr();
+    let render_slice = |start: usize, end: usize| {
+        electricity_template::json_splice(&Value::List(items[start..end].to_vec()))
+            .expect("a list of Values always serializes to JSON")
+    };
     let ranges = pack(items.len(), render_slice, |i| format!("item {i}"), room)?;
     Ok(ranges
         .into_iter()
@@ -156,7 +161,10 @@ pub fn split_mapping(mapping: &Dict, room: i64) -> Result<Vec<Dict>, NoSplitPoin
         }
         d
     };
-    let render_slice = |start: usize, end: usize| Value::Dict(slice_dict(start, end)).py_repr();
+    let render_slice = |start: usize, end: usize| {
+        electricity_template::json_splice(&Value::Dict(slice_dict(start, end)))
+            .expect("a dict of Values always serializes to JSON")
+    };
     let label_at = |i: usize| format!("key {}", keys[i].py_repr());
     let ranges = pack(keys.len(), render_slice, label_at, room)?;
     Ok(ranges

@@ -1,0 +1,22 @@
+name: template-list-dict-json-tool-params
+interface:
+  inputs:
+    items: {default: ["café", true, false, null, 2024-01-02]}
+    empty_list: {default: []}
+    obj: {default: {k: 1, nested: ["x", "y"]}}
+    empty_dict: {default: {}}
+    section_items: {default: ["x", "y"]}
+effects:
+  - type: tool
+    name: splice
+    provider: json
+    params:
+      mode: stringify
+      input: unused
+      escaped: "{{input.items}}"
+      raw: "{{{input.items}}}"
+      escaped_obj: "{{input.obj}}"
+      raw_obj: "{{{input.obj}}}"
+      escaped_empty_list: "{{input.empty_list}}"
+      escaped_empty_dict: "{{input.empty_dict}}"
+      section: "{{#input.section_items}}<{{.}}>{{/input.section_items}}"

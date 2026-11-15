@@ -434,7 +434,7 @@ mod differential_tests {
     use super::*;
     use crate::params::ParamsCtx;
     use chrono::NaiveDate;
-    use electricity_template::{PlainCtx, ScopeRoot, render_template, render_template_with_root};
+    use electricity_template::{ScopeRoot, render_template, render_template_with_root};
     use indexmap::IndexMap;
     use std::rc::Rc;
 
@@ -567,12 +567,11 @@ mod differential_tests {
     /// (`Err` text included).
     fn assert_same_render(chain: &CtxChain, store: &Store, template: &str, case: &str) {
         let old_ctx = live_ctx(chain, store);
-        let old =
-            render_template(template, &old_ctx, &PlainCtx, "template").map_err(|e| e.to_string());
+        let old = render_template(template, &old_ctx, "template").map_err(|e| e.to_string());
 
         let live_root = LiveRoot::new(chain, store);
-        let new = render_template_with_root(template, &live_root, &PlainCtx, "template")
-            .map_err(|e| e.to_string());
+        let new =
+            render_template_with_root(template, &live_root, "template").map_err(|e| e.to_string());
 
         assert_eq!(old, new, "{case}: template {template:?} diverged");
     }

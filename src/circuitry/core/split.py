@@ -4,9 +4,10 @@ Pure functions only — no template rendering, no state, no I/O. Given a
 container value (a list, a mapping, or a string) and a *room* budget in
 estimated tokens, :func:`split_list`/:func:`split_mapping`/:func:`split_text`
 produce whole-unit, in-order parts, each of which — rendered the same way
-Mustache renders a bare ``{{{x}}}``/``{{x}}`` tag, i.e. ``str(value)`` for a
-non-string value, the value itself for a string — estimates to no more than
-*room* tokens. :func:`circuitry.core.complexity._estimate_tokens`'s own
+Mustache renders a bare ``{{{x}}}``/``{{x}}`` tag, i.e.
+``json.dumps(value, ensure_ascii=False, default=str)`` for a non-string
+value, the value itself for a string — estimates to no more than *room*
+tokens. :func:`circuitry.core.complexity._estimate_tokens`'s own
 ceiling-division-by-4 is duplicated here as :func:`estimate_tokens` rather
 than imported, so this module has no dependency on ``core.complexity`` (or
 anything else) and stays trivially unit-testable; the two must be kept in
@@ -28,6 +29,7 @@ part to the room ceiling except the last.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any
@@ -119,7 +121,7 @@ def split_list(items: Sequence[Any], *, room: int) -> list[list[Any]]:
         raise NoSplitPoint("item 0")
 
     def render_slice(start: int, end: int) -> str:
-        return str(materialized[start:end])
+        return json.dumps(materialized[start:end], ensure_ascii=False, default=str)
 
     ranges = _pack(
         len(materialized),
@@ -140,7 +142,11 @@ def split_mapping(mapping: Mapping[str, Any], *, room: int) -> list[dict[str, An
         raise NoSplitPoint(f"key {keys[0]!r}")
 
     def render_slice(start: int, end: int) -> str:
-        return str({key: mapping[key] for key in keys[start:end]})
+        return json.dumps(
+            {key: mapping[key] for key in keys[start:end]},
+            ensure_ascii=False,
+            default=str,
+        )
 
     ranges = _pack(
         len(keys),

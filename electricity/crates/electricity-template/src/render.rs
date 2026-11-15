@@ -1,7 +1,5 @@
 //! The rendering half of the chevron port: `Value`-keyed context lookup
-//! (`_get_key`), truthiness, section/inverted-section iteration, and the
-//! two splice contexts (`core/templates.py` / `core/tool.py:195`'s
-//! `PlainCtx`/`JsonAwareCtx` split, DESIGN.md §3.3).
+//! (`_get_key`), truthiness, and section/inverted-section iteration.
 //!
 //! This module trades chevron's own single-pass generator-and-mutable-
 //! scope-stack algorithm (`chevron/renderer.py`) for an equivalent
@@ -13,72 +11,29 @@
 //! confirmed exceptions) by output, not by internal mechanism.
 
 use chrono::{Datelike, Timelike};
+use electricity_json::{Separators, WriteMode};
 use electricity_value::Value;
 
 use crate::tokenizer::Tag;
 
-/// How a `{{var}}`/`{{{var}}}` splice of a `List`/`Dict` value renders,
-/// and how a falsy one is treated. The default (`PlainCtx`) renders a
-/// list/dict via [`Value::py_repr`] (Python's `str()` on a list/dict is
-/// its `repr`) and collapses a falsy (empty) one to `""`, same as any
-/// other falsy scalar. `JsonAwareCtx` (used only for a tool's
-/// `params_json`, DESIGN.md §3.3's Quirk Q2) instead calls a
-/// caller-supplied serializer, and — because `core/tool.py`'s
-/// `_JsonAwareDict`/`_JsonAwareList` set
-/// `_CHEVRON_return_scope_when_falsy = True` — never collapses an empty
-/// list/dict to `""`: it always serializes, so an empty one still prints
-/// `"[]"`/`"{}"`.
-pub trait SpliceCtx {
-    /// Render a `List`/`Dict` value for a `{{var}}`/`{{{var}}}` splice.
-    /// The error string is surfaced verbatim as a render failure
-    /// (`"{label}: could not render: {0}"`); electricity-template does
-    /// not dictate its wording since the serializer is caller-supplied.
-    fn splice(&self, value: &Value) -> Result<String, String>;
-
-    /// Whether a falsy (empty) `List`/`Dict` still renders via
-    /// [`SpliceCtx::splice`] rather than collapsing to `""`.
-    fn keep_falsy_containers(&self) -> bool;
-}
-
-/// The default context: a list/dict splices as Python's `str()` would
-/// render it (`[1, 'a']`, `{'a': 1}`), and an empty one is just another
-/// falsy value.
-pub struct PlainCtx;
-
-impl SpliceCtx for PlainCtx {
-    fn splice(&self, value: &Value) -> Result<String, String> {
-        Ok(value.py_repr())
-    }
-
-    fn keep_falsy_containers(&self) -> bool {
-        false
-    }
-}
-
-/// The context used only for a tool's `params_json` field: a list/dict
-/// splices through a caller-supplied serializer (real `json.dumps` on
-/// the Python side) instead of `py_repr`, and never collapses an empty
-/// one to `""`. Deliberately does not depend on `electricity-json`
-/// (built in parallel, DESIGN.md §3.3): the tool-effect compiler supplies
-/// the serializer once both crates exist.
-pub struct JsonAwareCtx<'a> {
-    serializer: &'a dyn Fn(&Value) -> Result<String, String>,
-}
-
-impl<'a> JsonAwareCtx<'a> {
-    pub fn new(serializer: &'a dyn Fn(&Value) -> Result<String, String>) -> Self {
-        Self { serializer }
-    }
-}
-
-impl SpliceCtx for JsonAwareCtx<'_> {
-    fn splice(&self, value: &Value) -> Result<String, String> {
-        (self.serializer)(value)
-    }
-
-    fn keep_falsy_containers(&self) -> bool {
-        true
-    }
+/// How a `{{var}}`/`{{{var}}}` splice of a `List`/`Dict` value renders
+/// (`core/templates.py`'s own ``_json_aware_ctx``, applied inside
+/// ``render_template`` itself rather than only for a tool's
+/// `params_json`): the JSON text `json.dumps(value, ensure_ascii=False,
+/// default=str)` would produce — matching every Mustache render site,
+/// not `Value::py_repr`'s Python `str()` — and never collapsed to `""`
+/// when empty, so `{{x}}` against `[]`/`{}` still prints `"[]"`/`"{}"`.
+pub fn json_splice(value: &Value) -> Result<String, String> {
+    electricity_json::dumps_default_str(
+        value,
+        WriteMode {
+            indent: None,
+            sort_keys: false,
+            ensure_ascii: false,
+            separators: Separators::Default,
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// A render-tree node, built once per template from its (already
@@ -429,21 +384,17 @@ pub(crate) fn get_key<R: ScopeRoot>(key: &str, scope: &Scope<R>) -> Result<Value
 
 /// How a resolved value becomes the text spliced in for `{{var}}`/
 /// `{{{var}}}`/`{{&var}}` (not yet HTML-escaped): a literal zero/`False`
-/// prints itself; a `List`/`Dict` splices via `ctx` if truthy, or if
-/// falsy and `ctx` keeps falsy containers (`JsonAwareCtx`); every other
-/// truthy value prints via `py_str`; everything else collapses to `""`.
-fn stringify_for_variable(value: &Value, ctx: &dyn SpliceCtx) -> Result<String, String> {
+/// prints itself; a `List`/`Dict` always splices as JSON text, truthy or
+/// not (matching `core/templates.py::render_template`'s own
+/// `_json_aware_ctx` wrapping, applied to every render now, not only a
+/// tool's `params_json`); every other truthy value prints via `py_str`;
+/// everything else collapses to `""`.
+fn stringify_for_variable(value: &Value) -> Result<String, String> {
     if is_zero_or_false(value) {
         return Ok(value.py_str());
     }
     match value {
-        Value::List(_) | Value::Dict(_) => {
-            if truthy(value) || ctx.keep_falsy_containers() {
-                ctx.splice(value)
-            } else {
-                Ok(String::new())
-            }
-        }
+        Value::List(_) | Value::Dict(_) => json_splice(value),
         _ if truthy(value) => Ok(value.py_str()),
         _ => Ok(String::new()),
     }
@@ -484,7 +435,6 @@ fn html_escape(s: &str) -> String {
 fn render_variable_escaped<R: ScopeRoot>(
     key: &str,
     scope: &Scope<R>,
-    ctx: &dyn SpliceCtx,
     escape: bool,
 ) -> Result<String, String> {
     let mut value = get_key(key, scope)?;
@@ -494,7 +444,7 @@ fn render_variable_escaped<R: ScopeRoot>(
             .map(|parent| parent.nearest_whole())
             .ok_or_else(|| "list index out of range".to_string())?;
     }
-    let text = stringify_for_variable(&value, ctx)?;
+    let text = stringify_for_variable(&value)?;
     if escape {
         Ok(html_escape(&text))
     } else {
@@ -505,13 +455,9 @@ fn render_variable_escaped<R: ScopeRoot>(
 /// `{{{x}}}`/`{{&x}}`: the resolved value, unescaped, with no special
 /// case for `{{{.}}}`/`{{&.}}` resolving to `True` (see
 /// [`render_variable_escaped`]).
-fn render_variable_raw<R: ScopeRoot>(
-    key: &str,
-    scope: &Scope<R>,
-    ctx: &dyn SpliceCtx,
-) -> Result<String, String> {
+fn render_variable_raw<R: ScopeRoot>(key: &str, scope: &Scope<R>) -> Result<String, String> {
     let value = get_key(key, scope)?;
-    stringify_for_variable(&value, ctx)
+    stringify_for_variable(&value)
 }
 
 /// Render a tree against a scope stack (nearest scope first). A section
@@ -528,7 +474,6 @@ fn render_variable_raw<R: ScopeRoot>(
 pub(crate) fn render_nodes<R: ScopeRoot>(
     nodes: &[Node],
     scope: &Scope<R>,
-    ctx: &dyn SpliceCtx,
     escape: bool,
 ) -> Result<String, String> {
     let mut out = String::new();
@@ -536,9 +481,9 @@ pub(crate) fn render_nodes<R: ScopeRoot>(
         match node {
             Node::Literal(s) => out.push_str(s),
             Node::Variable(key) => {
-                out.push_str(&render_variable_escaped(key, scope, ctx, escape)?);
+                out.push_str(&render_variable_escaped(key, scope, escape)?);
             }
-            Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scope, ctx)?),
+            Node::NoEscape(key) => out.push_str(&render_variable_raw(key, scope)?),
             Node::Section(key, body) => {
                 let mut value = get_key(key, scope)?;
                 // `Value::List(items) = value` would move `items` out of
@@ -550,13 +495,11 @@ pub(crate) fn render_nodes<R: ScopeRoot>(
                 if let Value::List(items) = &mut value {
                     for element in std::mem::take(items) {
                         if truthy(&element) {
-                            out.push_str(&render_with_pushed_scope(
-                                body, element, scope, ctx, escape,
-                            )?);
+                            out.push_str(&render_with_pushed_scope(body, element, scope, escape)?);
                         }
                     }
                 } else if truthy(&value) {
-                    out.push_str(&render_with_pushed_scope(body, value, scope, ctx, escape)?);
+                    out.push_str(&render_with_pushed_scope(body, value, scope, escape)?);
                 }
             }
             Node::Inverted(key, body) => {
@@ -566,7 +509,6 @@ pub(crate) fn render_nodes<R: ScopeRoot>(
                         body,
                         Value::Bool(true),
                         scope,
-                        ctx,
                         escape,
                     )?);
                 }
@@ -580,9 +522,8 @@ fn render_with_pushed_scope<'a, R: ScopeRoot>(
     body: &[Node],
     new_scope: Value,
     scope: &'a Scope<'a, R>,
-    ctx: &dyn SpliceCtx,
     escape: bool,
 ) -> Result<String, String> {
     let pushed = Scope::Pushed(new_scope, scope);
-    render_nodes(body, &pushed, ctx, escape)
+    render_nodes(body, &pushed, escape)
 }

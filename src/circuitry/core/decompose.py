@@ -1675,21 +1675,25 @@ def _prepare_split(
     value = _dotted_get(ctx, reference.split("."))
     if isinstance(value, str):
         kind = "string"
-        empty: Any = ""
     elif isinstance(value, Mapping):
         kind = "mapping"
-        empty = {}
     elif isinstance(value, list):
         kind = "list"
-        empty = []
     else:
         raise _NoSplitPointError(
             f"the split reference {reference!r} is not a list, mapping, or string"
         )
 
-    from .templates import render_template
+    from .templates import render_template, splice_text
 
-    fixed_ctx = _set_dotted_copy(ctx, reference.split("."), empty)
+    # The split reference's own tag(s) count toward each part's own
+    # rendered size (added back below, once per occurrence); the fixed
+    # text is everything else, so the reference renders as "" here
+    # regardless of kind — falsy and zero tokens either way, never the
+    # kind's own empty container ("[]"/"{}" would double-count the
+    # reference's own brackets, which every part's own size already
+    # carries).
+    fixed_ctx = _set_dotted_copy(ctx, reference.split("."), "")
     rendered_fixed: list[str] = [
         render_template(text, {**fixed_ctx, **extra_state}, label=label, escape=False)
         for (label, _raw, _role), text in zip(sources, expanded_texts, strict=True)
@@ -1733,10 +1737,7 @@ def _prepare_split(
     except NoSplitPoint as exc:
         raise _NoSplitPointError(str(exc)) from exc
 
-    sizes = [
-        _estimate_tokens(str(part)) if not isinstance(part, str) else _estimate_tokens(part)
-        for part in parts
-    ]
+    sizes = [_estimate_tokens(splice_text(part)) for part in parts]
     return _SplitPrep(
         ref_path=reference,
         kind=kind,

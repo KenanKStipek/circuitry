@@ -73,7 +73,7 @@ def test_each_iteration_sees_only_its_own_item_with_shared_nested_object() -> No
     )
     assert seen_ids == list(range(20))
     for i in range(20):
-        assert node[f"iter_{i}"]["step"]["value"] == f"id={i} tags=['draft', 'needs-review']"
+        assert node[f"iter_{i}"]["step"]["value"] == f'id={i} tags=["draft", "needs-review"]'
 
     # The shared object itself is untouched — nothing wrote back into it.
     assert shared_tags == ["draft", "needs-review"]

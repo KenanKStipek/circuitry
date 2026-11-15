@@ -99,7 +99,6 @@ pub async fn evaluate_model_condition(
     let rendered = match electricity_template::render_template_with_root(
         &template.source,
         ctx,
-        &electricity_template::PlainCtx,
         kind.label(),
     ) {
         Ok(text) => text,
@@ -212,7 +211,6 @@ pub async fn evaluate_model_expect(
     let rendered = electricity_template::render_template_with_root(
         &template.source,
         &render_ctx,
-        &electricity_template::PlainCtx,
         "expect.template",
     )
     .map_err(|err| ExpectCallError::Raised {

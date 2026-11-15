@@ -682,7 +682,6 @@ async fn load_child<R: ParamsCtx>(
                 run_ctx.declared_prompts,
                 run_ctx.effect_names,
                 "inline",
-                &electricity_template::PlainCtx,
                 matches!(text.escape, electricity_bytecode::Escape::Html),
             )?;
             let cleaned = clean_yaml_fences(&rendered);
@@ -917,7 +916,6 @@ async fn resolved_inputs_now<R: ParamsCtx>(
                         run_ctx.declared_prompts,
                         run_ctx.effect_names,
                         &format!("inputs.{}", key.py_str()),
-                        &electricity_template::PlainCtx,
                         matches!(text.escape, electricity_bytecode::Escape::Html),
                     )
                     .ok()?,
@@ -1235,7 +1233,6 @@ async fn attempt_once<R: ParamsCtx>(
                         run_ctx.declared_prompts,
                         run_ctx.effect_names,
                         &label_for_render,
-                        &electricity_template::PlainCtx,
                         matches!(text.escape, electricity_bytecode::Escape::Html),
                     )
                     .map(Value::Str)

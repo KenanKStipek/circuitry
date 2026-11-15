@@ -1,0 +1,23 @@
+adapter: scripted
+model: test
+interface:
+  inputs:
+    items: {default: ["café", true, false, null, 2024-01-02]}
+    obj: {default: {k: 1, nested: ["x", "y"]}}
+    empty_dict: {default: {}}
+effects:
+  - type: prompt
+    name: as_escaped
+    template: "escaped={{input.items}}"
+  - type: prompt
+    name: as_raw
+    template: "raw={{{input.items}}}"
+  - type: prompt
+    name: obj_escaped
+    template: "escaped={{input.obj}}"
+  - type: prompt
+    name: obj_raw
+    template: "raw={{{input.obj}}}"
+  - type: prompt
+    name: empty
+    template: "empty={{input.empty_dict}}"

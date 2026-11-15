@@ -9,7 +9,7 @@
 //! needs to trust the committed file.
 
 use chrono::{FixedOffset, NaiveDate, NaiveDateTime};
-use electricity_template::{JsonAwareCtx, PlainCtx, Value, render_template, template_syntax_error};
+use electricity_template::{Value, render_template, template_syntax_error};
 use electricity_value::Dict;
 use serde::Deserialize;
 
@@ -98,7 +98,6 @@ struct RenderCase {
     template: String,
     ctx: TaggedValue,
     label: String,
-    json_aware: bool,
     render_ok: Option<String>,
     render_err: Option<String>,
 }
@@ -107,57 +106,6 @@ struct RenderCase {
 struct Corpus {
     syntax_cases: Vec<SyntaxCase>,
     render_cases: Vec<RenderCase>,
-}
-
-/// A small JSON-ish serializer covering exactly the value shapes the
-/// corpus's `json_aware` cases use (`None`/`Bool`/`Int`/`Str`/`List`/
-/// `Dict`) -- deliberately not `electricity-json` (built in parallel,
-/// DESIGN.md §3.3): `JsonAwareCtx` takes its serializer from the caller,
-/// so this crate is tested against one of its own rather than depending
-/// on that crate existing yet.
-fn test_json_serialize(value: &Value) -> Result<String, String> {
-    match value {
-        Value::None => Ok("null".to_string()),
-        Value::Bool(b) => Ok(if *b { "true" } else { "false" }.to_string()),
-        Value::Int(i) => Ok(i.to_bigint().to_string()),
-        Value::Str(s) => Ok(json_quote(s)),
-        Value::List(items) => {
-            let parts: Result<Vec<String>, String> =
-                items.iter().map(test_json_serialize).collect();
-            Ok(format!("[{}]", parts?.join(", ")))
-        }
-        Value::Dict(d) => {
-            let parts: Result<Vec<String>, String> = d
-                .iter()
-                .map(|(k, v)| {
-                    let key = match k {
-                        Value::Str(s) => s.clone(),
-                        other => other.py_str(),
-                    };
-                    Ok(format!("{}: {}", json_quote(&key), test_json_serialize(v)?))
-                })
-                .collect();
-            Ok(format!("{{{}}}", parts?.join(", ")))
-        }
-        other => Err(format!(
-            "test_json_serialize: unsupported value {:?}",
-            other
-        )),
-    }
-}
-
-fn json_quote(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    out.push('"');
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            _ => out.push(c),
-        }
-    }
-    out.push('"');
-    out
 }
 
 #[test]
@@ -188,12 +136,7 @@ fn golden_corpus_render() {
     let mut failures = Vec::new();
     for (i, case) in corpus.render_cases.into_iter().enumerate() {
         let root = Value::from(case.ctx);
-        let result = if case.json_aware {
-            let ctx = JsonAwareCtx::new(&test_json_serialize);
-            render_template(&case.template, &root, &ctx, &case.label)
-        } else {
-            render_template(&case.template, &root, &PlainCtx, &case.label)
-        };
+        let result = render_template(&case.template, &root, &case.label);
         match (result, case.render_ok, case.render_err) {
             (Ok(text), Some(expected), None) if text == expected => {}
             (Err(err), None, Some(expected)) if err.to_string() == expected => {}

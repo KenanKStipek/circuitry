@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778 step 3",
+  "description": "A report effect's message: a whole list spliced through {{...}} and {{{...}}} both render the same JSON text (a report message never HTML-escapes either way, like a prompt template), nested non-ASCII, booleans, null and a date included; an empty list still renders \"[]\", never collapsed to \"\".",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

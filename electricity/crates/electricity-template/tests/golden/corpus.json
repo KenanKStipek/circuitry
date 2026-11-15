@@ -16,7 +16,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "&lt;b&gt;&amp;'&quot;",
@@ -38,7 +37,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "<b>&'\"",
@@ -60,7 +58,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "<b>&'\"",
@@ -82,7 +79,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "True",
@@ -104,7 +100,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "False",
@@ -125,7 +120,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -147,7 +141,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "42",
@@ -169,7 +162,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "0",
@@ -191,7 +183,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "1.0",
@@ -213,7 +204,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "0.0",
@@ -235,7 +225,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "-0.0",
@@ -257,7 +246,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "1e-05",
@@ -292,7 +280,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "[1, 2, 3]",
@@ -314,10 +301,9 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "",
+      "render_ok": "[]",
       "template": "{{l}}"
     },
     {
@@ -347,10 +333,9 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "{'a': 1}",
+      "render_ok": "{&quot;a&quot;: 1}",
       "template": "{{d}}"
     },
     {
@@ -369,10 +354,9 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "",
+      "render_ok": "{}",
       "template": "{{d}}"
     },
     {
@@ -407,10 +391,9 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "[1, 'a', None, True]",
+      "render_ok": "[1, &quot;a&quot;, null, true]",
       "template": "{{l}}"
     },
     {
@@ -418,7 +401,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "[]",
@@ -451,7 +433,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -495,7 +476,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "deep",
@@ -526,7 +506,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "first",
@@ -557,7 +536,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "second",
@@ -588,7 +566,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -621,7 +598,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -656,7 +632,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "[1][2][3]",
@@ -678,7 +653,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -732,7 +706,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "<1><x>",
@@ -785,7 +758,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "a-b-",
@@ -833,7 +805,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "OUT",
@@ -855,7 +826,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "yes",
@@ -877,7 +847,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -899,7 +868,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -932,7 +900,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "v",
@@ -954,7 +921,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -976,7 +942,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "empty",
@@ -998,7 +963,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -1020,7 +984,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "empty",
@@ -1042,7 +1005,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "empty",
@@ -1053,7 +1015,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "empty",
@@ -1115,7 +1076,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "12",
@@ -1147,7 +1107,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "A-not-B",
@@ -1169,7 +1128,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "text\nbody\ntail",
@@ -1191,7 +1149,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "text\ntail",
@@ -1202,7 +1159,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "after",
@@ -1229,7 +1185,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "1\nnext",
@@ -1251,7 +1206,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "A\nb",
@@ -1283,7 +1237,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "A x\nc",
@@ -1294,7 +1247,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "x\n  ",
@@ -1316,7 +1268,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "custom",
@@ -1327,7 +1278,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -1338,7 +1288,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "a",
@@ -1360,7 +1309,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "ab{{x}}c",
@@ -1392,10 +1340,9 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "{'flag': True, 'marker': 'OUTER'}",
+      "render_ok": "{&quot;flag&quot;: true, &quot;marker&quot;: &quot;OUTER&quot;}",
       "template": "{{#flag}}{{.}}{{/flag}}"
     },
     {
@@ -1403,7 +1350,6 @@
         "t": "bool",
         "v": true
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "True",
@@ -1414,7 +1360,6 @@
         "t": "bool",
         "v": true
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: list index out of range",
       "render_ok": null,
@@ -1441,10 +1386,9 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "[{'items': [True]}]",
+      "render_ok": "[{&quot;items&quot;: [true]}]",
       "template": "{{#items}}[{{.}}]{{/items}}"
     },
     {
@@ -1463,7 +1407,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "messages[0].content",
       "render_err": null,
       "render_ok": "ok",
@@ -1474,7 +1417,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "messages[0].content",
       "render_err": "messages[0].content: malformed Mustache template: unclosed tag at line 1",
       "render_ok": null,
@@ -1485,7 +1427,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
       "render_ok": null,
@@ -1496,7 +1437,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
       "render_ok": null,
@@ -1507,7 +1447,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: malformed Mustache template: Trying to close tag \"x\" Looks like it was not opened. line 2",
       "render_ok": null,
@@ -1518,7 +1457,6 @@
         "t": "dict",
         "v": []
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
       "render_ok": null,
@@ -1540,7 +1478,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: malformed Mustache template: partials are not supported: {{> p}}",
       "render_ok": null,
@@ -1575,7 +1512,6 @@
           ]
         ]
       },
-      "json_aware": true,
       "label": "params_json",
       "render_err": null,
       "render_ok": "[1, 2, 3]",
@@ -1597,7 +1533,6 @@
           ]
         ]
       },
-      "json_aware": true,
       "label": "params_json",
       "render_err": null,
       "render_ok": "[]",
@@ -1619,7 +1554,6 @@
           ]
         ]
       },
-      "json_aware": true,
       "label": "params_json",
       "render_err": null,
       "render_ok": "{}",
@@ -1652,7 +1586,6 @@
           ]
         ]
       },
-      "json_aware": true,
       "label": "params_json",
       "render_err": null,
       "render_ok": "{&quot;a&quot;: 1}",
@@ -1694,7 +1627,6 @@
           ]
         ]
       },
-      "json_aware": true,
       "label": "params_json",
       "render_err": null,
       "render_ok": "[1, &quot;a&quot;, null, true, false]",
@@ -1716,11 +1648,239 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
-      "render_ok": "[]",
+      "render_ok": "[[]]",
       "template": "[{{x}}]"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "dict",
+              "v": []
+            }
+          ]
+        ]
+      },
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[{}]",
+      "template": "[{{x}}]"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[\"a\", \"b\"]",
+      "template": "{{{x}}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "str",
+                  "v": "b"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[&quot;a&quot;, &quot;b&quot;]",
+      "template": "{{x}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "str",
+                  "v": "café"
+                },
+                {
+                  "t": "bool",
+                  "v": true
+                },
+                {
+                  "t": "bool",
+                  "v": false
+                },
+                {
+                  "t": "none"
+                },
+                {
+                  "t": "date",
+                  "v": "2026-01-02"
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[\"café\", true, false, null, \"2026-01-02\"]",
+      "template": "{{{x}}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "x"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "a"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "b"
+                      },
+                      {
+                        "t": "list",
+                        "v": [
+                          {
+                            "t": "int",
+                            "v": "2"
+                          },
+                          {
+                            "t": "int",
+                            "v": "3"
+                          }
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "label": "template",
+      "render_err": null,
+      "render_ok": "[{\"a\": 1}, {\"b\": [2, 3]}]",
+      "template": "{{{x}}}"
+    },
+    {
+      "ctx": {
+        "t": "dict",
+        "v": [
+          [
+            {
+              "t": "str",
+              "v": "items"
+            },
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "str",
+                      "v": "a"
+                    }
+                  ]
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "b"
+                      },
+                      {
+                        "t": "int",
+                        "v": "1"
+                      }
+                    ]
+                  ]
+                }
+              ]
+            }
+          ]
+        ]
+      },
+      "label": "template",
+      "render_err": null,
+      "render_ok": "<[&quot;a&quot;]><{&quot;b&quot;: 1}>",
+      "template": "{{#items}}<{{.}}>{{/items}}"
     },
     {
       "ctx": {
@@ -1738,7 +1898,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "b'\\x00\\xffabc'",
@@ -1760,7 +1919,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -1782,7 +1940,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "2020-01-02",
@@ -1805,7 +1962,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "2020-01-02 03:04:05+00:00",
@@ -1827,7 +1983,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "a",
@@ -1849,7 +2004,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "c",
@@ -1871,7 +2025,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -1893,7 +2046,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "97",
@@ -1915,7 +2067,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -1936,7 +2087,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'NoneType' object is not subscriptable",
       "render_ok": null,
@@ -1958,7 +2108,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'bool' object is not subscriptable",
       "render_ok": null,
@@ -1980,7 +2129,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'int' object is not subscriptable",
       "render_ok": null,
@@ -2002,7 +2150,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'float' object is not subscriptable",
       "render_ok": null,
@@ -2024,7 +2171,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'datetime.date' object is not subscriptable",
       "render_ok": null,
@@ -2047,7 +2193,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'datetime.datetime' object is not subscriptable",
       "render_ok": null,
@@ -2069,7 +2214,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'int' object is not subscriptable",
       "render_ok": null,
@@ -2091,7 +2235,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'bool' object is not subscriptable",
       "render_ok": null,
@@ -2113,7 +2256,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": "template: could not render: 'float' object is not subscriptable",
       "render_ok": null,
@@ -2134,7 +2276,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2166,7 +2307,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "OUTER",
@@ -2188,7 +2328,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "Intro",
@@ -2239,7 +2378,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "2/12/1",
@@ -2261,7 +2399,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "2026",
@@ -2283,7 +2420,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2315,7 +2451,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2347,7 +2482,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "OUTER",
@@ -2370,7 +2504,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "2020-1-2 3:4:5",
@@ -2393,7 +2526,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2415,7 +2547,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2437,7 +2568,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2459,7 +2589,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "OUTER",
@@ -2492,7 +2621,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "OUTER",
@@ -2533,7 +2661,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "a (Outer) b (Outer) ",
@@ -2586,7 +2713,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "inoutout",
@@ -2617,7 +2743,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "no-1no-2",
@@ -2639,7 +2764,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "body",
@@ -2681,7 +2805,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "ABC",
@@ -2716,7 +2839,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "b",
@@ -2751,7 +2873,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "",
@@ -2773,7 +2894,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "café 中文 🎉 &lt;ok&gt;",
@@ -2804,7 +2924,6 @@
           ]
         ]
       },
-      "json_aware": false,
       "label": "template",
       "render_err": null,
       "render_ok": "- a\n- b\ndone",

@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """Generate electricity-template's golden corpus from Circuitry's real
-chevron port (`core/templates.py::render_template`/`template_syntax_error`,
-`core/tool.py::_json_aware_ctx`).
+chevron port (`core/templates.py::render_template`/`template_syntax_error`).
 
 Two kinds of cases, since `template_syntax_error` doesn't take a context at
 all:
 
 - ``syntax_cases``: a template alone, and the syntax-error description
   `template_syntax_error` returns for it (or ``null`` if it's valid Mustache).
-- ``render_cases``: a template, a context, a label, and whether the context
-  is wrapped through `_json_aware_ctx` first (DESIGN.md §3.3's
-  `params_json`-only splice serializer, Quirk Q2) -- paired with either the
-  real rendered text or `str(TemplateError)`.
+- ``render_cases``: a template, a context, and a label -- paired with
+  either the real rendered text or `str(TemplateError)`. `render_template`
+  itself wraps every context through `_json_aware_ctx` now (a whole list or
+  dict renders as JSON text, matching `params_json`, at every template
+  site), so there is no longer a context variant to choose between.
 
 Every case is synthetic, written directly against the rules in
 `electricity/DESIGN.md` §3.3 and `electricity/docs/spec/runtime-semantics.md`
@@ -36,7 +36,6 @@ from circuitry.core.templates import (
     render_template,
     template_syntax_error,
 )
-from circuitry.core.tool import _json_aware_ctx
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -140,16 +139,14 @@ def build_syntax_cases() -> list[dict]:
 # ---------------------------------------------------------------------
 
 
-def render_case(template: str, ctx: object, *, label: str = "template", json_aware: bool = False) -> dict:
-    effective_ctx = _json_aware_ctx(ctx) if json_aware else ctx
+def render_case(template: str, ctx: object, *, label: str = "template") -> dict:
     try:
-        text = render_template(template, effective_ctx, label=label)
+        text = render_template(template, ctx, label=label)
     except TemplateError as exc:
         return {
             "template": template,
             "ctx": encode(ctx),
             "label": label,
-            "json_aware": json_aware,
             "render_ok": None,
             "render_err": str(exc),
         }
@@ -158,7 +155,6 @@ def render_case(template: str, ctx: object, *, label: str = "template", json_awa
             "template": template,
             "ctx": encode(ctx),
             "label": label,
-            "json_aware": json_aware,
             "render_ok": text,
             "render_err": None,
         }
@@ -287,17 +283,39 @@ def build_render_cases() -> list[dict]:
     cases.append(render_case("{{=<% %>=}}<%> p%><%/x%>", {}))
     cases.append(render_case("{{#a}}{{> p}}", {"a": True}))
 
-    # --- JsonAwareCtx: the params_json splice serializer ---
-    cases.append(render_case("{{x}}", {"x": [1, 2, 3]}, label="params_json", json_aware=True))
-    cases.append(render_case("{{x}}", {"x": []}, label="params_json", json_aware=True))
-    cases.append(render_case("{{x}}", {"x": {}}, label="params_json", json_aware=True))
-    cases.append(render_case("{{x}}", {"x": {"a": 1}}, label="params_json", json_aware=True))
+    # --- a whole list or dict renders as JSON text at every template site,
+    # matching params_json (circuitry#778 step 3) ---
+    cases.append(render_case("{{x}}", {"x": [1, 2, 3]}, label="params_json"))
+    cases.append(render_case("{{x}}", {"x": []}, label="params_json"))
+    cases.append(render_case("{{x}}", {"x": {}}, label="params_json"))
+    cases.append(render_case("{{x}}", {"x": {"a": 1}}, label="params_json"))
+    cases.append(render_case("{{x}}", {"x": [1, "a", None, True, False]}, label="params_json"))
+    # An ordinary (non-params_json) template renders the same way: an empty
+    # list/dict still splices as "[]"/"{}", not "".
+    cases.append(render_case("[{{x}}]", {"x": []}, label="template"))
+    cases.append(render_case("[{{x}}]", {"x": {}}, label="template"))
+    # `{{{...}}}` (unescaped) renders the same JSON text as `{{...}}`
+    # (escaped) would, just without the HTML-escaping pass.
+    cases.append(render_case("{{{x}}}", {"x": ["a", "b"]}, label="template"))
+    cases.append(render_case("{{x}}", {"x": ["a", "b"]}, label="template"))
+    # Nested non-ASCII, booleans, null, and a date inside a list.
     cases.append(
         render_case(
-            "{{x}}", {"x": [1, "a", None, True, False]}, label="params_json", json_aware=True
+            "{{{x}}}",
+            {"x": ["café", True, False, None, datetime.date(2026, 1, 2)]},
+            label="template",
         )
     )
-    cases.append(render_case("[{{x}}]", {"x": []}, label="template", json_aware=False))
+    # A dict nested inside a list, and a list nested inside a dict.
+    cases.append(render_case("{{{x}}}", {"x": [{"a": 1}, {"b": [2, 3]}]}, label="template"))
+    # A section over a list is unaffected: it still iterates, not JSON.
+    cases.append(
+        render_case(
+            "{{#items}}<{{.}}>{{/items}}",
+            {"items": [["a"], {"b": 1}]},
+            label="template",
+        )
+    )
 
     # --- bytes / date / datetime scalars ---
     cases.append(render_case("{{b}}", {"b": bytes([0, 255, 97, 98, 99])}))

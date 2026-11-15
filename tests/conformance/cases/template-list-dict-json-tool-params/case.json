@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778 step 3",
+  "description": "A tool's params: a whole list and a whole dict spliced through {{...}} (HTML-escaped) and {{{...}}} (raw) render as JSON text, not Python's repr(); nested non-ASCII, booleans, null and a date; an empty list and an empty dict still render (\"[]\"/\"{}\"), never collapsed to \"\"; a Mustache section over a list is unaffected and still iterates.",
+  "engines": ["python", "electricity"],
+  "expect": "success"
+}

@@ -4,6 +4,7 @@
 //! -- both the resulting parts (in order) and, when a unit doesn't fit,
 //! the exact `NoSplitPoint` text (issue #682).
 
+use chrono::NaiveDate;
 use electricity_value::{Dict, Value};
 use electricity_vm::split::{split_list, split_mapping, split_text};
 use std::path::Path;
@@ -35,6 +36,10 @@ fn decode(tagged: &serde_json::Value) -> Value {
             Value::Float(f64::from_bits(bits))
         }
         "str" => Value::Str(tagged["v"].as_str().expect("str v").to_string()),
+        "date" => Value::Date(
+            NaiveDate::parse_from_str(tagged["v"].as_str().expect("date v"), "%Y-%m-%d")
+                .expect("valid ISO date"),
+        ),
         "list" => Value::List(
             tagged["v"]
                 .as_array()

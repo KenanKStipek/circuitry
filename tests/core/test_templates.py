@@ -28,6 +28,7 @@ from circuitry.core.store import Store
 from circuitry.core.templates import (
     TemplateError,
     render_template,
+    splice_text,
     template_syntax_error,
 )
 
@@ -71,6 +72,177 @@ def test_render_template_raises_instead_of_returning_raw_text() -> None:
     assert render_template("hi {{a}}", {"a": 1}) == "hi 1"
     with pytest.raises(TemplateError, match=r"^params\.input: malformed Mustache template"):
         render_template(BROKEN, {}, label="params.input")
+
+
+def test_a_whole_list_or_dict_renders_as_json_not_python_repr() -> None:
+    assert render_template("{{x}}", {"x": ["a", "b"]}) == '[&quot;a&quot;, &quot;b&quot;]'
+    assert render_template("{{{x}}}", {"x": ["a", "b"]}) == '["a", "b"]'
+    assert render_template("{{{x}}}", {"x": {"k": 1}}) == '{"k": 1}'
+
+
+def test_nested_bool_null_and_date_inside_a_list_render_as_json() -> None:
+    value = [1, True, False, None, date(2026, 1, 2), "café"]
+    assert (
+        render_template("{{{x}}}", {"x": value})
+        == '[1, true, false, null, "2026-01-02", "café"]'
+    )
+
+
+def test_an_empty_list_or_dict_still_renders_not_collapsed_to_empty_string() -> None:
+    assert render_template("[{{x}}]", {"x": []}) == "[[]]"
+    assert render_template("[{{x}}]", {"x": {}}) == "[{}]"
+
+
+def test_a_section_over_a_list_is_unaffected_by_json_rendering() -> None:
+    assert render_template("{{#items}}<{{.}}>{{/items}}", {"items": ["a", "b"]}) == "<a><b>"
+    assert render_template("{{#items}}x{{/items}}", {"items": []}) == ""
+
+
+def test_an_empty_list_or_dict_is_still_falsy_in_a_section() -> None:
+    assert render_template("{{#x}}seen{{/x}}", {"x": []}) == ""
+    assert render_template("{{#x}}seen{{/x}}", {"x": {}}) == ""
+
+
+def test_an_empty_list_or_dict_still_renders_an_inverted_section() -> None:
+    assert render_template("{{^x}}empty{{/x}}", {"x": []}) == "empty"
+    assert render_template("{{^x}}empty{{/x}}", {"x": {}}) == "empty"
+
+
+def test_a_value_nested_hundreds_of_levels_deep_elsewhere_in_ctx_does_not_fail_an_unrelated_render() -> (
+    None
+):
+    """Wrapping used to walk *every* node of ``ctx`` recursively on every
+    render, regardless of which tag a template actually read; a state
+    value nested deeply enough anywhere in ``ctx`` made every later render
+    fail with a recursion error, not just one reading that value. Lazy,
+    lookup-time wrapping only ever walks as deep as a template's own tags
+    go.
+    """
+    deep: dict[str, Any] = {}
+    cursor = deep
+    for _ in range(600):
+        cursor["next"] = {}
+        cursor = cursor["next"]
+    ctx = {"unrelated": deep, "x": 1}
+    assert render_template("{{x}}", ctx) == "1"
+
+
+def test_rendering_cost_does_not_grow_with_an_unrelated_sibling_values_size() -> None:
+    """A render used to wrap ``ctx`` recursively, top to bottom, before
+    chevron ever saw it (#778 step 3's first cut) -- the whole cost #268
+    removed for a tree loop's own per-iteration copy, paid again here on
+    every single render. Lazy, lookup-time wrapping
+    (:func:`circuitry.core.templates._wrap_container`) only wraps the
+    node a tag actually reaches, so the number of wraps a render performs
+    is the same no matter how large an unrelated sibling value is.
+    """
+    import circuitry.core.templates as templates_mod
+
+    calls = 0
+    original = templates_mod._wrap_container
+
+    def counting_wrap(value: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    small_ctx = {"item": {"id": 1}, "sibling": list(range(5))}
+    big_ctx = {"item": {"id": 1}, "sibling": [{"n": i} for i in range(5000)]}
+
+    templates_mod._wrap_container = counting_wrap
+    try:
+        calls = 0
+        render_template("{{item.id}}", small_ctx)
+        small_calls = calls
+
+        calls = 0
+        render_template("{{item.id}}", big_ctx)
+        big_calls = calls
+    finally:
+        templates_mod._wrap_container = original
+
+    assert small_calls == big_calls
+
+
+def test_a_chain_loops_growing_shared_state_does_not_make_later_iterations_render_more() -> None:
+    """A ``flow: chain`` loop records every finished iteration's own
+    result into the same shared state every later iteration's own
+    template render sees as ``ctx`` -- so state genuinely grows over the
+    loop's lifetime, the realistic shape #268's own shallow-overlay test
+    (``test_loop_tree_each_shallow_overlay.py``) exercises for the tree
+    flow's per-iteration copy. The number of wraps one iteration's own
+    render performs must not grow with how many earlier iterations have
+    already piled results into that shared state.
+    """
+    import circuitry.core.templates as templates_mod
+
+    calls = 0
+    original = templates_mod._wrap_container
+
+    def counting_wrap(value: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        return original(value)
+
+    n = 60
+    items = [{"id": i, "payload": list(range(50))} for i in range(n)]
+    orch = {
+        "effects": [
+            {
+                "type": "loop",
+                "name": "work",
+                "flow": "chain",
+                "each": {"in": "input.items", "as": "item"},
+                "body": [
+                    {
+                        "type": "tool",
+                        "name": "step",
+                        "provider": "json",
+                        "params": {"mode": "stringify", "input": "{{item.id}}"},
+                    }
+                ],
+            }
+        ]
+    }
+    root = compile_orchestration(orch=orch, root_name="prime")
+    state = {"input": {"items": items}}
+
+    templates_mod._wrap_container = counting_wrap
+    try:
+        DynamicRuntime(root, adapter=RecordingAdapter(), model="unit-test").execute(
+            store=Store(state)
+        )
+    finally:
+        templates_mod._wrap_container = original
+
+    # A per-render cost that grows with the loop's own history would blow
+    # past this well before n=60 (quadratic in n, not linear): a handful
+    # of wraps per iteration (one per dotted path segment, plus the root),
+    # times n, with slack for the loop machinery's own templates.
+    assert calls < n * 20, calls
+
+
+def test_splice_text_matches_what_a_bare_tag_would_render() -> None:
+    assert splice_text(["a", "b"]) == '["a", "b"]'
+    assert splice_text({"k": 1}) == '{"k": 1}'
+    assert splice_text([]) == "[]"
+    assert splice_text("a") == "a"
+    assert splice_text(True) == "True"
+
+
+def test_declared_prompt_partial_effect_reference_renders_a_list_as_json() -> None:
+    """``{{> name}}`` splices an effect's own value before chevron ever sees
+    it (``core.prompt_compose._resolve_effect_text``), so it needs its own
+    JSON rendering, not just ``render_template``'s (#778 step 3)."""
+    from circuitry.core.prompt_compose import render_with_composition
+
+    ctx = {"prime": {"items": {"value": ["a", "b"]}}}
+    assert (
+        render_with_composition(
+            "{{> items}}", ctx, declared={}, known_effect_names=frozenset({"items"})
+        )
+        == '["a", "b"]'
+    )
 
 
 def test_section_tag_matching_the_section_name_renders_the_value_not_a_method() -> None:

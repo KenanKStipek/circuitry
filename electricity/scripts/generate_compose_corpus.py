@@ -40,7 +40,6 @@ from typing import Any
 from circuitry.core.prompt_compose import render_with_composition
 from circuitry.core.store.store import Store
 from circuitry.core.templates import TemplateError, render_template
-from circuitry.core.tool import _json_aware_ctx
 from circuitry.core.yield_effect import YieldDefinition, YieldRuntime
 
 OUTPUT = (
@@ -135,13 +134,11 @@ def compose_case(
     known: frozenset[str] = frozenset(),
     label: str = "template",
     escape: bool = True,
-    json_aware: bool = False,
 ) -> dict:
-    effective_ctx = _json_aware_ctx(ctx) if json_aware else ctx
     try:
         text = render_with_composition(
             template,
-            effective_ctx,
+            ctx,
             declared=declared,
             known_effect_names=known,
             label=label,
@@ -158,7 +155,6 @@ def compose_case(
         "known_effect_names": sorted(known),
         "label": label,
         "escape": escape,
-        "json_aware": json_aware,
         **result,
     }
 
@@ -391,23 +387,28 @@ def build_compose_cases() -> list[dict]:
         )
     )
 
-    # --- params_json's own JsonAwareCtx: an effect's list/dict value
-    # serializes as real JSON, not py_repr, and an empty one is never
-    # collapsed to "" ---
+    # --- an effect reference's own list/dict value serializes as real
+    # JSON, not py_repr, at every label, and an empty one is never
+    # collapsed to "" (circuitry#778 step 3) ---
     cases.append(
         compose_case(
             "{{> symbols}}",
             {"prime": {"symbols": _effect(["AAPL", "MSFT"])}},
             label="params_json",
-            json_aware=True,
         )
     )
     cases.append(
         compose_case(
             "[{{> items}}]",
             {"prime": {"items": _effect([])}},
-            label="params_json",
-            json_aware=True,
+            label="template",
+        )
+    )
+    cases.append(
+        compose_case(
+            "{{> obj}}",
+            {"prime": {"obj": _effect({"k": 1, "ok": True})}},
+            label="template",
         )
     )
 
