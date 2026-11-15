@@ -23,7 +23,7 @@
 
 use electricity_bytecode::{Escape, ParamNode};
 use electricity_json::{Separators, WriteMode};
-use electricity_template::{JsonAwareCtx, PlainCtx, ScopeRoot};
+use electricity_template::ScopeRoot;
 use electricity_value::{Dict, Value};
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
@@ -194,7 +194,6 @@ fn render_node<R: ParamsCtx>(
             declared_prompts,
             effect_names,
             path,
-            &PlainCtx,
             matches!(text.escape, Escape::Html),
         )
         .map(Value::Str)
@@ -335,41 +334,25 @@ impl fmt::Display for RenderParamsJsonError {
 
 impl std::error::Error for RenderParamsJsonError {}
 
-fn json_aware_splice(value: &Value) -> Result<String, String> {
-    electricity_json::dumps_default_str(
-        value,
-        WriteMode {
-            indent: None,
-            sort_keys: false,
-            ensure_ascii: false,
-            separators: Separators::Default,
-        },
-    )
-    .map_err(|err| err.to_string())
-}
-
 /// Renders *template* (a tool effect's own `params_json:`) against
-/// *ctx* through [`JsonAwareCtx`] (DESIGN.md \u00a73.3's Quirk Q2: a
-/// `{{{...}}}` splice of a native list/dict value serializes as real
-/// JSON, never falls back to `""` just because it's empty), then parses
-/// the rendered text as JSON -- `core/tool.py::_render_params_json`. The
-/// result must be a JSON object; anything else is
-/// [`RenderParamsJsonError::NotObject`].
+/// *ctx* -- a `{{{...}}}` splice of a native list/dict value serializes
+/// as real JSON, never falls back to `""` just because it's empty, the
+/// same as every other template site now (circuitry#778 step 3) -- then
+/// parses the rendered text as JSON (`core/tool.py::
+/// _render_params_json`). The result must be a JSON object; anything
+/// else is [`RenderParamsJsonError::NotObject`].
 pub fn render_params_json<R: ParamsCtx>(
     template: &str,
     ctx: &R,
     declared_prompts: &IndexMap<String, String>,
     effect_names: &BTreeSet<String>,
 ) -> Result<Dict, RenderParamsJsonError> {
-    let serializer: &dyn Fn(&Value) -> Result<String, String> = &json_aware_splice;
-    let json_ctx = JsonAwareCtx::new(serializer);
     let rendered_text = crate::compose::render_with_composition(
         template,
         ctx,
         declared_prompts,
         effect_names,
         "params_json",
-        &json_ctx,
         true,
     )
     .map_err(RenderParamsJsonError::Template)?;
@@ -820,7 +803,7 @@ mod tests {
     }
 
     #[test]
-    fn params_json_renders_a_native_list_as_real_json_through_json_aware_ctx() {
+    fn params_json_renders_a_native_list_as_real_json() {
         let ctx = ctx_from(vec![(
             "prime",
             ctx_from(vec![(

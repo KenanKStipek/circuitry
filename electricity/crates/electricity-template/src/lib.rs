@@ -4,13 +4,13 @@
 //! Mustache engine (DESIGN.md §3.3, runtime-semantics §3).
 //!
 //! ```
-//! use electricity_template::{render_template, PlainCtx, Value};
+//! use electricity_template::{render_template, Value};
 //!
 //! let mut ctx = Value::Dict(Default::default());
 //! ctx.as_dict_mut()
 //!     .unwrap()
 //!     .insert(Value::Str("name".into()), Value::Str("world".into()));
-//! let out = render_template("hello {{name}}", &ctx, &PlainCtx, "template").unwrap();
+//! let out = render_template("hello {{name}}", &ctx, "template").unwrap();
 //! assert_eq!(out, "hello world");
 //! ```
 //!
@@ -91,7 +91,7 @@ mod render;
 mod tokenizer;
 
 pub use electricity_value::Value;
-pub use render::{JsonAwareCtx, PlainCtx, ScopeRoot, SpliceCtx, step};
+pub use render::{ScopeRoot, step};
 
 use tokenizer::{Tag, TokenizeError, TokenizeFailure};
 
@@ -429,21 +429,14 @@ pub fn tokens_raw(template: &str) -> Result<Vec<TokenKind>, RawTokensError> {
     }
 }
 
-/// Render *template* against *root* through *ctx* ([`PlainCtx`] for every
-/// ordinary template site, [`JsonAwareCtx`] only for a tool's
-/// `params_json`, DESIGN.md §3.3). Mirrors
+/// Render *template* against *root*. Mirrors
 /// `core/templates.py::render_template` exactly, including which
 /// failures are "malformed" vs. "could not render" (see
 /// [`TemplateError`]) and *label*'s place in the message
 /// (`"{label}: ..."`, the field name the caller is rendering — e.g.
 /// `"template"`, `"params_json"`, `"messages[0].content"`).
-pub fn render_template(
-    template: &str,
-    root: &Value,
-    ctx: &dyn SpliceCtx,
-    label: &str,
-) -> Result<String, TemplateError> {
-    render_template_with_root(template, root, ctx, label)
+pub fn render_template(template: &str, root: &Value, label: &str) -> Result<String, TemplateError> {
+    render_template_with_root(template, root, label)
 }
 
 /// [`render_template`], generalized over *root*'s own [`ScopeRoot`] impl
@@ -458,10 +451,9 @@ pub fn render_template(
 pub fn render_template_with_root<R: ScopeRoot>(
     template: &str,
     root: &R,
-    ctx: &dyn SpliceCtx,
     label: &str,
 ) -> Result<String, TemplateError> {
-    render_template_with_root_and_escape(template, root, ctx, label, true)
+    render_template_with_root_and_escape(template, root, label, true)
 }
 
 /// [render_template_with_root], with *escape* as an additive option
@@ -480,7 +472,6 @@ pub fn render_template_with_root<R: ScopeRoot>(
 pub fn render_template_with_root_and_escape<R: ScopeRoot>(
     template: &str,
     root: &R,
-    ctx: &dyn SpliceCtx,
     label: &str,
     escape: bool,
 ) -> Result<String, TemplateError> {
@@ -507,7 +498,7 @@ pub fn render_template_with_root_and_escape<R: ScopeRoot>(
     };
     let tree = render::build_tree(&tokens);
     let scope = render::Scope::root(root);
-    render::render_nodes(&tree, &scope, ctx, escape).map_err(|msg| TemplateError {
+    render::render_nodes(&tree, &scope, escape).map_err(|msg| TemplateError {
         label: label.to_string(),
         kind: TemplateErrorKind::Render(msg),
     })
@@ -519,11 +510,10 @@ pub fn render_template_with_root_and_escape<R: ScopeRoot>(
 pub fn render_template_with_escape(
     template: &str,
     root: &Value,
-    ctx: &dyn SpliceCtx,
     label: &str,
     escape: bool,
 ) -> Result<String, TemplateError> {
-    render_template_with_root_and_escape(template, root, ctx, label, escape)
+    render_template_with_root_and_escape(template, root, label, escape)
 }
 
 #[cfg(test)]
@@ -595,39 +585,27 @@ mod tests {
     #[test]
     fn plain_variable_and_escaping() {
         let ctx = dict(vec![("s", Value::Str("<b>&'\"".to_string()))]);
-        let out = render_template("{{s}}", &ctx, &PlainCtx, "template").unwrap();
+        let out = render_template("{{s}}", &ctx, "template").unwrap();
         assert_eq!(out, "&lt;b&gt;&amp;'&quot;");
     }
 
     #[test]
     fn no_escape_variants() {
         let ctx = dict(vec![("s", Value::Str("<b>".to_string()))]);
-        assert_eq!(
-            render_template("{{{s}}}", &ctx, &PlainCtx, "t").unwrap(),
-            "<b>"
-        );
-        assert_eq!(
-            render_template("{{&s}}", &ctx, &PlainCtx, "t").unwrap(),
-            "<b>"
-        );
+        assert_eq!(render_template("{{{s}}}", &ctx, "t").unwrap(), "<b>");
+        assert_eq!(render_template("{{&s}}", &ctx, "t").unwrap(), "<b>");
     }
 
     #[test]
     fn missing_key_renders_empty() {
         let ctx = dict(vec![]);
-        assert_eq!(
-            render_template("[{{missing}}]", &ctx, &PlainCtx, "t").unwrap(),
-            "[]"
-        );
+        assert_eq!(render_template("[{{missing}}]", &ctx, "t").unwrap(), "[]");
     }
 
     #[test]
     fn dotted_missing_segment_renders_empty() {
         let ctx = dict(vec![("a", dict(vec![("b", dict(vec![]))]))]);
-        assert_eq!(
-            render_template("[{{a.b.c}}]", &ctx, &PlainCtx, "t").unwrap(),
-            "[]"
-        );
+        assert_eq!(render_template("[{{a.b.c}}]", &ctx, "t").unwrap(), "[]");
     }
 
     #[test]
@@ -636,10 +614,7 @@ mod tests {
             "items",
             Value::List(vec![Value::Str("a".into()), Value::Str("b".into())]),
         )]);
-        assert_eq!(
-            render_template("{{items.1}}", &ctx, &PlainCtx, "t").unwrap(),
-            "b"
-        );
+        assert_eq!(render_template("{{items.1}}", &ctx, "t").unwrap(), "b");
     }
 
     #[test]
@@ -649,7 +624,7 @@ mod tests {
             Value::List(vec![Value::Int(1.into()), Value::Int(2.into())]),
         )]);
         assert_eq!(
-            render_template("{{#items}}[{{.}}]{{/items}}", &ctx, &PlainCtx, "t").unwrap(),
+            render_template("{{#items}}[{{.}}]{{/items}}", &ctx, "t").unwrap(),
             "[1][2]"
         );
     }
@@ -671,7 +646,7 @@ mod tests {
             ]),
         )]);
         assert_eq!(
-            render_template("{{#items}}<{{.}}>{{/items}}", &ctx, &PlainCtx, "t").unwrap(),
+            render_template("{{#items}}<{{.}}>{{/items}}", &ctx, "t").unwrap(),
             "<1><x>"
         );
     }
@@ -689,8 +664,7 @@ mod tests {
                 dict(vec![("b", dict(vec![("present", Value::Bool(true))]))]),
             ),
         ]);
-        let out =
-            render_template("{{#a}}{{#b}}[{{outer}}]{{/b}}{{/a}}", &ctx, &PlainCtx, "t").unwrap();
+        let out = render_template("{{#a}}{{#b}}[{{outer}}]{{/b}}{{/a}}", &ctx, "t").unwrap();
         assert_eq!(out, "[OUTER]");
     }
 
@@ -704,7 +678,7 @@ mod tests {
             ("x", Value::Str("OUTER".to_string())),
             ("inner", dict(vec![("x", Value::Int(0.into()))])),
         ]);
-        let out = render_template("{{#inner}}[{{x}}]{{/inner}}", &ctx, &PlainCtx, "t").unwrap();
+        let out = render_template("{{#inner}}[{{x}}]{{/inner}}", &ctx, "t").unwrap();
         assert_eq!(out, "[0]");
     }
 
@@ -712,12 +686,12 @@ mod tests {
     fn inverted_section() {
         let ctx = dict(vec![("x", Value::Bool(false))]);
         assert_eq!(
-            render_template("{{^x}}empty{{/x}}", &ctx, &PlainCtx, "t").unwrap(),
+            render_template("{{^x}}empty{{/x}}", &ctx, "t").unwrap(),
             "empty"
         );
         let ctx2 = dict(vec![("x", Value::Bool(true))]);
         assert_eq!(
-            render_template("{{^x}}empty{{/x}}", &ctx2, &PlainCtx, "t").unwrap(),
+            render_template("{{^x}}empty{{/x}}", &ctx2, "t").unwrap(),
             ""
         );
     }
@@ -725,11 +699,8 @@ mod tests {
     #[test]
     fn zero_and_false_render_literally() {
         let ctx = dict(vec![("z", Value::Int(0.into())), ("f", Value::Bool(false))]);
-        assert_eq!(render_template("{{z}}", &ctx, &PlainCtx, "t").unwrap(), "0");
-        assert_eq!(
-            render_template("{{f}}", &ctx, &PlainCtx, "t").unwrap(),
-            "False"
-        );
+        assert_eq!(render_template("{{z}}", &ctx, "t").unwrap(), "0");
+        assert_eq!(render_template("{{f}}", &ctx, "t").unwrap(), "False");
     }
 
     #[test]
@@ -738,13 +709,16 @@ mod tests {
             ("flag", Value::Bool(true)),
             ("marker", Value::Str("OUTER".into())),
         ]);
-        let out = render_template("{{#flag}}{{.}}{{/flag}}", &ctx, &PlainCtx, "t").unwrap();
-        assert_eq!(out, "{'flag': True, 'marker': 'OUTER'}");
+        let out = render_template("{{#flag}}{{.}}{{/flag}}", &ctx, "t").unwrap();
+        assert_eq!(
+            out,
+            "{&quot;flag&quot;: true, &quot;marker&quot;: &quot;OUTER&quot;}"
+        );
     }
 
     #[test]
     fn dot_true_bug_raises_without_outer_scope() {
-        let err = render_template("{{.}}", &Value::Bool(true), &PlainCtx, "template").unwrap_err();
+        let err = render_template("{{.}}", &Value::Bool(true), "template").unwrap_err();
         assert_eq!(
             err.to_string(),
             "template: could not render: list index out of range"
@@ -753,13 +727,13 @@ mod tests {
 
     #[test]
     fn dot_true_bug_does_not_affect_no_escape() {
-        let out = render_template("{{{.}}}", &Value::Bool(true), &PlainCtx, "t").unwrap();
+        let out = render_template("{{{.}}}", &Value::Bool(true), "t").unwrap();
         assert_eq!(out, "True");
     }
 
     #[test]
     fn partial_is_rejected() {
-        let err = render_template("{{> name}}", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        let err = render_template("{{> name}}", &dict(vec![]), "template").unwrap_err();
         assert_eq!(
             err.to_string(),
             "template: malformed Mustache template: partials are not supported: {{> name}}"
@@ -792,7 +766,7 @@ mod tests {
             template_syntax_error("{{> p}}{{}}"),
             Some("partials are not supported: {{> p}}".to_string())
         );
-        let err = render_template("{{> p}}{{}}", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        let err = render_template("{{> p}}{{}}", &dict(vec![]), "template").unwrap_err();
         assert_eq!(
             err.to_string(),
             "template: malformed Mustache template: partials are not supported: {{> p}}"
@@ -805,7 +779,7 @@ mod tests {
             template_syntax_error("{{a"),
             Some("unclosed tag at line 1".to_string())
         );
-        let err = render_template("{{a", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        let err = render_template("{{a", &dict(vec![]), "template").unwrap_err();
         assert_eq!(
             err.to_string(),
             "template: malformed Mustache template: unclosed tag at line 1"
@@ -818,7 +792,7 @@ mod tests {
             template_syntax_error("{{}}"),
             Some("string index out of range".to_string())
         );
-        let err = render_template("{{}}", &dict(vec![]), &PlainCtx, "template").unwrap_err();
+        let err = render_template("{{}}", &dict(vec![]), "template").unwrap_err();
         assert_eq!(
             err.to_string(),
             "template: could not render: string index out of range"
@@ -826,40 +800,40 @@ mod tests {
     }
 
     #[test]
-    fn json_aware_ctx_keeps_falsy_containers() {
-        let serializer = |v: &Value| -> Result<String, String> {
-            match v {
-                Value::List(items) if items.is_empty() => Ok("[]".to_string()),
-                Value::Dict(d) if d.is_empty() => Ok("{}".to_string()),
-                _ => Ok(v.py_repr()),
-            }
-        };
-        let json_ctx = JsonAwareCtx::new(&serializer);
-        let ctx = dict(vec![("items", Value::List(vec![]))]);
-        assert_eq!(
-            render_template("[{{items}}]", &ctx, &json_ctx, "params_json").unwrap(),
-            "[[]]"
-        );
-        assert_eq!(
-            render_template("[{{items}}]", &ctx, &PlainCtx, "t").unwrap(),
-            "[]"
-        );
+    fn an_empty_list_or_dict_splices_as_json_not_falsy() {
+        let ctx = dict(vec![
+            ("items", Value::List(vec![])),
+            ("obj", Value::Dict(Default::default())),
+        ]);
+        assert_eq!(render_template("[{{items}}]", &ctx, "t").unwrap(), "[[]]");
+        assert_eq!(render_template("[{{obj}}]", &ctx, "t").unwrap(), "[{}]");
     }
 
     #[test]
-    fn json_aware_ctx_serializer_error_is_could_not_render() {
-        let failing = |_: &Value| -> Result<String, String> { Err("boom".to_string()) };
-        let json_ctx = JsonAwareCtx::new(&failing);
-        let ctx = dict(vec![("items", Value::List(vec![Value::Int(1.into())]))]);
-        let err = render_template("{{items}}", &ctx, &json_ctx, "params_json").unwrap_err();
-        assert_eq!(err.to_string(), "params_json: could not render: boom");
+    fn a_list_or_dict_splices_as_json_text_not_python_repr() {
+        let ctx = dict(vec![(
+            "items",
+            Value::List(vec![
+                Value::Str("a".to_string()),
+                Value::Bool(true),
+                Value::None,
+            ]),
+        )]);
+        assert_eq!(
+            render_template("{{items}}", &ctx, "t").unwrap(),
+            "[&quot;a&quot;, true, null]"
+        );
+        assert_eq!(
+            render_template("{{{items}}}", &ctx, "t").unwrap(),
+            "[\"a\", true, null]"
+        );
     }
 
     #[test]
     fn section_tag_matching_the_section_name_renders_the_value_not_a_method() {
         let ctx = dict(vec![("title", Value::Str("Intro".to_string()))]);
         assert_eq!(
-            render_template("{{#title}}{{title}}{{/title}}", &ctx, &PlainCtx, "t").unwrap(),
+            render_template("{{#title}}{{title}}{{/title}}", &ctx, "t").unwrap(),
             "Intro"
         );
     }
@@ -869,18 +843,9 @@ mod tests {
         use chrono::NaiveDate;
         let d = Value::Date(NaiveDate::from_ymd_opt(2026, 10, 14).unwrap());
         let ctx = dict(vec![("d", d)]);
-        assert_eq!(
-            render_template("{{d.year}}", &ctx, &PlainCtx, "t").unwrap(),
-            "2026"
-        );
-        assert_eq!(
-            render_template("{{d.month}}", &ctx, &PlainCtx, "t").unwrap(),
-            "10"
-        );
-        assert_eq!(
-            render_template("{{d.day}}", &ctx, &PlainCtx, "t").unwrap(),
-            "14"
-        );
+        assert_eq!(render_template("{{d.year}}", &ctx, "t").unwrap(), "2026");
+        assert_eq!(render_template("{{d.month}}", &ctx, "t").unwrap(), "10");
+        assert_eq!(render_template("{{d.day}}", &ctx, "t").unwrap(), "14");
     }
 
     #[test]
@@ -888,10 +853,7 @@ mod tests {
         use chrono::NaiveDate;
         let d = Value::Date(NaiveDate::from_ymd_opt(2026, 10, 14).unwrap());
         let ctx = dict(vec![("d", d)]);
-        assert_eq!(
-            render_template("{{d.isoformat}}", &ctx, &PlainCtx, "t").unwrap(),
-            ""
-        );
+        assert_eq!(render_template("{{d.isoformat}}", &ctx, "t").unwrap(), "");
     }
 
     #[test]
@@ -903,7 +865,7 @@ mod tests {
             ("isoformat", Value::Str("OUTER".to_string())),
         ]);
         assert_eq!(
-            render_template("{{#d}}{{isoformat}}{{/d}}", &ctx, &PlainCtx, "t").unwrap(),
+            render_template("{{#d}}{{isoformat}}{{/d}}", &ctx, "t").unwrap(),
             "OUTER"
         );
     }
@@ -920,7 +882,6 @@ mod tests {
             render_template(
                 "{{dt.year}}-{{dt.month}}-{{dt.day}} {{dt.hour}}:{{dt.minute}}:{{dt.second}}.{{dt.microsecond}}",
                 &ctx,
-                &PlainCtx,
                 "t"
             )
             .unwrap(),

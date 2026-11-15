@@ -1444,7 +1444,6 @@ fn render_reference_alone(reference: &str, ctx: &Value) -> Result<String, String
     electricity_template::render_template_with_root_and_escape(
         &template,
         ctx,
-        &electricity_template::PlainCtx,
         "split reference",
         false,
     )
@@ -1657,13 +1656,8 @@ fn prepare_split(
         .iter()
         .map(|source| (source.label.as_str(), source.text.as_str()))
         .collect();
-    let (expanded_texts, extra_state) = crate::compose::expand_sources(
-        &source_pairs,
-        ctx,
-        declared_prompts,
-        effect_names,
-        &electricity_template::PlainCtx,
-    )?;
+    let (expanded_texts, extra_state) =
+        crate::compose::expand_sources(&source_pairs, ctx, declared_prompts, effect_names)?;
 
     let references = candidate_references(&expanded_texts)?;
     if references.is_empty() {
@@ -1730,7 +1724,6 @@ fn prepare_split(
         let rendered = electricity_template::render_template_with_root_and_escape(
             text,
             &merged_ctx,
-            &electricity_template::PlainCtx,
             &sources[index].label,
             false,
         )

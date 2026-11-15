@@ -16,9 +16,7 @@
 //! on. `MAX_SECTION_DEPTH` (64) keeps a render at the limit cheap
 //! rather than merely stack-safe.
 
-use electricity_template::{
-    MAX_SECTION_DEPTH, PlainCtx, Value, render_template, template_syntax_error,
-};
+use electricity_template::{MAX_SECTION_DEPTH, Value, render_template, template_syntax_error};
 
 fn run_on_2mib_stack<F: FnOnce() + Send + 'static>(f: F) {
     std::thread::Builder::new()
@@ -55,7 +53,7 @@ fn exactly_at_the_limit_renders_on_a_2mib_stack() {
     run_on_2mib_stack(|| {
         let template = nested_template(MAX_SECTION_DEPTH);
         let ctx = nested_ctx(MAX_SECTION_DEPTH);
-        let out = render_template(&template, &ctx, &PlainCtx, "t")
+        let out = render_template(&template, &ctx, "t")
             .expect("nesting at exactly MAX_SECTION_DEPTH must still render");
         assert_eq!(out, "x");
     });
@@ -66,7 +64,7 @@ fn one_past_the_limit_is_a_distinct_nesting_error_on_a_2mib_stack() {
     run_on_2mib_stack(|| {
         let template = nested_template(MAX_SECTION_DEPTH + 1);
         let ctx = nested_ctx(MAX_SECTION_DEPTH + 1);
-        let err = render_template(&template, &ctx, &PlainCtx, "t").unwrap_err();
+        let err = render_template(&template, &ctx, "t").unwrap_err();
         assert!(err.is_too_deeply_nested(), "got: {err}");
         assert_eq!(
             err.to_string(),
@@ -85,7 +83,7 @@ fn inverted_sections_count_toward_the_same_limit_on_a_2mib_stack() {
         let open: String = (0..n).map(|_| "{{^a}}").collect();
         let close: String = (0..n).map(|_| "{{/a}}").collect();
         let template = format!("{open}x{close}");
-        let err = render_template(&template, &Value::Bool(false), &PlainCtx, "t").unwrap_err();
+        let err = render_template(&template, &Value::Bool(false), "t").unwrap_err();
         assert!(err.is_too_deeply_nested(), "got: {err}");
         assert_eq!(
             err.to_string(),
@@ -121,7 +119,7 @@ fn rejection_is_cheap_even_though_rendering_at_this_depth_would_not_be() {
     let template = nested_template(n);
     let ctx = nested_ctx(n);
     let start = std::time::Instant::now();
-    let err = render_template(&template, &ctx, &PlainCtx, "t").unwrap_err();
+    let err = render_template(&template, &ctx, "t").unwrap_err();
     assert!(err.is_too_deeply_nested(), "got: {err}");
     assert!(
         start.elapsed() < std::time::Duration::from_secs(1),
@@ -142,7 +140,7 @@ fn an_extremely_long_dotted_name_does_not_overflow_the_stack() {
     let key = (0..segments).map(|_| "a").collect::<Vec<_>>().join(".");
     let template = format!("{{{{{key}}}}}");
     let ctx = Value::Dict(Default::default());
-    let out = render_template(&template, &ctx, &PlainCtx, "t")
+    let out = render_template(&template, &ctx, "t")
         .expect("a missing, arbitrarily long dotted path renders empty, not an error");
     assert_eq!(out, "");
 }

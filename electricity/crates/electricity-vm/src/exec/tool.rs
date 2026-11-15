@@ -726,7 +726,6 @@ fn render_tool_call<R: ParamsCtx>(
             declared_prompts,
             effect_names,
             "prompt",
-            &electricity_template::PlainCtx,
             matches!(prompt.escape, electricity_bytecode::Escape::Html),
         )?;
         rendered.insert(Value::Str("prompt".to_string()), Value::Str(text));

@@ -8,6 +8,7 @@ publish.workspace = true
 description = "A chevron port (Mustache) over electricity-value's Value, matching Circuitry's core/templates.py"
 
 [dependencies]
+electricity-json = { path = "../electricity-json" }
 electricity-value = { path = "../electricity-value" }
 # `step`'s own named-attribute lookup on a `Value::Date`/`Value::DateTime`
 # (`year`/`month`/`day`/`hour`/`minute`/`second`/`microsecond`, circuitry#389)

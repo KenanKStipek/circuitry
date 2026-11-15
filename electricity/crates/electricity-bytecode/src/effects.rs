@@ -199,8 +199,8 @@ pub struct ToolOp {
     /// `params` — already past the security-sensitive-key literal check
     /// (DESIGN.md §5.2) and `allowed_commands` must-be-literal check.
     pub params: ParamNode,
-    /// `params_json`, tagged for `JsonAwareCtx` rendering (DESIGN.md
-    /// §5.2) at run time.
+    /// `params_json`, parsed as JSON once rendered (DESIGN.md §5.2) at
+    /// run time.
     pub params_json: Option<TemplateText>,
     pub prompt: Option<TemplateText>,
     pub model: Option<String>,

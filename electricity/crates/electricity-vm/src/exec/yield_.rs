@@ -12,7 +12,7 @@ use crate::exec::CtxChain;
 use crate::exec::live_scope::LiveRoot;
 use crate::{CancellationToken, Frame, NodeRef, RunContext, RunObserver, Store, VmError};
 use electricity_bytecode::{Escape, OnError, Op, ParamNode, YieldOp};
-use electricity_template::{PlainCtx, ScopeRoot};
+use electricity_template::ScopeRoot;
 use electricity_value::{Dict, Value};
 
 fn now_iso() -> Value {
@@ -210,7 +210,6 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
                 run_ctx.declared_prompts,
                 run_ctx.effect_names,
                 &label,
-                &PlainCtx,
                 escape,
             )
         }
@@ -220,7 +219,6 @@ pub async fn execute_yield_with_ctx<R: ScopeRoot>(
             run_ctx.declared_prompts,
             run_ctx.effect_names,
             &label,
-            &PlainCtx,
             escape,
         ),
     };

@@ -9,7 +9,7 @@
 //! [`render_document_label`] warning, never a failure of
 //! [`crate::run::run_orchestration`]'s own hard-fail gate.
 
-use electricity_template::{PlainCtx, render_template_with_escape};
+use electricity_template::render_template_with_escape;
 use electricity_value::{Dict, Value};
 
 /// Cut point, in Unicode scalar values (`char`s) -- not grapheme
@@ -170,7 +170,7 @@ pub fn render_document_label(
     // escape: false -- a label is display text in a terminal or a log,
     // not HTML, the same reasoning that turned escaping off for prompt
     // text (#397).
-    match render_template_with_escape(template, &root, &PlainCtx, "label", false) {
+    match render_template_with_escape(template, &root, "label", false) {
         Ok(rendered) => {
             let cleaned = clean_label(&rendered);
             if cleaned.is_empty() {

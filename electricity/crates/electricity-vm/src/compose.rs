@@ -27,7 +27,8 @@
 //!    [`HiddenOverlay`] -- never a whole-context snapshot: the overlay
 //!    wraps whatever [`ScopeRoot`] *ctx* already is, live or not.
 
-use electricity_template::{ScopeRoot, SpliceCtx};
+use electricity_json::{Separators, WriteMode};
+use electricity_template::ScopeRoot;
 use electricity_value::Value;
 use indexmap::IndexMap;
 use std::collections::BTreeSet;
@@ -141,14 +142,13 @@ fn unescape_variable_tags(text: &str, label: &str) -> Result<String, String> {
 /// [`expand`] call a render makes -- `core/prompt_compose.py`'s own
 /// *counter*/*extra*/*budget* trio, each threaded the same way through
 /// `_expand`'s own recursion.
-struct ExpandState<'a> {
+struct ExpandState {
     counter: u64,
     extra: IndexMap<String, String>,
     budget: usize,
-    splice_ctx: &'a dyn SpliceCtx,
 }
 
-impl ExpandState<'_> {
+impl ExpandState {
     fn charge(&mut self, size: usize, where_label: &str) -> Result<(), String> {
         self.budget += size;
         if self.budget > MAX_EXPANDED_CHARS {
@@ -181,7 +181,6 @@ fn resolve_effect_text<R: ScopeRoot>(
     ctx: &R,
     known_names: &BTreeSet<String>,
     label: &str,
-    splice_ctx: &dyn SpliceCtx,
 ) -> Result<String, String> {
     let head_path = format!("prime.{head}");
     if ctx.contains(&head_path) {
@@ -189,7 +188,7 @@ fn resolve_effect_text<R: ScopeRoot>(
         let value = ctx.lookup(&value_path)?;
         return match value {
             None | Some(Value::None) => Ok(String::new()),
-            Some(v) => stringify_effect_value(&v, splice_ctx),
+            Some(v) => stringify_effect_value(&v),
         };
     }
     if known_names.contains(head) {
@@ -200,18 +199,30 @@ fn resolve_effect_text<R: ScopeRoot>(
     ))
 }
 
-/// `str(value)`, for an effect's own resolved value -- a `List`/`Dict`
-/// *always* goes through *splice_ctx* (never collapsed to `""` just
-/// because it's empty, unlike an ordinary `{{var}}` splice: `core/
-/// prompt_compose.py::_resolve_effect_text`'s own bare `str(value)` on
-/// Python's side, where a `_JsonAwareDict`/`_JsonAwareList`'s own
-/// `__str__` always serializes); every other value renders through
-/// [`electricity_value::Value::py_str`].
-fn stringify_effect_value(value: &Value, splice_ctx: &dyn SpliceCtx) -> Result<String, String> {
+/// `core/prompt_compose.py::_resolve_effect_text`'s own
+/// `splice_text(value)`, for an effect's own resolved value: a `List`/
+/// `Dict` always renders as JSON text (never collapsed to `""` just
+/// because it's empty, and the same JSON text every other `{{var}}`
+/// splice now renders too -- circuitry#778 step 3); every other value
+/// renders through [`electricity_value::Value::py_str`].
+fn stringify_effect_value(value: &Value) -> Result<String, String> {
     match value {
-        Value::List(_) | Value::Dict(_) => splice_ctx.splice(value),
+        Value::List(_) | Value::Dict(_) => json_splice(value),
         other => Ok(other.py_str()),
     }
+}
+
+fn json_splice(value: &Value) -> Result<String, String> {
+    electricity_json::dumps_default_str(
+        value,
+        WriteMode {
+            indent: None,
+            sort_keys: false,
+            ensure_ascii: false,
+            separators: Separators::Default,
+        },
+    )
+    .map_err(|err| err.to_string())
 }
 
 /// `core/prompt_compose.py::_expand` -- *template*, with every
@@ -241,7 +252,7 @@ fn expand<R: ScopeRoot>(
     known_names: &BTreeSet<String>,
     label: &str,
     seen: &BTreeSet<String>,
-    state: &mut ExpandState<'_>,
+    state: &mut ExpandState,
 ) -> Result<String, String> {
     let bytes = template.as_bytes();
     let mut out = String::with_capacity(template.len());
@@ -306,7 +317,7 @@ fn replace_one<R: ScopeRoot>(
     known_names: &BTreeSet<String>,
     label: &str,
     seen: &BTreeSet<String>,
-    state: &mut ExpandState<'_>,
+    state: &mut ExpandState,
 ) -> Result<String, String> {
     if !is_valid_name(name) {
         return Err(format!("{label}: '{{{{> {name}}}}}' is not a valid name."));
@@ -344,7 +355,7 @@ fn replace_one<R: ScopeRoot>(
             return Ok(fragment);
         }
     }
-    let text = resolve_effect_text(name, head, ctx, known_names, label, state.splice_ctx)?;
+    let text = resolve_effect_text(name, head, ctx, known_names, label)?;
     let text = drop_one_trailing_newline(&text).to_string();
     state.charge(text.chars().count(), label)?;
     let key = format!("__circuitry_partial_{}__", state.counter);
@@ -433,11 +444,8 @@ impl<R: ScopeRoot> ScopeRoot for HiddenOverlay<'_, R> {
 /// prompt-text site in the VM uses (runtime-semantics.md §3.4's own
 /// table). *label* is the budget/error attribution text (`"template"`
 /// for Python's own default) and the final template render's own error
-/// attribution; *splice_ctx* is [`electricity_template::PlainCtx`]/
-/// [`electricity_template::JsonAwareCtx`], the same split
-/// `render_template`'s own callers already choose between; *escape* is
-/// the underlying Mustache render's own HTML-escape flag (`true` for
-/// Python's own default).
+/// attribution; *escape* is the underlying Mustache render's own
+/// HTML-escape flag (`true` for Python's own default).
 ///
 /// For composable fields only (runtime-semantics.md §3.4's own table):
 /// a model-mode `if`/`while`/`expect` template or an asset `ref`
@@ -452,14 +460,12 @@ pub fn render_with_composition<R: ScopeRoot>(
     declared_prompts: &indexmap::IndexMap<String, String>,
     effect_names: &BTreeSet<String>,
     label: &str,
-    splice_ctx: &dyn SpliceCtx,
     escape: bool,
 ) -> Result<String, String> {
     let mut state = ExpandState {
         counter: 0,
         extra: IndexMap::new(),
         budget: 0,
-        splice_ctx,
     };
     let seen = BTreeSet::new();
     let rewritten = expand(
@@ -472,17 +478,15 @@ pub fn render_with_composition<R: ScopeRoot>(
         &mut state,
     )?;
     if state.extra.is_empty() {
-        electricity_template::render_template_with_root_and_escape(
-            &rewritten, ctx, splice_ctx, label, escape,
-        )
-        .map_err(|err| err.to_string())
+        electricity_template::render_template_with_root_and_escape(&rewritten, ctx, label, escape)
+            .map_err(|err| err.to_string())
     } else {
         let overlay = HiddenOverlay {
             hidden: &state.extra,
             inner: ctx,
         };
         electricity_template::render_template_with_root_and_escape(
-            &rewritten, &overlay, splice_ctx, label, escape,
+            &rewritten, &overlay, label, escape,
         )
         .map_err(|err| err.to_string())
     }
@@ -501,13 +505,11 @@ pub(crate) fn expand_sources<R: ScopeRoot>(
     ctx: &R,
     declared_prompts: &indexmap::IndexMap<String, String>,
     effect_names: &BTreeSet<String>,
-    splice_ctx: &dyn SpliceCtx,
 ) -> Result<(Vec<String>, IndexMap<String, String>), String> {
     let mut state = ExpandState {
         counter: 0,
         extra: IndexMap::new(),
         budget: 0,
-        splice_ctx,
     };
     let seen = BTreeSet::new();
     let mut expanded = Vec::with_capacity(sources.len());
@@ -529,7 +531,7 @@ pub(crate) fn expand_sources<R: ScopeRoot>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use electricity_template::{JsonAwareCtx, PlainCtx};
+
     use electricity_value::{Dict, Value};
 
     fn env() -> (indexmap::IndexMap<String, String>, BTreeSet<String>) {
@@ -553,7 +555,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -569,7 +570,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             false,
         )
         .unwrap();
@@ -591,7 +591,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -614,7 +613,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -634,7 +632,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -654,7 +651,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -677,7 +673,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -696,7 +691,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -731,7 +725,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -749,7 +742,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -767,7 +759,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -786,7 +777,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -804,7 +794,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -824,7 +813,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -844,7 +832,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -862,7 +849,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -883,7 +869,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -917,7 +902,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -935,7 +919,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -1008,7 +991,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -1027,7 +1009,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -1060,7 +1041,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -1090,7 +1070,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -1116,7 +1095,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -1146,7 +1124,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap_err();
@@ -1154,30 +1131,23 @@ mod tests {
     }
 
     #[test]
-    fn params_json_style_effect_values_serialize_as_json_through_json_aware_ctx() {
+    fn effect_reference_list_and_dict_values_serialize_as_json() {
         let declared_prompts = indexmap::IndexMap::new();
         let effect_names = BTreeSet::new();
         let ctx = ctx_with_prime(vec![(
             "symbols",
             effect_node(Value::List(vec![Value::from("AAPL"), Value::from("MSFT")])),
         )]);
-        let serializer: &dyn Fn(&Value) -> Result<String, String> = &|v: &Value| Ok(v.py_repr());
-        let json_ctx = JsonAwareCtx::new(serializer);
-        // A plain splice (PlainCtx-equivalent) uses `py_repr`, matching
-        // `str()` of a native Python list -- this test only pins that
-        // an effect reference's own list/dict value really does route
-        // through `splice_ctx` rather than always using `py_str`.
         let rendered = render_with_composition(
             "{{> symbols}}",
             &ctx,
             &declared_prompts,
             &effect_names,
-            "params_json",
-            &json_ctx,
+            "template",
             true,
         )
         .unwrap();
-        assert_eq!(rendered, "['AAPL', 'MSFT']");
+        assert_eq!(rendered, "[\"AAPL\", \"MSFT\"]");
     }
 
     #[test]
@@ -1191,7 +1161,6 @@ mod tests {
             &declared_prompts,
             &effect_names,
             "template",
-            &PlainCtx,
             true,
         )
         .unwrap();
@@ -1216,7 +1185,6 @@ mod golden_corpus_live_root {
     use crate::exec::CtxSource;
     use crate::exec::live_scope::LiveRoot;
     use crate::{NodeRef, Store};
-    use electricity_template::{JsonAwareCtx, PlainCtx};
     use electricity_value::Value;
     use indexmap::IndexMap;
     use serde::Deserialize;
@@ -1258,20 +1226,6 @@ mod golden_corpus_live_root {
         known_effect_names: Vec<String>,
         label: String,
         escape: bool,
-        json_aware: bool,
-    }
-
-    fn json_aware_splice(value: &Value) -> Result<String, String> {
-        electricity_json::dumps_default_str(
-            value,
-            electricity_json::WriteMode {
-                indent: None,
-                sort_keys: false,
-                ensure_ascii: false,
-                separators: electricity_json::Separators::Default,
-            },
-        )
-        .map_err(|err| err.to_string())
     }
 
     /// Writes *ctx*'s own dict-valued entries (recursively, including
@@ -1311,29 +1265,14 @@ mod golden_corpus_live_root {
         root: &R,
         known: &BTreeSet<String>,
     ) -> Result<String, String> {
-        if case.json_aware {
-            let serializer: &dyn Fn(&Value) -> Result<String, String> = &json_aware_splice;
-            let json_ctx = JsonAwareCtx::new(serializer);
-            render_with_composition(
-                &case.template,
-                root,
-                &case.declared,
-                known,
-                &case.label,
-                &json_ctx,
-                case.escape,
-            )
-        } else {
-            render_with_composition(
-                &case.template,
-                root,
-                &case.declared,
-                known,
-                &case.label,
-                &PlainCtx,
-                case.escape,
-            )
-        }
+        render_with_composition(
+            &case.template,
+            root,
+            &case.declared,
+            known,
+            &case.label,
+            case.escape,
+        )
     }
 
     #[test]

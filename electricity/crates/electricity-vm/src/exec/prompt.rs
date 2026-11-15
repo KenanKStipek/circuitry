@@ -1529,7 +1529,6 @@ pub(crate) async fn execute_prompt(
         let rendered_ref = match electricity_template::render_template_with_root(
             &asset.reference,
             &render_root,
-            &electricity_template::PlainCtx,
             &label,
         ) {
             Ok(rendered) => electricity_value::pycompat::py_strip(&rendered).to_string(),
@@ -2077,7 +2076,6 @@ fn render_prompt<R: crate::params::ParamsCtx>(
                 run_ctx.declared_prompts,
                 run_ctx.effect_names,
                 "template",
-                &electricity_template::PlainCtx,
                 false,
             )?;
             Ok((Vec::new(), rendered, Vec::new()))
@@ -2115,7 +2113,6 @@ fn render_prompt<R: crate::params::ParamsCtx>(
                             run_ctx.declared_prompts,
                             run_ctx.effect_names,
                             &label,
-                            &electricity_template::PlainCtx,
                             false,
                         )?
                     }
