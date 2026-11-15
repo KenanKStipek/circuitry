@@ -28,6 +28,7 @@ from circuitry.core.store import Store
 from circuitry.core.templates import (
     TemplateError,
     render_template,
+    splice_text,
     template_syntax_error,
 )
 
@@ -71,6 +72,53 @@ def test_render_template_raises_instead_of_returning_raw_text() -> None:
     assert render_template("hi {{a}}", {"a": 1}) == "hi 1"
     with pytest.raises(TemplateError, match=r"^params\.input: malformed Mustache template"):
         render_template(BROKEN, {}, label="params.input")
+
+
+def test_a_whole_list_or_dict_renders_as_json_not_python_repr() -> None:
+    assert render_template("{{x}}", {"x": ["a", "b"]}) == '[&quot;a&quot;, &quot;b&quot;]'
+    assert render_template("{{{x}}}", {"x": ["a", "b"]}) == '["a", "b"]'
+    assert render_template("{{{x}}}", {"x": {"k": 1}}) == '{"k": 1}'
+
+
+def test_nested_bool_null_and_date_inside_a_list_render_as_json() -> None:
+    value = [1, True, False, None, date(2026, 1, 2), "café"]
+    assert (
+        render_template("{{{x}}}", {"x": value})
+        == '[1, true, false, null, "2026-01-02", "café"]'
+    )
+
+
+def test_an_empty_list_or_dict_still_renders_not_collapsed_to_empty_string() -> None:
+    assert render_template("[{{x}}]", {"x": []}) == "[[]]"
+    assert render_template("[{{x}}]", {"x": {}}) == "[{}]"
+
+
+def test_a_section_over_a_list_is_unaffected_by_json_rendering() -> None:
+    assert render_template("{{#items}}<{{.}}>{{/items}}", {"items": ["a", "b"]}) == "<a><b>"
+    assert render_template("{{#items}}x{{/items}}", {"items": []}) == ""
+
+
+def test_splice_text_matches_what_a_bare_tag_would_render() -> None:
+    assert splice_text(["a", "b"]) == '["a", "b"]'
+    assert splice_text({"k": 1}) == '{"k": 1}'
+    assert splice_text([]) == "[]"
+    assert splice_text("a") == "a"
+    assert splice_text(True) == "True"
+
+
+def test_declared_prompt_partial_effect_reference_renders_a_list_as_json() -> None:
+    """``{{> name}}`` splices an effect's own value before chevron ever sees
+    it (``core.prompt_compose._resolve_effect_text``), so it needs its own
+    JSON rendering, not just ``render_template``'s (#778 step 3)."""
+    from circuitry.core.prompt_compose import render_with_composition
+
+    ctx = {"prime": {"items": {"value": ["a", "b"]}}}
+    assert (
+        render_with_composition(
+            "{{> items}}", ctx, declared={}, known_effect_names=frozenset({"items"})
+        )
+        == '["a", "b"]'
+    )
 
 
 def test_section_tag_matching_the_section_name_renders_the_value_not_a_method() -> None:
