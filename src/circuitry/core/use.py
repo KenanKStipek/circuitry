@@ -520,6 +520,141 @@ class _SavedChildRun:
         return saved is not _UNSAVEABLE and saved == _saved_form(inputs)
 
 
+#: The tiebreak order :func:`_json_key_sort_key` uses when two keys of
+#: different types write the same JSON text (e.g. the string ``"true"``
+#: beside the bool ``True``) -- arbitrary but fixed, so the order is total
+#: and the same on both engines.
+_KEY_TYPE_RANK = {bool: 0, int: 1, float: 2, type(None): 3, str: 4}
+
+
+def _json_key_text(key: Any) -> str:
+    """The JSON string ``json.dumps`` would write for a dict *key* --
+    ``"true"``/``"false"``/``"null"`` for a bool/``None``, decimal text
+    for an int or float, or the string itself.
+    """
+    if isinstance(key, str):
+        return key
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(key)
+    if isinstance(key, float):
+        return json.dumps(key)
+    raise TypeError(f"keys must be str, int, float, bool or None, not {type(key).__name__}")
+
+
+def _json_key_sort_key(key: Any) -> tuple[str, int]:
+    """*key*'s own sort key for :func:`_canonical_key_order`: the JSON
+    text it would write, then its type's rank in :data:`_KEY_TYPE_RANK`
+    as a tiebreak for two keys whose JSON text is the same.
+    """
+    rank = _KEY_TYPE_RANK[bool if isinstance(key, bool) else type(key)]
+    return (_json_key_text(key), rank)
+
+
+def _canonical_key_order(value: Any) -> Any:
+    """*value* with every dict's keys reordered into the order
+    :func:`_canonical_json_digest` hashes: by the JSON text each key
+    would write, not by the keys themselves -- so a dict mixing key
+    types that ``<`` can't compare (e.g. a YAML 1.1 ``on:`` key read as
+    the bool ``True`` beside a string key) still sorts, deterministically,
+    instead of ``json.dumps(..., sort_keys=True)``'s own ``TypeError`` for
+    that case (#778; ``yaml.dump``, which this replaced, tolerated it).
+    For a dict whose keys are all the same type and all strings -- the
+    realistic shape of a reflector's plan -- the JSON text of a key is the
+    key itself, so this sorts exactly as ``sort_keys=True`` always did.
+    """
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
+        return {k: _canonical_key_order(v) for k, v in items}
+    if isinstance(value, list):
+        return [_canonical_key_order(v) for v in value]
+    return value
+
+
+def _canonical_json_digest(doc: dict[str, Any]) -> str:
+    """The sha256 a reflector-generated document's ``meta.orchestration_sha256``
+    records: canonical JSON, not the document's own (nonexistent) YAML text.
+
+    Compact separators, and keys pre-sorted by :func:`_canonical_key_order`
+    (then written with ``sort_keys=False``, which only ever affects an
+    unordered ``dict`` literal, never this one) so the digest never
+    depends on the model's own key order, matching on both engines.
+    """
+    canonical = json.dumps(
+        _canonical_key_order(doc),
+        sort_keys=False,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _render_inline_document(
+    value: Any,
+    ctx: Mapping[str, Any],
+    *,
+    declared: Mapping[str, str],
+    known_effect_names: frozenset[str],
+) -> Any:
+    """Render every string leaf of *value* through
+    :func:`core.prompt_compose.render_with_composition` -- the same
+    composition an ordinary ``inline:`` field's own text gets as a whole,
+    applied leaf by leaf since there is no whole text here to render (a
+    reflector's generated plan is handed over already parsed, #778).
+
+    Not quite the same as rendering the whole (re-dumped) text once did:
+    a dict's own keys are never rendered (only values are, since a
+    document's structure -- which effect runs, under what name -- is
+    fixed by the model's parsed plan, not by a Mustache tag inside a
+    key), and there is no re-serialized YAML text left for a rendered
+    value's own quoting to break. A Mustache tag inside one *value*
+    still renders the same way either style would.
+    """
+    if isinstance(value, str):
+        return render_with_composition(
+            value, ctx, declared=declared, known_effect_names=known_effect_names, label="inline"
+        )
+    if isinstance(value, dict):
+        return {
+            k: _render_inline_document(
+                v, ctx, declared=declared, known_effect_names=known_effect_names
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _render_inline_document(
+                v, ctx, declared=declared, known_effect_names=known_effect_names
+            )
+            for v in value
+        ]
+    return value
+
+
+def _validate_inline_document(parsed: Any) -> tuple[bool, list[str]]:
+    """Validate an already-parsed document the way :func:`_validate_inline_yaml`
+    validates text — shared by an ordinary ``inline:`` child (parsed from its
+    own rendered text) and a reflector's generated plan (handed over as a
+    document object, never dumped to YAML and reparsed).
+
+    Returns (ok, errors) where errors is a list of human-readable messages.
+    """
+    if not isinstance(parsed, dict):
+        return False, ["Inline orchestration must be a YAML mapping with an 'effects' key."]
+
+    if "effects" not in parsed:
+        return False, ["Inline orchestration is missing required 'effects' key."]
+
+    errors = structural_errors(parsed)
+    return (len(errors) == 0), errors
+
+
 def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
     """Validate an inline YAML string the way ``cof check`` validates a file.
 
@@ -535,14 +670,7 @@ def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
     except _yaml.YAMLError as e:
         return False, [f"YAML parse error: {e}"]
 
-    if not isinstance(parsed, dict):
-        return False, ["Inline orchestration must be a YAML mapping with an 'effects' key."]
-
-    if "effects" not in parsed:
-        return False, ["Inline orchestration is missing required 'effects' key."]
-
-    errors = structural_errors(parsed)
-    return (len(errors) == 0), errors
+    return _validate_inline_document(parsed)
 
 
 def _clean_yaml_fences(text: str) -> str:
@@ -565,6 +693,18 @@ class UseDefinition:
     path: str | None = None
     orchestration: str | None = None
     inline: str | None = None
+    #: A reflector's generated plan, already parsed and normalized
+    #: (``core.reflector._extract_done_flag``) — never set by a document
+    #: author, and mutually exclusive with ``inline`` (only ``ReflectorRuntime``
+    #: builds a ``UseDefinition`` with this set, always alongside
+    #: ``force_generated=True``). Every string leaf renders through Mustache
+    #: the same way ``inline``'s own text does (:func:`_render_inline_document`),
+    #: but unlike ``inline`` there is no YAML dump-and-reparse: the document
+    #: itself (keys included) is never rendered as a whole, so the plan runs
+    #: with its keys in the order the model wrote them. Its own
+    #: ``meta.orchestration_sha256`` is the sha256 of its canonical JSON text
+    #: (:func:`_canonical_json_digest`) rather than of rendered YAML text.
+    inline_document: dict[str, Any] | None = None
     inputs: dict[str, Any] | None = None
     #: name -> state path. Values may be the canonical ``{path: ...}`` object
     #: or the bare-path shorthand; both normalize through ``core.outputs``.
@@ -858,12 +998,41 @@ class UseRuntime:
         self, ctx: dict[str, Any]
     ) -> tuple[dict[str, Any], str, str, str]:
         """Load the child orchestration dict, a display label, a cycle-identity
-        string, and the SHA-256 of the YAML text it came from.
+        string, and the SHA-256 identifying it.
 
         Returns (orch_dict, label, identity, sha256).
         For file-based: identity is the absolute resolved path; the digest is of the file's bytes.
         For inline: identity is 'inline:<sha256-of-cleaned-yaml>'; the digest is of that YAML.
+        For inline_document (a reflector's generated plan): identity is
+        'inline:<sha256-of-canonical-json>'; the digest is of the rendered
+        document's own canonical JSON text (:func:`_canonical_json_digest`) —
+        there is no YAML text to hash, since this path never dumps one.
         """
+        if self.defn.inline_document is not None:
+            # Every string leaf composes against *ctx* exactly as an
+            # ordinary 'inline:' field's own text does -- the parsed
+            # document is new (#778), but the plan's own effects still see
+            # the reflector's enclosing scope the same way.
+            rendered = _render_inline_document(
+                self.defn.inline_document,
+                ctx,
+                declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
+            )
+            if self.defn.validate:
+                ok, errors = _validate_inline_document(rendered)
+                if not ok:
+                    raise ValueError(
+                        "Inline orchestration validation failed:\n"
+                        + "\n".join(f"  - {e}" for e in errors)
+                    )
+            if not isinstance(rendered, dict):
+                raise ValueError(
+                    "Inline orchestration must be a YAML mapping with an 'effects' key."
+                )
+            digest = _canonical_json_digest(rendered)
+            return rendered, "inline", f"inline:{digest[:16]}", digest
+
         if self.defn.inline is not None:
             # Render Mustache template against parent context
             raw_yaml = render_with_composition(
@@ -1016,7 +1185,7 @@ class UseRuntime:
                 "",
             )
 
-        if self.defn.inline is None:
+        if self.defn.inline is None and self.defn.inline_document is None:
             # A path/ref/orchestration child loads from disk; it is its own,
             # independently trusted document unless the document that
             # carries this use effect is itself generated, in which case it
@@ -1025,12 +1194,20 @@ class UseRuntime:
             if not own_doc_is_generated:
                 return _fresh_ceiling()
             generated = True
-        else:
+        elif self.defn.inline is not None:
             generated = (
                 own_doc_is_generated
                 or self.defn.force_generated
                 or is_generated_inline(self.defn.inline, child_orch)
             )
+            if not generated:
+                return _fresh_ceiling()
+        else:
+            # inline_document: only ever built by the reflector's own
+            # synthetic use, always with force_generated=True -- there is
+            # no unrendered template of its own to compare the rendered
+            # document's shape against, unlike an author's inline: field.
+            generated = own_doc_is_generated or self.defn.force_generated
             if not generated:
                 return _fresh_ceiling()
 
@@ -1240,7 +1417,7 @@ class UseRuntime:
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
         meta["orchestration"] = legacy_ref
-        meta["inline"] = self.defn.inline is not None
+        meta["inline"] = self.defn.inline is not None or self.defn.inline_document is not None
         meta["resolved_path"] = None
         meta["validation_errors"] = None
         meta["error"] = None

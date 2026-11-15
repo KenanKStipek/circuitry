@@ -11,7 +11,7 @@ effects:
     effects:
       - type: reflector
         name: plan_it
-        prime_template: "Plan it. Goal: {goal}"
+        prime_template: "Plan it. Goal: {{goal}}"
         stop_on_done: false
         max_iterations: 2
         allow_tools: [json]

@@ -190,6 +190,11 @@ fn mapping() -> BTreeMap<(&'static str, &'static str), &'static str> {
         "effects::UseSource::Orchestration",
     );
     add("UseDefinition", "inline", "effects::UseSource::Inline");
+    add(
+        "UseDefinition",
+        "inline_document",
+        "effects::UseSource::InlineDocument",
+    );
     add("UseDefinition", "inputs", "effects::UseOp::inputs");
     add("UseDefinition", "outputs", "effects::UseOp::outputs");
     add("UseDefinition", "validate", "effects::UseOp::validate");

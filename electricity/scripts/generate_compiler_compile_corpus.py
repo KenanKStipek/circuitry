@@ -1676,19 +1676,33 @@ add(doc(text=(
 CASES[-1]["name"] = "prompt_inputs_in_a_loop_body_are_not_reference_checked"
 
 
-# --- A custom prime_template is never Mustache-checked ---------------------
+# --- A custom prime_template is Mustache-checked (issue #778) --------------
 
 add(doc(text=(
     "effects:\n"
     "  - type: reflector\n"
     "    name: think\n"
-    "    prime_template: 'Plan {goal}: {{#unclosed'\n"
+    "    prime_template: 'Plan: {{#unclosed'\n"
     "    effects:\n"
     "      - type: prompt\n"
     "        name: propose_steps\n"
     "        template: x\n"
 )))
-CASES[-1]["name"] = "reflector_prime_template_is_never_mustache_checked"
+CASES[-1]["name"] = "reflector_prime_template_malformed_mustache_is_refused"
+
+# --- A custom prime_template's leftover str.format placeholder is refused --
+
+add(doc(text=(
+    "effects:\n"
+    "  - type: reflector\n"
+    "    name: think\n"
+    "    prime_template: 'Plan {goal}'\n"
+    "    effects:\n"
+    "      - type: prompt\n"
+    "        name: propose_steps\n"
+    "        template: x\n"
+)))
+CASES[-1]["name"] = "reflector_prime_template_str_format_placeholder_is_refused"
 
 
 # --- A reflector's inner scope is scope_child(scope, name) ----------------

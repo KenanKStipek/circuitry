@@ -1,7 +1,10 @@
 //! `yaml.dump(value, default_flow_style=False)` -- a port of PyYAML's
 //! `Emitter`/`Serializer`/`Representer` for the values [`Value`] can
-//! hold (issue #506's lane L1, shared with M1-L2's `safe_dump(sort_keys
-//! =False)`).
+//! hold. Originally issue #506's lane L1 (a reflector's generated plan,
+//! re-dumped before `use(inline)` parsed it again) and M1-L2's own
+//! `safe_dump(sort_keys=False)`; issue #778 dropped the reflector's own
+//! dump-and-reparse round trip, so decomposition's own plan-dumping is
+//! this module's only caller left.
 //!
 //! Scope, deliberately narrower than PyYAML's own `Dumper`: every
 //! caller in this workspace always passes `default_flow_style=False`
@@ -9,9 +12,8 @@
 //! block-style collections (an empty list/dict is still the flow form
 //! `[]`/`{}` -- PyYAML's own exception to `default_flow_style=False`,
 //! confirmed against the real dumper) and always escapes non-ASCII.
-//! `sort_keys` is the one knob callers actually vary (reflector always
-//! dumps with it on, matching `yaml.dump`'s own default; L2's
-//! `safe_dump` turns it off). No caller in this crate ever asks this
+//! `sort_keys` is the one knob callers actually vary (decomposition's
+//! own `safe_dump` always turns it off). No caller in this crate ever asks this
 //! emitter to choose a literal/folded block scalar style (`|`/`>`) --
 //! PyYAML's own default representer never requests one either (every
 //! `ScalarNode` it builds leaves `style=None`, for the emitter's
@@ -46,11 +48,10 @@
 //! `sort_keys=True` path is `try: mapping = sorted(mapping) except
 //! TypeError: pass` -- a dict with mismatched-type keys (`{1: a, b:
 //! c}`) therefore dumps successfully, in its own *original* insertion
-//! order, never raising: confirmed directly against `yaml.dump` and
-//! against `circuitry.core.reflector._extract_done_flag` itself with
-//! PyYAML 6.0.3 (the pinned version), both of which return/dump the
-//! unsorted pair with no exception. [`sorted_keys`] reproduces that
-//! exact all-or-nothing fallback, not a raised error.
+//! order, never raising: confirmed directly against `yaml.dump` with
+//! PyYAML 6.0.3 (the pinned version), which returns/dumps the unsorted
+//! pair with no exception. [`sorted_keys`] reproduces that exact
+//! all-or-nothing fallback, not a raised error.
 
 use crate::scalar;
 use electricity_value::Value;
@@ -65,12 +66,10 @@ const BEST_INDENT: usize = 2;
 
 /// What [`dump`] couldn't finish -- today, only nesting deeper than
 /// [`crate::MAX_DEPTH`] (this crate's own shared bound for untrusted,
-/// possibly model-generated input: a reflector's generated plan is
-/// dumped right back out before `use(inline)` ever validates it, so
-/// nothing has bounded its depth yet when this function runs). Mapping
-/// key sorting, the one other failure mode the issue's own prose
-/// describes, does not actually reach this type -- see this module's
-/// own doc comment on why.
+/// possibly model-generated input, such as a decomposition plan dumped
+/// before it is parsed again). Mapping key sorting, the one other
+/// failure mode the issue's own prose describes, does not actually
+/// reach this type -- see this module's own doc comment on why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DumpError(pub String);
 
@@ -89,8 +88,9 @@ pub struct DumpOptions {
 }
 
 impl Default for DumpOptions {
-    /// `yaml.dump`'s own default (`sort_keys=True`) -- reflector's own
-    /// two dump call sites never override it.
+    /// `yaml.dump`'s own default (`sort_keys=True`); this crate's own
+    /// caller (decomposition's own plan-dumping) always turns it off
+    /// instead, by naming the field explicitly.
     fn default() -> Self {
         DumpOptions { sort_keys: true }
     }
@@ -319,15 +319,16 @@ fn sorted_keys(dict: &electricity_value::Dict, sort_keys: bool) -> Vec<Value> {
 /// [`emit_sequence`]'s own doc comment) with no flag to tell those
 /// apart.
 /// **Known gap, documented in DESIGN.md's own divergence table (issue
-/// #506's lane L1, PR #510's first review):**
+/// #506's lane L1, PR #510's first review; narrowed to decomposition by
+/// issue #778, which dropped the reflector's own use of this emitter):**
 /// PyYAML's own `check_simple_key` switches a block-mapping key to the
 /// explicit `? key\n: value` form once that key's own emitted length
 /// reaches 128 characters or it spans more than one line -- this
 /// function always writes the plain `key:` form below, whatever the
-/// key's own length or shape. Only reachable through
-/// `meta.orchestration_sha256`/the literal re-dumped text a reflector
-/// (or M1-L2) ever feeds back into a Mustache render, never the
-/// *parsed* value a key maps to.
+/// key's own length or shape. Only reachable through decomposition's
+/// own `meta.decomposition.yaml`, the literal plan text `decompose.rs`
+/// dumps and feeds back into a Mustache render, never the *parsed*
+/// value a key maps to.
 fn emit_mapping(
     out: &mut String,
     dict: &electricity_value::Dict,

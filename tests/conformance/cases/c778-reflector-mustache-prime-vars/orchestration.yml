@@ -1,0 +1,15 @@
+name: c778-reflector-mustache-prime-vars
+adapter: scripted
+model: test
+effects:
+  - type: yield
+    name: goal
+    template: "Summarize the project."
+  - type: reflector
+    name: plan_it
+    max_effects: 3
+    prime_template: "Plan it. Goal: {{goal}}. Context: {{context}}. Cap: {{max_effects}}."
+    effects:
+      - type: prompt
+        name: propose_steps
+        template: "propose steps"

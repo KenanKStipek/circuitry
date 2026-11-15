@@ -251,6 +251,15 @@ pub enum UseSource {
     Path(String),
     Orchestration(String),
     Inline(TemplateText),
+    /// `UseDefinition.inline_document` (#778): a reflector's generated
+    /// plan, already parsed and normalized -- never set from a document's
+    /// own YAML, only built by `exec::reflector`'s own synthetic `use`.
+    /// Unlike `Inline`, there is no YAML text here to dump and reparse:
+    /// every string leaf still composes against the enclosing scope
+    /// (`exec::use_::load_child`'s own leaf-by-leaf walk), but the
+    /// document's own key order survives, and its digest is the sha256
+    /// of its canonical JSON text, not of rendered YAML.
+    InlineDocument(Value),
 }
 
 /// `core/resume.py::ResumeMode` -- a `use`'s or a `dynamic`'s own

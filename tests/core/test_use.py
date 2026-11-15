@@ -14,6 +14,7 @@ from circuitry.core.store import Store
 from circuitry.core.use import (
     UseDefinition,
     UseRuntime,
+    _canonical_json_digest,
     _clean_yaml_fences,
     _resolve_dot_path,
     _validate_inline_yaml,
@@ -1350,3 +1351,49 @@ def test_run_seeds_orchestration_dir_from_the_root_file(
 
     assert result.ok, result.error
     assert result.state["prime"]["candidates"]["meta"]["error"] is None
+
+
+# ── _canonical_json_digest (#778) — a reflector-generated plan's digest ───────
+
+
+def test_canonical_json_digest_matches_plain_sort_keys_for_string_keys() -> None:
+    """All-string keys (the realistic shape of a reflector's plan) hash
+    exactly as ``json.dumps(doc, sort_keys=True, ...)`` always did."""
+    import hashlib
+    import json
+
+    doc = {"z": 1, "a": 2, "effects": []}
+    expected = hashlib.sha256(
+        json.dumps(
+            doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        ).encode("utf-8")
+    ).hexdigest()
+    assert _canonical_json_digest(doc) == expected
+
+
+def test_canonical_json_digest_tolerates_a_yaml_1_1_bool_key() -> None:
+    """``on: push`` parses as the bool key ``True`` (YAML 1.1) -- mixed
+    with a string key, plain ``sort_keys=True`` raises; this doesn't."""
+    doc = yaml.safe_load("on: push\nname: x\neffects: []\n")
+    assert True in doc
+    digest = _canonical_json_digest(doc)
+    assert isinstance(digest, str) and len(digest) == 64
+    # Deterministic: same input, same digest, regardless of insertion order.
+    reordered = {"effects": [], "name": "x", True: "push"}
+    assert _canonical_json_digest(reordered) == digest
+
+
+def test_canonical_json_digest_tolerates_a_mixed_int_and_string_key() -> None:
+    doc = yaml.safe_load("1: a\nb: c\neffects: []\n")
+    assert 1 in doc
+    digest = _canonical_json_digest(doc)
+    assert isinstance(digest, str) and len(digest) == 64
+
+
+def test_canonical_json_digest_breaks_a_text_tie_by_key_type() -> None:
+    """A string key ``\"true\"`` and the bool key ``True`` both write the
+    JSON text ``true`` -- the tie is broken by type (bool before str),
+    deterministically, not left to insertion order."""
+    doc_a = {"true": 1, True: 2, "effects": []}
+    doc_b = {True: 2, "true": 1, "effects": []}
+    assert _canonical_json_digest(doc_a) == _canonical_json_digest(doc_b)
