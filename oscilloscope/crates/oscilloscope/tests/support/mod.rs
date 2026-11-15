@@ -154,7 +154,10 @@ pub fn osi_electricity_command(home: &TestHome) -> Command {
 }
 
 /// Waits for `child` with a hard timeout, killing it (and panicking)
-/// rather than ever hanging a CI job.
+/// rather than ever hanging a CI job. `timeout`'s own clock starts
+/// when this is called, not when the test itself started -- it
+/// bounds only how long `child` takes to exit from here, never any
+/// wait a caller already ran before calling this.
 pub fn wait_with_timeout(mut child: Child, timeout: Duration) -> std::process::ExitStatus {
     let start = Instant::now();
     loop {

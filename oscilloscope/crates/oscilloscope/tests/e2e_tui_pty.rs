@@ -313,7 +313,11 @@ fn after_a_run_ends_down_and_enter_browse_a_row_and_bracket_steps_to_the_next() 
     );
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    let screen = wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["Ended", "alpha", "beta", "gamma"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("alpha") && screen.contains("beta") && screen.contains("gamma"),
         "expected all three rows on the ended Tape; screen:\n{screen}"
@@ -749,9 +753,15 @@ fn screen_keys_switch_screens_during_a_live_run() {
     // `q` while still running asks first; confirming both cancels
     // and leaves once the engine actually exits.
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -865,9 +875,15 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
     // `q` while still running asks first; confirming both cancels
     // and leaves once the engine actually exits.
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -958,9 +974,15 @@ fn resizing_the_store_screen_drops_readings_below_30_rows() {
     });
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1005,9 +1027,15 @@ fn resizing_below_80_columns_bounces_store_back_to_the_tape() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1076,7 +1104,11 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
         screen.contains("Flow \u{b7}"),
         "expected the Flow screen's own rail pane after pressing 2; screen:\n{screen}"
     );
-    let screen = wait_for_screen_text(&captured_buf, "◆", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["◆", "gate", "Story"],
+        Duration::from_secs(10),
+    );
     {
         assert!(
             screen.contains("◆"),
@@ -1136,9 +1168,15 @@ fn pressing_2_during_a_live_run_opens_the_flow_screen() {
     std::thread::sleep(Duration::from_millis(500));
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1217,9 +1255,15 @@ fn flow_up_down_and_plus_minus_select_and_fold_a_live_loops_own_lanes() {
     wait_for_screen_text(&captured_buf, "lanes +", Duration::from_secs(10));
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1291,7 +1335,11 @@ fn selecting_either_of_two_unnamed_ifs_on_one_host_shows_its_own_decision() {
     // onto b's own decision.
     std::thread::sleep(SIGNAL_DELAY);
     send_bytes(&mut master, b"\x1b[D\x1b[D");
-    let screen = wait_for_screen_text(&captured_buf, "cel  false", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["cel  false", "\u{2192} else", "(inferred)"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("cel  false"),
         "expected b's own condition once its decision is selected; screen:\n{screen}"
@@ -1305,7 +1353,11 @@ fn selecting_either_of_two_unnamed_ifs_on_one_host_shows_its_own_decision() {
     // onto a's own decision.
     std::thread::sleep(SIGNAL_DELAY);
     send_bytes(&mut master, b"\x1b[D\x1b[D");
-    let screen = wait_for_screen_text(&captured_buf, "cel  true", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["cel  true", "\u{2192} then", "(inferred)"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("cel  true"),
         "expected a's own condition once its decision is selected; screen:\n{screen}"
@@ -1372,7 +1424,11 @@ fn an_unnamed_ifs_decision_without_evidence_draws_before_a_later_resolved_one() 
         screen.contains("Flow \u{b7}"),
         "expected the Flow screen after pressing 2; screen:\n{screen}"
     );
-    let screen = wait_for_screen_text(&captured_buf, "\u{2192} none", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["\u{2192} none", "\u{2192} then"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("\u{2192} none"),
         "expected a's own vacuous decision to read \"\u{2192} none\"; screen:\n{screen}"
@@ -1454,9 +1510,15 @@ fn resizing_the_flow_screen_drops_the_story_pane_then_bounces_to_the_tape() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1486,7 +1548,11 @@ fn pressing_1_during_a_live_run_opens_the_signal_screen() {
     // The replayed screen, not the bytes drawn since the key press: a
     // screen switch redraws only the cells that changed, so text that
     // sits in the same cells on both screens is never sent again.
-    let screen = wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["SIGNAL", "┃", "slow"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("SIGNAL"),
         "expected the Signal screen's own chip after pressing 1; got:\n{screen}"
@@ -1548,9 +1614,15 @@ fn pressing_1_during_a_live_run_opens_the_signal_screen() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1591,9 +1663,15 @@ fn resizing_the_signal_screen_drops_readings_at_80_columns() {
     });
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1642,9 +1720,15 @@ fn resizing_below_80_columns_bounces_signal_back_to_the_tape() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -1730,9 +1814,15 @@ fn the_flow_screen_updates_live_without_a_further_key_press() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -2998,9 +3088,15 @@ fn pressing_p_on_the_tape_toggles_previews() {
     });
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3060,9 +3156,15 @@ fn pressing_t_on_the_tape_toggles_the_tokens_view() {
     });
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3207,9 +3309,15 @@ fn history_across_four_runs_shows_usual_tokens_and_a_deviation() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3291,7 +3399,7 @@ fn totals_row_shows_cached_input_from_a_patched_state_file() {
         &[OsStr::new("watch"), run_dir.path().as_os_str()],
     );
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    let screen = wait_for_screen_text(&captured_buf, "cached", Duration::from_secs(10));
+    let screen = wait_for_screen_text(&captured_buf, "(40 t cached)", Duration::from_secs(10));
     assert!(
         screen.contains("(40 t cached)"),
         "expected the Totals row to show the patched node's own cached input; got:\n{screen}"
@@ -3384,9 +3492,15 @@ fn follow_off_with_now_out_of_view_shows_a_status_line_notice() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3463,9 +3577,15 @@ fn the_help_overlay_opens_on_the_tapes_keys_and_pages_to_its_key() {
     std::thread::sleep(Duration::from_millis(300));
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3569,9 +3689,15 @@ fn the_tapes_help_overlay_merges_on_one_page_at_120x30() {
     std::thread::sleep(Duration::from_millis(300));
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3643,9 +3769,15 @@ fn the_help_overlay_lists_each_other_screens_own_key() {
 
     send_bytes(&mut master, b"0");
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3719,9 +3851,15 @@ fn resizing_through_the_tapes_four_size_classes_and_back() {
     );
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3833,9 +3971,15 @@ fn arrow_keys_enter_and_esc_move_and_open_a_step_on_the_tape() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3926,9 +4070,15 @@ fn the_tapes_detail_pane_still_shows_at_100x30() {
     }
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -3978,9 +4128,15 @@ fn the_tapes_list_title_shortens_instead_of_clipping_at_100x30() {
     );
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),
@@ -4261,7 +4417,11 @@ fn a_running_agent_shows_its_turn_and_tool_live_and_the_block_grows_on_enter() {
     // sleep ends -- the Tape row must show the turn and that running
     // tool while it's still in flight, not just the session's own
     // elapsed time.
-    let screen = wait_for_screen_text(&captured_buf, "turn 1", Duration::from_secs(15));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["turn 1", "bash", "Tape \u{b7} "],
+        Duration::from_secs(15),
+    );
     assert!(
         screen.contains("turn 1"),
         "expected the running turn on the Tape row; screen:\n{screen}"
@@ -4574,7 +4734,11 @@ fn a_running_shell_steps_detail_pane_shows_its_live_output() {
     );
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    let screen = wait_for_screen_text(&captured_buf, "── Output (live) ", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["── Output (live) ", "tick-1"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("── Output (live) "),
         "expected a live Output section while the step still runs; screen:\n{screen}"
@@ -4585,7 +4749,11 @@ fn a_running_shell_steps_detail_pane_shows_its_live_output() {
     wait_for_screen_text(&captured_buf, "Ended", Duration::from_secs(20));
     std::thread::sleep(SIGNAL_DELAY);
     send_bytes(&mut master, b"\x1b[A");
-    let screen = wait_for_screen_text(&captured_buf, "work · Selected", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["work · Selected", "── Output ", "tick-1", "tick-2"],
+        Duration::from_secs(10),
+    );
     assert!(
         !screen.contains("Output (live)"),
         "expected the live section gone once the step finished; screen:\n{screen}"
@@ -4887,9 +5055,15 @@ effects:
     );
 
     send_bytes(&mut master, b"q");
-    std::thread::sleep(Duration::from_millis(200));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine (osi dropped the `y`, never
+    // quit, and this hit its own exit wait's hard cap).
+    wait_for_screen_text(&captured_buf, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master, b"y");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before
+    // osi can exit -- more headroom than a plain quit needs.
+    let status = wait_with_timeout(child, Duration::from_secs(60));
     assert_eq!(
         status.code(),
         Some(130),

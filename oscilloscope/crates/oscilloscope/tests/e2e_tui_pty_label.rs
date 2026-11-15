@@ -340,9 +340,14 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
     // own `q` while running never quits at once, unlike `osi watch`
     // or an already-ended run) -- `y` confirms it.
     send_bytes(&mut master_b, b"q");
-    std::thread::sleep(Duration::from_millis(300));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine.
+    wait_for_screen_text(&captured_b, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master_b, b"y");
-    let _status_b = wait_with_timeout(child_b, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before osi
+    // can exit -- more headroom than a plain quit needs.
+    let _status_b = wait_with_timeout(child_b, Duration::from_secs(60));
 
     assert_no_leftover_process(work.path());
     assert_no_leftover_process(out_dir_a.path());
