@@ -55,6 +55,17 @@ calls for every ``mode: cel`` expression so ``cof check`` rejects a bad
 expression before a run ever dispatches, and :func:`state_paths`, which
 ``core.state_ns`` uses to police the ``state.<namespace>`` grammar
 against the parse tree rather than against a regex over the source.
+
+**Nesting has one explicit limit.** :func:`_compile` rejects an
+expression nested deeper than :data:`MAX_CEL_NESTING_DEPTH` as soon as it
+parses, before anything -- the state-path walk below, or evaluation
+itself -- recurses over its tree. electricity enforces the identical
+limit, the identical depth count and the identical message, so the two
+engines reject exactly the same expressions rather than each failing
+wherever its own recursion happens to give out, which used to differ by
+shape and by Python version. An expression compiled only at run time (a
+``use: inline`` child rendered from a template) gets the same check the
+first time it compiles, with the same message.
 """
 
 from __future__ import annotations
@@ -99,8 +110,8 @@ class CelError(Exception):
     ) -> None:
         super().__init__(message)
         self.expression = expression
-        #: Set only by :func:`_compile`'s own ``RecursionError`` catch --
-        #: lets :func:`validate_cel_syntax` report the one-line "nested
+        #: Set only when *expression* is over :data:`MAX_CEL_NESTING_DEPTH`
+        #: -- lets :func:`validate_cel_syntax` report the one-line "nested
         #: too deeply" text instead of wrapping it as a generic parse
         #: failure (which would repeat the whole, deeply nested
         #: expression back in the message).
@@ -354,9 +365,11 @@ class _StateEvaluator(Evaluator):
 
     Every method below replaces its base-class counterpart's body outright
     (never a ``super()`` call, never a shared helper called per tree
-    level): cel-python's nesting limit is Python's own recursion limit, the
-    CEL golden corpus pins where that limit falls for each shape, and one
-    extra frame per level moves it. ``marks`` is ``id(node) -> path`` for
+    level). Every tree this evaluator ever walks already passed
+    :func:`_compile`'s own :data:`MAX_CEL_NESTING_DEPTH` check, well under
+    where cel-python's own recursive evaluator (or this one) could
+    exhaust Python's recursion budget for any shape -- see
+    :func:`_nesting_depth`. ``marks`` is ``id(node) -> path`` for
     the ``member_dot`` occurrences this one evaluation found unset —
     computed once, before evaluating, by :func:`_mark_unset`; it is shared
     unchanged with every :meth:`sub_evaluator` this evaluator builds for a
@@ -923,7 +936,9 @@ def validate_cel_syntax(
     except CelError as exc:
         if exc.too_deeply_nested:
             raise CelValidationError(
-                f"{where}: expression is nested too deeply", expression=expr
+                f"{where}: expression is nested too deeply "
+                f"(limit {MAX_CEL_NESTING_DEPTH})",
+                expression=expr,
             ) from exc
         raise CelValidationError(
             f"{where}: expression does not parse ({exc}). Expression: {expr!r}",
@@ -959,22 +974,18 @@ def free_identifiers(expr: str) -> tuple[str, ...]:
     identifiers here; a message-construction type name (``Msg{f: 1}``) is,
     because it is read the same way any other bare name is.
 
-    Raises :class:`CelValidationError` if *expr* does not parse, or is too
-    deeply nested for this walk's own recursion to finish -- a shape
-    :func:`_compile` can itself compile fine (its own ``RecursionError``
-    catch, around parsing and :func:`_collect_state_paths`, never runs),
-    since this walk is a second, separate recursive pass over the same
-    cached tree, paying its own frame per level independently.
+    Raises :class:`CelValidationError` if *expr* does not parse, or is
+    over :data:`MAX_CEL_NESTING_DEPTH`.
     """
     out: list[str] = []
     try:
         _walk_free_identifiers(_compile(expr).runner.ast, frozenset(), out)
     except RecursionError:
-        raise CelValidationError(
-            "expression is nested too deeply",
-            expression=expr,
-            too_deeply_nested=True,
-        ) from None
+        # Unreachable: _compile already proved this tree is within
+        # MAX_CEL_NESTING_DEPTH, and this walk is a plain recursive pass
+        # over the same, already-depth-bounded tree -- kept only as a
+        # last-resort guard.
+        raise _too_deeply_nested_error(expr) from None
     return tuple(out)
 
 
@@ -1173,65 +1184,183 @@ _ENV = celpy.Environment()
 _LOCK = threading.Lock()
 _CACHE: dict[str, _Compiled] = {}
 
+#: One explicit limit on a CEL expression's nesting depth, checked once
+#: per expression right after it parses -- the same number electricity's
+#: own compiler enforces, so the two engines reject exactly the same
+#: expressions rather than each failing wherever its own recursion
+#: happens to give out.
+#:
+#: Measured directly, with this module's own ``_compile``/``evaluate_cel``
+#: copied into a throwaway venv on CPython 3.10, 3.11, 3.12 and 3.13 (the
+#: pinned ``cel-python`` always raises the recursion limit to 2500 --
+#: ``celpy.Environment.__init__`` -- so that is the real budget on every
+#: version, not CPython's own default): for every shape in
+#: :func:`_nesting_depth`'s own construct list, built as a chain of only
+#: that one construct and nothing else, the tightest first-failure depth
+#: across all four versions is 49 (a nested list or a nested map literal,
+#: on 3.10 and 3.11, failing during evaluation rather than at parse --
+#: every other shape's own floor is higher: parens/calls 55, an index
+#: chain 241, a method-call chain 299, a member-access chain 411, a
+#: logical or unary run 489). 32 sits well under that floor, with margin
+#: for a Python version this module has not been measured against yet
+#: and for however much of the budget the calling context (a `while`
+#: condition inside a `use` child, say) has already spent by the time an
+#: expression is compiled. ``tests/core/test_cel_eval.py`` proves every
+#: shape accepted at this limit evaluates without error, and that the
+#: ``RecursionError`` guards below are unreachable under it.
+MAX_CEL_NESTING_DEPTH = 32
+
+#: Grammar rules cel-python's parser recurses into themselves on the
+#: left (``addition: [addition_add | addition_sub] multiplication``, and
+#: identically for ``multiplication``, ``relation``, ``conditionaland``
+#: and ``conditionalor``): each is a plain pass-through with exactly one
+#: child when its own operator is absent, and the one real nesting
+#: construct -- a binary arithmetic (``+ - * / %``), relational/equality
+#: (``< <= > >= == !=``) or ``in`` link for the first three, a ``&&``/
+#: ``||`` link for the last two -- with two (the left chain, recursed,
+#: and the right operand). Counted the same as the constructs the issue
+#: enumerates (parens, calls, literals, member/index/method links,
+#: logical and unary operators): every one of these recurses in the
+#: parsed tree exactly the same way, so a long chain of any of them can
+#: exhaust Python's recursion budget the same way a long accessor chain
+#: can, and the explicit limit would not be Python-independent if it
+#: left any of them uncounted.
+_CHAIN_RULES = frozenset(
+    {"addition", "multiplication", "relation", "conditionaland", "conditionalor"}
+)
+
+#: Grammar rules that always add one level of nesting wherever they
+#: occur: grouping and call parentheses (``paren_expr``, ``ident_arg``,
+#: ``dot_ident_arg``), a list or map literal (``list_lit``, ``map_lit``),
+#: and a member-access, index, method-call or message-literal link
+#: (``member_dot``, ``member_index``, ``member_dot_arg``,
+#: ``member_object``).
+_ALWAYS_NESTS = frozenset(
+    {
+        "paren_expr",
+        "ident_arg",
+        "dot_ident_arg",
+        "list_lit",
+        "map_lit",
+        "member_dot",
+        "member_index",
+        "member_dot_arg",
+        "member_object",
+    }
+)
+
+
+def _is_nesting_construct(node: lark.Tree) -> bool:
+    """Whether *node* itself is one nesting level, not a grammar wrapper.
+
+    ``unary`` is ``member | unary_not unary | unary_neg unary`` -- a
+    pass-through to ``member`` with one child, or one prefix ``!``/``-``
+    link with two.
+    """
+    data = str(node.data)
+    if data == "unary" or data in _CHAIN_RULES:
+        return len(node.children) == 2
+    return data in _ALWAYS_NESTS
+
+
+@dataclass
+class _DepthFrame:
+    node: lark.Tree
+    index: int = 0
+    best_child_depth: int = 0
+
+
+def _nesting_depth(node: Any) -> int:
+    """The deepest nesting level under *node*: one per parenthesis, call,
+    list/map literal, member-access/index/method-call link, logical
+    operator and unary operator, plus every binary arithmetic,
+    relational, equality and ``in`` link (:data:`_CHAIN_RULES`'s own
+    docstring says why those count too) -- every other grammar rule is a
+    pure wrapper and adds nothing.
+
+    Walked iteratively, with an explicit stack of :class:`_DepthFrame`
+    standing in for the call stack a recursive version would use,
+    instead of Python function recursion -- so no expression, however
+    deep, can make this function itself hit the recursion limit it
+    exists to enforce before anything else does. Each frame resumes its
+    own ``children`` at ``index`` rather than iterating them with a
+    ``for`` loop, so a frame already on the stack is revisited, not
+    re-entered, when control returns to it.
+    """
+    if not isinstance(node, lark.Tree):
+        return 0
+    stack = [_DepthFrame(node)]
+    while True:
+        frame = stack[-1]
+        children = frame.node.children
+        if frame.index < len(children):
+            child = children[frame.index]
+            frame.index += 1
+            if isinstance(child, lark.Tree):
+                stack.append(_DepthFrame(child))
+            continue
+        depth_here = (
+            frame.best_child_depth + 1
+            if _is_nesting_construct(frame.node)
+            else frame.best_child_depth
+        )
+        stack.pop()
+        if not stack:
+            return depth_here
+        parent = stack[-1]
+        if depth_here > parent.best_child_depth:
+            parent.best_child_depth = depth_here
+
+
+def _too_deeply_nested_error(expr: str) -> CelValidationError:
+    return CelValidationError(
+        f"expression is nested too deeply (limit {MAX_CEL_NESTING_DEPTH})",
+        expression=expr,
+        too_deeply_nested=True,
+    )
+
 
 def _compile(expr: str) -> _Compiled:
     """Parse *expr* once and memoise the runner and its state paths."""
-    too_deeply_nested = False
-    compiled: _Compiled | None = None
     with _LOCK:
         cached = _CACHE.get(expr)
         if cached is not None:
             return cached
         try:
             tree = _ENV.compile(expr)
-            found = _collect_state_paths(tree)
-            runner = _ENV.program(tree, functions=_FUNCTIONS)
-            # Inside the same try as the two walks above, not after it:
-            # this is a third independent recursive pass over the same
-            # tree, with its own frame cost per level, so it can overflow
-            # even when they didn't (observed on Python 3.12, a deeply
-            # nested expression neither of the other two failed on).
-            reads_whole_state = _count_state_idents(tree) != len(found)
-        except RecursionError:
-            # Walking the parse tree recurses per tree level the same way
-            # parsing itself does, so a pathologically nested expression
-            # (deep parenthesisation, a long accessor chain) can exhaust
-            # Python's recursion budget in any of the three walks above
-            # rather than in ``_ENV.compile`` itself. Only a flag is set
-            # here, never a raise: constructing and raising
-            # ``CelValidationError`` from inside this ``except`` clause,
-            # while ``with _LOCK`` is still on the stack, chains onto
-            # whatever's left of the ``RecursionError``'s own, already
-            # near-the-limit traceback -- close enough to cof's own floor
-            # for this shape that it could itself re-trigger a second
-            # ``RecursionError`` while unwinding. Raising below, after
-            # both the ``try``/``except`` and the ``with`` block have
-            # already exited and every one of their frames has unwound,
-            # costs this function nothing it wasn't going to pay anyway.
-            too_deeply_nested = True
         except Exception as exc:
             raise CelValidationError(str(exc).strip(), expression=expr) from exc
-        else:
-            paths = tuple((path, guarded) for _node, path, guarded in found)
-            compiled = _Compiled(
-                runner=runner,
-                paths=paths,
-                occurrences=tuple(
-                    (node, path) for node, path, guarded in found if not guarded
-                ),
-                reads_whole_state=reads_whole_state,
-            )
-            if len(_CACHE) >= _CACHE_MAX_ENTRIES:
-                _CACHE.clear()
-            _CACHE[expr] = compiled
-    if too_deeply_nested:
-        raise CelValidationError(
-            "expression is nested too deeply",
-            expression=expr,
-            too_deeply_nested=True,
+        # Checked immediately after parsing and before any of the walks
+        # below -- which, like cel-python's own evaluator, recurse once
+        # per tree level and have no depth budget of their own -- ever
+        # runs. ``_nesting_depth`` itself never recurses, so it cannot
+        # be the thing that overflows, whatever the real depth is.
+        if _nesting_depth(tree) > MAX_CEL_NESTING_DEPTH:
+            raise _too_deeply_nested_error(expr)
+        try:
+            found = _collect_state_paths(tree)
+            runner = _ENV.program(tree, functions=_FUNCTIONS)
+            reads_whole_state = _count_state_idents(tree) != len(found)
+        except RecursionError:
+            # Unreachable once every expression admitted above is proven
+            # safe at MAX_CEL_NESTING_DEPTH (test_cel_eval.py's own
+            # sweep) -- kept only as a last-resort guard.
+            raise _too_deeply_nested_error(expr) from None
+        except Exception as exc:
+            raise CelValidationError(str(exc).strip(), expression=expr) from exc
+        paths = tuple((path, guarded) for _node, path, guarded in found)
+        compiled = _Compiled(
+            runner=runner,
+            paths=paths,
+            occurrences=tuple(
+                (node, path) for node, path, guarded in found if not guarded
+            ),
+            reads_whole_state=reads_whole_state,
         )
-    assert compiled is not None
-    return compiled
+        if len(_CACHE) >= _CACHE_MAX_ENTRIES:
+            _CACHE.clear()
+        _CACHE[expr] = compiled
+        return compiled
 
 
 def clear_expression_cache() -> None:
