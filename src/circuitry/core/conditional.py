@@ -558,6 +558,28 @@ class ConditionalRuntime:
                 meta["error"] = str(e)
                 meta["completed_at"] = _now_iso()
             raise
+        except BaseException as e:
+            # An interrupt (Ctrl-C, SIGTERM, a cancelled run) is not an
+            # Exception (#796): recording both the error and
+            # `completed_at` -- the same pair an interrupted `dynamic`/
+            # `use`/named loop already records -- keeps this conditional's
+            # own `end` event `ok: false` instead of `true`.
+            # `resume.effect_completed_ok` requires both `completed_at`
+            # truthy *and* no `error`, so a truthy `error` alone already
+            # keeps `cof run --resume` rerunning this branch regardless of
+            # `completed_at`.
+            if node:
+                node["value"] = {
+                    "result": result,
+                    "branch": branch,
+                    "effects": executed_effects,
+                }
+            if meta:
+                from .dynamic import _error_text
+
+                meta["error"] = _error_text(e)
+                meta["completed_at"] = _now_iso()
+            raise
 
     def _effect_record(self, *, effect: EffectDef, index: int) -> dict[str, Any]:
         effect_name = getattr(effect, "name", None)

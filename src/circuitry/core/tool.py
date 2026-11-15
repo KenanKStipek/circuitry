@@ -40,7 +40,7 @@ from ..secrets import (
     secret_ref,
     secret_ref_error,
 )
-from .cancellation import get_token
+from .cancellation import RunCancelledBySignal, get_token
 from .concurrency import RUNTIME_CONFIG_KEY as _CONCURRENCY_LIMITER_KEY
 from .effect_identity import model_call
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
@@ -1243,6 +1243,20 @@ class ToolRuntime:
                     if scrubbed != str(e):
                         # A new error, so no traceback or cause carries the value.
                         failure = RuntimeError(scrubbed)
+
+            if failure is not None and get_token().is_set() and not get_token().in_cleanup():
+                # A real signal never reaches a tree-flow branch's own
+                # worker thread directly (`core.cancellation`'s own module
+                # docstring) -- cancelling it kills its tracked subprocess
+                # instead, which surfaces here as an ordinary nonzero-exit
+                # `Exception`, not the `BaseException` a real signal raises.
+                # Raising before anything below is recorded (#796) leaves
+                # this node exactly as a real signal landing on the main
+                # thread already does -- `start` fired, no `completed_at`,
+                # no `meta.error`, no `end` event -- the same as
+                # electricity's own unpaired `start` for a leaf killed this
+                # way inside a tree branch.
+                raise RunCancelledBySignal() from failure
 
             if failure is not None:
                 meta["error"] = str(failure)

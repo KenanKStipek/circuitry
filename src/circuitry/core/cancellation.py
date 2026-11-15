@@ -272,12 +272,18 @@ class CancellationToken:
         # whole process the instant a signal lands in that window; an
         # RLock lets the same thread reacquire it instead.
         self._lock = threading.RLock()
-        self._processes: set[subprocess.Popen[str] | subprocess.Popen[bytes]] = set()
+        #: Maps each tracked process to whether it was registered while
+        #: `in_cleanup()` was true (#796) -- a dict, not a plain set, so
+        #: :meth:`request` can tell a process a `finally:` started apart
+        #: from one the run's own body started, and spare the former from
+        #: its first kill (see :meth:`request`).
+        self._processes: dict[subprocess.Popen[str] | subprocess.Popen[bytes], bool] = {}
         #: python_eval's own sandboxed child (#357 follow-up) -- tracked
-        #: separately from `_processes`, not folded into the same set,
+        #: separately from `_processes`, not folded into the same dict,
         #: because it is killed differently: `kill_tracked_process` (pid
-        #: only, never `killpg`) rather than `kill_process_group`.
-        self._mp_processes: set[BaseProcess] = set()
+        #: only, never `killpg`) rather than `kill_process_group`. Same
+        #: cleanup-flag value as `_processes` (#796).
+        self._mp_processes: dict[BaseProcess, bool] = {}
         self._signum: int | None = None
         self._armed = False
 
@@ -319,7 +325,10 @@ class CancellationToken:
         self._signum = None
 
     def request(self, signum: int | None = None) -> bool:
-        """Request cancellation, killing every tracked process group now.
+        """Request cancellation, killing every tracked process group now --
+        except one a `finally:` already has running (#796; see
+        :meth:`kill_cleanup_processes_too` for how that one still goes
+        down on a genuine second signal).
 
         *signum*, when given, names the signal that caused this (SIGINT vs
         SIGTERM) — see :attr:`signum`; a :class:`RunCancelledBySignal` raised by a
@@ -327,6 +336,26 @@ class CancellationToken:
         reads it from here instead to still pick exit code 143 over 130
         when it is this token's own ``RunCancelledBySignal`` (not the main thread's
         ``SigTermInterrupt``) that happens to reach the top first.
+
+        A process :meth:`track`/:meth:`track_process` registered while
+        ``in_cleanup()`` was true -- a `finally:` block's own running step
+        -- always survives this call: the docs promise a `finally:` a
+        best-effort run in full, and killing its own process group out
+        from under it the instant a signal lands would cut it short
+        exactly as before #796. Not gated on whether this is literally
+        the first call: :class:`_SignalWatcher` and the main-thread
+        handler both call this for the very same first signal (one
+        ordinarily racing the other, see below), so a flag read fresh
+        from :attr:`_event` on every call can't tell that apart from a
+        second, genuine signal arriving later -- it would read exactly
+        the same ``False`` either way, and ``cli.interrupts``'s own
+        handler -- the one place that *does* know the difference, via its
+        own ``_SignalCount`` -- never calls this a second time at all
+        (#404/#555: a repeated call risks the same stuck-``Condition``
+        exposure this method's own ``Event.set()`` call already guards
+        against below). It calls :meth:`kill_cleanup_processes_too`
+        instead, which only ever touches :attr:`_lock`, never
+        :attr:`_event`.
 
         Returns ``True`` the first time this is called (this call is the
         one that triggered cancellation); ``False`` if a prior call already
@@ -351,13 +380,39 @@ class CancellationToken:
             # a `Future`'s.
             self._event.set()
         with self._lock:
-            procs = list(self._processes)
-            mp_procs = list(self._mp_processes)
+            procs = [p for p, in_cleanup in self._processes.items() if not in_cleanup]
+            mp_procs = [
+                p for p, in_cleanup in self._mp_processes.items() if not in_cleanup
+            ]
         for proc in procs:
             kill_process_group(proc)
         for mp_proc in mp_procs:
             kill_tracked_process(mp_proc)
         return first
+
+    def kill_cleanup_processes_too(self) -> None:
+        """Kill every process :meth:`request` is sparing because a
+        `finally:` started it -- called only by ``cli.interrupts``'s own
+        handler, only for a genuine *second* SIGINT/SIGTERM (#796).
+
+        Deliberately a separate method, not another call to
+        :meth:`request`: that call's own docstring explains why
+        ``cli.interrupts`` must never call it a second time at all
+        (#404/#555 -- a repeat touches :attr:`_event`'s own
+        ``Condition``-backed lock, which a first signal's handler raising
+        mid-release of could leave stuck forever). This one only ever
+        takes :attr:`_lock`, an ``RLock`` the same thread can always
+        reacquire without blocking, and never touches :attr:`_event` at
+        all -- by the time a second signal's handler calls this, the
+        first one already set it.
+        """
+        with self._lock:
+            procs = [p for p, in_cleanup in self._processes.items() if in_cleanup]
+            mp_procs = [p for p, in_cleanup in self._mp_processes.items() if in_cleanup]
+        for proc in procs:
+            kill_process_group(proc)
+        for mp_proc in mp_procs:
+            kill_tracked_process(mp_proc)
 
     @property
     def signum(self) -> int | None:
@@ -485,6 +540,21 @@ class CancellationToken:
         handler (``cli.interrupts``) kills every tracked process and calls
         ``os._exit`` directly, without going through :meth:`check` at all.
 
+        A *first* signal landing while this scope is active (#796) is
+        parked the same way, but by ``cli.interrupts``'s own handler, not
+        this method: :meth:`in_cleanup` makes it defer the real
+        ``SigTermInterrupt``/``KeyboardInterrupt``/``SigHupInterrupt`` it
+        would otherwise raise straight into whatever bytecode a `finally:`
+        step's own blocking wait happens to be running, exactly like
+        :func:`deferred_signal_region` already does for a lock a worker
+        thread also holds. This method's own exit is what lets that
+        parked exception go once the *outermost* ``cleanup()`` scope is
+        done -- :func:`check_deferred_signal`, called below only once
+        ``_cleanup_depth`` has unwound to 0, so a `finally:` nested inside
+        another one (a dynamic's own `finally:` that itself contains a
+        dynamic with its own `finally:`) only raises once the outer one
+        has finished too.
+
         A ``contextvars.ContextVar``, not a plain counter on ``self``: it
         must suppress cancellation only for the thread(s) actually running
         this ``finally:``, never for an unrelated branch still running
@@ -495,6 +565,8 @@ class CancellationToken:
             yield
         finally:
             _cleanup_depth.reset(token)
+            if _cleanup_depth.get() == 0:
+                check_deferred_signal()
 
     @contextmanager
     def track(
@@ -516,17 +588,27 @@ class CancellationToken:
         took its snapshot would otherwise run to completion unseen (#357).
         Close that race here: if cancellation is already set
         the moment *proc* is registered, kill it immediately.
+
+        Registered with whether :meth:`in_cleanup` is true *right now*
+        (#796) -- this is what lets :meth:`request` spare a `finally:`
+        step's own process from a first signal that lands once it is
+        already running. A process a `finally:` starts *after* an earlier
+        signal already cancelled the run takes the ``already_cancelled``
+        branch above instead (`in_cleanup()` is also checked there, for
+        the same reason), so this flag only ever matters for a signal that
+        arrives *while* this process is already tracked.
         """
+        in_cleanup = self.in_cleanup()
         with self._lock:
-            self._processes.add(proc)
-            already_cancelled = self._event.is_set() and not self.in_cleanup()
+            self._processes[proc] = in_cleanup
+            already_cancelled = self._event.is_set() and not in_cleanup
         if already_cancelled:
             kill_process_group(proc)
         try:
             yield
         finally:
             with self._lock:
-                self._processes.discard(proc)
+                self._processes.pop(proc, None)
 
     @contextmanager
     def track_process(self, proc: BaseProcess) -> Iterator[None]:
@@ -538,18 +620,20 @@ class CancellationToken:
         :func:`kill_tracked_process` (pid only) instead. Mirrors
         :meth:`track`'s own already-cancelled race close: if cancellation
         is set the moment *proc* is registered, kill it immediately rather
-        than leaving it to run unseen.
+        than leaving it to run unseen. Also mirrors its own `in_cleanup()`
+        flag (#796), for the same reason.
         """
+        in_cleanup = self.in_cleanup()
         with self._lock:
-            self._mp_processes.add(proc)
-            already_cancelled = self._event.is_set() and not self.in_cleanup()
+            self._mp_processes[proc] = in_cleanup
+            already_cancelled = self._event.is_set() and not in_cleanup
         if already_cancelled:
             kill_tracked_process(proc)
         try:
             yield
         finally:
             with self._lock:
-                self._mp_processes.discard(proc)
+                self._mp_processes.pop(proc, None)
 
 
 _token = CancellationToken()
@@ -621,7 +705,11 @@ def check_deferred_signal() -> None:
     specifically so a first signal landing during that wait doesn't cut it
     short (#555): the exception stays parked until every
     already-running branch has actually finished and the outermost region
-    exits, exactly as it would if it had landed anywhere else inside one).
+    exits, exactly as it would if it had landed anywhere else inside one)
+    or inside :meth:`CancellationToken.cleanup` (#796 -- a `finally:` must
+    run in full too; :meth:`CancellationToken.cleanup`'s own exit calls
+    this again once it's the one leaving, the same way a
+    :func:`deferred_signal_region` does below).
 
     Call this from a coordination loop's own poll, outside any lock --
     the whole point of parking the exception in the first place was to
@@ -635,7 +723,7 @@ def check_deferred_signal() -> None:
         # loop on a worker thread (a tree nested inside a tree branch) must
         # never take it and raise it there instead.
         return
-    if _defer_depth > 0:
+    if _defer_depth > 0 or get_token().in_cleanup():
         return
     exc = _take_deferred_signal_exception()
     if exc is not None:

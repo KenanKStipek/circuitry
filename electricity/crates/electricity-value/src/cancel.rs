@@ -34,6 +34,16 @@ const UNSET: i32 = 0;
 struct Inner {
     signum: AtomicI32,
     notify: Notify,
+    /// Set only by [`CancellationToken::new_cleanup_scope`] (#796) -- a
+    /// `finally:`'s own disconnected token, so a process `electricity-
+    /// tools::process::run_tracked` starts against it registers itself
+    /// with that crate's own global cleanup-process list instead of
+    /// relying on this token's own (never-set) cancellation to be
+    /// killed. A genuine *second* SIGINT/SIGTERM kills every process
+    /// still on that list before `std::process::exit` -- nothing on
+    /// this disconnected token's own `is_set`/`cancelled` would
+    /// otherwise ever see that signal at all.
+    cleanup_scope: bool,
 }
 
 /// A cancellation flag, shareable across threads and tasks, with an
@@ -62,9 +72,37 @@ impl CancellationToken {
             inner: Arc::new(Inner {
                 signum: AtomicI32::new(UNSET),
                 notify: Notify::new(),
+                cleanup_scope: false,
             }),
             parent: None,
         }
+    }
+
+    /// A fresh, unset root token marked as a `finally:`'s own
+    /// disconnected scope (#796) -- see [`is_cleanup_scope`]'s own doc
+    /// comment.
+    ///
+    /// [`is_cleanup_scope`]: CancellationToken::is_cleanup_scope
+    pub fn new_cleanup_scope() -> Self {
+        CancellationToken {
+            inner: Arc::new(Inner {
+                signum: AtomicI32::new(UNSET),
+                notify: Notify::new(),
+                cleanup_scope: true,
+            }),
+            parent: None,
+        }
+    }
+
+    /// Whether this token was made with [`new_cleanup_scope`] -- never
+    /// inherited from a parent, since every `finally:` gets its own
+    /// fresh, disconnected token rather than a [`child`] of the real
+    /// one.
+    ///
+    /// [`new_cleanup_scope`]: CancellationToken::new_cleanup_scope
+    /// [`child`]: CancellationToken::child
+    pub fn is_cleanup_scope(&self) -> bool {
+        self.inner.cleanup_scope
     }
 
     /// Requests cancellation with *signum*. Returns `true` exactly when
@@ -112,6 +150,7 @@ impl CancellationToken {
             inner: Arc::new(Inner {
                 signum: AtomicI32::new(UNSET),
                 notify: Notify::new(),
+                cleanup_scope: false,
             }),
             parent: Some(Arc::new(self.clone())),
         }

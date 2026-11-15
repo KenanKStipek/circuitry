@@ -1638,6 +1638,12 @@ fn arm_signals(token: CancellationToken) -> SignalGuard {
                             // run to `std::process::exit`.
                             continue;
                         }
+                        // #796: a genuine second signal still kills a
+                        // `finally:` step's own tracked process too --
+                        // nothing on its own disconnected
+                        // `new_cleanup_scope` token would otherwise
+                        // ever see *any* signal, first or second.
+                        electricity::kill_every_cleanup_process();
                         std::process::exit(match signum {
                             SIGINT => Signal::Sigint.exit_code(),
                             SIGTERM => Signal::Sigterm.exit_code(),
