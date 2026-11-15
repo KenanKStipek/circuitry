@@ -1,0 +1,14 @@
+{
+  "spec_case": "issue #778",
+  "description": "A generated plan that is not valid YAML at all (a syntax error, not a calendar-invalid timestamp like c528-invalid-timestamp-reflector-plan) is never handed to use(inline) to diagnose: there is no YAML dump-and-reparse round trip left to produce raw text for it to parse, so it fails the reflector's own iteration directly as parse_failed, with no generated child node. PyYAML's own message is third-party text, compared by location only.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "location",
+  "location_pattern": "prime\\.plan_it: parse_failed: ",
+  "third_party_text": [
+    {"location": "prime.meta.error", "pattern": "(?s)prime\\.plan_it: parse_failed: .+"},
+    {"location": "prime.plan_it.meta.error", "pattern": "(?s)parse_failed: .+"},
+    {"location": "prime.plan_it.meta.iterations.0.error", "pattern": "(?s)parse_failed: .+"}
+  ]
+}

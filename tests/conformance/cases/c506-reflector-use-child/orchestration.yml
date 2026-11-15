@@ -11,7 +11,12 @@ effects:
           template: "Summarize the project."
         - type: reflector
           name: plan_it
-          prime_template: "Plan it. Goal: {{goal}}"
+          # The parent's own `inline:` text is itself a Mustache template
+          # (rendered against the parent's context before this child is
+          # parsed), so a literal `{{goal}}` here would be eaten by that
+          # outer render. Switching delimiters around it keeps it literal
+          # until this reflector renders its own prime_template.
+          prime_template: "Plan it. Goal: {{=<% %>=}}{{goal}}<%={{ }}=%>"
           allow_tools: [json]
           effects:
             - type: prompt

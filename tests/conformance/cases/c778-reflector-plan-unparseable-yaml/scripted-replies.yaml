@@ -1,0 +1,4 @@
+prime.plan_it.inner.propose_steps:
+  - text: "This is not YAML at all: [[[invalid"
+    tokens_sent: 10
+    tokens_received: 20

@@ -793,6 +793,28 @@ A malformed Mustache template, or one that still writes a `str.format`-style
 single-brace placeholder (`{goal}`, `{context}`, or `{max_effects}`, not part
 of a `{{...}}` tag), is a `cof check`/`cof run` error naming the fix.
 
+**A `prime_template` nested inside a `use: inline:` child, or inside another
+reflector's own generated plan, needs its `{{goal}}`/`{{context}}`/
+`{{max_effects}}` tags protected from the *enclosing* document's own render.**
+A `use: inline:` child's whole text is itself a Mustache template, rendered
+against the parent's context before it is ever parsed as YAML; a reflector's
+generated plan renders every string leaf the same way. Either render reaches
+a nested `prime_template` string before the nested reflector itself ever gets
+to render it, so a literal `{{goal}}` written there is consumed by the outer
+render instead — against the outer context, where `goal` is usually empty —
+and never reaches the nested reflector's own render at all. Protect it with a
+Mustache set-delimiter tag, so the outer render leaves it as literal text:
+
+```yaml
+prime_template: "Plan it. Goal: {{=<% %>=}}{{goal}}<%={{ }}=%>"
+```
+
+The nested reflector's own render still sees `{{goal}}` and fills it in
+normally — only the *outer* render treats it as plain text. The same applies
+to `{{context}}`/`{{max_effects}}`, and to a plain hand-written child loaded
+by `path:` or `ref:` instead: its content is never rendered by the parent at
+all, so this does not apply there.
+
 ---
 
 ### `timeout_ms` from state
