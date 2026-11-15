@@ -15,7 +15,7 @@ use support::{
     SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process, drain_continuously,
     e2e_enabled, launch_osi_log, open_pty, resize_pty, send_bytes, spawn_osi_on_pty,
     wait_for_registry_entries, wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone,
-    wait_for_step_start, wait_with_timeout, write_doc,
+    wait_for_screen_texts, wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 static ALL_LOCK: Mutex<()> = Mutex::new(());
@@ -123,7 +123,7 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(&captured_buf, &["SELECT", "All"], Duration::from_secs(20));
     assert!(
         screen.contains("All"),
         "expected the All row listed on Select:\n{screen}"
@@ -151,7 +151,9 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     // this test can assume either way.
     send_bytes(&mut master, b"\r");
     let screen = wait_for_screen(&captured_buf, Duration::from_secs(20), |s| {
-        !s.contains("osi  All") && s.contains("SIGNAL")
+        !s.contains("osi  All")
+            && s.contains("SIGNAL")
+            && (s.contains("a.yml") || s.contains("b.yml"))
     });
     assert!(
         screen.contains("SIGNAL") && !screen.contains("osi  All"),
@@ -167,7 +169,8 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     };
 
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen =
+        wait_for_screen_texts(&captured_buf, &["osi  All", "ALL"], Duration::from_secs(20));
     assert!(
         screen.contains("ALL"),
         "expected esc from the opened run to return to the grid:\n{screen}"
@@ -190,7 +193,8 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     );
 
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen =
+        wait_for_screen_texts(&captured_buf, &["osi  All", "ALL"], Duration::from_secs(20));
     assert!(
         screen.contains("ALL"),
         "expected esc from the opened run to return to the grid:\n{screen}"
@@ -212,14 +216,19 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
          not reset to the default focus:\n{screen}"
     );
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "osi  All", Duration::from_secs(20));
+    let screen =
+        wait_for_screen_texts(&captured_buf, &["osi  All", "ALL"], Duration::from_secs(20));
     assert!(
         screen.contains("ALL"),
         "expected esc from the opened run to return to the grid:\n{screen}"
     );
 
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["SELECT", "a.yml", "b.yml"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("SELECT") && !screen.contains("osi  All"),
         "expected esc from the grid to return to Select, not stay on All:\n{screen}"
@@ -314,7 +323,7 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(&captured_buf, &["SELECT", "All"], Duration::from_secs(10));
     assert!(
         screen.contains("All"),
         "expected the All row listed on Select:\n{screen}"
@@ -322,7 +331,8 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
 
     send_bytes(&mut master, b"g");
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(10));
+    let screen =
+        wait_for_screen_texts(&captured_buf, &["ALL", "… 2 more"], Duration::from_secs(10));
     assert!(
         screen.contains("ALL"),
         "expected enter on the All row to open the grid:\n{screen}"
@@ -344,7 +354,15 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     wait_for_screen_text(&captured_buf, "… 1 more", Duration::from_secs(10));
 
     send_bytes(&mut master, b"u");
-    let screen = wait_for_screen_text(&captured_buf, "COMBINED SIGNAL", Duration::from_secs(10));
+    // The header draws "COMBINED SIGNAL" before the Per Run table
+    // and the Readings pane below it -- waited for together, not
+    // just the header, so this doesn't read a frame that has the
+    // chip but not yet the panes this then asserts on.
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["COMBINED SIGNAL", "Per Run", "Readings"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("Per Run") && screen.contains("Readings"),
         "expected u to open the Combined Signal:\n{screen}"
@@ -410,7 +428,7 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
 
     send_bytes(&mut master, b"\x1b");
     let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |s| {
-        !s.contains("COMBINED SIGNAL") && s.contains("osi  All")
+        !s.contains("COMBINED SIGNAL") && s.contains("osi  All") && s.contains("… 1 more")
     });
     assert!(
         screen.contains("osi  All") && !screen.contains("COMBINED SIGNAL"),
@@ -440,7 +458,11 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     );
 
     send_bytes(&mut master, b"\x1b");
-    let screen = wait_for_screen_text(&captured_buf, "ALL · TAPE", Duration::from_secs(10));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["osi  All", "ALL · TAPE"],
+        Duration::from_secs(10),
+    );
     assert!(
         screen.contains("osi  All") && screen.contains("ALL · TAPE"),
         "expected esc from the reopened run to return to the tiles:\n{screen}"
@@ -529,9 +551,9 @@ fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
     // but still well above the shared 60x24 floor every screen has.
     resize_pty(&slave_path, 100, 40);
     send_bytes(&mut master, b"u");
-    let screen = wait_for_screen_text(
+    let screen = wait_for_screen_texts(
         &captured_buf,
-        "Combined Signal needs",
+        &["Combined Signal needs", "osi  All", "ALL · TAPE"],
         Duration::from_secs(10),
     );
     assert!(
@@ -775,7 +797,11 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
     let captured_buf = drain_continuously(master.try_clone().expect("dup the pty master"));
     let select_child = AutoKill::new(spawn_osi_on_pty(&home, &slave_path, &[]));
 
-    let screen = wait_for_screen_text(&captured_buf, "SELECT", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(
+        &captured_buf,
+        &["SELECT", "do.yml"],
+        Duration::from_secs(20),
+    );
     assert!(
         screen.contains("do.yml"),
         "expected the live run listed on Select:\n{screen}"
@@ -783,7 +809,7 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
 
     send_bytes(&mut master, b"g");
     send_bytes(&mut master, b"\r");
-    let screen = wait_for_screen_text(&captured_buf, "ALL", Duration::from_secs(20));
+    let screen = wait_for_screen_texts(&captured_buf, &["ALL", "do.yml"], Duration::from_secs(20));
     assert!(
         screen.contains("do.yml"),
         "expected the live run's own tile on the grid:\n{screen}"

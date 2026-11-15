@@ -16,7 +16,8 @@ use std::time::Duration;
 
 use support::{
     ELECTRICITY_CONFIG, TestHome, assert_no_leftover_process, drain_continuously, open_pty,
-    send_bytes, spawn_osi_on_pty_with_env, wait_for_screen_text, wait_with_timeout, write_doc,
+    send_bytes, spawn_osi_on_pty_with_env, wait_for_registry_entries, wait_for_screen_text,
+    wait_for_screen_texts, wait_with_timeout, write_doc,
 };
 
 /// A fake engine standing in for `electricity`, run through Python
@@ -128,6 +129,17 @@ fn path_with(bin_dir: &Path) -> OsString {
     std::env::join_paths(paths).expect("join PATH")
 }
 
+/// An RFC3339 timestamp, seconds precision -- every fixture below is
+/// built from `chrono::Utc::now()` rather than a fixed date: a
+/// written-once literal reads a run as having started however long
+/// ago it is by the time this file was written, not when the test
+/// actually runs, and the header's own elapsed time then grows
+/// without bound, eventually overlapping (and truncating) other text
+/// on the same row, the label included.
+fn rfc3339(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
 /// A `run_start` event line carrying `label`, plus one finished leaf
 /// -- the "still running" shape this test's own engine double writes
 /// at once. `label` here is always `__LABEL__` (the engine double's
@@ -136,41 +148,55 @@ fn path_with(bin_dir: &Path) -> OsString {
 fn running_events(run_id: &str) -> String {
     format!(
         concat!(
-            "{{\"v\":1,\"seq\":0,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",",
+            "{{\"v\":1,\"seq\":0,\"ts\":\"{now}\",\"ev\":\"run_start\",",
             "\"run_id\":\"{run_id}\",\"orchestration\":\"do-thing.yml\",\"pid\":__PID__,",
             "\"engine\":\"electricity 0.1.0\",\"label\":\"__LABEL__\"}}\n",
         ),
+        now = rfc3339(chrono::Utc::now()),
         run_id = run_id,
     )
 }
 
-fn running_state() -> &'static str {
-    concat!(
-        "{\"runtime\":{\"last_run\":{\"completed_at\":null}},",
-        "\"prime\":{\"value\":null,\"meta\":{\"created_at\":\"2026-01-01T00:00:00Z\",",
-        "\"completed_at\":null}}}"
+fn running_state() -> String {
+    format!(
+        concat!(
+            "{{\"runtime\":{{\"last_run\":{{\"completed_at\":null}}}},",
+            "\"prime\":{{\"value\":null,\"meta\":{{\"created_at\":\"{now}\",",
+            "\"completed_at\":null}}}}}}"
+        ),
+        now = rfc3339(chrono::Utc::now()),
     )
 }
 
 fn final_events(run_id: &str) -> String {
+    let start = chrono::Utc::now();
+    let end = start + chrono::Duration::seconds(1);
     format!(
         concat!(
-            "{{\"v\":1,\"seq\":0,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",",
+            "{{\"v\":1,\"seq\":0,\"ts\":\"{start}\",\"ev\":\"run_start\",",
             "\"run_id\":\"{run_id}\",\"orchestration\":\"do-thing.yml\",\"pid\":__PID__,",
             "\"engine\":\"electricity 0.1.0\",\"label\":\"__LABEL__\"}}\n",
-            "{{\"v\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:01Z\",\"ev\":\"run_end\",\"ok\":true}}\n",
+            "{{\"v\":1,\"seq\":1,\"ts\":\"{end}\",\"ev\":\"run_end\",\"ok\":true}}\n",
         ),
+        start = rfc3339(start),
+        end = rfc3339(end),
         run_id = run_id,
     )
 }
 
-fn final_state() -> &'static str {
-    concat!(
-        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2026-01-01T00:00:01Z\",",
-        "\"totals\":{\"wall_time_s\":1.0,\"effects_run\":1,\"tokens_sent\":0,",
-        "\"tokens_received\":0,\"cost_usd\":0.0}}},",
-        "\"prime\":{\"value\":true,\"meta\":{\"created_at\":\"2026-01-01T00:00:00Z\",",
-        "\"completed_at\":\"2026-01-01T00:00:01Z\",\"error\":null}}}"
+fn final_state() -> String {
+    let start = chrono::Utc::now();
+    let end = start + chrono::Duration::seconds(1);
+    format!(
+        concat!(
+            "{{\"runtime\":{{\"last_run\":{{\"completed_at\":\"{end}\",",
+            "\"totals\":{{\"wall_time_s\":1.0,\"effects_run\":1,\"tokens_sent\":0,",
+            "\"tokens_received\":0,\"cost_usd\":0.0}}}}}},",
+            "\"prime\":{{\"value\":true,\"meta\":{{\"created_at\":\"{start}\",",
+            "\"completed_at\":\"{end}\",\"error\":null}}}}}}"
+        ),
+        start = rfc3339(start),
+        end = rfc3339(end),
     )
 }
 
@@ -212,13 +238,13 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
         &[
             ("PATH", path_env.as_os_str()),
             ("OSI_DOUBLE_EVENTS", OsStr::new(&running_events("run-a"))),
-            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
+            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(&running_state())),
             ("OSI_DOUBLE_FINISH_FILE", finish_file_a.as_os_str()),
             (
                 "OSI_DOUBLE_FINAL_EVENTS",
                 OsStr::new(&final_events("run-a")),
             ),
-            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(final_state())),
+            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(&final_state())),
         ],
     );
 
@@ -247,7 +273,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
         &[
             ("PATH", path_env.as_os_str()),
             ("OSI_DOUBLE_EVENTS", OsStr::new(&running_events("run-b"))),
-            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
+            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(&running_state())),
             (
                 "OSI_DOUBLE_FINISH_FILE",
                 work.path().join("finish-b-never").as_os_str(),
@@ -256,7 +282,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
                 "OSI_DOUBLE_FINAL_EVENTS",
                 OsStr::new(&final_events("run-b")),
             ),
-            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(final_state())),
+            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(&final_state())),
         ],
     );
     wait_for_screen_text(&captured_b, "ticket seven", Duration::from_secs(20));
@@ -264,7 +290,11 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
     // Both runs are still alive now -- bare `osi`, with no document
     // of its own, discovers both through the shared registry (same
     // `TestHome`, so the same `OSI_RUNS_DIR`) and shows the Select
-    // screen's own running list, never attaching to just one.
+    // screen's own running list, never attaching to just one. B's
+    // header shows its label from the first frame, before B's registry
+    // entry exists, so wait for both entries: with only A's, bare `osi`
+    // would attach to A directly.
+    wait_for_registry_entries(&home.path().join("runs"), 2, Duration::from_secs(20));
     let (master_c, slave_c) = open_pty();
     let mut master_c = master_c;
     let captured_c = drain_continuously(master_c.try_clone().expect("dup pty master c"));
@@ -288,16 +318,25 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
 
     // Now run A finishes for real: the exit summary (DESIGN.md
     // §2.4's `■ run <name> ...` row) shows the same label, printed
-    // to the plain scrollback once the TUI leaves the alt screen.
+    // to the plain scrollback once the TUI leaves the alt screen --
+    // so waited for here on the TUI's own header `Ended`, still on
+    // the alternate screen, not on that later scrollback text, which
+    // can't show until `q` actually leaves it; the exit summary
+    // itself is the explicit assert below, on the terminal's whole
+    // output once osi has exited.
     std::fs::write(&finish_file_a, b"go").unwrap();
-    wait_for_screen_text(&captured_a, "run ticket 42", Duration::from_secs(20));
+    wait_for_screen_text(&captured_a, "Ended", Duration::from_secs(20));
     send_bytes(&mut master_a, b"q");
     let status_a = wait_with_timeout(child_a, Duration::from_secs(30));
     assert!(status_a.success(), "osi should exit 0, got {status_a:?}");
-    let final_text_a = String::from_utf8_lossy(&captured_a.lock().unwrap()).into_owned();
-    assert!(
-        final_text_a.contains("run ticket 42") && final_text_a.contains("ok"),
-        "expected the exit summary to name the run by its label:\n{final_text_a}"
+    // Waited for rather than read straight off `captured_a`: osi's
+    // exit here only means the engine's own exec has returned, not
+    // that the draining thread has caught up on the exit summary it
+    // writes to the scrollback on the way out.
+    wait_for_screen_texts(
+        &captured_a,
+        &["run ticket 42", "ok"],
+        Duration::from_secs(5),
     );
 
     // B's own engine is still running (it never got a finish file),
@@ -305,9 +344,14 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
     // own `q` while running never quits at once, unlike `osi watch`
     // or an already-ended run) -- `y` confirms it.
     send_bytes(&mut master_b, b"q");
-    std::thread::sleep(Duration::from_millis(300));
+    // Confirming a live-run cancel with `y` only works once the
+    // confirm dialog is actually on screen -- a fixed delay here
+    // raced it on a loaded machine.
+    wait_for_screen_text(&captured_b, "cancel the run", Duration::from_secs(10));
     send_bytes(&mut master_b, b"y");
-    let _status_b = wait_with_timeout(child_b, Duration::from_secs(30));
+    // A live-run cancel kills the step's own subprocess before osi
+    // can exit -- more headroom than a plain quit needs.
+    let _status_b = wait_with_timeout(child_b, Duration::from_secs(60));
 
     assert_no_leftover_process(work.path());
     assert_no_leftover_process(out_dir_a.path());

@@ -149,16 +149,9 @@ fn osi_watch_signal_follows_now_an_hour_into_a_run() {
     wait_for_screen_text(&captured_buf, "SIGNAL", Duration::from_secs(10));
     // The chip switches the instant "SIGNAL" lands, a redraw tick or
     // two before the chart's own cells (sent well after it in the
-    // same differential frame) are certain to have arrived too.
-    std::thread::sleep(Duration::from_millis(300));
-    let screen_a = {
-        let whole = captured_buf.lock().unwrap().clone();
-        screen_grid(&whole, 200, 60).join("\n")
-    };
-    assert!(
-        screen_a.contains('\u{2503}'),
-        "expected the Now sweep on screen an hour into the run; screen:\n{screen_a}"
-    );
+    // same differential frame) are certain to have arrived too --
+    // waited for here rather than assumed after a fixed delay.
+    let screen_a = wait_for_screen_text(&captured_buf, "\u{2503}", Duration::from_secs(10));
     let marks_a = now_marks_row(&screen_a)
         .unwrap_or_else(|| panic!("expected a marks row with a Now label; screen:\n{screen_a}"));
     assert!(
