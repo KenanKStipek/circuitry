@@ -4144,6 +4144,33 @@ way -- never only once the whole level's own walk ends. The
 `PlanTree::unnamed_if_decisions` alone (issue #770), unaffected by
 where a decision ends up drawn.
 
+**A pending decision apart from its own branch rows** (issue #797).
+Two narrower shapes still drew a decision apart from the branch rows
+it owns, left after #779 fixed the plan-order splice above:
+
+- A decision still pending, with a real step on both of its own
+  branches, spliced ahead of a later sibling that already ran
+  (neither branch has started, so it draws as before, both branches
+  ahead ghosts) left its own `then`/`else` rows unhidden from the
+  rest of the level's own walk, so once that walk reached them they
+  drew again, as plain stations, after the sibling that triggered
+  the splice. The splice now hides both branches' own paths itself
+  once it places such a decision -- `build_unnamed_decision`'s own
+  still-pending case still leaves them unhidden on its own, since a
+  decision reached directly by its own branch's row (the `pos` match
+  a level below the splice) must still draw that row right there,
+  inline, the same as before.
+- A decision whose own branch had actually started, but whose
+  branch row carried no timestamp of its own (so it sorted after a
+  later sibling that did), still matched the splice on that
+  sibling's row. Anchored there instead of at the branch's own row,
+  `branch_subtree_end` found nothing to consume, so the taken lane
+  came out empty and the branch's real row drew again later as a
+  plain station. The splice now skips a decision whose own branch
+  has already started, leaving it to place once the walk reaches
+  that branch's own row instead, where the taken lane comes out
+  right.
+
 ### 6.4 Tests
 
 - **Golden tests, with `insta`.** Each fixture is a recorded run: plan, snapshot sequence with times, events, stdout/stderr and exit code. The fixtures are the §1 probes, with paths scrubbed. Two outputs are checked against goldens:
@@ -4172,6 +4199,7 @@ where a decision ends up drawn.
 - **The Signal screen (issue #688, replacing the Time screen of issue #650).** `oscilloscope-core/src/screens.rs` unit-tests `build_signal` end to end against synthetic rows and nodes: the axis rule with history (1.5x the usual largest step, the smallest doubling-series value at or above it) and without (600/80, doubled once past the run's own largest single column, never past the run's own running total, and never a second time); two prompts ending in the same 100 ms column summing into it rather than each getting their own; a decision's own `◆` mark winning over a finished prompt's `✓` sharing its column; a running prompt's own live estimate landing in the Now column, never the column its own start time would otherwise place it at; and Readings' own ratio and peak. `oscilloscope/src/keys.rs` unit-tests `←→` scrubbing one column at a time and clamping to Now and zero, `+`/`-` stepping the five zoom levels and clamping at both ends (and resetting a scrubbed cursor back to Now, since a column's own width just changed under it), `n` returning to Now, `⏎` toggling the full-screen step view only while a step is actually under the cursor, and switching screens resetting that shared toggle. `oscilloscope/src/tui.rs` unit-tests the chart directly: a live column's own bar draws faint, never in the Now sweep's bold style; a run many times longer than the pane is wide still keeps the sweep on screen (the trace's own window scrolls to follow the cursor, or Now while following it); a scrubbed cursor is tinted distinctly from the sweep; an axis top of 1,200 or more is never cut, with its own thousands separator; and the Help overlay lists exactly Signal's own keys, not Flow's or Cost's older generic list. `tui.rs`'s own golden tests cover the Signal screen at 120×30 and 80×24 against the design's own frames, replayed from the `run2` fixture frozen 3.62s after its own start with three pooled history runs. `oscilloscope/tests/e2e_tui_pty.rs` presses `1` during a live `cof` run and checks the Now sweep and the running step's own row, scrubs, zooms and returns to Now, opens and closes the full-screen step view, returns to the Tape with `0`, and separately checks that 80 columns drops the Readings pane and that below 80 columns Signal bounces back to the Tape on its own, picked up on the next redraw with no key needed.
 - **The one summary function (issue #739).** `oscilloscope-core/src/summary.rs` unit-tests `json_value_summary`/`first_words`/`first_sentence_end`/`is_json_shaped` directly: a top-level string, a JSON-looking string that never parses (kept to the first-words rule), a string that genuinely does parse as an object or an array (summarised exactly as if it had arrived typed), null, a number and a boolean, an object with and without a summary-like field (tried in order, a blank one skipped), a nested empty object and array reading `0 keys`/`0 items`, a single item or key reading the singular (`1 item`/`1 key`), mixed value kinds in one object, an array of strings and of non-strings, an empty array, and cutting a long result to width with `⋯`. `oscilloscope-core/src/screens.rs` covers a finished prompt's own JSON reply on the Tape row and the Signal's own step row, an agent step whose `meta.raw` has nothing recorded falling through to the same summary on its own value, and the Flow rail's own selected pass pane summarising a prompt's JSON reply rather than dropping it; `oscilloscope-core/src/render.rs` covers a non-prompt step's own JSON value the same way, and that a plain-text, non-JSON reply or value keeps its own full preview rather than the summary's first-words cut at its first sentence. Issue #745's two fixes: the detail pane's own title cut (`tui::tape_detail_title_cut`) is unit-tested directly for a two-segment breadcrumb (dropping the first segment entirely rather than hard-clipping the step's own name), plus a `tui.rs` golden-style test over a real mid-run snapshot of `tests/fixtures/nested_tree_loops` at 120x30 for the deeper breadcrumb case; the same fixture's golden test covers `■ Run Started`/`■ Run End` reading at the exact column (in cells, not bytes) every other row's own widened name field starts at. `oscilloscope/tests/e2e_tui_pty.rs`'s `json_replies_read_as_short_summaries_not_raw_json` scripts an object with a summary field, an object of lists, an array of strings, an array of objects, a string holding JSON and plain text as a live `cof` run's own replies, and checks the replayed screen's finished rows: each reads its own short summary, and none shows `{"`/`["` anywhere.
 - **Flow rail order for a decision without evidence (issue #779).** `oscilloscope-core/src/rail.rs` unit-tests `build_level` directly against two unnamed `if`s on one host, the first (`a`) taking an `else` with no steps and the second (`b`) taking a branch with a real step: the rail's own station order matches the plan both before and after `b` resolves, `a`'s decision always ahead of `b`'s, never behind it. `oscilloscope/tests/e2e_tui_pty.rs`'s `an_unnamed_ifs_decision_without_evidence_draws_before_a_later_resolved_one` runs the same shape against a real `cof`, pressing `2` once the run has ended, and checks the rail's own rendered row left to right: `a`'s own headline (`→ none`) reads at an earlier column than `b`'s (`→ then`).
+- **A pending decision apart from its own branch rows (issue #797).** `oscilloscope-core/src/rail.rs` unit-tests `build_level` directly against both narrower shapes, each built from hand-made `Row`s rather than a real run: a decision still pending, with a real step on both its own branches, spliced ahead of a plain sibling that already ran -- the decision's own `then`/`else` rows must not draw again, as plain stations, after that sibling; and a decision whose own branch already ran but whose row carries no timestamp, sorting it after a later sibling -- the decision must place once the walk reaches that branch's own row, with the branch's real row inside its own taken lane rather than drawn again as a plain station.
 
 ---
 
