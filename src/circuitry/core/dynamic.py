@@ -81,7 +81,15 @@ def _error_text(exc: BaseException) -> str:
     top-level ``RunResult.error`` already uses for the identical case, so a
     container's `meta.error` and the run's own top-level error read the
     same way for the same interrupt.
+
+    A ``RunCancelledBySignal`` a worker thread's own poll raised carries a
+    message of its own ("run cancelled", "run cancelled during backoff"),
+    which would otherwise be read back verbatim. Every container uses the
+    signal-name wording instead, whichever thread noticed the cancellation,
+    the same as the root and as electricity (#796).
     """
+    if isinstance(exc, RunCancelledBySignal):
+        exc = RunCancelledBySignal()
     text = str(exc)
     if text:
         return text

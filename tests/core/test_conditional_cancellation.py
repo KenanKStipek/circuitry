@@ -5,6 +5,7 @@ never `ok: true`.
 
 from __future__ import annotations
 
+import signal
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +17,7 @@ from circuitry.core.resume import effect_completed_ok
 from circuitry.core.store import Store
 
 
-def test_named_if_branch_cancelled_records_error_not_completed_at(
+def test_named_if_branch_cancelled_records_error_and_completed_at(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def killed_plugin(**kw: object) -> object:
@@ -62,3 +63,25 @@ def test_named_if_branch_cancelled_records_error_not_completed_at(
     # branch regardless.
     assert meta.get("completed_at") is not None
     assert not effect_completed_ok(node)
+
+
+@pytest.mark.parametrize("message", ["run cancelled", "run cancelled during backoff", ""])
+@pytest.mark.parametrize(
+    ("signum", "expected"),
+    [(signal.SIGTERM, "Interrupted (SIGTERM)"), (signal.SIGINT, "Interrupted (Ctrl-C/SIGINT)")],
+)
+def test_a_worker_threads_cancellation_message_never_becomes_a_containers_error(
+    message: str, signum: int, expected: str
+) -> None:
+    """A `RunCancelledBySignal` a worker thread's own poll raised carries its own
+    message; every container's `meta.error` uses the signal-name wording instead,
+    as the root and electricity do (#796)."""
+    from circuitry.core.cancellation import get_token
+    from circuitry.core.dynamic import _error_text
+
+    token = get_token()
+    try:
+        token.request(signum)
+        assert _error_text(RunCancelledBySignal(message)) == expected
+    finally:
+        token.reset()
