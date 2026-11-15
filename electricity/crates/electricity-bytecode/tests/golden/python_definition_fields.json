@@ -64,6 +64,7 @@
     "path",
     "orchestration",
     "inline",
+    "inline_document",
     "inputs",
     "outputs",
     "validate",
