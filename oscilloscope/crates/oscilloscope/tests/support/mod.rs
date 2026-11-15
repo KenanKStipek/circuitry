@@ -1065,6 +1065,166 @@ pub fn terminate_launcher(mut child: Child) {
     }
 }
 
+/// Ends its own child on drop, including while unwinding from a
+/// failed assertion (this crate's own test profile doesn't set
+/// `panic = "abort"`): every background `osi`/`cof` a Select or All
+/// pty test spawns is wrapped in one from the moment it's spawned,
+/// so a panic partway through a test can never leave it running
+/// underneath a *later* test, once that file's own lock is released
+/// -- exactly how `e2e_tui_pty_select.rs`'s own early flakiness
+/// traced back to a stray, still-running `sleep` left behind by an
+/// earlier panic, long before this guard existed. [`Self::into_inner`]
+/// hands the child back, bare, for a caller that means to wait on it
+/// normally; a `Child` taken that way is on its own again, same as it
+/// always was, which is exactly the point right before a test's own
+/// explicit, final `wait_with_timeout`.
+///
+/// [`Self::set_engine_pid`] names the engine (`cof`) this launcher's
+/// own forwarded SIGTERM is meant to reach, once the caller has read
+/// it back off this run's own registry entry -- a drop that has to
+/// fall back to killing the launcher outright (its own SIGTERM, left
+/// unanswered for this guard's whole deadline) still reaches that
+/// engine directly, by its own pid, rather than leaving it an orphan
+/// underneath a launcher that's now gone. Found about once in 200
+/// runs under load (issue #803): the launcher's own SIGTERM-forward-
+/// and-wait can legitimately take longer than this guard's own prior
+/// 10s deadline when the engine has a subprocess of its own still
+/// live to kill first (the same headroom a live-run cancel needs
+/// elsewhere in this suite) -- without an engine pid to fall back on,
+/// that made this guard's own fallback kill the launcher alone,
+/// orphaning the engine underneath it (issue #804: the same shape,
+/// unfixed, in a second test file, is why this guard lives here now
+/// rather than in either one of them).
+///
+/// Before actually signalling that pid, [`Drop::drop`] first checks
+/// it's still the engine this guard was given -- `ps -ww -o args= -p
+/// <pid>` must still name the run directory [`Self::set_engine_pid`]
+/// was given alongside it. A pid the OS has since recycled for some
+/// unrelated process, in the time between this guard learning it and
+/// its own fallback deadline expiring, is left alone rather than
+/// signalled on the strength of a stale registry entry alone.
+pub struct AutoKill {
+    child: Option<Child>,
+    engine_pid: Option<u32>,
+    engine_owns: Option<PathBuf>,
+}
+
+impl AutoKill {
+    pub fn new(child: Child) -> Self {
+        AutoKill {
+            child: Some(child),
+            engine_pid: None,
+            engine_owns: None,
+        }
+    }
+
+    /// *info* is `(pid, run_dir)`, exactly what [`engine_pid_for_doc`]
+    /// returns -- `run_dir` is also the needle [`Drop::drop`]'s own
+    /// fallback checks for in that pid's command line before ever
+    /// signalling it.
+    pub fn set_engine_pid(&mut self, info: (u32, PathBuf)) {
+        self.engine_pid = Some(info.0);
+        self.engine_owns = Some(info.1);
+    }
+
+    pub fn into_inner(mut self) -> Child {
+        self.child.take().expect("AutoKill still holds its child")
+    }
+}
+
+impl Drop for AutoKill {
+    fn drop(&mut self) {
+        let Some(mut child) = self.child.take() else {
+            return;
+        };
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        unsafe {
+            libc::kill(child.id() as i32, libc::SIGTERM);
+        }
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            if Instant::now() >= deadline {
+                if let (Some(pid), Some(owns)) = (self.engine_pid, &self.engine_owns) {
+                    if pid_still_names(pid, owns) {
+                        unsafe {
+                            libc::kill(pid as i32, libc::SIGKILL);
+                        }
+                    }
+                }
+                let _ = child.kill();
+                let _ = child.wait();
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
+}
+
+/// Whether *pid* is still a process whose own command line names
+/// *needle* -- [`AutoKill`]'s drop calls this right before its own
+/// fallback kill, so a pid the OS has since recycled for an
+/// unrelated process is left alone rather than signalled on the
+/// strength of a stale registry entry alone. `-ww` keeps the whole
+/// command line (a plain `ps -o args=` truncates it on Linux); a
+/// `ps` that fails outright, or reports no such pid at all, answers
+/// `false` -- there is nothing there this guard could still own.
+fn pid_still_names(pid: u32, needle: &Path) -> bool {
+    let Ok(output) = Command::new("ps")
+        .arg("-ww")
+        .arg("-o")
+        .arg("args=")
+        .arg("-p")
+        .arg(pid.to_string())
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    String::from_utf8_lossy(&output.stdout).contains(&needle.to_string_lossy().into_owned())
+}
+
+/// The `pid` and `run_dir` of whichever registry entry under
+/// *runs_dir* has *out_dir* as its own run directory -- read back
+/// once a launcher's own run has registered, to give that launcher's
+/// own [`AutoKill`] the engine pid (and the run directory
+/// [`AutoKill::set_engine_pid`]'s own fallback checks the engine's
+/// command line for) it needs. Matched by *out_dir* rather than by
+/// the document's own name: two launchers of the very same document
+/// and config (issue #717's own test) still each get their own
+/// distinct `--out-dir`, so this always finds the right one, where
+/// matching by document name alone could not.
+pub fn engine_pid_for_doc(runs_dir: &Path, out_dir: &Path) -> (u32, PathBuf) {
+    let want = out_dir
+        .canonicalize()
+        .unwrap_or_else(|_| out_dir.to_path_buf());
+    for entry in std::fs::read_dir(runs_dir)
+        .expect("read runs_dir")
+        .flatten()
+    {
+        let Ok(text) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
+            continue;
+        };
+        let Some(run_dir) = value.get("run_dir").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        if Path::new(run_dir) == want {
+            let pid = value["pid"].as_u64().expect("registry entry has a pid") as u32;
+            return (pid, PathBuf::from(run_dir));
+        }
+    }
+    panic!("no registry entry under {runs_dir:?} has run_dir {out_dir:?}");
+}
+
 /// Polls `runs_dir` until it holds at least `want` entries, capped
 /// at `timeout` -- the registry entry is written once `run_start` is
 /// known, not instantly at spawn.

@@ -9,58 +9,17 @@ mod support;
 
 use std::process::Child;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use support::{
-    SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process, drain_continuously,
-    e2e_enabled, launch_osi_log, open_pty, resize_pty, send_bytes, spawn_osi_on_pty,
-    wait_for_registry_entries, wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone,
-    wait_for_screen_texts, wait_for_step_start, wait_with_timeout, write_doc,
+    AutoKill, SCRIPTED_CONFIG, SELECT_SLOW_DOC, TestHome, assert_no_leftover_process,
+    drain_continuously, e2e_enabled, engine_pid_for_doc, launch_osi_log, open_pty, resize_pty,
+    send_bytes, spawn_osi_on_pty, wait_for_registry_entries, wait_for_screen, wait_for_screen_text,
+    wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
 
 static ALL_LOCK: Mutex<()> = Mutex::new(());
-
-/// See `e2e_tui_pty_select.rs`'s own `AutoKill` doc comment: the
-/// same guard, so a panic partway through this file's own round
-/// trip can never leave a background `cof` running for a later
-/// test's own `ps` scan to find.
-struct AutoKill(Option<Child>);
-
-impl AutoKill {
-    fn new(child: Child) -> Self {
-        AutoKill(Some(child))
-    }
-
-    fn into_inner(mut self) -> Child {
-        self.0.take().expect("AutoKill still holds its child")
-    }
-}
-
-impl Drop for AutoKill {
-    fn drop(&mut self) {
-        let Some(mut child) = self.0.take() else {
-            return;
-        };
-        if child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
-        }
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            if Instant::now() >= deadline {
-                let _ = child.kill();
-                let _ = child.wait();
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-}
 
 /// Issue #698, §4's own navigation path: with two live runs
 /// registered (both fit on one page at this terminal's own width,
@@ -93,14 +52,14 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
-    let child_a = AutoKill::new(launch_osi_log(
+    let mut child_a = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_a,
         &config_a,
         out_a.path(),
     ));
-    let child_b = AutoKill::new(launch_osi_log(
+    let mut child_b = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_b,
@@ -117,6 +76,11 @@ fn bare_osi_opens_all_and_the_esc_round_trip_returns_to_select() {
     }
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if `AutoKill`'s drop ever has to fall back to
+    // killing the launcher outright.
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, out_a.path()));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, out_b.path()));
 
     let (master, slave_path) = open_pty();
     let mut master = master;
@@ -296,7 +260,7 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
         .map(|name| write_doc(work.path(), name, SCRIPTED_CONFIG))
         .collect();
     let outs: Vec<_> = (0..3).map(|_| tempfile::tempdir().unwrap()).collect();
-    let children: Vec<AutoKill> = (0..3)
+    let mut children: Vec<AutoKill> = (0..3)
         .map(|i| {
             AutoKill::new(launch_osi_log(
                 &home,
@@ -317,6 +281,12 @@ fn bare_osi_opens_the_combined_signal_and_the_esc_round_trip_returns_to_select()
     }
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 3, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if `AutoKill`'s drop ever has to fall back to
+    // killing the launcher outright.
+    for (child, out) in children.iter_mut().zip(&outs) {
+        child.set_engine_pid(engine_pid_for_doc(&runs_dir, out.path()));
+    }
 
     let (master, slave_path) = open_pty();
     let mut master = master;
@@ -512,14 +482,14 @@ fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
     let config_b = write_doc(work.path(), "config-b.json", SCRIPTED_CONFIG);
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
-    let child_a = AutoKill::new(launch_osi_log(
+    let mut child_a = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_a,
         &config_a,
         out_a.path(),
     ));
-    let child_b = AutoKill::new(launch_osi_log(
+    let mut child_b = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc_b,
@@ -536,6 +506,11 @@ fn combined_signal_bounces_to_the_tiles_below_its_own_floor() {
     }
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if `AutoKill`'s drop ever has to fall back to
+    // killing the launcher outright.
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, out_a.path()));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, out_b.path()));
 
     let (master, slave_path) = open_pty();
     let mut master = master;
@@ -642,14 +617,14 @@ fn two_runs_of_the_same_document_and_config_get_different_names_on_select_and_al
     let config = write_doc(work.path(), "same-config.json", SCRIPTED_CONFIG);
     let out_a = tempfile::tempdir().unwrap();
     let out_b = tempfile::tempdir().unwrap();
-    let child_a = AutoKill::new(launch_osi_log(
+    let mut child_a = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc,
         &config,
         out_a.path(),
     ));
-    let child_b = AutoKill::new(launch_osi_log(
+    let mut child_b = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc,
@@ -666,6 +641,12 @@ fn two_runs_of_the_same_document_and_config_get_different_names_on_select_and_al
     }
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if `AutoKill`'s drop ever has to fall back to
+    // killing the launcher outright -- matched by each launcher's
+    // own `--out-dir`, not by the document the two launchers share.
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, out_a.path()));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, out_b.path()));
 
     let (master, slave_path) = open_pty();
     let mut master = master;
@@ -760,7 +741,7 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
     }
 
     let out_live = tempfile::tempdir().unwrap();
-    let live_child = AutoKill::new(launch_osi_log(
+    let mut live_child = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &doc,
@@ -777,7 +758,7 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
     // only way to reach Select's own `All` row here.
     let other_doc = write_doc(work.path(), "other.yml", SELECT_SLOW_DOC);
     let out_other = tempfile::tempdir().unwrap();
-    let other_child = AutoKill::new(launch_osi_log(
+    let mut other_child = AutoKill::new(launch_osi_log(
         &home,
         work.path(),
         &other_doc,
@@ -791,6 +772,11 @@ fn a_tiles_run_end_shows_the_eta_once_history_holds_three_finished_runs() {
     );
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 2, Duration::from_secs(10));
+    // So this test's own cleanup can kill each engine directly, by
+    // its own pid, if `AutoKill`'s drop ever has to fall back to
+    // killing the launcher outright.
+    live_child.set_engine_pid(engine_pid_for_doc(&runs_dir, out_live.path()));
+    other_child.set_engine_pid(engine_pid_for_doc(&runs_dir, out_other.path()));
 
     let (master, slave_path) = open_pty();
     let mut master = master;

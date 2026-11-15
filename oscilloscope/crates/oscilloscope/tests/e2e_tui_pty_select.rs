@@ -21,14 +21,13 @@
 mod support;
 
 use std::path::Path;
-use std::process::Child;
 use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use support::{
-    SCRIPTED_CONFIG, SELECT_SLOW_DOC, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    drain_continuously, e2e_enabled, launch_osi_log, open_pty, osi_command, scripted_config,
-    send_bytes, spawn_osi_on_pty, wait_for_registry_entries, wait_for_screen_text,
+    AutoKill, SCRIPTED_CONFIG, SELECT_SLOW_DOC, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
+    drain_continuously, e2e_enabled, engine_pid_for_doc, launch_osi_log, open_pty, osi_command,
+    scripted_config, send_bytes, spawn_osi_on_pty, wait_for_registry_entries, wait_for_screen_text,
     wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
     wait_with_timeout_capturing_stdout, write_doc,
 };
@@ -36,119 +35,9 @@ use support::{
 /// Serialises every test in this file against every other (see the
 /// module's own doc comment) -- held for a whole test's own
 /// duration, not around any one step of it, since the leftover
-/// process [`AutoKill`]'s own doc comment describes could appear at
-/// any point during a concurrently-running test.
+/// process [`support::AutoKill`]'s own doc comment describes could
+/// appear at any point during a concurrently-running test.
 static SELECT_LOCK: Mutex<()> = Mutex::new(());
-
-/// Ends its own child on drop, including while unwinding from a
-/// failed assertion (this crate's own test profile doesn't set
-/// `panic = "abort"`): every background `osi`/`cof` this file spawns
-/// is wrapped in one from the moment it's spawned, so a panic
-/// partway through a test can never leave it running underneath a
-/// *later* test in this same file, once [`SELECT_LOCK`] is released
-/// -- exactly how this file's own early flakiness traced back to a
-/// stray, still-running `sleep` left behind by an earlier panic, long
-/// before this guard existed. [`Self::into_inner`] hands the child
-/// back, bare, for a caller that means to wait on it normally; a
-/// `Child` taken that way is on its own again, same as it always
-/// was, which is exactly the point right before this file's own
-/// explicit, final `wait_with_timeout`.
-///
-/// [`Self::set_engine_pid`] names the engine (`cof`) this launcher's
-/// own forwarded SIGTERM is meant to reach, once the caller has read
-/// it back off this run's own registry entry -- a drop that has to
-/// fall back to killing the launcher outright (its own SIGTERM, left
-/// unanswered for this guard's whole deadline) still reaches that
-/// engine directly, by its own pid, rather than leaving it an orphan
-/// underneath a launcher that's now gone. Found about once in 200
-/// runs under load: the launcher's own SIGTERM-forward-and-wait can
-/// legitimately take longer than this guard's own prior 10s deadline
-/// when the engine has a subprocess of its own still live to kill
-/// first (the same headroom a live-run cancel needs elsewhere in
-/// this suite) -- without an engine pid to fall back on, that made
-/// this guard's own fallback kill the launcher alone, orphaning the
-/// engine underneath it.
-struct AutoKill {
-    child: Option<Child>,
-    engine_pid: Option<u32>,
-}
-
-impl AutoKill {
-    fn new(child: Child) -> Self {
-        AutoKill {
-            child: Some(child),
-            engine_pid: None,
-        }
-    }
-
-    fn set_engine_pid(&mut self, pid: u32) {
-        self.engine_pid = Some(pid);
-    }
-
-    fn into_inner(mut self) -> Child {
-        self.child.take().expect("AutoKill still holds its child")
-    }
-}
-
-impl Drop for AutoKill {
-    fn drop(&mut self) {
-        let Some(mut child) = self.child.take() else {
-            return;
-        };
-        if child.try_wait().ok().flatten().is_some() {
-            return;
-        }
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
-        }
-        let deadline = Instant::now() + Duration::from_secs(60);
-        loop {
-            if child.try_wait().ok().flatten().is_some() {
-                return;
-            }
-            if Instant::now() >= deadline {
-                if let Some(pid) = self.engine_pid {
-                    unsafe {
-                        libc::kill(pid as i32, libc::SIGKILL);
-                    }
-                }
-                let _ = child.kill();
-                let _ = child.wait();
-                return;
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-    }
-}
-
-/// The `pid` field of whichever registry entry under `runs_dir` names
-/// *doc_name* as its own orchestration -- read back once a launcher's
-/// own run has registered, to give that launcher's own [`AutoKill`]
-/// the engine pid its drop's own fallback needs.
-fn engine_pid_for_doc(runs_dir: &Path, doc_name: &str) -> u32 {
-    for entry in std::fs::read_dir(runs_dir)
-        .expect("read runs_dir")
-        .flatten()
-    {
-        let Ok(text) = std::fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) else {
-            continue;
-        };
-        let Some(orchestration) = value.get("orchestration").and_then(|v| v.as_str()) else {
-            continue;
-        };
-        if Path::new(orchestration)
-            .file_name()
-            .and_then(|n| n.to_str())
-            == Some(doc_name)
-        {
-            return value["pid"].as_u64().expect("registry entry has a pid") as u32;
-        }
-    }
-    panic!("no registry entry under {runs_dir:?} names {doc_name:?}");
-}
 
 /// A quick, allow-listed document (an `echo` tool) that finishes at
 /// once -- used to populate history for the empty Select's own
@@ -257,8 +146,8 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     // So this test's own cleanup can kill each engine directly, by
     // its own pid, if `AutoKill`'s drop ever has to fall back to
     // killing the launcher outright.
-    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, "a.yml"));
-    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, "b.yml"));
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, out_a.path()));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, out_b.path()));
     assert_eq!(
         std::fs::read_dir(&runs_dir)
             .map(|rd| rd.flatten().count())
@@ -444,8 +333,8 @@ fn t_cycles_the_theme_across_select_a_run_and_its_store() {
     // unanswered long enough for `AutoKill`'s drop to fall back to
     // killing the launcher outright (the leak this test once hit
     // about once in 200 runs under load).
-    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, "a.yml"));
-    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, "b.yml"));
+    child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, out_a.path()));
+    child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, out_b.path()));
     let cursor_doc = earliest_registered_document(&runs_dir);
     // The finished prompt's own tokens land in the run's live state,
     // polled on its own tick -- a plain event wait only proves the
@@ -615,7 +504,7 @@ fn bare_osi_attaches_at_once_with_exactly_one_live_run() {
     );
     let runs_dir = home.path().join("runs");
     wait_for_registry_entries(&runs_dir, 1, Duration::from_secs(10));
-    launcher.set_engine_pid(engine_pid_for_doc(&runs_dir, "a.yml"));
+    launcher.set_engine_pid(engine_pid_for_doc(&runs_dir, out.path()));
 
     let (master, slave_path) = open_pty();
     let mut master = master;
