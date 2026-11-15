@@ -143,13 +143,22 @@ fn pid_liveness_from_ps_result(
         };
     };
     if output.status.success() {
-        return if command_line_names_engine(&String::from_utf8_lossy(&output.stdout)) {
-            PidLiveness::Alive
-        } else {
-            PidLiveness::Recycled
-        };
+        let command_line = String::from_utf8_lossy(&output.stdout);
+        if command_line_names_engine(&command_line) {
+            return PidLiveness::Alive;
+        }
+        // A placeholder in place of the command line means `ps` couldn't
+        // read this process's arguments, not that the pid now belongs to
+        // something else: BSD `ps` prints the process name in parentheses
+        // (`(python3.11)`) and procps prints it in brackets (`[python3]`).
+        if is_placeholder_command_line(&command_line) {
+            return PidLiveness::Unknown;
+        }
+        return PidLiveness::Recycled;
     }
-    if output.stdout.is_empty() && output.stderr.is_empty() {
+    // Only a `ps` that exited (not one killed by a signal) with nothing to
+    // say has looked the pid up and found nothing.
+    if output.status.code().is_some() && output.stdout.is_empty() && output.stderr.is_empty() {
         return PidLiveness::Gone;
     }
     if kill_reports_esrch {
@@ -157,6 +166,15 @@ fn pid_liveness_from_ps_result(
     } else {
         PidLiveness::Unknown
     }
+}
+
+/// Whether `ps` printed a placeholder name instead of a process's real
+/// command line: `(name)` from BSD `ps`, `[name]` from procps, either
+/// alone or followed by procps's ` <defunct>`.
+fn is_placeholder_command_line(command_line: &str) -> bool {
+    let first = command_line.split_whitespace().next().unwrap_or("");
+    (first.starts_with('(') && first.ends_with(')'))
+        || (first.starts_with('[') && first.ends_with(']'))
 }
 
 /// The basename of one command-line token.
@@ -599,6 +617,36 @@ mod tests {
             stdout: stdout.as_bytes().to_vec(),
             stderr: stderr.as_bytes().to_vec(),
         }
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_unknown_when_ps_prints_a_placeholder_name() {
+        for placeholder in ["(python3.11)\n", "(cof)", "[python3]", "[cof] <defunct>"] {
+            let output = fake_ps_output(true, placeholder, "");
+            assert_eq!(
+                pid_liveness_from_ps_result(Ok(output), false),
+                PidLiveness::Unknown,
+                "{placeholder:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn pid_liveness_from_ps_result_is_unknown_when_ps_is_killed_by_a_signal() {
+        use std::os::unix::process::ExitStatusExt;
+        let killed = || std::process::Output {
+            status: std::process::ExitStatus::from_raw(libc::SIGKILL),
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+        };
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(killed()), false),
+            PidLiveness::Unknown
+        );
+        assert_eq!(
+            pid_liveness_from_ps_result(Ok(killed()), true),
+            PidLiveness::Gone
+        );
     }
 
     #[test]
