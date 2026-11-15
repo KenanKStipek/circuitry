@@ -24,8 +24,8 @@ use support::{
     ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
     drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
     screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
-    wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start,
-    wait_with_timeout, write_doc,
+    wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts,
+    wait_for_step_start, wait_with_timeout, write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -56,17 +56,21 @@ fn find_text(grid: &[String], needle: &str) -> Option<(usize, usize)> {
 }
 
 /// Waits until `pattern` has appeared anywhere in `buf` so far, or
-/// `timeout` runs out either way.
+/// panics (with `pattern` and everything drawn so far) once `timeout`
+/// runs out without it.
 fn wait_for_pattern(buf: &Arc<Mutex<Vec<u8>>>, pattern: &[u8], timeout: Duration) {
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if buf
-            .lock()
-            .unwrap()
-            .windows(pattern.len())
-            .any(|w| w == pattern)
-        {
+    loop {
+        let whole = buf.lock().unwrap().clone();
+        if whole.windows(pattern.len()).any(|w| w == pattern) {
             return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{:?} never appeared within {timeout:?}; got:\n{:?}",
+                String::from_utf8_lossy(pattern),
+                String::from_utf8_lossy(&whole)
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -88,12 +92,20 @@ fn wait_for_pattern_since(
     timeout: Duration,
 ) {
     let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if buf.lock().unwrap()[since_len..]
+    loop {
+        let whole = buf.lock().unwrap().clone();
+        if whole[since_len..]
             .windows(pattern.len())
             .any(|w| w == pattern)
         {
             return;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{:?} never appeared within {timeout:?}; got:\n{:?}",
+                String::from_utf8_lossy(pattern),
+                String::from_utf8_lossy(&whole[since_len..])
+            );
         }
         std::thread::sleep(Duration::from_millis(20));
     }
@@ -135,8 +147,23 @@ fn wait_for_run_end(events_path: &Path, timeout: Duration) {
 /// exactly the one thing that test exists to not do). Non-blocking,
 /// so a quiet stretch between frames can never block this past its
 /// own deadline.
-fn wait_for_pattern_on_master(master: &mut File, pattern: &[u8], timeout: Duration) {
+///
+/// `carry` accumulates every byte ever read off `master` across every
+/// call sharing it -- a `read()` can return far more than just the
+/// bytes up to a first match (osi's own writes don't line up with
+/// this function's own chunk boundaries at all), so a second call
+/// waiting for a later pattern must still be able to see bytes this
+/// call already consumed from the fd but had no reason to return.
+fn wait_for_pattern_on_master(
+    master: &mut File,
+    carry: &mut Vec<u8>,
+    pattern: &[u8],
+    timeout: Duration,
+) {
     use std::io::Read;
+    if carry.windows(pattern.len()).any(|w| w == pattern) {
+        return;
+    }
     let fd = master.as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
     assert!(flags >= 0, "fcntl F_GETFL failed");
@@ -146,14 +173,13 @@ fn wait_for_pattern_on_master(master: &mut File, pattern: &[u8], timeout: Durati
         "fcntl F_SETFL O_NONBLOCK failed"
     );
     let deadline = Instant::now() + timeout;
-    let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
     while Instant::now() < deadline {
         match master.read(&mut chunk) {
             Ok(0) => break,
             Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.windows(pattern.len()).any(|w| w == pattern) {
+                carry.extend_from_slice(&chunk[..n]);
+                if carry.windows(pattern.len()).any(|w| w == pattern) {
                     return;
                 }
             }
@@ -165,7 +191,7 @@ fn wait_for_pattern_on_master(master: &mut File, pattern: &[u8], timeout: Durati
     }
     panic!(
         "pattern {pattern:?} never appeared within {timeout:?}; got:\n{:?}",
-        String::from_utf8_lossy(&buf)
+        String::from_utf8_lossy(carry)
     );
 }
 
@@ -205,14 +231,24 @@ fn a_short_run_renders_in_the_tui_and_exits_cleanly_with_no_leftovers() {
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
     );
 
-    // Review finding K1: the run finishes almost at once (an `echo`),
-    // but the TUI now stays open on that final state — `q` (no
-    // confirm, nothing left running) is what actually leaves it.
+    // The run finishes almost at once (an `echo`), but the TUI now
+    // stays open on that final state -- `q` (no confirm, nothing
+    // left running) is what actually leaves it. Waited for on the
+    // header's own `Ended`, not a fixed delay: on a loaded machine
+    // `cof` can still be running the echo when a fixed delay expires,
+    // and `q` while it's still running opens a confirm-cancel dialog
+    // instead of quitting, which this test never answers -- hanging
+    // it all the way to the hard timeout below (issue #795).
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     send_bytes(&mut master, b"q");
 
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // Above the two waits' own worst case (20s + 20s) with margin:
+    // this cap bounds how long osi itself takes to notice `q` and
+    // exit, not those waits, but a smaller number would make a
+    // timeout here read as "osi hung" when it could just as well be
+    // this test's own earlier waits having eaten most of it.
+    let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(status.success(), "osi should exit 0, got {status:?}");
 
     // Finding 17: the same grace period every other test here gives
@@ -589,16 +625,36 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
         .expect("spawn bare osi");
     assert!(discover.status.success());
     let discover_stdout = String::from_utf8_lossy(&discover.stdout);
+    // Matched by this run's own, already-canonicalized orchestration
+    // path (the registry entry's own `orchestration` field), not a
+    // bare "do.yml" -- every pty test in this binary writes a
+    // document of that same name, and `OSI_PROCESS_SCAN` is left on
+    // for this one test (the one that exercises the scan itself), so
+    // a "do.yml" match could just as well land on a different test's
+    // own concurrently-running run.
+    let own_orchestration = entry["orchestration"].as_str().unwrap();
     let discover_line = discover_stdout
         .lines()
-        .find(|l| l.contains("do.yml"))
-        .unwrap_or_else(|| panic!("expected a line naming do.yml, got:\n{discover_stdout}"));
+        .find(|l| l.contains(own_orchestration))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a line naming this run's own document ({own_orchestration}), got:\n{discover_stdout}"
+            )
+        });
     assert!(discover_line.contains("cof"));
+    // The registry always wins over the process scan for a run found
+    // by both (discovery.rs's own doc comment: deduplicated by pid,
+    // registry entries added first) -- so the run directory bare
+    // `osi` lists here is the registry entry's own `run_dir`, read
+    // moments ago, not the scan's own cwd-derived guess. Checked
+    // against that exact field, with the expected directory, the
+    // entry and the line all shown on failure, rather than leaving a
+    // mismatch with no way to tell which source actually won.
+    let entry_run_dir = entry["run_dir"].as_str().unwrap();
     assert!(
-        discover_line.contains(&out_dir.path().display().to_string())
-            || std::fs::canonicalize(out_dir.path())
-                .is_ok_and(|p| discover_line.contains(&p.display().to_string())),
-        "expected the run directory in: {discover_line}"
+        discover_line.contains(entry_run_dir),
+        "expected the run directory {entry_run_dir:?} (from the registry entry {entry}) in: \
+         {discover_line:?}"
     );
     assert_eq!(
         std::fs::read_dir(&runs_dir)
@@ -814,40 +870,38 @@ fn pressing_3_during_a_live_run_opens_the_store_screen() {
     // would let the cursor stay put and still pass a check that only
     // looks for *some* redraw, which the ticking clock alone already
     // guarantees.
-    let before_down = captured_buf.lock().unwrap().len();
+    // The table's own two rows (`ask` and `again`) are both already
+    // on screen before either arrow key -- only the cursor glyph
+    // itself moves, so waiting for either row's own text as new
+    // bytes (`wait_for_pattern_since`) would wait for text that was
+    // never going to be redrawn at all. Waited for on the rendered
+    // screen grid instead, for the cursor actually being on the row
+    // it belongs on.
     send_bytes(&mut master, b"\x1b[B");
-    wait_for_pattern_since(
-        &captured_buf,
-        before_down,
-        b"again",
-        Duration::from_secs(10),
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("again"))
+    });
+    assert!(
+        screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("again")),
+        "expected ↓ to move the table's own cursor onto `again`; screen:\n{screen}"
     );
-    {
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        let cursor_on_again = screen
-            .lines()
-            .any(|l| l.contains('❯') && l.contains("again"));
-        assert!(
-            cursor_on_again,
-            "expected ↓ to move the table's own cursor onto `again`; screen:\n{screen}"
-        );
-    }
 
-    let before_up = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\x1b[A");
-    wait_for_pattern_since(&captured_buf, before_up, b"ask", Duration::from_secs(10));
-    {
-        let whole = captured_buf.lock().unwrap().clone();
-        let screen = support::screen_grid(&whole, 200, 60).join("\n");
-        let cursor_on_ask = screen
+    let screen = wait_for_screen(&captured_buf, Duration::from_secs(10), |screen| {
+        screen
             .lines()
-            .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again"));
-        assert!(
-            cursor_on_ask,
-            "expected ↑ to move the table's own cursor back onto `ask`; screen:\n{screen}"
-        );
-    }
+            .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again"))
+    });
+    assert!(
+        screen
+            .lines()
+            .any(|l| l.contains('❯') && l.contains("ask") && !l.contains("again")),
+        "expected ↑ to move the table's own cursor back onto `ask`; screen:\n{screen}"
+    );
 
     let before_enter = captured_buf.lock().unwrap().len();
     send_bytes(&mut master, b"\r");
@@ -1802,7 +1856,12 @@ fn the_flow_screen_updates_live_without_a_further_key_press() {
     send_bytes(&mut master, b"2");
 
     let before_decision = captured_buf.lock().unwrap().len();
-    wait_for_pattern(&captured_buf, "→ then".as_bytes(), Duration::from_secs(20));
+    // Waited for on the rendered screen grid, not a raw byte
+    // pattern: osi draws the rail's own cursor-positioning escapes
+    // between "→" and "then", so the two are never one contiguous
+    // byte run to search for -- only `screen_grid`'s own replay puts
+    // them on the same line with the space the rendered screen shows.
+    wait_for_screen_text(&captured_buf, "→ then", Duration::from_secs(20));
     {
         let after = captured_buf.lock().unwrap()[before_decision..].to_vec();
         let rendered = String::from_utf8_lossy(&after);
@@ -1883,11 +1942,17 @@ fn a_short_run_with_no_animation_still_renders_and_exits_cleanly() {
         ],
     );
 
+    // Waited for on the header's own `Ended`, not a fixed delay: the
+    // run finishes almost at once (an `echo`), but on a loaded
+    // machine `cof` can still be running it when a fixed delay
+    // expires, and `q` while it's still running opens a confirm-
+    // cancel dialog this test never answers (issue #795).
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     send_bytes(&mut master, b"q");
 
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // Above the two waits' own worst case (20s + 20s) with margin.
+    let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(
         status.success(),
         "osi --no-animation should exit 0, got {status:?}"
@@ -1945,16 +2010,20 @@ fn a_forwarded_sigterm_on_the_finished_screen_still_exits_promptly() {
     );
     let pid = child.id() as i32;
 
-    // The `echo` finishes almost at once, well inside `SIGNAL_DELAY`
-    // -- by the time this sends SIGTERM, the TUI is on the finished
-    // screen already, never having been asked to leave it yet.
+    // Waited for on the header's own `Ended`, not a fixed delay: the
+    // `echo` finishes almost at once, but on a loaded machine `cof`
+    // can still be running it well past a fixed delay -- sending
+    // SIGTERM before the TUI has actually reached the finished
+    // screen would hit the still-running engine instead, exiting 143
+    // rather than 0 (issue #795).
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     unsafe {
         libc::kill(pid, libc::SIGTERM);
     }
 
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // Above the two waits' own worst case (20s + 20s) with margin.
+    let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(
         status.success(),
         "the run itself already succeeded; a SIGTERM on the finished screen must not turn that \
@@ -2209,6 +2278,7 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let (mut master, slave_path) = open_pty();
+    let mut master_carry = Vec::new();
 
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
@@ -2219,7 +2289,12 @@ fn a_closed_pty_master_mid_run_with_no_signal_still_exits_promptly_with_no_lefto
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
     );
 
-    wait_for_pattern_on_master(&mut master, b"\x1b[?1049h", Duration::from_secs(20));
+    wait_for_pattern_on_master(
+        &mut master,
+        &mut master_carry,
+        b"\x1b[?1049h",
+        Duration::from_secs(20),
+    );
     wait_for_step_start(
         &out_dir.path().join("events.jsonl"),
         "prime.slow",
@@ -2287,6 +2362,7 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
     let config = write_doc(work.path(), "config.json", SCRIPTED_CONFIG);
 
     let (mut master, slave_path) = open_pty();
+    let mut master_carry = Vec::new();
 
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
@@ -2297,16 +2373,29 @@ fn a_closed_pty_master_on_the_finished_screen_with_no_signal_still_exits_promptl
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
     );
 
-    wait_for_pattern_on_master(&mut master, b"\x1b[?1049h", Duration::from_secs(20));
-    // The `echo` finishes almost at once -- well inside `SIGNAL_DELAY`,
-    // the TUI is on the finished screen already, never having been
-    // asked to leave it yet.
-    std::thread::sleep(SIGNAL_DELAY);
+    // Waited for on the header's own `Ended`, not a fixed delay: the
+    // `echo` finishes almost at once, but on a loaded machine `cof`
+    // can still be running it well past a fixed delay, which this
+    // test's own `elapsed` check below would then blame on osi
+    // taking too long to notice the closed terminal (issue #795).
+    wait_for_pattern_on_master(
+        &mut master,
+        &mut master_carry,
+        b"\x1b[?1049h",
+        Duration::from_secs(20),
+    );
+    wait_for_pattern_on_master(
+        &mut master,
+        &mut master_carry,
+        b"Ended",
+        Duration::from_secs(20),
+    );
 
     let closed_at = Instant::now();
     drop(master);
 
-    let status = wait_with_timeout(child, Duration::from_secs(15));
+    // Above the two waits' own worst case (20s + 20s) with margin.
+    let status = wait_with_timeout(child, Duration::from_secs(45));
     let elapsed = closed_at.elapsed();
     // The run itself finished fine before the terminal went away, so
     // osi ends with the run's own exit code: 0, never a panic's 101.
@@ -2432,14 +2521,17 @@ fn osi_watch_renders_in_the_tui_and_exits_cleanly() {
     let run_dir_arg = run_dir.path().as_os_str();
     let child = spawn_osi_on_pty(&home, &slave_path, &[OsStr::new("watch"), run_dir_arg]);
 
-    // Review finding K1: the run `cof` already finished before `osi
-    // watch` ever attached, so the TUI shows the finished screen
-    // immediately — `q` detaches it, same as the run test above.
+    // The run `cof` already finished before `osi watch` ever
+    // attached, so the TUI shows the finished screen immediately --
+    // `q` detaches it, same as the run test above. Waited for on the
+    // header's own `Ended`, not a fixed delay, the same as every
+    // other finished-screen test here.
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(SIGNAL_DELAY);
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(20));
     send_bytes(&mut master, b"q");
 
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // Above the two waits' own worst case (20s + 20s) with margin.
+    let status = wait_with_timeout(child, Duration::from_secs(45));
     assert!(status.success(), "osi watch should exit 0, got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));
@@ -2817,10 +2909,13 @@ fn a_fast_exiting_engine_shows_the_real_ok_ending_not_aborted() {
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
     // The engine double sleeps 0.3s before writing anything at all
     // (comfortably more than one of the TUI's own ~30ms poll ticks),
-    // then writes and exits in one burst -- a further 1.5s here gives
-    // the fix's own drain every chance to have already run and the
-    // TUI to have redrawn with it before this reads the pty's buffer.
-    std::thread::sleep(Duration::from_millis(1500));
+    // then writes and exits in one burst. Waited for on the header's
+    // own `Ended`, not a fixed delay: this `assert` below reads every
+    // byte drawn up to that point, so it still sees an `aborted` the
+    // bug would have shown earlier, and no longer risks reading the
+    // screen before the double has actually written anything on a
+    // loaded machine.
+    wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(10));
     let rendered_before_switch = captured_buf.lock().unwrap().clone();
     assert!(
         !String::from_utf8_lossy(&rendered_before_switch).contains("aborted"),
@@ -2915,11 +3010,15 @@ fn a_fast_exiting_engine_shows_the_real_failed_ending_not_aborted() {
         ],
     );
 
+    // Waited for on the header's own `Failed`, not a fixed delay:
+    // `q` while the engine double hasn't yet written its final state
+    // opens a confirm-cancel dialog this test never answers.
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
-    std::thread::sleep(Duration::from_millis(1500));
+    wait_for_pattern(&captured_buf, b"Failed", Duration::from_secs(10));
     send_bytes(&mut master, b"q");
 
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    // Above the two waits' own worst case (20s + 10s) with margin.
+    let status = wait_with_timeout(child, Duration::from_secs(40));
     assert_eq!(status.code(), Some(1), "got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));

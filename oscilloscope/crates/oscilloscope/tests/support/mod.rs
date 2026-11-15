@@ -489,6 +489,24 @@ pub fn screen_grid(bytes: &[u8], cols: usize, rows: usize) -> Vec<String> {
                             }
                         }
                     }
+                    // Entering or leaving the alternate screen
+                    // (`\x1b[?1049h`/`l`) -- a real terminal gives
+                    // the program a screen of its own, blank, not
+                    // the primary one's own leftover content (osi's
+                    // pre-alt-screen warning line, say, still sitting
+                    // at row 0 otherwise). Not just another `J`: no
+                    // program ever has to ask for this clear itself,
+                    // so a caller that waits for text on literally
+                    // the alternate screen's first frame must still
+                    // find it, not whatever stale primary-screen text
+                    // happened to share its row and column.
+                    'h' | 'l' if params.trim_start_matches('?') == "1049" => {
+                        for line in grid.iter_mut() {
+                            line.iter_mut().for_each(|c| *c = ' ');
+                        }
+                        row = 0;
+                        col = 0;
+                    }
                     _ => {}
                 }
             } else if i < chars.len() {
@@ -757,8 +775,11 @@ pub fn drain_continuously(mut master: File) -> Arc<Mutex<Vec<u8>>> {
 
 /// Polls the replayed screen (every drawn byte so far through
 /// [`screen_grid`], 200x60) until it shows `needle`, returning that
-/// screen; after `timeout` it returns whatever the screen shows, for
-/// the caller's own assertion to name the step that lagged.
+/// screen -- panics, with `needle` and the whole replayed screen, if
+/// `timeout` runs out first, rather than silently handing a caller a
+/// screen that never actually showed it: a caller that genuinely
+/// wants "whatever the screen shows right now", timeout or not, reads
+/// `captured_buf` directly instead, and says why at its own call site.
 pub fn wait_for_screen_text(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     needle: &str,
@@ -768,19 +789,22 @@ pub fn wait_for_screen_text(
     loop {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = screen_grid(&whole, 200, 60).join("\n");
-        if screen.contains(needle) || Instant::now() >= deadline {
+        if screen.contains(needle) {
             return screen;
+        }
+        if Instant::now() >= deadline {
+            panic!("{needle:?} never appeared on screen within {timeout:?}; screen:\n{screen}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
 /// [`wait_for_screen_text`] for several needles: polls until the
-/// replayed screen holds every one of them, or the deadline passes.
-/// osi writes a frame in several pieces, so a screen that shows one
-/// row of an overlay (its title, say) can still be missing the rows
-/// below it; waiting for everything a test then asserts on keeps it
-/// from reading a half-drawn frame.
+/// replayed screen holds every one of them, or panics -- osi writes
+/// a frame in several pieces, so a screen that shows one row of an
+/// overlay (its title, say) can still be missing the rows below it;
+/// waiting for everything a test then asserts on keeps it from
+/// reading a half-drawn frame.
 pub fn wait_for_screen_texts(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     needles: &[&str],
@@ -790,18 +814,22 @@ pub fn wait_for_screen_texts(
     loop {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = screen_grid(&whole, 200, 60).join("\n");
-        if needles.iter().all(|needle| screen.contains(needle)) || Instant::now() >= deadline {
+        if needles.iter().all(|needle| screen.contains(needle)) {
             return screen;
+        }
+        if Instant::now() >= deadline {
+            panic!(
+                "{needles:?} never all appeared on screen within {timeout:?}; screen:\n{screen}"
+            );
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
-/// Polls until `done` holds for the replayed screen, or the deadline
-/// passes, and returns the last screen seen. For a screen change, wait
-/// for what the new screen shows, not only for the old text to go: a
-/// frame that has cleared the old screen but not drawn the new one yet
-/// shows neither.
+/// Polls until `done` holds for the replayed screen, or panics --
+/// for a screen change, wait for what the new screen shows, not only
+/// for the old text to go: a frame that has cleared the old screen
+/// but not drawn the new one yet shows neither.
 pub fn wait_for_screen(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     timeout: Duration,
@@ -811,15 +839,19 @@ pub fn wait_for_screen(
     loop {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = screen_grid(&whole, 200, 60).join("\n");
-        if done(&screen) || Instant::now() >= deadline {
+        if done(&screen) {
             return screen;
+        }
+        if Instant::now() >= deadline {
+            panic!("screen never matched within {timeout:?}; screen:\n{screen}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }
 }
 
 /// [`wait_for_screen_text`], but waiting for `needle` to disappear
-/// instead.
+/// instead, and panicking (with `needle` and the whole replayed
+/// screen) if it's still there once `timeout` runs out.
 pub fn wait_for_screen_text_gone(
     captured_buf: &Arc<Mutex<Vec<u8>>>,
     needle: &str,
@@ -829,8 +861,11 @@ pub fn wait_for_screen_text_gone(
     loop {
         let whole = captured_buf.lock().unwrap().clone();
         let screen = screen_grid(&whole, 200, 60).join("\n");
-        if !screen.contains(needle) || Instant::now() >= deadline {
+        if !screen.contains(needle) {
             return screen;
+        }
+        if Instant::now() >= deadline {
+            panic!("{needle:?} never left the screen within {timeout:?}; screen:\n{screen}");
         }
         std::thread::sleep(Duration::from_millis(100));
     }

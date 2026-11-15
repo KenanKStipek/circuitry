@@ -128,6 +128,17 @@ fn path_with(bin_dir: &Path) -> OsString {
     std::env::join_paths(paths).expect("join PATH")
 }
 
+/// An RFC3339 timestamp, seconds precision -- every fixture below is
+/// built from `chrono::Utc::now()` rather than a fixed date: a
+/// written-once literal reads a run as having started however long
+/// ago it is by the time this file was written, not when the test
+/// actually runs, and the header's own elapsed time then grows
+/// without bound, eventually overlapping (and truncating) other text
+/// on the same row, the label included.
+fn rfc3339(t: chrono::DateTime<chrono::Utc>) -> String {
+    t.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+}
+
 /// A `run_start` event line carrying `label`, plus one finished leaf
 /// -- the "still running" shape this test's own engine double writes
 /// at once. `label` here is always `__LABEL__` (the engine double's
@@ -136,41 +147,55 @@ fn path_with(bin_dir: &Path) -> OsString {
 fn running_events(run_id: &str) -> String {
     format!(
         concat!(
-            "{{\"v\":1,\"seq\":0,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",",
+            "{{\"v\":1,\"seq\":0,\"ts\":\"{now}\",\"ev\":\"run_start\",",
             "\"run_id\":\"{run_id}\",\"orchestration\":\"do-thing.yml\",\"pid\":__PID__,",
             "\"engine\":\"electricity 0.1.0\",\"label\":\"__LABEL__\"}}\n",
         ),
+        now = rfc3339(chrono::Utc::now()),
         run_id = run_id,
     )
 }
 
-fn running_state() -> &'static str {
-    concat!(
-        "{\"runtime\":{\"last_run\":{\"completed_at\":null}},",
-        "\"prime\":{\"value\":null,\"meta\":{\"created_at\":\"2026-01-01T00:00:00Z\",",
-        "\"completed_at\":null}}}"
+fn running_state() -> String {
+    format!(
+        concat!(
+            "{{\"runtime\":{{\"last_run\":{{\"completed_at\":null}}}},",
+            "\"prime\":{{\"value\":null,\"meta\":{{\"created_at\":\"{now}\",",
+            "\"completed_at\":null}}}}}}"
+        ),
+        now = rfc3339(chrono::Utc::now()),
     )
 }
 
 fn final_events(run_id: &str) -> String {
+    let start = chrono::Utc::now();
+    let end = start + chrono::Duration::seconds(1);
     format!(
         concat!(
-            "{{\"v\":1,\"seq\":0,\"ts\":\"2026-01-01T00:00:00Z\",\"ev\":\"run_start\",",
+            "{{\"v\":1,\"seq\":0,\"ts\":\"{start}\",\"ev\":\"run_start\",",
             "\"run_id\":\"{run_id}\",\"orchestration\":\"do-thing.yml\",\"pid\":__PID__,",
             "\"engine\":\"electricity 0.1.0\",\"label\":\"__LABEL__\"}}\n",
-            "{{\"v\":1,\"seq\":1,\"ts\":\"2026-01-01T00:00:01Z\",\"ev\":\"run_end\",\"ok\":true}}\n",
+            "{{\"v\":1,\"seq\":1,\"ts\":\"{end}\",\"ev\":\"run_end\",\"ok\":true}}\n",
         ),
+        start = rfc3339(start),
+        end = rfc3339(end),
         run_id = run_id,
     )
 }
 
-fn final_state() -> &'static str {
-    concat!(
-        "{\"runtime\":{\"last_run\":{\"completed_at\":\"2026-01-01T00:00:01Z\",",
-        "\"totals\":{\"wall_time_s\":1.0,\"effects_run\":1,\"tokens_sent\":0,",
-        "\"tokens_received\":0,\"cost_usd\":0.0}}},",
-        "\"prime\":{\"value\":true,\"meta\":{\"created_at\":\"2026-01-01T00:00:00Z\",",
-        "\"completed_at\":\"2026-01-01T00:00:01Z\",\"error\":null}}}"
+fn final_state() -> String {
+    let start = chrono::Utc::now();
+    let end = start + chrono::Duration::seconds(1);
+    format!(
+        concat!(
+            "{{\"runtime\":{{\"last_run\":{{\"completed_at\":\"{end}\",",
+            "\"totals\":{{\"wall_time_s\":1.0,\"effects_run\":1,\"tokens_sent\":0,",
+            "\"tokens_received\":0,\"cost_usd\":0.0}}}}}},",
+            "\"prime\":{{\"value\":true,\"meta\":{{\"created_at\":\"{start}\",",
+            "\"completed_at\":\"{end}\",\"error\":null}}}}}}"
+        ),
+        start = rfc3339(start),
+        end = rfc3339(end),
     )
 }
 
@@ -212,13 +237,13 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
         &[
             ("PATH", path_env.as_os_str()),
             ("OSI_DOUBLE_EVENTS", OsStr::new(&running_events("run-a"))),
-            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
+            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(&running_state())),
             ("OSI_DOUBLE_FINISH_FILE", finish_file_a.as_os_str()),
             (
                 "OSI_DOUBLE_FINAL_EVENTS",
                 OsStr::new(&final_events("run-a")),
             ),
-            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(final_state())),
+            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(&final_state())),
         ],
     );
 
@@ -247,7 +272,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
         &[
             ("PATH", path_env.as_os_str()),
             ("OSI_DOUBLE_EVENTS", OsStr::new(&running_events("run-b"))),
-            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(running_state())),
+            ("OSI_DOUBLE_RUNNING_STATE", OsStr::new(&running_state())),
             (
                 "OSI_DOUBLE_FINISH_FILE",
                 work.path().join("finish-b-never").as_os_str(),
@@ -256,7 +281,7 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
                 "OSI_DOUBLE_FINAL_EVENTS",
                 OsStr::new(&final_events("run-b")),
             ),
-            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(final_state())),
+            ("OSI_DOUBLE_FINAL_STATE", OsStr::new(&final_state())),
         ],
     );
     wait_for_screen_text(&captured_b, "ticket seven", Duration::from_secs(20));
@@ -288,9 +313,14 @@ fn a_run_started_with_label_shows_it_in_the_header_select_and_exit_summary() {
 
     // Now run A finishes for real: the exit summary (DESIGN.md
     // §2.4's `■ run <name> ...` row) shows the same label, printed
-    // to the plain scrollback once the TUI leaves the alt screen.
+    // to the plain scrollback once the TUI leaves the alt screen --
+    // so waited for here on the TUI's own header `Ended`, still on
+    // the alternate screen, not on that later scrollback text, which
+    // can't show until `q` actually leaves it; the exit summary
+    // itself is the explicit assert below, on the terminal's whole
+    // output once osi has exited.
     std::fs::write(&finish_file_a, b"go").unwrap();
-    wait_for_screen_text(&captured_a, "run ticket 42", Duration::from_secs(20));
+    wait_for_screen_text(&captured_a, "Ended", Duration::from_secs(20));
     send_bytes(&mut master_a, b"q");
     let status_a = wait_with_timeout(child_a, Duration::from_secs(30));
     assert!(status_a.success(), "osi should exit 0, got {status_a:?}");
