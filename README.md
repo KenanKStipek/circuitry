@@ -15,7 +15,7 @@ This page is the short tour. The **[Guidebook](docs/guidebook/README.md)** cover
 ## Install and run
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/kenankstipek/circuitry/main/scripts/install.sh | sh   # or: pipx install circuitry-cof
+curl -fsSL https://raw.githubusercontent.com/kenankstipek/circuitry/main/scripts/install.sh | sh
 cof setup                           # find a local model (Ollama by default) and write config
 cof run learn/hello -e name=World   # run a bundled example
 cof list                            # the bundled library: learn, utilities, patterns, recipes, agents

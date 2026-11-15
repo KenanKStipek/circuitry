@@ -22,9 +22,7 @@ subset of the language:
   `electricity --help` lists every option.
 - **Effects and tools.** `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
   `prompt` and `reflector` effects and `finally:` blocks run, with the
-  <!-- doc-counts:start electricity-tool-count -->18<!-- doc-counts:end electricity-tool-count -->
-  tool providers
-  <!-- doc-counts:start electricity-tool-list -->`agent`, `awk`, `cel`, `clock`, `env_vars`, `ffmpeg`, `fs`, `gh`, `hash`, `http`, `imagemagick`, `json`, `regex`, `service`, `shell`, `systemone`, `uuid` and `validate_yaml`<!-- doc-counts:end electricity-tool-list -->.
+  following <!-- doc-counts:start electricity-tool-count -->18<!-- doc-counts:end electricity-tool-count --> tool providers: <!-- doc-counts:start electricity-tool-list -->`agent`, `awk`, `cel`, `clock`, `env_vars`, `ffmpeg`, `fs`, `gh`, `hash`, `http`, `imagemagick`, `json`, `regex`, `service`, `shell`, `systemone`, `uuid` and `validate_yaml`<!-- doc-counts:end electricity-tool-list -->.
   [What electricity can't run yet](#what-electricity-cant-run-yet), below,
   refuses anything else with a preview message pointing at `cof run`, before
   any state is written.
@@ -103,14 +101,10 @@ subset of the language:
 
 ## What electricity can't run yet
 
-- **Tool providers.** electricity builds
-  <!-- doc-counts:start electricity-tool-count -->18<!-- doc-counts:end electricity-tool-count -->
-  of Circuitry's
-  <!-- doc-counts:start tool-plugin-count -->76<!-- doc-counts:end tool-plugin-count -->
-  tool plugins (the list above). A document, or a `use: {path:}` child, naming
-  any of the other
-  <!-- doc-counts:start electricity-unsupported-count -->58<!-- doc-counts:end electricity-unsupported-count -->
-  is refused before the run starts; a plan compiled
+- **Tool providers.** electricity builds <!-- doc-counts:start electricity-tool-count -->18<!-- doc-counts:end electricity-tool-count --> of Circuitry's <!-- doc-counts:start tool-plugin-count -->76<!-- doc-counts:end tool-plugin-count --> tool plugins
+  (the list above). A document, or a `use: {path:}` child, naming any of the
+  other <!-- doc-counts:start electricity-unsupported-count -->58<!-- doc-counts:end electricity-unsupported-count --> is
+  refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
   absorbs it. A name that isn't one of Circuitry's plugins at all fails
@@ -121,11 +115,13 @@ subset of the language:
   ASCII or Latin-1 fails the effect with the preview message.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
-- **Persistence.** `runtime.persistence` is refused -- clients need the
-  `--state`-file/`--last`-stash resume paths first (#727, #760); a
-  backend can follow. `cof run --resume <run-id>` (looked up via a
-  `runtime.persistence` backend) still isn't supported -- `--resume`
-  always needs `--state <file>` or `--resume last`.
+- **Persistence.** `runtime.persistence` is refused. `electricity run`
+  already has the file-based resume paths (`--state <path>`/`-s`,
+  `--resume <mode>`, `--force` and `--last`, #727 and #760); a
+  `runtime.persistence` backend (SQL, SurrealDB) isn't built yet. `cof
+  run --resume <run-id>` (looked up via a `runtime.persistence` backend)
+  still isn't supported -- `--resume` always needs `--state <file>` or
+  `--resume last`.
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
 - **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,

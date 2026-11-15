@@ -70,7 +70,8 @@ and are therefore an injection surface.
 
 **Mitigation — ffmpeg.** `FfmpegPlugin.execute`, in
 [`src/circuitry/plugins/ffmpeg.py`](../src/circuitry/plugins/ffmpeg.py),
-passes all arguments as a list to `subprocess.run` (no shell). File path
+passes all arguments as a list to `core/cancellation.py::run_tracked`
+(no shell). File path
 arguments and CLI scalars go through `_check_safe()`, in the same file,
 which rejects shell metacharacters even though the no-shell invocation
 already prevents expansion. Drawtext text values go through
@@ -83,8 +84,8 @@ because no shell layer interprets them.
 `_validate_image_dir()`, both in
 [`src/circuitry/plugins/comfyui.py`](../src/circuitry/plugins/comfyui.py).
 These reject paths escaping the configured working area. The HTTP transport
-uses standard `subprocess.run(list_args)` shape — no shell — and goes
-through the same
+also goes through `core/cancellation.py::run_tracked` with a list of
+arguments — no shell — and goes through the same
 [`circuitry/curl_support.py`](../src/circuitry/curl_support.py) plumbing
 described below, so its workflow payload (which embeds the rendered prompt)
 never lands on the curl command line either.
@@ -791,9 +792,11 @@ for the full shape); an `http` effect's `params.headers` or a subprocess
 tool's host `env` names one with `{secret: <name>}` to use it without the
 value ever reaching the document's own data flow.
 
-**Mitigation.** `secrets.py::SecretValues.resolve` (via `resolve_secret`)
-resolves a name at dispatch, once per attempt, never earlier and never
-cached across effects. The value
+**Mitigation.** `core/tool.py::ToolRuntime.execute` creates one
+`secrets.py::SecretValues` instance before its retry loop and resolves
+every `{secret: ...}` reference through it (`resolve_secret`); a name
+resolves once per effect dispatch, retries included, never earlier and
+never cached across effects. The value
 never reaches `params`, `meta.params_rendered`, `meta.raw`, an error, the
 events stream or a log; anywhere it would otherwise be echoed (a response
 body, a response header, a process's output or error text), it is replaced
@@ -824,8 +827,11 @@ symlinks resolved first, so a `..` segment or a symlinked directory leading
 outside that base is refused before any request is sent; a target that is
 itself a symlink or a directory is refused even with `overwrite: true`.
 The body is written to a temporary file next to the target and moved into
-place only once it is complete and under `max_bytes`, so a failure midway
-leaves neither file. Only a document run by path may name `save_to` or
+place only once it is complete and under `max_bytes`: `_move_into_place`
+replaces the target atomically (`os.replace`) under `overwrite: true`, or
+claims the name exclusively otherwise, so a failure midway never leaves a
+partial file at the target and, under `overwrite: true`, never removes an
+existing one it did not fully replace. Only a document run by path may name `save_to` or
 `within` at all — `http.py::reject_limited_save_to` refuses a limited
 document's attempt (in `params`, through `{from: ...}`, or through
 `params_json`) at `cof check` time or, when it only appears once rendered,
@@ -833,10 +839,15 @@ at that effect's own dispatch.
 
 **Residual risk.** `save_to` needs no capability of its own beyond `http`'s
 own `network` tag, so a document that capability consent already asked
-about for `http` can write a file on disk without a further prompt — unless
-the host sets `trust_orchestration_runtime` (which trusts every document),
-in which case a *limited* document could not reach `save_to` regardless,
-since trust is still required. `within` bounds *where* a file lands, not
+about for `http` can write a file on disk without a further prompt. A
+limited document (fetched, a library entry, or one a tool/reflector chose)
+can never name `save_to` at all — unless the host sets
+`trust_orchestration_runtime`: `cli/runtime_shim.py::run` passes
+`trusted=document_trust_document or cfg.trust_orchestration_runtime` into
+`core/compiler.py::compile_orchestration`, so that setting makes every
+document's `_current_document_trusted()` true and `limited` false there,
+not only one run by path. With it set, any document can use `save_to`
+with only `http`'s own `network` consent. `within` bounds *where* a file lands, not
 how large the run's disk footprint grows across many effects; `max_bytes`
 bounds one response, not a document that calls `http` with `save_to`
 repeatedly.
@@ -844,9 +855,10 @@ repeatedly.
 ### 14. The `service` tool
 
 `service` starts, queries and stops a long-running background process by
-name — the one tool plugin besides `shell` that runs an operator- or
-document-supplied command, and the only one that leaves something running
-after the effect returns.
+name — one of several tool plugins that run an operator- or
+document-supplied command outside the `shell` allowlist (see
+[Section 16](#16-tool-plugins-that-run-a-command-outside-the-shell-allowlist)),
+and the only one that leaves something running after the effect returns.
 
 **Mitigation.** `ServicePlugin._start` records ownership (`check_ownership`,
 the process group id, its start time, the machine's boot time) before
@@ -873,52 +885,72 @@ running.
 by `runtime.plugins.systemone.api_key_env` — a host setting, never an
 effect param.
 
-**Mitigation.** `SystemOnePlugin._api_key` requires `api_key_env` to be a
-variable *name* (checked against a name pattern), not a key value pasted
-directly into config, and rejects a key containing characters that can't be
-sent in a header. `SystemOnePlugin._server` refuses a `base_url` carrying
-its own `user:pass@` userinfo, and — unless `allow_remote` is set —
-refuses any host that is not loopback (`localhost`, `127.0.0.0/8`,
-`[::1]`), by literal host check rather than a DNS lookup that could resolve
+**Mitigation.** `SystemOnePlugin._api_key` requires `api_key_env` to match
+an identifier pattern (`_ENV_NAME`, letters/digits/underscore, not
+starting with a digit) rather than take any string, and rejects a
+resolved value containing characters that can't be sent in a header.
+That pattern only rejects a value shaped unlike a name at all; a pasted
+key that happens to be identifier-shaped (`sk_abc123`) still passes it as
+a "name". `SystemOnePlugin._server` refuses a `base_url` carrying its own
+`user:pass@` userinfo, and — unless `allow_remote` is set — refuses any
+host that is not loopback (`localhost`, `127.0.0.0/8`, `[::1]`), by
+literal host check rather than a DNS lookup that could resolve
 differently at request time. An effect param named `base_url`,
 `api_key_env` or `allow_remote` is a `cof check` error and a dispatch-time
 refusal, the same as any other `runtime.plugins.<name>` host setting a
 document's own params may not set.
 
-**Residual risk.** With `allow_remote: true` and `base_url` on `http://`,
-the key crosses the network unencrypted; `systemone` does not enforce
-`https://` for a remote server, only loopback-by-default. As with
-`api_key_env` on an adapter (see [Section 3](#3-credential-handling)), the
-choice of *which* variable is config-only, but a trusted document can still
-set `base_url` to any loopback (or, with `allow_remote`, any) host, so it
-can still send whatever is in that variable to a server of its choosing.
+**Residual risk.** Unlike an adapter's `api_key_env`, which
+`cli/effective_settings.py::_strip_document_api_key_env` strips from a
+document's `runtime.adapters.<name>` block unconditionally, nothing strips
+`runtime.plugins.systemone.api_key_env` from a trusted document's own
+`runtime.plugins` block. A trusted document can therefore choose which
+environment variable `systemone` sends as a bearer token, not only config
+— and, with `base_url` on a loopback host it also controls (or, with
+`allow_remote: true`, any host), send that variable's value there. With
+`allow_remote: true` and `base_url` on `http://`, the value also crosses
+the network unencrypted; `systemone` does not enforce `https://` for a
+remote server, only loopback-by-default.
 
 ### 16. Tool plugins that run a command outside the shell allowlist
 
 `runtime.plugins.shell.allowed_commands` governs only the dedicated `shell`
 plugin. Every other plugin tagged with the `shell` capability in
 [`plugins/capabilities.py`](../src/circuitry/plugins/capabilities.py) also
-runs an external binary with effect-supplied arguments, and that pin does
-not reach any of them:
+runs an external binary, and that pin does not reach any of them:
 
 - **One fixed binary, document-supplied arguments.** `docker`, `kubectl`,
   `gh`, `git`, `yt_dlp`, `ripgrep`, `pytest`, `awk`, `sed`, `pandoc`,
   `mediainfo`, `imagemagick`, `exiftool`, `7z`, `ping`, `traceroute`,
   `linter`, `ocr`, `gpg`, `diff_patch`, `pdf_render` and `ffmpeg` each
-  always run the one binary their name (or docstring) says — a document's
-  `params` only choose that binary's own arguments, through
-  `_subprocess.py::GenericSubprocessTool` or a plugin's own command
-  builder (`ffmpeg.py::FfmpegPlugin.execute`, `gpg.py`'s multi-mode
-  builder, ...). The allowlist's whole purpose — deciding *which* program
-  may run — doesn't apply to a tool that can only ever run one; the risk
-  it doesn't cover is what that program's own arguments can do (an
-  `imagemagick`/`ffmpeg` filter graph, a `git`/`gh` subcommand that writes
-  or pushes, a `kubectl`/`docker` command against a live cluster or
-  daemon), which is each plugin's own concern, not the allowlist's.
-- **An arbitrary command, chosen per effect.** `service` (see
+  normally run one binary their name (or docstring) says, picked by
+  `shutil.which` over a fixed candidate list (`linter` tries `ruff` then
+  `eslint`) — a document's `params` only choose that binary's own
+  arguments, through `_subprocess.py::GenericSubprocessTool` or a plugin's
+  own command builder (`ffmpeg.py::FfmpegPlugin.execute`, `gpg.py`'s
+  multi-mode builder, ...). But a host setting,
+  `runtime.plugins.<name>.binary` (`_subprocess.py::plugin_binary_override`),
+  overrides which binary that is for any of them, to any path — flagged by
+  `cli/config_trust.py::host_sensitive_reason` as "tool binary or
+  environment: what Circuitry executes" — and a trusted document can set
+  it too, the same as any other `runtime.plugins.<name>` host setting (see
+  [Section 6](#6-host-settings-versus-orchestration-documents)). The
+  allowlist's whole purpose — deciding *which* program may run — doesn't
+  apply to a tool whose binary is fixed by the host or a trusted document,
+  not chosen per effect; the risk it doesn't cover is what that program's
+  own arguments can do (an `imagemagick`/`ffmpeg` filter graph, a
+  `git`/`gh` subcommand that writes or pushes, a `kubectl`/`docker`
+  command against a live cluster or daemon), which is each plugin's own
+  concern, not the allowlist's.
+- **An arbitrary command, chosen per effect or in config.** `service` (see
   [Section 14](#14-the-service-tool)) runs whatever command its own
   `params.command`/`params.shell` names, exactly like `shell` without its
-  allowlist.
+  allowlist. `mcp` (`plugins/mcp_client.py::McpPlugin`) starts the stdio
+  command configured per server under `runtime.plugins.mcp.servers`; it is
+  tagged only `network` in `plugins/capabilities.py`, not `shell`.
+  `runtime.secrets.<name>.command` (`secrets.py::_command_output`) runs an
+  arbitrary argv the same way, defined under `runtime.secrets` by the
+  host or a trusted document (see [Section 12](#12-secrets-runtimesecrets-and-secret-)).
 - **Not a single command at all.** `agent` (see
   [Section 2](#2-tool-plugin-shell-out)) runs a whole delegated coding-agent
   session with the user's own permissions — not sandboxed by this or any
@@ -927,7 +959,13 @@ not reach any of them:
 None of these plugins has an `allowed_commands`-style pin of its own — a
 host that relies on `shell.allowed_commands` to bound what a document can
 execute needs to leave every name above out of `enabled_tools` too, since
-the shell allowlist widens nothing it does not itself govern.
+the shell allowlist bounds nothing it does not itself govern. A trusted
+document can also set `runtime.plugins.<name>.binary`,
+`runtime.plugins.mcp.servers` or `runtime.secrets.<name>.command` itself
+(the same trust rule as any other `runtime.plugins`/`runtime.secrets` host
+setting, see [Section 6](#6-host-settings-versus-orchestration-documents)),
+so that bound also depends on which documents the host trusts, not only on
+`enabled_tools`.
 
 ---
 

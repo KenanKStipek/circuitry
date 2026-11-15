@@ -31,24 +31,34 @@ def test_format_list_joins_with_and() -> None:
     assert sync_doc_counts._format_list(["a", "b", "c"]) == "`a`, `b` and `c`"
 
 
-def test_electricity_tool_names_reads_only_between_markers(tmp_path: Path) -> None:
-    rs = tmp_path / "registry.rs"
+def test_electricity_tool_names_reads_only_flags_true_in_current(tmp_path: Path) -> None:
+    rs = tmp_path / "refusal.rs"
     rs.write_text(
-        "fn builders() {\n"
-        "    // doc-counts:electricity-tools:start\n"
-        '    map.insert("json", f);\n'
-        '    map.insert("shell", f);\n'
-        "    // doc-counts:electricity-tools:end\n"
-        '    map.insert("sleep", f); // test-only, outside the markers\n'
+        'const TOOL_REGEX_PROVIDERS: &[&str] = &["regex"];\n'
+        'const TOOL_HTTP_PROVIDERS: &[&str] = &["http"];\n'
+        "impl<'a> Supported<'a> {\n"
+        "    pub fn current(providers: &'a [&'a str]) -> Self {\n"
+        "        Supported {\n"
+        "            tool_regex: true,\n"
+        "            tool_http: false,\n"
+        "            providers,\n"
+        "        }\n"
+        "    }\n"
+        "\n"
+        "    fn allows_provider(&self, name: &str) -> bool {\n"
+        '        name == "json"\n'
+        "            || (self.tool_regex && TOOL_REGEX_PROVIDERS.contains(&name))\n"
+        "            || (self.tool_http && TOOL_HTTP_PROVIDERS.contains(&name))\n"
+        "    }\n"
         "}\n",
         encoding="utf-8",
     )
-    original = sync_doc_counts.ELECTRICITY_REGISTRY_RS
-    sync_doc_counts.ELECTRICITY_REGISTRY_RS = rs
+    original = sync_doc_counts.ELECTRICITY_REFUSAL_RS
+    sync_doc_counts.ELECTRICITY_REFUSAL_RS = rs
     try:
-        assert sync_doc_counts._electricity_tool_names() == ["json", "shell"]
+        assert sync_doc_counts._electricity_tool_names() == ["json", "regex"]
     finally:
-        sync_doc_counts.ELECTRICITY_REGISTRY_RS = original
+        sync_doc_counts.ELECTRICITY_REFUSAL_RS = original
 
 
 def test_rewrite_only_touches_recognized_markers() -> None:
@@ -87,3 +97,14 @@ def test_check_fails_when_a_doc_falls_out_of_sync(tmp_path: Path) -> None:
 
 def test_repo_docs_are_already_in_sync() -> None:
     assert sync_doc_counts.main(["--check"]) == 0
+
+
+def test_no_marker_starts_a_line() -> None:
+    """A line beginning `<!--` opens a CommonMark HTML block that can
+    interrupt the surrounding paragraph or list item (GitHub renders it
+    that way), so every marker must sit mid-line."""
+    for doc in sync_doc_counts.DOC_FILES:
+        for lineno, line in enumerate(doc.read_text(encoding="utf-8").splitlines(), start=1):
+            assert not line.lstrip().startswith("<!-- doc-counts:"), (
+                f"{doc}:{lineno} starts with a doc-counts marker"
+            )

@@ -14,11 +14,15 @@ themselves come from:
 - ``tool-plugin-count`` — ``len(circuitry.plugins.factory.PLUGIN_REGISTRY)``.
 - ``provider-count`` — ``len(circuitry.adapters.factory.ADAPTER_REGISTRY)``.
 - ``electricity-tool-count``/``electricity-tool-list``/
-  ``electricity-unsupported-count`` — the names inserted between the
-  ``doc-counts:electricity-tools:start``/``:end`` comments in
-  ``electricity/crates/electricity-tools/src/registry.rs``'s own
-  ``builders()``, which is electricity's actual, hand-written tool-provider
-  registry (not Circuitry's full one).
+  ``electricity-unsupported-count`` — the tool-provider names
+  ``electricity_bytecode::refusal::Supported::current``'s ``allows_provider``
+  gate actually accepts: ``"json"`` (always), plus every ``*_PROVIDERS``
+  constant in ``electricity/crates/electricity-bytecode/src/refusal.rs``
+  whose own capability flag is ``true`` in ``current()``. Parsed from that
+  file's own source text, not from which tool providers
+  ``electricity-tools/src/registry.rs`` happens to have a builder for —
+  that map's own doc comment says builders may be pre-registered as stubs
+  before the lane that gates them lands.
 
 Standard library only, except for importing circuitry itself.
 """
@@ -36,20 +40,41 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 from circuitry.adapters.factory import ADAPTER_REGISTRY  # noqa: E402
 from circuitry.plugins.factory import PLUGIN_REGISTRY  # noqa: E402
 
-ELECTRICITY_REGISTRY_RS = (
-    REPO_ROOT / "electricity" / "crates" / "electricity-tools" / "src" / "registry.rs"
+ELECTRICITY_REFUSAL_RS = (
+    REPO_ROOT / "electricity" / "crates" / "electricity-bytecode" / "src" / "refusal.rs"
 )
-
-_RS_MARKER_START = "doc-counts:electricity-tools:start"
-_RS_MARKER_END = "doc-counts:electricity-tools:end"
 
 
 def _electricity_tool_names() -> list[str]:
-    text = ELECTRICITY_REGISTRY_RS.read_text(encoding="utf-8")
-    start = text.index(_RS_MARKER_START)
-    end = text.index(_RS_MARKER_END, start)
-    span = text[start:end]
-    return sorted(re.findall(r'map\.insert\(\s*"([a-zA-Z0-9_]+)"', span))
+    """The provider names ``Supported::current(...).allows_provider`` accepts
+    today: ``"json"`` (hard-coded in ``allows_provider``), plus every
+    ``*_PROVIDERS`` constant ``allows_provider`` gates behind a capability
+    flag that ``current()`` sets ``true``."""
+    text = ELECTRICITY_REFUSAL_RS.read_text(encoding="utf-8")
+
+    current_start = text.index("pub fn current(providers: &'a [&'a str]) -> Self {")
+    allows_provider_start = text.index("fn allows_provider(&self, name: &str) -> bool {")
+    current_body = text[current_start:allows_provider_start]
+    true_flags = {
+        name for name, value in re.findall(r"(\w+): (true|false),", current_body) if value == "true"
+    }
+
+    allows_provider_end = text.index("\n    }\n}\n", allows_provider_start)
+    allows_provider_body = text[allows_provider_start:allows_provider_end]
+    gated_arrays = re.findall(r"self\.(\w+) && ([A-Z_]+)\.contains\(&name\)", allows_provider_body)
+
+    names = {"json"}
+    for flag, array_name in gated_arrays:
+        if flag not in true_flags:
+            continue
+        array_pattern = re.compile(
+            rf"const {array_name}: &\[&str\] = &\[(?P<items>[^\]]*)\];"
+        )
+        match = array_pattern.search(text)
+        if match is None:
+            raise ValueError(f"no definition found for {array_name!r} in {ELECTRICITY_REFUSAL_RS}")
+        names.update(re.findall(r'"([a-zA-Z0-9_]+)"', match.group("items")))
+    return sorted(names)
 
 
 def _format_list(names: list[str]) -> str:

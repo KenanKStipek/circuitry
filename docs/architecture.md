@@ -118,7 +118,7 @@ circuitry/
 │   │   ├── complexity.py · router.py · decompose.py    the complexity layer
 │   │   └── primes.py         the planning directives (reflector, wizard, decomposition)
 │   ├── schema/               orchestration.schema.json, profile.schema.json
-│   ├── adapters/             29 model providers behind one Adapter protocol
+│   ├── adapters/             model providers behind one Adapter protocol
 │   ├── plugins/              70+ tool providers (fs, http, ffmpeg, github, slack, mcp, …)
 │   ├── runtime_plugins/      31 observers: persistence backends, pub/sub, telemetry exporters
 │   ├── curation/             the bundled library — learn/ utilities/ patterns/ recipes/ agents/
@@ -156,24 +156,30 @@ See [CONTRIBUTING.md](../CONTRIBUTING.md) for setup, commands, and local verific
 
 ## Deployment and Operations
 
-- **CI** — `.github/workflows/`: `quality.yml` (the pytest matrix across the
-  supported Python versions, `ruff`, `mypy`, the curation smoke test, a
-  built-dist check, the man-page check) runs on every pull request and push
-  to `main`; `electricity.yml` and `oscilloscope.yml` run their own Cargo
-  gates (`cargo fmt`, `clippy`, `cargo test --workspace`) for changes under
-  `electricity/`/`oscilloscope/`; `electricity-generated.yml` checks that the
-  files `electricity/scripts/generate_*.py` write from Circuitry's own code
-  are still current; `rust-release-build.yml` is the reusable workflow both
-  Rust workspaces' release builds call; `postgres-integration.yml` and
-  `surrealdb-integration.yml` run the integration suite against those
-  backends on `main`; `release.yml` publishes a tagged release to PyPI and
-  GitHub Releases; `accept.yml` and `rollup.yml` handle issue/PR bookkeeping.
+- **CI** — `.github/workflows/`: `quality.yml` builds the `electricity`
+  binary once (`build-electricity`) for the pytest matrix across the
+  supported Python versions to share, and also runs `ruff`, `mypy`, the
+  doc-counts check (`scripts/sync-doc-counts.py --check`), the curation
+  smoke test, a built-dist check and the man-page check, on every pull
+  request and push to `main`; `electricity.yml` and `oscilloscope.yml` run
+  their own Cargo gates (`cargo fmt`, `clippy`, `cargo test --workspace`)
+  for changes under `electricity/`/`oscilloscope/`; `electricity-generated.yml`
+  checks that the files `electricity/scripts/generate_*.py` write from
+  Circuitry's own code are still current; `rust-release-build.yml` is the
+  reusable workflow both Rust workspaces' release builds call;
+  `postgres-integration.yml` and `surrealdb-integration.yml` run the
+  integration suite against those backends on push to `main` and on a pull
+  request that touches their own paths; `release.yml` publishes a tagged
+  release to PyPI and GitHub Releases; `accept.yml` and `rollup.yml` handle
+  issue/PR bookkeeping.
 - **Docker** — `electricity/Dockerfile` builds the preview `electricity`
-  container image from the release workflow's pre-built static binaries;
-  `services/house-cook/Dockerfile` and `services/idea-farm/Dockerfile` build
-  two small always-on services that run Circuitry orchestrations in
-  production, kept in this repository so their own code stays in lockstep
-  with the library.
+  container image from the release workflow's pre-built static binaries.
+  `services/idea-farm/Dockerfile` installs this repository's own `src` at
+  the built SHA and runs `farm.py`, which calls `circuitry.run_orchestration`
+  on its bundled `idea_generator.yml` in a loop — kept here so its runtime
+  stays in lockstep with the library it imports. `services/house-cook/Dockerfile`
+  installs the released `cookd` binary (a CyberDiner provider, not a
+  Circuitry orchestration) and runs it through `entrypoint.sh`.
 - No Kubernetes or Terraform manifests are present in this repository.
 
 ## Testing Strategy
