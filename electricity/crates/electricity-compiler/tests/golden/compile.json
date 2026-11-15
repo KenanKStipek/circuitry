@@ -491,6 +491,7 @@
           "path": "child.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": {
             "topic": "{{input.topic}}"
           },
@@ -556,6 +557,7 @@
           "path": null,
           "orchestration": null,
           "inline": "effects: []",
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -2084,6 +2086,7 @@
           "path": "child.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -2682,6 +2685,7 @@
           "path": null,
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8171,9 +8175,9 @@
     }
   },
   {
-    "name": "reflector_prime_template_is_never_mustache_checked",
+    "name": "reflector_prime_template_malformed_mustache_is_refused",
     "files": {
-      "doc.yml": "effects:\n  - type: reflector\n    name: think\n    prime_template: 'Plan {goal}: {{#unclosed'\n    effects:\n      - type: prompt\n        name: propose_steps\n        template: x\n"
+      "doc.yml": "effects:\n  - type: reflector\n    name: think\n    prime_template: 'Plan: {{#unclosed'\n    effects:\n      - type: prompt\n        name: propose_steps\n        template: x\n"
     },
     "entry": "doc.yml",
     "options": {
@@ -8182,83 +8186,50 @@
       "inputs": {}
     },
     "validate": {
-      "ok": true,
-      "errors": [],
+      "ok": false,
+      "errors": [
+        "prime.effects[0].prime_template: malformed Mustache template: unclosed tag at line 1"
+      ],
       "warnings": []
     },
-    "run_error": null,
-    "definition": {
-      "name": "prime",
-      "effects": [
-        {
-          "name": "think",
-          "inner": {
-            "name": "inner",
-            "effects": [
-              {
-                "name": "propose_steps",
-                "template": "x",
-                "template_file": null,
-                "messages": null,
-                "prompt_type": "text",
-                "schema": null,
-                "model": null,
-                "provider": null,
-                "provider_fallbacks": null,
-                "routing_override": null,
-                "params": null,
-                "timeout_ms": null,
-                "deterministic": false,
-                "inputs": null,
-                "assets": null,
-                "retries": null,
-                "on_error": "fail",
-                "description": null,
-                "enabled": true,
-                "group": null,
-                "split": null
-              }
-            ],
-            "flow": "chain",
-            "finally_effects": [],
-            "max_concurrency": null,
-            "stop_on_error": false,
-            "on_error": "fail",
-            "resume": "continue",
-            "labels": null,
-            "enabled": true,
-            "prompts": {},
-            "effect_names": []
-          },
-          "plan_from_step": "propose_steps",
-          "max_iterations": 1,
-          "generated_key": "generated",
-          "stop_on_done": true,
-          "prime_template": "Plan {goal}: {{#unclosed",
-          "max_effects": 8,
-          "enabled": true,
-          "allow_tools": []
-        }
-      ],
-      "flow": "chain",
-      "finally_effects": [],
-      "max_concurrency": null,
-      "stop_on_error": false,
-      "on_error": "fail",
-      "resume": "continue",
-      "labels": null,
-      "enabled": true,
-      "prompts": {},
-      "effect_names": [
-        "propose_steps",
-        "think"
-      ]
-    },
-    "definition_error": null,
-    "digest": "ea1256a2e85fa48b054b10cd3404c0c8a425786c5dd077941b29a6ab770b3341",
+    "run_error": "prime.effects[0].prime_template: malformed Mustache template: unclosed tag at line 1",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].prime_template: malformed Mustache template: unclosed tag at line 1",
+    "digest": "c11f079f2099f394d9bcdc378dd33abcac28c68588032caf21832e7482ba892f",
     "comparison": {
-      "validate_errors": [],
-      "run_error": null
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
+    }
+  },
+  {
+    "name": "reflector_prime_template_str_format_placeholder_is_refused",
+    "files": {
+      "doc.yml": "effects:\n  - type: reflector\n    name: think\n    prime_template: 'Plan {goal}'\n    effects:\n      - type: prompt\n        name: propose_steps\n        template: x\n"
+    },
+    "entry": "doc.yml",
+    "options": {
+      "skip_preflight": true,
+      "trust_document": true,
+      "inputs": {}
+    },
+    "validate": {
+      "ok": false,
+      "errors": [
+        "prime.effects[0].prime_template: uses the str.format placeholder '{goal}'; write '{{goal}}' instead."
+      ],
+      "warnings": []
+    },
+    "run_error": "prime.effects[0].prime_template: uses the str.format placeholder '{goal}'; write '{{goal}}' instead.",
+    "definition": null,
+    "definition_error": "ValueError: prime.effects[0].prime_template: uses the str.format placeholder '{goal}'; write '{{goal}}' instead.",
+    "digest": "610ed374c5f0118faa96a4fb5c026a81dac86c6d46c6e1a8314989179951a55e",
+    "comparison": {
+      "validate_errors": [
+        "exact"
+      ],
+      "run_error": "exact"
     }
   },
   {
@@ -8546,6 +8517,7 @@
           "path": "b.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8610,6 +8582,7 @@
           "path": "b.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8675,6 +8648,7 @@
           "path": "b.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8742,6 +8716,7 @@
           "path": "c.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8807,6 +8782,7 @@
           "path": "a.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8873,6 +8849,7 @@
           "path": "a.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -8937,6 +8914,7 @@
           "path": "a.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,
@@ -9002,6 +8980,7 @@
           "path": "a.yml",
           "orchestration": null,
           "inline": null,
+          "inline_document": null,
           "inputs": null,
           "outputs": null,
           "validate": true,

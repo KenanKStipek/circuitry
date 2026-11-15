@@ -8,11 +8,13 @@ with no real `Store` needed:
 
 - `_clean_yaml_fences`/`_extract_done_flag`: fences, `---`, every
   `str.splitlines()` separator, `steps`/`plan` dict/list, a bare list,
-  a scalar, invalid YAML, mixed key types, `done` truthiness.
-- `_render_reflector_prime`: format specs, `!r`, `{{ }}`, unknown
-  fields, lone braces -- records the rendered text plus whether the
-  `.format()` call itself raised (`fell_back`), independent of the
-  function's own `logger.warning` side effect.
+  a scalar, invalid YAML (syntax and a calendar-invalid timestamp
+  alike), `done` truthiness. `_extract_done_flag` hands back a parsed
+  document, not YAML text (issue #778) -- recorded here as JSON.
+- `_render_reflector_prime`: Mustache tags (`{{goal}}`/`{{context}}`/
+  `{{max_effects}}`), no HTML escaping, a literal single brace left
+  untouched, an unknown field, a malformed template and a partial tag
+  (both refused -- there is no fallback to the raw template).
 - `_best_effort_context`/`_best_effort_goal`, called directly (PR
   #510's first review: an earlier draft of this script
   re-implemented `_best_effort_context`'s own redact/`json.dumps`/
@@ -23,8 +25,8 @@ with no real `Store` needed:
   construction needed at all.
 
 Must be run with Python 3.11 and the pinned dependencies
-(`generator-constraints.txt`): PyYAML's own `safe_load`/`dump` output,
-and `json.dumps`'s own escaping, are what several of these cases pin.
+(`generator-constraints.txt`): PyYAML's own `safe_load` output, and
+`json.dumps`'s own escaping, are what several of these cases pin.
 
 Usage: python3 generate_reflector_corpus.py [--check]
 """
@@ -65,13 +67,13 @@ def clean_fences_case(text: str) -> dict:
 
 def extract_done_case(text: str) -> dict:
     try:
-        done, plan_yaml = _extract_done_flag(text)
+        done, parsed = _extract_done_flag(text)
         return {
             "kind": "extract_done",
             "input": text,
             "ok": True,
             "done": done,
-            "plan_yaml": plan_yaml,
+            "parsed": parsed,
         }
     except Exception as exc:  # recording the failure itself
         return {
@@ -93,9 +95,9 @@ def clean_fences_cases() -> list[dict]:
         "a\x1cb",
         "a\x1db",
         "a\x1eb",
-        "a\u2028b",
+        "a b",
         "a\x85b",
-        "a\u2029b",
+        "a b",
         "```\x0ceffects: []\x0c---\x0c```",
         "  \n```\n  \n",
         "no fences at all\njust plain text",
@@ -119,18 +121,21 @@ def extract_done_cases() -> list[dict]:
         "done: 'no'\neffects: []\n",
         "done: no\neffects: []\n",
         "done: off\neffects: []\n",
-        "effects: [\n",  # unparseable YAML
-        "1: a\nb: c\neffects: []\n",  # mixed key types, but no sort needed (no done re-dump path hits sort)
-        "```yaml\ndone: false\neffects:\n  - type: tool\n    name: x\n    provider: json\n```\n",
+        "effects: [\n",  # unparseable YAML (syntax)
         "done: false\nsteps: not-a-list\neffects: []\n",
         "done: false\nplan: not-a-dict-or-list\n",
+        # A plan whose own top-level keys are not in sorted order --
+        # issue #778: no round trip through `yaml.dump` means the
+        # parsed document keeps exactly this order, `done` included
+        # (dropped only, never used to resort the rest).
+        "zeta: 1\neffects:\n  - type: prompt\n    name: a\n    template: hi\nalpha: 2\ndone: false\n",
+        "```yaml\ndone: false\neffects:\n  - type: tool\n    name: x\n    provider: json\n```\n",
         # Issue #528's own comment: a calendar-invalid timestamp
         # (`when: 2024-02-30`) is PyYAML's own bare, uncaught
-        # `ValueError` -- never a `yaml.YAMLError` `_extract_done_flag`'s
-        # own `except _yaml.YAMLError:` could catch, so it escapes past
-        # this function entirely (`ok: False` here), unlike every other
-        # unparseable-YAML case above (`ok: True`, `done: False`, the
-        # raw text handed to `use(inline)` instead).
+        # `ValueError` -- propagates the same way an ordinary YAML
+        # syntax error now does (issue #778: no "let use(inline) handle
+        # it" swallow left to distinguish them), so this is `ok: False`
+        # like the unparseable-YAML case above.
         "done: false\neffects: []\nwhen: 2024-02-30\n",
     ]
     return [extract_done_case(t) for t in texts]
@@ -142,66 +147,50 @@ def extract_done_cases() -> list[dict]:
 
 
 def prime_case(
-    template: str,
-    *,
-    max_effects: int = 8,
-    goal: str = "g",
-    context: str = "c",
-    divergence: bool = False,
+    template: str, *, max_effects: int = 8, goal: str = "g", context: str = "c"
 ) -> dict:
-    """*divergence* marks a case electricity's own `py_str_format`
-    deliberately does not reproduce (the settled "attribute/index
-    access falls back" divergence) -- the Rust replay test skips the
-    exact-text comparison for one of these, checking only that its own
-    implementation took the fallback branch instead.
-    """
-    rendered = _render_reflector_prime(
-        prime_template=template, max_effects=max_effects, goal=goal, context=context
-    )
     try:
-        (template or "").format(max_effects=max_effects, goal=goal, context=context)
-        fell_back = False
-    except Exception:  # detecting the fallback branch itself
-        fell_back = True
-    return {
-        "kind": "prime",
-        "template": template,
-        "max_effects": max_effects,
-        "goal": goal,
-        "context": context,
-        "fell_back": fell_back,
-        "divergence": divergence,
-        "rendered": rendered,
-    }
+        rendered = _render_reflector_prime(
+            prime_template=template, max_effects=max_effects, goal=goal, context=context
+        )
+        return {
+            "kind": "prime",
+            "template": template,
+            "max_effects": max_effects,
+            "goal": goal,
+            "context": context,
+            "ok": True,
+            "rendered": rendered,
+        }
+    except Exception as exc:  # no fallback to the raw template (issue #778)
+        return {
+            "kind": "prime",
+            "template": template,
+            "max_effects": max_effects,
+            "goal": goal,
+            "context": context,
+            "ok": False,
+            "error": str(exc),
+        }
 
 
 def prime_cases() -> list[dict]:
-    # `{goal.upper}` (attribute access) is deliberately excluded: Python's
-    # `str.format` actually succeeds there, printing the *bound method's*
-    # own `repr` (`<built-in method upper of str object at 0x...>`, a
-    # memory address) -- non-deterministic even run to run over the same
-    # input, so no golden file could ever pin it. `py_str_format` chooses
-    # the documented divergence instead (DESIGN.md §13): fall back to the
-    # raw template rather than try to reproduce an address.
     return [
-        prime_case("Goal: {goal}\nContext: {context}\nMax: {max_effects}"),
-        prime_case("Max (padded): {max_effects:03d}"),
-        prime_case("Context repr: {context!r}"),
-        prime_case("Goal str: {goal!s}"),
-        prime_case("Literal braces: {{not a field}}"),
-        prime_case("Unknown field: {nope}"),
-        prime_case("Lone brace: {"),
-        prime_case("Lone close: }"),
-        prime_case("Positional: {}"),
-        # Python succeeds here (`"g"[0]`), deterministically -- but this
-        # is the settled "index access falls back" divergence (DESIGN.md
-        # §13): `py_str_format` never does attribute/index access at all.
-        prime_case("Index access: {goal[0]}", divergence=True),
-        prime_case("Bad conversion: {goal!x}"),
+        prime_case("Goal: {{goal}}\nContext: {{context}}\nMax: {{max_effects}}"),
+        prime_case("Unknown field: {{nope}}"),
+        prime_case("Literal braces: {not a field}"),
         prime_case("", max_effects=3, goal="", context=""),
-        prime_case("{max_effects:<6d}|end"),
-        prime_case("Quoted: {context!r}", context="has 'single' and \"double\""),
-        prime_case("Non-ascii: {goal}", goal="caf\u00e9 \U0001f600"),
+        # No HTML escaping (#397/#778: a prompt template, like any
+        # other) -- `&`/`<`/`>`/quotes survive verbatim.
+        prime_case("Goal: {{goal}}", goal="Ben & Jerry's <ice> \"cream\""),
+        prime_case("Non-ascii: {{goal}}", goal="café \U0001f600"),
+        # A malformed Mustache template -- refused, never a raw-text
+        # fallback (a document error at check/compile time for a real
+        # orchestration; this generator calls the renderer directly).
+        prime_case("Unclosed section: {{#bad}}"),
+        # A partial tag -- refused the same way any other template
+        # rejects one (`core.templates.render_template`).
+        prime_case("Partial: {{> other}}"),
     ]
 
 
@@ -226,7 +215,7 @@ def context_cases() -> list[dict]:
         context_case({}),
         context_case({"model": "gpt-4", "adapter": "openai", "plugins": ["json", "shell"]}),
         context_case({"model": None, "adapter": None, "plugins": None}),
-        context_case({"model": "caf\u00e9-\U0001f600", "adapter": "openai", "plugins": []}),
+        context_case({"model": "café-\U0001f600", "adapter": "openai", "plugins": []}),
         # A secret-shaped *value* inside one of the three fields
         # `_best_effort_context`'s own summary keeps (`model`/`adapter`/
         # `plugins`) -- PR #510's first review: an
