@@ -2079,6 +2079,11 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
             }
             OnError::Skip | OnError::Continue => {
                 set_leaf(store, &effect_node, "value", Value::None);
+                // This `use`'s own node still reports *message* -- the
+                // absorbed failure stays this node's own record, exactly
+                // like a `dynamic`'s own `meta.error` keeps the body's
+                // failure rather than the signal (#272's rule) -- only
+                // the exception this call returns differs.
                 observer.effect_complete(
                     &effect_path,
                     instance,
@@ -2086,6 +2091,13 @@ pub async fn execute_use_with_ctx<R: ParamsCtx>(
                     super::completed_at_is_truthy(store, &meta_node),
                 );
                 observer.write();
+                // The interrupt is never lost just because this `use`'s
+                // own on_error degraded a failure a nested effect's own
+                // `on_error: fail` had already explicitly let win over
+                // the very same signal (#799).
+                if token.is_set() {
+                    return Err(VmError::Cancelled);
+                }
                 Ok(())
             }
             OnError::Break => unreachable!("a use effect's own on_error is never Break"),

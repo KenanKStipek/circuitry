@@ -18,8 +18,11 @@ from ..output import live_region as _live_region
 from .cancellation import (
     RunCancelledBySignal,
     as_completed_promptly,
+    copy_signal_outranked_tag,
     deferred_signal_region,
     get_token,
+    mark_signal_outranked_by_failure,
+    raise_if_interrupted_outside_cleanup,
     submit_with_context,
     wait_for_cancelled_branches,
 )
@@ -356,7 +359,9 @@ class DynamicRuntime:
                             resume_active=resume_active,
                         )
                     except Exception as e:
-                        raise RuntimeError(f"{effect_path}: {e}") from e
+                        wrapped = RuntimeError(f"{effect_path}: {e}")
+                        copy_signal_outranked_tag(e, wrapped)
+                        raise wrapped from e
                     finally:
                         if store.on_write:
                             store.on_write(store.root_state)
@@ -744,6 +749,19 @@ class DynamicRuntime:
                     body_exc,
                 )
             if is_cancellation or self.defn.on_error == "fail":
+                if (
+                    not is_cancellation
+                    and finally_exc is not None
+                    and not isinstance(finally_exc, Exception)
+                ):
+                    # on_error: fail deliberately lets this ordinary
+                    # failure win over the signal `finally_exc` itself
+                    # reports (#799's own row 3) -- tagged so an ancestor
+                    # (`use.py`'s own tree-branch fallback, #796) never
+                    # re-detects the same still-set token and re-converts
+                    # this already-settled decision back into a
+                    # cancellation once body_exc propagates past it.
+                    mark_signal_outranked_by_failure(body_exc)
                 raise body_exc
             # skip/continue: the same degradation a leaf effect's on_error
             # gives — the failure is recorded on this dynamic's own meta.error
@@ -755,6 +773,11 @@ class DynamicRuntime:
                 body_exc,
                 self.defn.on_error,
             )
+            # A signal landing while this dynamic's own `finally:` ran, or
+            # anywhere else in this run, is never lost just because
+            # on_error degraded the body's own, unrelated, already-handled
+            # failure (#799).
+            raise_if_interrupted_outside_cleanup()
             return
 
         if finally_exc is not None:
@@ -773,6 +796,7 @@ class DynamicRuntime:
                 finally_exc,
                 self.defn.on_error,
             )
+            raise_if_interrupted_outside_cleanup()
             return
 
     def _await_tree_branches(
@@ -810,6 +834,7 @@ class DynamicRuntime:
                 )
                 wrapped = RuntimeError(f"{effect_path}: {e}")
                 wrapped.__cause__ = e
+                copy_signal_outranked_tag(e, wrapped)
                 tree_errors.append(wrapped)
                 if self.defn.stop_on_error:
                     # stop_event (set in _execute_branch) is what actually
@@ -874,7 +899,9 @@ class DynamicRuntime:
                     effect, store=child_store, ctx=ctx, resume_active=False
                 )
             except Exception as e:
-                raise RuntimeError(f"{effect_path}: {e}") from e
+                wrapped = RuntimeError(f"{effect_path}: {e}")
+                copy_signal_outranked_tag(e, wrapped)
+                raise wrapped from e
             finally:
                 if store.on_write:
                     store.on_write(store.root_state)

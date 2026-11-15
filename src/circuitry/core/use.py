@@ -16,7 +16,13 @@ from typing import Any, Literal
 from ..adapters import Adapter
 from ..adapters._retry import RetryInfo, next_backoff_delay_ms
 from ..output import console as _console
-from .cancellation import RunCancelledBySignal, get_token
+from .cancellation import (
+    RunCancelledBySignal,
+    get_token,
+    mark_signal_outranked_by_failure,
+    raise_if_interrupted_outside_cleanup,
+    signal_outranked_by_failure,
+)
 from .document_check import structural_errors
 from .effect_identity import model_call, nested_container
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
@@ -1723,8 +1729,16 @@ class UseRuntime:
             # Never true while a `finally:` is running (`in_cleanup()`):
             # an ordinary failure inside cleanup -- the child's own token
             # is fresh there too -- must still go through `on_error` as
-            # usual, not be reported as this run's own interrupt.
-            if get_token().is_set() and not get_token().in_cleanup():
+            # usual, not be reported as this run's own interrupt. Never
+            # true either for an exception a nested `dynamic`'s own
+            # `on_error: fail` already deliberately let win over this
+            # very signal (#799) -- re-detecting the still-set token here
+            # would re-mask that decision on its way past this `use`.
+            if (
+                get_token().is_set()
+                and not get_token().in_cleanup()
+                and not signal_outranked_by_failure(e)
+            ):
                 from .dynamic import _error_text
 
                 cancelled = RunCancelledBySignal()
@@ -1771,14 +1785,25 @@ class UseRuntime:
                     _console.print(line)
 
             if self.defn.on_error == "fail":
-                raise RuntimeError(
-                    f"use '{self.defn.name}' -> {label}: {e}"
-                ) from e
+                wrapped = RuntimeError(f"use '{self.defn.name}' -> {label}: {e}")
+                if signal_outranked_by_failure(e):
+                    # Propagate the tag onto the wrapped exception too
+                    # (#799): a `use` nested inside another `use`/
+                    # `dynamic` with its own `on_error: fail` must see
+                    # the same already-settled decision, not just this
+                    # one.
+                    mark_signal_outranked_by_failure(wrapped)
+                raise wrapped from e
             if self.defn.on_error in ("skip", "continue"):
                 # A reused node (an unnamed loop's prior pass, a resume)
                 # must not let that pass's value survive next to this
                 # pass's error (#260).
                 node["value"] = None
+                # The interrupt is never lost just because this `use`'s
+                # own on_error degraded a failure a nested effect's
+                # `on_error: fail` had already explicitly let win over
+                # the very same signal (#799).
+                raise_if_interrupted_outside_cleanup()
         except BaseException as e:
             # An interrupt (Ctrl-C, SIGTERM, a cancelled run) is not an
             # Exception, but what the child finished before it is exactly
