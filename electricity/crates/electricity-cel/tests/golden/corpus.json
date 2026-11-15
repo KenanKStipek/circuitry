@@ -7319,6 +7319,118 @@
     "unset_path": null
   },
   {
+    "expr": "true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : 0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : 0",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[1].exists(x, ((((((((((((((((((((((((((((((x)))))))))))))))))))))))))))))) > 0)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[1].exists(x, (((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))) > 0)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "((((((((((((((((0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1))))))))))))))))",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "(((((((((((((((((0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1)))))))))))))))))",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "(((((((((((((((((((((((((((((false))))))))))))))))))))))))))))) || false || false || false",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "((((((((((((((((((((((((((((((false)))))))))))))))))))))))))))))) || false || false || false",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
     "expr": "((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {

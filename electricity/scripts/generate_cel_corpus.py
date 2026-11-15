@@ -40,6 +40,7 @@ from pathlib import Path
 from typing import Any
 
 from circuitry.core.cel_eval import (
+    MAX_CEL_NESTING_DEPTH,
     CelEvaluationError,
     evaluate_cel,
     evaluate_cel_expect,
@@ -933,8 +934,47 @@ def build_corpus() -> list[dict]:
     # calling context already spent). Every shape the limit's own
     # module docs (`core/cel_eval.py`) enumerate gets one case exactly
     # at the limit (accepted) and one past it (rejected).
-    _AT_LIMIT = 32
+    _AT_LIMIT = MAX_CEL_NESTING_DEPTH
     cases += [
+        # Ternary (`?:`): an else-if ladder, nesting on the right.
+        condition(" : ".join("true ? 1" for _ in range(_AT_LIMIT)) + " : 0", {}),
+        condition(" : ".join("true ? 1" for _ in range(_AT_LIMIT + 1)) + " : 0", {}),
+        # A macro's own predicate body, not just its own call: the
+        # body here is one level short of the limit on its own, so the
+        # macro's own extra level is what tips the second case over.
+        condition(
+            "[1].exists(x, " + "(" * (_AT_LIMIT - 2) + "x" + ")" * (_AT_LIMIT - 2) + " > 0)",
+            {},
+        ),
+        condition(
+            "[1].exists(x, " + "(" * (_AT_LIMIT - 1) + "x" + ")" * (_AT_LIMIT - 1) + " > 0)", {}
+        ),
+        # A grouping parenthesis around a different-shaped operand adds
+        # to that operand's own depth instead of being checked against
+        # it separately: half the limit in parens, around a `+` chain
+        # already half the limit long.
+        condition(
+            "(" * (_AT_LIMIT // 2) + "0" + "+1" * (_AT_LIMIT // 2) + ")" * (_AT_LIMIT // 2),
+            {},
+        ),
+        condition(
+            "(" * (_AT_LIMIT // 2 + 1)
+            + "0"
+            + "+1" * (_AT_LIMIT // 2)
+            + ")" * (_AT_LIMIT // 2 + 1),
+            {},
+        ),
+        # A `||`/`&&` run's own left fold: the deep operand at either
+        # end of the run sits under a different number of links than
+        # the AST's own balanced tree would suggest.
+        condition(
+            " || ".join(["(" * (_AT_LIMIT - 3) + "false" + ")" * (_AT_LIMIT - 3)] + ["false"] * 3),
+            {},
+        ),
+        condition(
+            " || ".join(["(" * (_AT_LIMIT - 2) + "false" + ")" * (_AT_LIMIT - 2)] + ["false"] * 3),
+            {},
+        ),
         condition("(" * _AT_LIMIT + "1" + ")" * _AT_LIMIT, {}),
         condition("(" * (_AT_LIMIT + 1) + "1" + ")" * (_AT_LIMIT + 1), {}),
         condition("int(" * _AT_LIMIT + "1" + ")" * _AT_LIMIT, {}),
