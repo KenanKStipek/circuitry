@@ -1107,6 +1107,16 @@ class TestNestedTooDeeplyIsACheckError:
             validate_cel_syntax(expr, effect_path="prime.effects[0]")
         assert "nested too deeply" in str(excinfo.value)
 
+    def test_a_wide_in_list_of_300_elements_is_unaffected(self):
+        """A long, flat ``in [...]`` list is many siblings, not nesting:
+        300 independent elements must not be refused just because there
+        are more of them than MAX_CEL_NESTING_DEPTH -- the way to test
+        many alternatives instead of a long ``||`` chain."""
+        expr = "state.input.n in [" + ", ".join(str(i) for i in range(300)) + "]"
+        validate_cel_syntax(expr, effect_path="prime.effects[0]")
+        assert evaluate_cel(expr, {"input": {"n": 299}}) is True
+        assert evaluate_cel(expr, {"input": {"n": 300}}) is False
+
     def test_recursion_error_guard_reports_the_uniform_message(self, monkeypatch):
         """Simulates the walks after the depth check themselves overflowing
         anyway -- proving _compile's own ``RecursionError`` guard reports

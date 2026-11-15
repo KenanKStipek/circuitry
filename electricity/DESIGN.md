@@ -1815,20 +1815,28 @@ regardless of which underlying crate is used:
   module bounds *that*, a run-time-built `value`/`meta`/`state` argument, by the shared
   `MAX_DEPTH` instead, rejecting with the same `CelError` kind rather than recursing further.
 
-  **Depth** counts one level per parenthesis, call, list/map literal, member-access/index/
-  method-call link, binary arithmetic/relational/equality/`in` link, logical `&&`/`||` link and
-  prefix `!`/`-` occurrence — every other grammar production is a pure wrapper and adds nothing.
-  `electricity-cel::nesting::ast_nesting_depth` walks `cel`'s own parsed `Expr` tree to count most
-  of these directly, but three shapes leave no trace of their own link count in that tree and need
-  a separate scan of the source text instead (`text_nesting_depth`, confirmed directly, not
-  assumed): a grouping parenthesis has no AST node of its own at all (`(((1)))` parses to exactly
-  the same tree as `1`); `cel`'s own parser folds a long `&&`/`||` run into a balanced binary tree
-  rather than cof's own left-linear one, so its depth grows with the *logarithm* of the run's
-  length, not the length itself; and a run of prefix `!`/`-` collapses to exactly one AST node
-  regardless of the run's own length. `electricity-cel`'s own `nesting.rs` module docs carry the
-  full detail, including a `.map(x, x)`-style macro call's own synthesized accumulator-loop
-  boilerplate (`accu_init`/`loop_cond`/`loop_step`/`result`), deliberately not walked at all for
-  the same reason.
+  **Depth** counts one level per parenthesis, call, list/map/struct literal, member-access/
+  index/method-call link, binary arithmetic/relational/equality/`in` link, logical `&&`/`||`
+  link, prefix `!`/`-` occurrence, ternary and macro — every other grammar production is a pure
+  wrapper and adds nothing. A run of more than 32 `||`, `&&` or `+` (or any other binary operator)
+  is refused the same as any other shape: write `x in [...]` to test many alternatives instead of
+  a long `||` chain. `electricity-cel::nesting::ast_nesting_depth` walks `cel`'s own parsed `Expr`
+  tree, which already matches cof's own left-linear structure for every construct it represents
+  that way — a plain recursive `max(children) + 1` reproduces cof's own count with no further
+  help. Three constructs don't, and leave no trace of their own true depth in that tree at all: a
+  grouping parenthesis has no AST node of its own (`(((1)))` parses to exactly the same tree as
+  `1`); `cel`'s own parser folds a `&&`/`||` run into a balanced binary tree rather than cof's own
+  left-linear one; and a run of prefix `!`/`-` collapses to zero or one AST node by parity,
+  regardless of the run's own length. `cel`'s own vendored parser (`vendor/cel/src/parser/
+  parser.rs`) records exactly what each of these resolves to, by id, in
+  `SourceInfo::nesting_override`, while it still has the information to; `ast_nesting_depth` adds
+  it back in, and un-flattens a `&&`/`||` run back into cof's own left-fold weighting (operand 0
+  of a k-run under k - 1 levels, operand j >= 1 under k - j). A macro's own argument expressions
+  — `cel`'s own `.map(x, x)`-style macros, and electricity's own `has()` — are woven into
+  synthesized boilerplate the same way; `SourceInfo::macro_body_ids` records each one's own
+  original id, by the expansion's result id, so `ast_nesting_depth` counts the argument's own
+  depth rather than the boilerplate's. `electricity-cel`'s own `nesting.rs` module docs carry the
+  full detail.
 
   32 is chosen with margin below cof's own measured floor: run directly against CPython 3.10,
   3.11, 3.12 and 3.13 (`cel-python` always raises the process recursion limit to 2500 on its own,
@@ -1842,27 +1850,19 @@ regardless of which underlying crate is used:
   level of bracket nesting *and* once per link of an operator or member/index/call chain while
   *building* its tree — a chain shape genuinely overflows a 2 MiB stack between 1,620 and 1,640
   terms (measured directly, debug and `--release` alike, within the 4096-character expression
-  cap). `text_nesting_depth`'s own `combined` field, checked before `compile()` is ever called,
-  keeps an expression that deep from reaching the real parser at all (`MAX_SAFETY_CHAIN_DEPTH`,
-  1,000 — a generous margin under that floor, not a parity boundary with cof). Bracket nesting
-  cannot threaten the stack this way regardless: `cel` 0.15.0's own parser has a hard-coded
-  internal recursion guard (`max_recursion_depth`, 96) over every such grammar production on one
-  path at once, which rejects *gracefully* from 96 through at least 50,000 levels, never a crash
-  (confirmed directly) — `is_parser_recursion_limit` recognizes that guard's own message and
-  reports it the same uniform way as every other over-limit rejection. Since 32 is far under both
-  the parser's own 96-bracket guard and the 1,620-term real-overflow floor, the only expressions
-  that ever reach either mechanism are already well past this limit — both are insurance, never
-  the boundary an ordinary document can actually reach.
-
-  **Known, accepted imprecision for a mixed shape.** A grouping paren wrapping some other
-  construct (`(state.a + state.b)`) is checked as two independent maxima — the AST walk for the
-  addition, the text scan for the parenthesis — not as one combined path, because a grouping
-  paren leaves no trace in the parsed tree to correlate the two against. A pathological
-  expression mixing both shapes right at the limit can therefore pass electricity's own check
-  while cof's own, single combined count would reject it. Accepted, not required to close: no
-  real orchestration's expression approaches this limit in even one shape, let alone two at once
-  (issue #778's own PR body records the deepest expression found in this repository's own
-  documents).
+  cap). `nesting::safety_upper_bound`, a deliberately conservative scan of the raw source text,
+  checked before `compile()` is ever called, keeps an expression that deep from reaching the real
+  parser at all (`MAX_SAFETY_CHAIN_DEPTH`, 1,000 — a generous margin under that floor, not a
+  parity boundary with cof: its own count never undercounts `ast_nesting_depth`'s, so anything it
+  rejects is also over 32, reported the exact same uniform way, never a distinct message and
+  never a parse error). Bracket nesting cannot threaten the stack this way regardless: `cel`
+  0.15.0's own parser has a hard-coded internal recursion guard (`max_recursion_depth`, 96) over
+  every such grammar production on one path at once, which rejects *gracefully* from 96 through
+  at least 50,000 levels, never a crash (confirmed directly) — `is_parser_recursion_limit`
+  recognizes that guard's own message and reports it the same uniform way too. Since 32 is far
+  under both the parser's own 96-bracket guard and the 1,620-term real-overflow floor, the only
+  expressions that ever reach either mechanism are already well past this limit — both are
+  insurance, never the boundary an ordinary document can actually reach.
 
 ### 7.3 Regex engines
 

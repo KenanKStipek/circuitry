@@ -2458,24 +2458,33 @@ but a map's own key lookup does not cross between them:
 CEL evaluation failed for 'state.input.m[1u] == 1': cannot index a map with a uint
 ```
 
-An expression nested deeper than 32 levels — parentheses, calls, list/map
-literals, member-access/index/method-call links, binary operators,
-`&&`/`||` links and prefix `!`/`-` each count as one level — is rejected
-as soon as it compiles, before any effect evaluates it, named the same
-way as any other check error, never a parser dump or the whole expression
-quoted back:
+An expression nested deeper than 32 levels — parentheses, calls, list/
+map/struct literals, member-access/index/method-call links, binary
+operators, `&&`/`||` links, prefix `!`/`-`, a ternary (`?:`) and a
+macro's own argument (`.map`/`.filter`/`.all`/`.exists`/`.exists_one`/
+`has`) each count as one level — is rejected as soon as it compiles,
+before any effect evaluates it, named the same way as any other check
+error, never a parser dump or the whole expression quoted back:
 
 ```
 CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply (limit 32)
 ```
 
-The limit is the same number, the same message and the same compile-time
-phase on both engines — cof and electricity reject exactly the same
+The limit is the same number, the same depth count and the same message
+on both engines — cof and electricity reject exactly the same
 expressions, rather than each failing wherever its own recursion happened
 to give out, which used to differ by shape and by Python version. An
 expression that only exists at run time (a `use: inline` child rendered
-from a template) gets the same check the first time it compiles, which is
-when that effect runs, not when the parent document is checked.
+from a template, or the `cel` tool's own expression from state) gets the
+same check the first time it compiles, which is when that effect runs,
+not when the parent document is checked.
+
+A run of more than 32 `&&`, `||`, `+` or any other binary operator is
+refused the same way as a deeply bracketed expression — each link in the
+chain counts as one level, not just a parenthesis or a call. Write
+`x in [a, b, c, ...]` to test many alternatives instead of a long `||`
+chain. A long, flat list or map literal is unaffected: its own elements
+don't nest, however many of them there are.
 
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset read that decides the
