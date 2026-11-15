@@ -2408,12 +2408,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].body: value should be non-empty",
-        "effects[0]: value is valid under each of {'required': ['while']}, {'required': ['each']}"
+        "effects[0]: value is valid under each of {'required': ['while']}, {'required': ['each']}",
+        "effects[0].body: value should be non-empty"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0]: value is valid under each of {'required': ['while']}, {'required': ['each']}",
+    "run_error": "Orchestration validation failed:\n  - effects[0]: value is valid under each of {'required': ['while']}, {'required': ['each']}\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found both).",
     "digest": "1c4589f7545d5f026409ae3b854dbe66456535873f8169ea801a0007da64cf61",
@@ -2439,12 +2439,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].body: value should be non-empty",
-        "effects[0]: value is not valid under any of the given schemas ('each' is a required property)"
+        "effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
+        "effects[0].body: value should be non-empty"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
+    "run_error": "Orchestration validation failed:\n  - effects[0]: value is not valid under any of the given schemas ('each' is a required property)\n  - effects[0].body: value should be non-empty",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]' must set exactly one of 'while' or 'each' (found neither).",
     "digest": "92cf20e5470d068f5b66c594cb9bccfb975022f8512c481b055c6ff3eec230a5",
@@ -3351,12 +3351,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].each: 'not-a-mapping' is not of type 'object'",
-        "effects[0].body: value should be non-empty"
+        "effects[0].body: value should be non-empty",
+        "effects[0].each: 'not-a-mapping' is not of type 'object'"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].each: 'not-a-mapping' is not of type 'object'\n  - effects[0].body: value should be non-empty",
+    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0].each: 'not-a-mapping' is not of type 'object'",
     "definition": null,
     "definition_error": "ValueError: Loop at 'prime.effects[0]': 'each' must be a mapping.",
     "digest": "66c729555fe0d919534e6aa691081d489ff1288f15990963cee5a79d49835501",
@@ -3382,12 +3382,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].while: 'template' is a required property",
-        "effects[0].body: value should be non-empty"
+        "effects[0].body: value should be non-empty",
+        "effects[0].while: 'template' is a required property"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].while: 'template' is a required property\n  - effects[0].body: value should be non-empty",
+    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0].while: 'template' is a required property",
     "definition": null,
     "definition_error": "ValueError: Loop while at 'prime.effects[0]': mode 'model' requires a 'template' field.",
     "digest": "e241e69b5ce9e2950169d5536f11a39e08b102c38683e29c01f72e1be7c5f55e",
@@ -3413,12 +3413,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].while: 'expr' is a required property",
-        "effects[0].body: value should be non-empty"
+        "effects[0].body: value should be non-empty",
+        "effects[0].while: 'expr' is a required property"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].while: 'expr' is a required property\n  - effects[0].body: value should be non-empty",
+    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0].while: 'expr' is a required property",
     "definition": null,
     "definition_error": "ValueError: Loop while at 'prime.effects[0]': mode 'cel' requires an 'expr' field.",
     "digest": "edb10aa2ad867e2ef304238dd016281a003dab515882ba9bfa2e124324e15785",
@@ -3942,12 +3942,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].while: 'mode' is a required property",
-        "effects[0].body: value should be non-empty"
+        "effects[0].body: value should be non-empty",
+        "effects[0].while: 'mode' is a required property"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].while: 'mode' is a required property\n  - effects[0].body: value should be non-empty",
+    "run_error": "Orchestration validation failed:\n  - effects[0].body: value should be non-empty\n  - effects[0].while: 'mode' is a required property",
     "definition": null,
     "definition_error": "ValueError: prime.effects[0].while.template: malformed Mustache template: unclosed tag at line 1",
     "digest": "ddb2f23a1c65085edbe92a9b754ef8e4a619f5cec271f840f78d3e7c33c4a845",
@@ -4605,12 +4605,12 @@
     "validate": {
       "ok": false,
       "errors": [
-        "effects[0].max_concurrency: 0 is less than the minimum of 1",
-        "effects[0].effects: value should be non-empty"
+        "effects[0].effects: value should be non-empty",
+        "effects[0].max_concurrency: 0 is less than the minimum of 1"
       ],
       "warnings": []
     },
-    "run_error": "Orchestration validation failed:\n  - effects[0].max_concurrency: 0 is less than the minimum of 1\n  - effects[0].effects: value should be non-empty",
+    "run_error": "Orchestration validation failed:\n  - effects[0].effects: value should be non-empty\n  - effects[0].max_concurrency: 0 is less than the minimum of 1",
     "definition": {
       "name": "prime",
       "effects": [
