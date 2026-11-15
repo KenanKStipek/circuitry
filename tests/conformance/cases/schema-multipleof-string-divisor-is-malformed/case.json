@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5 (closes issue #507's own item 5)",
+  "description": "A `multipleOf` divisor reached only through a `$ref` into a key no schema-structure walk recognizes as housing a subschema (`myCustomDefs` isn't a metaschema-recognized applicator) used to skip the metaschema check and reach Python's own runtime `%` arithmetic instead, raising `TypeError`. The new well-formedness check walks every `multipleOf` in the schema unconditionally, regardless of which key holds it, so this is now a compile-time refusal before any instance is considered, the same as a top-level one.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

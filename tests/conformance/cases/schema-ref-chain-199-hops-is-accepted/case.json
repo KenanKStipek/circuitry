@@ -1,0 +1,10 @@
+{
+  "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5",
+  "description": "A $defs chain of 198 single-hop $refs (L0 -> L1 -> ... -> L198 = {type: object}), plus the schema's own top-level $ref into L0: 199 total consecutive $ref resolutions, one under the 200-hop cap -- the boundary both engines still accept, reply {} validates cleanly.",
+  "engines": [
+    "python",
+    "electricity"
+  ],
+  "config": "config.json",
+  "expect": "success"
+}

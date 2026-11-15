@@ -1,0 +1,3 @@
+{
+  "error": "Prompt 'ask': schema is not a valid JSON Schema: multipleOf must be a number greater than 0"
+}

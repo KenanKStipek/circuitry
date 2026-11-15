@@ -1,0 +1,24 @@
+{
+  "name": "schema-ref-two-schema-cycle",
+  "adapter": "scripted",
+  "model": "m",
+  "effects": [
+    {
+      "type": "prompt",
+      "name": "ask",
+      "prompt_type": "json",
+      "schema": {
+        "$ref": "#/$defs/A",
+        "$defs": {
+          "A": {
+            "$ref": "#/$defs/B"
+          },
+          "B": {
+            "$ref": "#/$defs/A"
+          }
+        }
+      },
+      "template": "give json"
+    }
+  ]
+}
