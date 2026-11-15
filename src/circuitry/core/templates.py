@@ -20,7 +20,7 @@ import chevron  # type: ignore[import-untyped]
 import chevron.renderer  # type: ignore[import-untyped]
 from chevron.tokenizer import ChevronError  # type: ignore[import-untyped]
 
-__all__ = ["TemplateError", "render_template", "template_syntax_error"]
+__all__ = ["TemplateError", "render_template", "splice_text", "template_syntax_error"]
 
 #: Per-call, per-thread/task override for ``render_template(..., escape=False)``
 #: (#397) — read by :func:`_escape_aware`, which replaces
@@ -165,6 +165,22 @@ def _json_aware_ctx(value: Any) -> Any:
     if isinstance(value, list):
         return _JsonAwareList(_json_aware_ctx(v) for v in value)
     return value
+
+
+def splice_text(value: Any) -> str:
+    """The text a bare ``{{var}}``/``{{{var}}}`` tag would splice for
+    *value*: JSON (matching :func:`render_template`'s own wrapping) for a
+    whole list or dict, ``str(value)`` otherwise.
+
+    For a caller that resolves and stringifies a value itself, outside any
+    Mustache render (``core.prompt_compose``'s own ``{{> name}}`` effect-
+    reference splice, which runs before the including template ever
+    reaches chevron) — so the same list/dict renders the same way there
+    too.
+    """
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False, default=str)
+    return str(value)
 
 
 def _describe(exc: Exception) -> str:

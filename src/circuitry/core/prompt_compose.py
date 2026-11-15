@@ -52,7 +52,12 @@ from typing import Any
 
 import chevron.tokenizer  # type: ignore[import-untyped]
 
-from .templates import TemplateError, render_template, template_syntax_error
+from .templates import (
+    TemplateError,
+    render_template,
+    splice_text,
+    template_syntax_error,
+)
 
 __all__ = [
     "EFFECT_NAMES_RUNTIME_KEY",
@@ -823,7 +828,7 @@ def _resolve_effect_text(
     prime_ns = ctx.get("prime") if isinstance(ctx, Mapping) else None
     if isinstance(prime_ns, Mapping) and head in prime_ns:
         value = _dotted_get(ctx, ["prime", *name.split("."), "value"])
-        return "" if value is None else str(value)
+        return "" if value is None else splice_text(value)
     if head in known_names:
         return ""
     raise TemplateError(
