@@ -923,8 +923,9 @@ stop promptly.** On the first SIGINT, SIGTERM or SIGHUP:
   running inside it; #796's own tests for this are cross-engine CLI parity tests, not
   conformance cases. The same rule holds no matter which container's `on_error` is the one
   that would otherwise absorb the failure left over from a signal detected this way -- a
-  `use`, a `dynamic` with no `finally:` of its own, or a loop pass that is not the last --
-  every `Skip`/`Continue`/`Break` site in `exec::dynamic`/`exec::use_`/`exec::loop_` returns
+  `use`, a `dynamic` with no `finally:` of its own, or a loop with `on_error: break` or
+  `continue` -- every `Skip`/`Continue`/`Break` site in
+  `exec::dynamic`/`exec::use_`/`exec::loop_` returns
   `VmError::Cancelled` once the token is set outside a `finally:`'s own disconnected scope,
   and `exec::dynamic` reports a `finally:` step's own later ordinary failure as the
   interrupt too, once a signal already landed there first (#799). A genuine *second* signal
