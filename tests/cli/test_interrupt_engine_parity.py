@@ -543,3 +543,233 @@ def test_nested_finally_signal_does_not_cut_outer_cleanup_short(
         assert ends["prime.inner.inner_cleanup"]["ok"] is True, ends
         assert ends["prime.outer_cleanup"]["ok"] is True, ends
         assert ends["prime"]["ok"] is False, ends
+
+
+#: issue #799's own three table rows -- a `dynamic` ("work") whose body
+#: always fails, and whose own `finally:` always sends the engine a
+#: first SIGTERM while *its* `cleanup` step is itself running:
+#: - `absorbed_last`: `work`'s own `on_error: continue` absorbs the
+#:   body's failure, and nothing else follows it -- the row the bug was
+#:   filed on (on `main`, the run ends `ok: true`, exit 0, losing the
+#:   interrupt entirely).
+#: - `absorbed_followed`: same `on_error: continue`, but another effect
+#:   (`after`) follows `work` -- already correct on `main` on both
+#:   engines, kept here as a control: `after` must still never run.
+#: - `unhandled`: `work` has no `on_error` (`fail`, the default) -- the
+#:   existing rule that an unmasked failure wins over a later signal
+#:   stays: exits 1, not 130/143/129, whether or not this fix changes
+#:   anything else.
+_LOST_INTERRUPT_ROWS = ("absorbed_last", "absorbed_followed", "unhandled")
+#: Every placement issue #799 and its own fix must agree on: the
+#: document's own root effects, a `use` child's own root effects, and
+#: one pass of a named (chain-flow) loop's own body.
+_LOST_INTERRUPT_PLACEMENTS = ("top_level", "use_child", "loop_pass")
+
+
+def _work_dynamic_lines(row: str, *, indent: str) -> str:
+    """The `dynamic` (`work`) + its own `finally:` for issue #799's own
+    table, indented to sit directly inside *indent* (a document's own
+    top-level `effects:`, a `use` child's own top-level `effects:`, or a
+    `loop`'s own `body:`)."""
+    field = indent + "  "
+    on_error = f"{field}on_error: continue\n" if row != "unhandled" else ""
+    lines = (
+        f"{indent}- type: dynamic\n"
+        f"{field}name: work\n"
+        f"{on_error}"
+        f"{field}effects:\n"
+        f"{_shell_step('fails', 'exit 3', indent=field + '  ')}"
+        f"{field}finally:\n"
+        f"{_shell_step('cleanup', 'touch cleanup_started; kill -TERM $PPID; exec sleep 5', indent=field + '  ')}"
+    )
+    if row == "absorbed_followed":
+        lines += _shell_step("after", "touch after_ran", indent=indent)
+    return lines
+
+
+_LOOP_PASS_DIRECT_WRAPPER = (
+    "interface:\n  inputs:\n    items: {default: [0]}\n"
+    "effects:\n  - type: loop\n    name: lp\n"
+    "    each: {in: input.items, as: x}\n    body:\n"
+)
+
+
+def _write_lost_interrupt_case(placement: str, row: str, case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    if placement == "top_level":
+        doc = "effects:\n" + _work_dynamic_lines(row, indent="  ")
+        (case_dir / "orchestration.yml").write_text(doc, encoding="utf-8")
+    elif placement == "use_child":
+        (case_dir / "orchestration.yml").write_text(
+            _WRAPPER_ORCHESTRATIONS["use_child"], encoding="utf-8"
+        )
+        child = "effects:\n" + _work_dynamic_lines(row, indent="  ")
+        (case_dir / "child.yml").write_text(child, encoding="utf-8")
+    else:
+        assert placement == "loop_pass"
+        doc = _LOOP_PASS_DIRECT_WRAPPER + _work_dynamic_lines(row, indent="      ")
+        (case_dir / "orchestration.yml").write_text(doc, encoding="utf-8")
+
+
+def _lost_interrupt_paths(placement: str) -> dict[str, str]:
+    """*placement* -> the state path of `work`, its own `fails`/
+    `cleanup` leaves, `after` (the `absorbed_followed` row's own
+    sibling), and every container between `work` and the root,
+    inclusive."""
+    if placement == "top_level":
+        work, after, containers = "prime.work", "prime.after", ("prime",)
+    elif placement == "use_child":
+        work = "prime.child.work"
+        after = "prime.child.after"
+        containers = ("prime.child", "prime")
+    else:
+        assert placement == "loop_pass"
+        work = "prime.lp.iter_0.work"
+        after = "prime.lp.iter_0.after"
+        containers = ("prime.lp", "prime")
+    return {
+        "work": work, "fails": f"{work}.fails", "cleanup": f"{work}.cleanup",
+        "after": after, "containers": containers,
+    }
+
+
+@pytest.mark.parametrize("placement", _LOST_INTERRUPT_PLACEMENTS)
+@pytest.mark.parametrize("row", _LOST_INTERRUPT_ROWS)
+def test_interrupt_during_finally_after_an_absorbed_failure_is_never_lost(
+    tmp_path: Path, electricity_binary: Path, placement: str, row: str,
+) -> None:
+    """Issue #799: a signal landing while a `dynamic`'s own `finally:`
+    runs, right after its own body failed and that failure was already
+    absorbed by `on_error: continue`, still ends the run interrupted --
+    even when nothing runs after that `dynamic` (`absorbed_last`, the
+    exact shape the issue was filed on: `main` ends this `ok: true`,
+    exit 0, on both engines). `absorbed_followed` and `unhandled` are
+    controls already correct on `main`, kept here so a future change
+    cannot quietly re-break either row while fixing another.
+    """
+    env = _sandboxed_env(tmp_path)
+    results: dict[str, subprocess.CompletedProcess[str]] = {}
+    case_dirs: dict[str, Path] = {}
+    for engine in ENGINES:
+        case_dir = tmp_path / engine
+        _write_lost_interrupt_case(placement, row, case_dir)
+        case_dirs[engine] = case_dir
+        results[engine] = _run(engine, electricity_binary, case_dir, env)
+
+    cof_result, elec_result = results["cof"], results["electricity"]
+    expected_returncode = 1 if row == "unhandled" else 143
+    assert cof_result.returncode == elec_result.returncode == expected_returncode, (
+        row, placement, cof_result.stdout, cof_result.stderr,
+        elec_result.stdout, elec_result.stderr,
+    )
+
+    cof_dir, elec_dir = case_dirs["cof"], case_dirs["electricity"]
+    for case_dir, result in ((cof_dir, cof_result), (elec_dir, elec_result)):
+        assert (case_dir / "cleanup_started").exists()
+        assert (case_dir / "out.json").exists()
+        summary = json.loads(result.stdout)
+        assert summary["ok"] is False
+        if row == "unhandled":
+            assert summary["error"] != "Interrupted (SIGTERM)", summary
+        else:
+            assert summary["error"] == "Interrupted (SIGTERM)", summary
+
+    paths = _lost_interrupt_paths(placement)
+    cof_ends = _end_events_by_path((cof_dir / "events.jsonl").read_text(encoding="utf-8"))
+    elec_ends = _end_events_by_path((elec_dir / "events.jsonl").read_text(encoding="utf-8"))
+    for ends in (cof_ends, elec_ends):
+        assert ends[paths["cleanup"]]["ok"] is True, (paths, ends)
+        if row == "unhandled":
+            # The body's own failure still wins over the later signal
+            # (the existing rule this fix must not disturb): `work`
+            # reports its own ordinary failure, never the interrupt.
+            assert ends[paths["work"]]["ok"] is False, (paths, ends)
+            assert ends[paths["work"]]["error"] != "Interrupted (SIGTERM)", ends
+            for container in paths["containers"]:
+                assert ends[container]["ok"] is False, (container, ends)
+        else:
+            assert ends[paths["work"]]["ok"] is False, (paths, ends)
+            for container in paths["containers"]:
+                assert ends[container]["ok"] is False, (container, ends)
+                assert ends[container]["error"] == "Interrupted (SIGTERM)", (container, ends)
+        if row == "absorbed_followed":
+            assert paths["after"] not in ends, (paths, ends)
+            assert not (case_dirs[
+                "cof" if ends is cof_ends else "electricity"
+            ] / "after_ran").exists()
+
+    # `effects_run` agrees between the two engines either way (the
+    # per-path checks above already establish they agree on *which*
+    # effects ran).
+    cof_state = json.loads((cof_dir / "out.json").read_text(encoding="utf-8"))
+    elec_state = json.loads((elec_dir / "out.json").read_text(encoding="utf-8"))
+    assert _effects_run(cof_state) == _effects_run(elec_state), (
+        cof_state.get("runtime"), elec_state.get("runtime"),
+    )
+
+
+@pytest.mark.parametrize("engine", ENGINES)
+def test_interrupt_during_finally_after_absorbed_failure_resumes(
+    tmp_path: Path, electricity_binary: Path, engine: str,
+) -> None:
+    """Issue #799's own `absorbed_last` row, resumed: `work` never
+    finished without error (its own `meta.error` is set even though
+    `on_error: continue` absorbed it for its parent), so `--resume`
+    reruns it from its own first effect -- this time `cleanup` sees
+    `proceed` already on disk and skips the kill, and the whole run
+    finishes normally, `ok: true`, exit 0.
+    """
+    binary, _ = harness.resolve_electricity_binary()
+    env = _sandboxed_env(tmp_path)
+    case_dir = tmp_path / engine
+    case_dir.mkdir()
+    cleanup_script = (
+        "[ -f proceed ] || "
+        "{ touch cleanup_started; kill -TERM $PPID; exec sleep 5; }"
+    )
+    cleanup = "    finally:\n" + _shell_step("cleanup", cleanup_script, indent="      ")
+    doc = (
+        "effects:\n  - type: dynamic\n    name: work\n    on_error: continue\n"
+        "    effects:\n"
+        f"{_shell_step('fails', 'exit 3', indent='      ')}"
+        f"{cleanup}"
+    )
+    (case_dir / "orchestration.yml").write_text(doc, encoding="utf-8")
+
+    first = _run(engine, binary, case_dir, env)
+    assert first.returncode == 143, (first.stdout, first.stderr)
+    assert (case_dir / "out.json").exists()
+    summary_before = json.loads(first.stdout)
+    assert summary_before["ok"] is False
+
+    (case_dir / "proceed").touch()
+    resume_proc = subprocess.Popen(
+        _cmd(
+            engine, binary,
+            [
+                "orchestration.yml", "--events", "events-resume.jsonl",
+                "--state", "out.json", "--out", "out.json",
+                "--resume", "state", "--force",
+            ],
+        ),
+        cwd=case_dir, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+    )
+    try:
+        stdout, stderr = resume_proc.communicate(timeout=_COMMUNICATE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        _diagnose_and_fail(
+            resume_proc, timeout=_COMMUNICATE_TIMEOUT_SECONDS,
+            label=f"waiting for {engine}'s own --resume to finish",
+        )
+        stdout, stderr = "", ""  # unreachable
+    # A successful run with both `--out` and a piped (non-tty) stdout
+    # prints no JSON summary at all (`app.py`'s own `--print`/no-`--out`
+    # gate) -- the exit code and `--events` stream are this run's only
+    # signal.
+    assert resume_proc.returncode == 0, (engine, stdout, stderr)
+    ends = _end_events_by_path(
+        (case_dir / "events-resume.jsonl").read_text(encoding="utf-8")
+    )
+    assert ends["prime"]["ok"] is True, ends
+    assert ends["prime.work.fails"]["ok"] is False, ends
+    assert ends["prime.work.cleanup"]["ok"] is True, ends
