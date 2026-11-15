@@ -384,9 +384,8 @@ def prime_template_str_format_error(prime_template: str) -> str | None:
     it would render as literal text instead of the planner's goal, its
     context, or the effect cap -- almost certainly not what the author
     wants, so it is refused rather than silently kept. A double-braced
-    ``{{goal}}`` (the Mustache form, or a literal ``{{{{goal}}}}``-shaped
-    escape) never matches: the brace immediately before or after it is
-    checked and excluded.
+    ``{{goal}}`` (the Mustache form) never matches: the brace immediately
+    before or after a bare ``{goal}`` is checked and excluded.
     """
     best_pos: int | None = None
     best_name: str | None = None

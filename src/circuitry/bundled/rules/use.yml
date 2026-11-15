@@ -53,7 +53,7 @@ state_paths:
   full_namespace: "prime.<name>.<child_effect>.value (only when neither outputs: nor a child interface declares outputs)"
   recorded_child: "prime.<name>.<child_effect> — the child's own effects, kept beside the mapped value when runtime.state.record_children is true (a run setting, opt-in), at every depth."
   received_inputs: "prime.<name>.meta.inputs — what the child actually received (always recorded)."
-  child_digest: "prime.<name>.meta.orchestration_sha256 — SHA-256 of the child's YAML text (always recorded)."
+  child_digest: "prime.<name>.meta.orchestration_sha256 — SHA-256 of the child's YAML text (the file's bytes, or the rendered inline YAML), except a reflector's own generated plan: SHA-256 of its canonical JSON text instead, since it is never dumped to YAML (always recorded)."
 constraints:
   - "Exactly one of ref, path, orchestration, or inline."
   - "ref must exist in the advertised library catalog — a ref pointing at a state path (prime.*) is INVALID; to pass data to the child, use inputs:."
