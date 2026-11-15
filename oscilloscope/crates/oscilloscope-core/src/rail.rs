@@ -624,8 +624,21 @@ fn build_level(
         // decisions can share the same trigger row; emitting them
         // in `unnamed`'s own plan order (ascending `k`) keeps them
         // in plan order relative to each other too.
+        //
+        // Issue #797 shape 2: a decision whose own branch already
+        // started is excluded here, even when a later sibling's row
+        // also names it -- splicing it in at the sibling's own row
+        // would anchor `build_unnamed_decision`'s search for the
+        // taken branch's content there instead of at the branch's
+        // own row, finding nothing (`branch_subtree_end` needs to
+        // start exactly at a taken-branch row) and leaving the real
+        // row to draw again later as a plain station. Left for the
+        // `pos` match below once the walk reaches that row instead.
         while let Some(k) = (0..unnamed.len()).find(|&k| {
-            !unnamed_emitted[k] && unnamed[k].later_siblings.iter().any(|p| p == &row.path)
+            !unnamed_emitted[k]
+                && unnamed[k].later_siblings.iter().any(|p| p == &row.path)
+                && !any_branch_started(ctx.unfolded_rows, &unnamed[k].then_paths)
+                && !any_branch_started(ctx.unfolded_rows, &unnamed[k].else_paths)
         }) {
             unnamed_emitted[k] = true;
             let (station, fork, _, hide) =
@@ -633,6 +646,42 @@ fn build_level(
             items.push(RailItem::Station(station));
             items.push(RailItem::Fork(fork));
             hidden.extend(hide);
+            // Issue #797 shape 1: this decision is now placed ahead
+            // of its own branch rows (if either has one yet) --
+            // `build_unnamed_decision`'s own still-pending case
+            // deliberately returns no `hide` of its own, since the
+            // `pos` match below relies on drawing inline right where
+            // it's first reached; here, placed early instead, either
+            // row would otherwise still be ahead in this level's own
+            // walk and draw a second time as a plain station.
+            hidden.extend(unnamed[k].then_paths.iter().cloned());
+            hidden.extend(unnamed[k].else_paths.iter().cloned());
+            // A nested unnamed `if` inside one of these same hidden
+            // branches (`collect_branch_paths` already folded its
+            // own leaf paths up into `unnamed[k]`'s) has nothing of
+            // its own left to be reached by either this level's walk
+            // or a later sibling's row -- marked emitted here too, so
+            // it never falls through to the trailing pending fallback
+            // and draws after a sibling of `unnamed[k]`'s own that
+            // has nothing to do with it.
+            let branch_paths: Vec<&String> = unnamed[k]
+                .then_paths
+                .iter()
+                .chain(unnamed[k].else_paths.iter())
+                .collect();
+            for j in 0..unnamed.len() {
+                if unnamed_emitted[j] {
+                    continue;
+                }
+                let own_paths: Vec<&String> = unnamed[j]
+                    .then_paths
+                    .iter()
+                    .chain(unnamed[j].else_paths.iter())
+                    .collect();
+                if !own_paths.is_empty() && own_paths.iter().all(|p| branch_paths.contains(p)) {
+                    unnamed_emitted[j] = true;
+                }
+            }
         }
         if let Some(pos) = (0..unnamed.len()).find(|&k| {
             !unnamed_emitted[k]
@@ -868,8 +917,16 @@ fn build_unnamed_decision(
         lanes
     } else {
         // Still pending: both branches draw as ahead ghosts, never
-        // hidden from the rest of this level's own walk, since
-        // either one might still turn out to be the one that ran.
+        // hidden here -- the `pos` match above can call this right
+        // at the branch's own row (consumed == 0, so the caller's
+        // `i` doesn't move), and that row must still draw right
+        // after the decision, inline, the same as before issue #797.
+        // The early-splice call site (issue #797 shape 1, placing a
+        // decision ahead of a later sibling while it's still fully
+        // pending) hides these same paths itself once this returns,
+        // since in that case the branch's own row is still ahead in
+        // this level's own walk and would otherwise draw a second
+        // time as a plain station.
         [&decision.then_paths, &decision.else_paths]
             .into_iter()
             .filter_map(|side| side.first())
@@ -2707,8 +2764,14 @@ mod tests {
     /// all, so neither of its own branches ever gets a real node --
     /// only a later sibling resolving first can prove `a` is settled.
     fn vacuous_else_unnamed_if_yaml(a: &str, b: &str) -> String {
+        // Issue #797: `a`'s `else: []` is explicit here (`b`'s stays
+        // absent) -- `a` is the decision that actually settles
+        // through the vacuous-else case below, so an explicit empty
+        // `else` list must settle the same way no `else` key at all
+        // does on the one decision this document's own assertions
+        // actually cover.
         format!(
-            "effects:\n  - type: if\n    if: {{mode: cel, expr: \"false\"}}\n    then:\n      - name: {a}_then\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n  - type: if\n    if: {{mode: cel, expr: \"true\"}}\n    then:\n      - name: {b}_then\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n"
+            "effects:\n  - type: if\n    if: {{mode: cel, expr: \"false\"}}\n    then:\n      - name: {a}_then\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n    else: []\n  - type: if\n    if: {{mode: cel, expr: \"true\"}}\n    then:\n      - name: {b}_then\n        type: tool\n        provider: json\n        params: {{mode: parse, input: \"\\\"x\\\"\"}}\n"
         )
     }
 
@@ -2829,6 +2892,251 @@ mod tests {
                 "prime.b_then".to_string(),
             ],
             "a's decision (`.__if`) must still draw before b's (`.__if_1`), never after it"
+        );
+    }
+
+    /// Both #797 shapes share this document -- an `if` with a real
+    /// step on each branch, followed by a plain `b_step` sibling --
+    /// and differ only in which rows the hand-built test around each
+    /// one actually gives `a_then`/`a_else`: still `Pending` for
+    /// shape 1 (no node of either branch has ever run), or `Done`
+    /// with no timestamp of its own for shape 2 (the branch actually
+    /// ran, but sorts after `b_step` anyway).
+    fn if_with_both_branches_and_a_later_sibling_yaml() -> String {
+        "effects:\n  - type: if\n    if: {mode: cel, expr: \"true\"}\n    then:\n      - name: a_then\n        type: tool\n        provider: json\n        params: {mode: parse, input: \"\\\"x\\\"\"}\n    else:\n      - name: a_else\n        type: tool\n        provider: json\n        params: {mode: parse, input: \"\\\"y\\\"\"}\n  - name: b_step\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"z\\\"\"}\n"
+            .to_string()
+    }
+
+    /// Issue #797 shape 1: while `a`'s decision is still pending,
+    /// its own `then`/`else` rows must not draw a second time, as
+    /// plain stations, after `b_step` -- the later sibling that
+    /// proves `a`'s plan position and triggers the splice ahead of
+    /// it (`build_level`'s own early-splice loop).
+    #[test]
+    fn a_pending_decision_hides_its_own_branch_rows_once_spliced() {
+        let plan = compile_doc(&if_with_both_branches_and_a_later_sibling_yaml());
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let zone = chrono::FixedOffset::east_opt(0).unwrap();
+        let root_row = Row {
+            path: "prime".to_string(),
+            depth: 0,
+            label: "prime".to_string(),
+            kind: RowKind::Root,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: true,
+        };
+        let mut b_step_row = root_row.clone();
+        b_step_row.path = "prime.b_step".to_string();
+        b_step_row.depth = 1;
+        b_step_row.label = "b_step".to_string();
+        b_step_row.kind = RowKind::Tool;
+        b_step_row.status.kind = StatusKind::Done;
+        b_step_row.duration_s = Some(0.0);
+        b_step_row.has_children = false;
+        let mut a_then_row = b_step_row.clone();
+        a_then_row.path = "prime.a_then".to_string();
+        a_then_row.label = "a_then".to_string();
+        a_then_row.status.kind = StatusKind::Pending;
+        a_then_row.duration_s = None;
+        let mut a_else_row = a_then_row.clone();
+        a_else_row.path = "prime.a_else".to_string();
+        a_else_row.label = "a_else".to_string();
+
+        // Row order matches `render::child_segments`'s own tie-break:
+        // `b_step` has a real `created_at`, `a_then`/`a_else` have
+        // none, so `b_step` sorts ahead of both.
+        let rows = vec![root_row, b_step_row, a_then_row, a_else_row];
+        let state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "b_step": {"value": "z", "meta": {"created_at": "t0", "completed_at": "t1"}}}
+        });
+        let flat = flat_from(state.clone());
+        let rail = build_rail(
+            &rows,
+            &flat,
+            &plan,
+            &header,
+            Some(&state),
+            &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(
+            lane_stations(&rail, None),
+            vec!["prime.__if".to_string(), "prime.b_step".to_string()],
+            "a's own then/else rows must not draw again as plain stations after b_step"
+        );
+    }
+
+    /// Issue #797 shape 2: `a`'s own branch (`a_then`) already ran,
+    /// but its row carries no evidence of its own, so it sorts after
+    /// `b_step`'s real row -- the splice must skip `a` at `b_step`'s
+    /// row (its own branch already started) and place it once the
+    /// walk reaches `a_then`'s own row instead, with a real taken
+    /// lane rather than an empty one.
+    #[test]
+    fn a_spliced_decisions_started_branch_still_draws_its_own_row() {
+        let plan = compile_doc(&if_with_both_branches_and_a_later_sibling_yaml());
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let zone = chrono::FixedOffset::east_opt(0).unwrap();
+        let root_row = Row {
+            path: "prime".to_string(),
+            depth: 0,
+            label: "prime".to_string(),
+            kind: RowKind::Root,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: true,
+        };
+        let mut b_step_row = root_row.clone();
+        b_step_row.path = "prime.b_step".to_string();
+        b_step_row.depth = 1;
+        b_step_row.label = "b_step".to_string();
+        b_step_row.kind = RowKind::Tool;
+        b_step_row.status.kind = StatusKind::Done;
+        b_step_row.duration_s = Some(0.0);
+        b_step_row.has_children = false;
+        let mut a_then_row = b_step_row.clone();
+        a_then_row.path = "prime.a_then".to_string();
+        a_then_row.label = "a_then".to_string();
+        // Started, but with no `created_at` of its own -- it sorts
+        // after `b_step` in `rows`, same as a real run can leave a
+        // just-started step before its first evidence lands.
+        a_then_row.duration_s = None;
+
+        let rows = vec![root_row, b_step_row, a_then_row];
+        let state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "b_step": {"value": "z", "meta": {"created_at": "t0", "completed_at": "t1"}},
+                "a_then": {"value": "x", "meta": {"created_at": null, "completed_at": "t2"}}}
+        });
+        let flat = flat_from(state.clone());
+        let rail = build_rail(
+            &rows,
+            &flat,
+            &plan,
+            &header,
+            Some(&state),
+            &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(
+            lane_stations(&rail, None),
+            vec![
+                "prime.b_step".to_string(),
+                "prime.__if".to_string(),
+                "prime.a_then".to_string(),
+            ],
+            "a's decision must place when the walk reaches a_then's own row, with a_then in its taken lane"
+        );
+    }
+
+    /// Issue #797 shape 1, the way a sequential run actually reaches
+    /// it: `a`'s own `then` branch is nothing but another unnamed
+    /// `if` (`b`), whose own `then` is a real step (`x`); `a`'s
+    /// `else` is a real step too (`z`). Neither of `a`'s own folded
+    /// branch paths (`collect_branch_paths` flattens `b`'s own `x`
+    /// straight into `a`'s `then_paths`) has started, so `a` splices
+    /// ahead of `w`, the first later sibling to run -- `b`, nested
+    /// entirely inside `a`'s own hidden branch, must never surface
+    /// on its own, including after `u`, a later sibling of `a`'s
+    /// that hasn't run either.
+    fn nested_unnamed_if_yaml() -> String {
+        "effects:\n  - type: if\n    if: {mode: cel, expr: \"true\"}\n    then:\n      - type: if\n        if: {mode: cel, expr: \"false\"}\n        then:\n          - name: x\n            type: tool\n            provider: json\n            params: {mode: parse, input: \"\\\"x\\\"\"}\n    else:\n      - name: z\n        type: tool\n        provider: json\n        params: {mode: parse, input: \"\\\"z\\\"\"}\n  - name: w\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"w\\\"\"}\n  - name: u\n    type: tool\n    provider: json\n    params: {mode: parse, input: \"\\\"u\\\"\"}\n"
+            .to_string()
+    }
+
+    /// Issue #797 shape 1's own nested case: once `a`'s splice hides
+    /// its own branch paths (`x`, `z`), `b` -- the unnamed `if`
+    /// nested entirely inside `a`'s own `then` -- must be treated
+    /// the same way, never falling through to the trailing pending
+    /// fallback and drawing after `u`, a later sibling that has
+    /// nothing to do with either decision.
+    #[test]
+    fn a_pending_decisions_nested_if_never_draws_after_a_later_sibling() {
+        let plan = compile_doc(&nested_unnamed_if_yaml());
+        let header = minimal_header();
+        let model = crate::model::RunModel::new();
+        let zone = chrono::FixedOffset::east_opt(0).unwrap();
+        let root_row = Row {
+            path: "prime".to_string(),
+            depth: 0,
+            label: "prime".to_string(),
+            kind: RowKind::Root,
+            status: crate::model::RowStatus {
+                kind: StatusKind::Running,
+                skip_reason: None,
+                retrying: false,
+            },
+            duration_s: None,
+            loop_progress: None,
+            dim: None,
+            has_children: true,
+        };
+        let mut w_row = root_row.clone();
+        w_row.path = "prime.w".to_string();
+        w_row.depth = 1;
+        w_row.label = "w".to_string();
+        w_row.kind = RowKind::Tool;
+        w_row.status.kind = StatusKind::Done;
+        w_row.duration_s = Some(0.0);
+        w_row.has_children = false;
+        let mut x_row = w_row.clone();
+        x_row.path = "prime.x".to_string();
+        x_row.label = "x".to_string();
+        x_row.status.kind = StatusKind::Pending;
+        x_row.duration_s = None;
+        let mut z_row = x_row.clone();
+        z_row.path = "prime.z".to_string();
+        z_row.label = "z".to_string();
+        let mut u_row = x_row.clone();
+        u_row.path = "prime.u".to_string();
+        u_row.label = "u".to_string();
+
+        // Row order matches `render::child_segments`'s own
+        // tie-break: `w` has a real `created_at`, `x`/`z`/`u` have
+        // none, so `w` sorts ahead of all three, which then fall
+        // back to plan order among themselves.
+        let rows = vec![root_row, w_row, x_row, z_row, u_row];
+        let state = serde_json::json!({
+            "prime": {"value": null, "meta": {"created_at": "t0", "completed_at": null},
+                "w": {"value": "w", "meta": {"created_at": "t0", "completed_at": "t1"}}}
+        });
+        let flat = flat_from(state.clone());
+        let rail = build_rail(
+            &rows,
+            &flat,
+            &plan,
+            &header,
+            Some(&state),
+            &zone,
+            &model,
+            "2026-01-01T00:00:00Z",
+        );
+        assert_eq!(
+            lane_stations(&rail, None),
+            vec![
+                "prime.__if".to_string(),
+                "prime.w".to_string(),
+                "prime.u".to_string(),
+            ],
+            "nothing of a's own branch -- including b, nested inside it -- may draw after u"
         );
     }
 
