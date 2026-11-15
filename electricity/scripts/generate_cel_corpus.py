@@ -103,34 +103,9 @@ def encode(value: object) -> dict:
 # ---------------------------------------------------------------------
 
 
-#: How many extra Python call frames separate this generator's own,
-#: shallow top-level call into `evaluate_cel` from the tightest of the
-#: three real contexts measured for issue #403 (a top-level `if`, a
-#: `while` loop condition, an `if` inside a `use` child) -- those three
-#: were measured through the real `cof run` CLI (a subprocess per shape
-#: per context, never a padded in-process call); this generator still
-#: uses a padded direct call for speed, calibrated so it reproduces the
-#: same accept/reject boundary the CLI measured for the shapes below.
-#: `electricity-cel`'s `nesting.rs` module docs carry the full
-#: CLI-measured numbers.
-_DEEPEST_CONTEXT_PAD = 12
-
-
-def _at_depth(pad: int, call: Any) -> Any:
-    """Calls *call* after recursing *pad* frames deeper first.
-
-    Reproduces, from this generator's own shallow top-level call stack,
-    how much Python recursion budget `evaluate_cel` actually has left in
-    a real run's deepest measured context -- see `_DEEPEST_CONTEXT_PAD`.
-    """
-    if pad <= 0:
-        return call()
-    return _at_depth(pad - 1, call)
-
-
-def _outcome(call: Any, *, pad: int = 0) -> dict:
+def _outcome(call: Any) -> dict:
     try:
-        result = _at_depth(pad, call)
+        result = call()
     except CelEvaluationError:
         return {"kind": "error", "message": None}
     return {"kind": "ok", "result": result}
@@ -150,12 +125,11 @@ def condition(
     *,
     strict: bool = False,
     exact_error: bool = False,
-    pad: int = 0,
 ) -> dict:
     def call() -> bool:
         return evaluate_cel(expr, state, strict=strict)
 
-    outcome = _outcome_exact(call) if exact_error else _outcome(call, pad=pad)
+    outcome = _outcome_exact(call) if exact_error else _outcome(call)
     try:
         named_path = unset_path(expr, state, strict=strict)
     except CelEvaluationError:
@@ -950,103 +924,58 @@ def build_corpus() -> list[dict]:
         condition("has(state.m[state.k].x)", {"m": {"a": {"x": 1}}}),
     ]
 
-    # --- issue #403: nesting boundaries per expression shape, matching
-    # Circuitry's own electricity-side caps as closely as it is safe to.
-    # electricity-cel's `nesting.rs` module docs carry the full
-    # measurement, done through the real `cof run` CLI (a subprocess per
-    # shape per context -- a top-level `if`, a `while` loop condition, an
-    # `if` inside a `use` child -- never a padded in-process call). This
-    # generator still calls `evaluate_cel` directly with a calibrated pad
-    # (`_DEEPEST_CONTEXT_PAD`) for speed; every depth pinned below was
-    # cross-checked to land on the same side of the boundary the CLI
-    # measured, not assumed from the padding alone. Only depths clearly
-    # inside the range every measured context accepted, and clearly
-    # above every cap (electricity's own and Circuitry's measured floor
-    # alike), are pinned -- never a depth inside a band where the two
-    # engines, or different real contexts, disagree.
+    # --- issue #778: one explicit nesting-depth limit
+    # (`MAX_CEL_NESTING_DEPTH`, 32), the same on both engines and the
+    # same regardless of calling context -- replaces the seven
+    # per-shape, context-dependent caps issue #403 measured (no padding
+    # needed any more: the explicit check counts the expression's own
+    # structure, never however much of Python's recursion budget the
+    # calling context already spent). Every shape the limit's own
+    # module docs (`core/cel_eval.py`) enumerate gets one case exactly
+    # at the limit (accepted) and one past it (rejected).
+    _AT_LIMIT = 32
     cases += [
-        # Nested parentheses / nested global calls (`int(int(...))`):
-        # electricity's own `MAX_PAREN_CALL_NESTING_DEPTH` (53) matches
-        # Circuitry's own floor for both shapes exactly, in every context
-        # measured -- N-1/N accepted, N+1 rejected, by both engines.
-        condition("(" * 52 + "1" + ")" * 52, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("(" * 53 + "1" + ")" * 53, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("(" * 54 + "1" + ")" * 54, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("int(" * 52 + "1" + ")" * 52, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("int(" * 53 + "1" + ")" * 53, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("int(" * 54 + "1" + ")" * 54, {}, pad=_DEEPEST_CONTEXT_PAD),
-        # Nested list / map literals: `MAX_LIST_MAP_NESTING_DEPTH` (48)
-        # matches Circuitry's own floor for both exactly too.
-        condition("[" * 47 + "1" + "]" * 47, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("[" * 48 + "1" + "]" * 48, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("[" * 49 + "1" + "]" * 49, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("{'a':" * 47 + "1" + "}" * 47, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("{'a':" * 48 + "1" + "}" * 48, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("{'a':" * 49 + "1" + "}" * 49, {}, pad=_DEEPEST_CONTEXT_PAD),
-        # Arithmetic (`+`)/relational (`<`) chains: `MAX_CHAIN_NESTING_DEPTH`
-        # (241) now matches Circuitry's own floor for this family exactly
-        # (index got its own, tighter cap below instead of
-        # sharing this one, so this cap no longer needs to be stricter
-        # than Circuitry just to stay safe for the index shape too). 238
-        # is pinned as accepted by both -- comfortably inside the real
-        # boundary (241), not at it, matching this generator's own
-        # practice below of never pinning a case exactly at a boundary
-        # the padding can't reproduce with certainty; 250 as rejected by
-        # both, comfortably past Circuitry's own floor too.
-        condition("0" + "+1" * 238, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("0" + "+1" * 250, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("0" + "<1" * 238, {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("0" + "<1" * 250, {}, pad=_DEEPEST_CONTEXT_PAD),
-        # `&&`/`||` chains and a unary `!`/`-` run: Circuitry's own
-        # evaluator recurses once per character/operator for these too,
-        # despite `cel`'s own grammar never recursing for them at all
-        # (`nesting.rs`'s module docs) -- `MAX_LOGICAL_UNARY_NESTING_DEPTH`
-        # (484) matches Circuitry's own floor in every context measured.
-        # 400, clearly inside 484, is pinned as accepted (never exactly
-        # at the real boundary: this generator's own pad does not
-        # reproduce Circuitry's real, CLI-measured 484/485 boundary
-        # closely enough to pin a case right at it without risking a
-        # false reading); 510/601 are rejected, well past the boundary.
-        condition(" && ".join(["true"] * 401), {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition(" && ".join(["true"] * 510), {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("!" * 400 + "true", {}, pad=_DEEPEST_CONTEXT_PAD),
-        condition("!" * 601 + "true", {}, pad=_DEEPEST_CONTEXT_PAD),
-        # Member-access (`.`) chains: a plain select chain fails
-        # Circuitry at *compile* time, not evaluation time, with a bare,
-        # uncaught exception rather than a `CelEvaluationError`
-        # (`nesting.rs`'s module docs) -- not a case this generator's
-        # `evaluate_cel`-based helpers can safely build (a deep enough
-        # one would crash the generator itself, the same way it crashes
-        # a real `cof check`); see
-        # `tests/conformance/cases/cel-member-access-too-deep` instead,
-        # which exercises exactly that failure on both engines through a
-        # real document. Only a shallow, well inside
-        # `MAX_ACCESSOR_NESTING_DEPTH`, accepted case is pinned here,
-        # with a real matching state so the expression actually
-        # evaluates rather than hitting the absent-path rule; 20, not
-        # the full depth, so the corpus fixture's own tagged JSON
-        # encoding of a matching state value stays well under
-        # `serde_json`'s own default recursion limit when parsed back on
-        # the Rust side (this crate's own dependencies may never add
-        # `serde_json`'s `unbounded_depth` feature to work around that).
-        condition("state" + ".a" * 20, _nested_dict(20)),
-        # Index (`[]`) chains: a *separate*, tighter cap from the
-        # operator chains above (`MAX_INDEX_NESTING_DEPTH`, 238),
-        # a clean, caught evaluation failure (not the
-        # member-access shape's bare one) once the path it indexes into
-        # resolves to real data -- confirmed on both engines through a
-        # real document at the exact boundary (239 links) in
-        # `tests/conformance/cases/cel-nesting-caps-fail-the-run`,
-        # not duplicated here. Only a shallow, accepted case, well inside
-        # the cap, for the same reasons as the member-access one above.
-        condition("state" + "[0]" * 20, _nested_list(20)),
+        condition("(" * _AT_LIMIT + "1" + ")" * _AT_LIMIT, {}),
+        condition("(" * (_AT_LIMIT + 1) + "1" + ")" * (_AT_LIMIT + 1), {}),
+        condition("int(" * _AT_LIMIT + "1" + ")" * _AT_LIMIT, {}),
+        condition("int(" * (_AT_LIMIT + 1) + "1" + ")" * (_AT_LIMIT + 1), {}),
+        condition("[" * _AT_LIMIT + "1" + "]" * _AT_LIMIT, {}),
+        condition("[" * (_AT_LIMIT + 1) + "1" + "]" * (_AT_LIMIT + 1), {}),
+        condition("{'a':" * _AT_LIMIT + "1" + "}" * _AT_LIMIT, {}),
+        condition("{'a':" * (_AT_LIMIT + 1) + "1" + "}" * (_AT_LIMIT + 1), {}),
+        condition("0" + "+1" * _AT_LIMIT, {}),
+        condition("0" + "+1" * (_AT_LIMIT + 1), {}),
+        condition("0" + "<1" * _AT_LIMIT, {}),
+        condition("0" + "<1" * (_AT_LIMIT + 1), {}),
+        condition(" && ".join(["true"] * (_AT_LIMIT + 1)), {}),
+        condition(" && ".join(["true"] * (_AT_LIMIT + 2)), {}),
+        condition(" || ".join(["true"] * (_AT_LIMIT + 1)), {}),
+        condition(" || ".join(["true"] * (_AT_LIMIT + 2)), {}),
+        condition("!" * _AT_LIMIT + "true", {}),
+        condition("!" * (_AT_LIMIT + 1) + "true", {}),
+        # A space between each `-` keeps the lexer from absorbing one
+        # of them into the numeric literal's own optional leading sign
+        # (`-1` is one token, not `-` applied to `1`).
+        condition("- " * _AT_LIMIT + "1", {}),
+        condition("- " * (_AT_LIMIT + 1) + "1", {}),
+        # Member-access (`.`): a real matching state, so the expression
+        # actually evaluates rather than hitting the absent-path rule.
+        condition("state" + ".a" * _AT_LIMIT, _nested_dict(_AT_LIMIT)),
+        condition("state" + ".a" * (_AT_LIMIT + 1), _nested_dict(_AT_LIMIT + 1)),
+        # Index (`[]`).
+        condition("state" + "[0]" * _AT_LIMIT, _nested_list(_AT_LIMIT)),
+        condition("state" + "[0]" * (_AT_LIMIT + 1), _nested_list(_AT_LIMIT + 1)),
+        # Method-call chain (`.map(x, x)`...): one link short of the
+        # limit, since the base list literal itself is the first level.
+        condition("[1]" + ".map(x, x)" * (_AT_LIMIT - 1), {}),
+        condition("[1]" + ".map(x, x)" * _AT_LIMIT, {}),
         # Nested function calls (`size(size(...))`): governed by the
-        # same paren/call-nesting cap as parentheses/global calls above,
-        # but fails for an unrelated reason well before that cap matters
-        # at all -- `size()` returns an `int`, which has no `size()` of
-        # its own, so Circuitry's own evaluator (and electricity-cel's
-        # `cel` dependency, the same stdlib function) rejects any depth
-        # beyond 1 on a type mismatch, not a recursion limit.
+        # same limit as parentheses/global calls above, but fails for
+        # an unrelated reason well before the limit matters at all --
+        # `size()` returns an `int`, which has no `size()` of its own,
+        # so Circuitry's own evaluator (and electricity-cel's `cel`
+        # dependency, the same stdlib function) rejects any depth
+        # beyond 1 on a type mismatch, not a nesting failure.
         condition("size(state)", [1, 2, 3]),
         condition("size(size(state))", [1, 2, 3]),
     ]
