@@ -1126,12 +1126,20 @@ class UseRuntime:
             if not own_doc_is_generated:
                 return _fresh_ceiling()
             generated = True
-        else:
+        elif self.defn.inline is not None:
             generated = (
                 own_doc_is_generated
                 or self.defn.force_generated
                 or is_generated_inline(self.defn.inline, child_orch)
             )
+            if not generated:
+                return _fresh_ceiling()
+        else:
+            # inline_document: only ever built by the reflector's own
+            # synthetic use, always with force_generated=True -- there is
+            # no unrendered template of its own to compare the rendered
+            # document's shape against, unlike an author's inline: field.
+            generated = own_doc_is_generated or self.defn.force_generated
             if not generated:
                 return _fresh_ceiling()
 
