@@ -1,0 +1,14 @@
+interface:
+  inputs:
+    items: {default: ["café", true, false, null, 2024-01-02]}
+    empty_list: {default: []}
+effects:
+  - type: report
+    name: as_escaped
+    message: "escaped={{input.items}}"
+  - type: report
+    name: as_raw
+    message: "raw={{{input.items}}}"
+  - type: report
+    name: empty
+    message: "empty={{input.empty_list}}"

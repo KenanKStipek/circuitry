@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778 step 3",
+  "description": "A prompt effect's template: a whole list spliced through {{...}} and {{{...}}} both render the same JSON text (prompt text never HTML-escapes either way), nested non-ASCII, booleans, null and a date included; an empty dict still renders \"{}\", never collapsed to \"\".",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}
