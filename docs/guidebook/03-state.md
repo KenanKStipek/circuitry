@@ -125,7 +125,7 @@ This goes green and renders "Is this issue a bug, a feature or a question? Issue
 
 ## Rendering values
 
-A `text` value interpolates as itself. A structured value is a dict or a list, and interpolating the whole thing renders its string form — `{'severity': 'high', 'components': ['parser']}` — which is rarely what a prompt wants. Read fields: `{{prime.assessment.value.severity}}`, `{{prime.assessment.value.components}}`. To hand a whole collection to the model, prefer iterating it with a [loop](07-loop.md), or ask the producing prompt for prose in the first place.
+A `text` value interpolates as itself. A structured value is a dict or a list, and interpolating the whole thing renders it as JSON text — `{"severity": "high", "components": ["parser"]}` — which is rarely what a prompt wants. Read fields: `{{prime.assessment.value.severity}}`, `{{prime.assessment.value.components}}`. To hand a whole collection to the model, prefer iterating it with a [loop](07-loop.md), or ask the producing prompt for prose in the first place.
 
 A node without `.value` is also a legal read and renders the whole node, `meta` included. Nearly always a mistake:
 

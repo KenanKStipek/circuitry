@@ -1382,10 +1382,11 @@ object is deep-merged over `params` (its keys win on conflicts). This keeps
 A prior step's list/object value can be a native Python list/dict already in
 state (e.g. from an `array`/`object` prompt, the `json` plugin's parse/
 extract, MCP `structuredContent`, a `surrealdb` result, or a loop `each.as`
-item) — `params_json` serializes it back to JSON text when splicing it in.
-It can also be a string that already holds JSON text; that string is
-spliced in verbatim. Either way, use `{{{...}}}` (triple-stache) so the
-value is not HTML-escaped, since `params_json` parses the whole rendered
+item) — splicing it in renders it as JSON text (see [Mustache Template
+Interpolation](#mustache-template-interpolation)), the same as it would
+anywhere else. It can also be a string that already holds JSON text; that
+string is spliced in verbatim. Either way, use `{{{...}}}` (triple-stache) so
+the value is not HTML-escaped, since `params_json` parses the whole rendered
 template as JSON. Only splice a *whole* JSON value this way — a bare scalar
 like `{{{input.name}}}` inside a JSON string literal breaks if the value
 contains a `"`, `\`, or newline; put scalars under `params:` instead and
@@ -2238,6 +2239,7 @@ Templates use Mustache syntax (`{{...}}`). Two kinds of references:
 - Never use a bare `{{<name>}}` for caller-supplied input — always include the `input.` prefix; a bare reference matching a declared `interface.inputs` name is a hard error from `cof check`
 - Nested effects always include their parent dynamic name in the path
 - A malformed tag (`{{input.topic}`, a section closed under the wrong name) is an error from `cof check` and `cof run`, never text sent on as written
+- **A whole list or dict renders as JSON.** `{{x}}`/`{{{x}}}` against a value that is a whole list or dict (not a scalar) renders the JSON text `json.dumps` would produce (`["a", "b"]`, `{"k": 1}`), not Python's `repr()` (`['a', 'b']`, `{'k': 1}`) — nested booleans/`null`/dates included, and an empty list or dict still renders (`"[]"`/`"{}"`), never collapsed to an empty string. A section (`{{#x}}...{{/x}}`) over a list or dict is unaffected: it still iterates or scopes, and an empty one is still falsy there. Scalars (a string, number, boolean, `null`) render exactly as before.
 - **The attribute fallback resolves only a date/datetime's own calendar fields.** A name is looked up in the current scope, then each enclosing scope — a dict key, a list index, or, on a `datetime.date`/`datetime.datetime` value, one of its own `year`, `month`, `day`, `hour`, `minute`, `second`, `microsecond` fields. Every other attribute is a miss and falls through to the next scope, like any missing key: a method (`{{#title}}{{title}}{{/title}}` over the string `"Intro"` reaching `str.title`; `{{d.isoformat}}` on a date reaching `date.isoformat`); `int`/`float`'s own `real`/`imag`/`numerator`/`denominator`; `tzinfo`/`fold`/`min`/`max`/`resolution`; or any dunder (`__doc__`, ...) — never Python's description of that attribute.
 - **In prompt text, `{{x}}` does not HTML-escape.** A `prompt` effect's `template` and each `messages` entry's `content`, a `yield` effect's `template`, a declared `prompts:` entry, and a prompt file (`{file: <path>}`, see [Prompt composition](#prompt-composition)) all render `{{x}}` exactly like `{{{x}}}`/`{{&x}}` — prompts are not HTML, so escaping only corrupted the quoted text, code, JSON and XML-style tags they commonly carry. Everywhere else a template renders — tool `params`/`prompt`, `params_json`, a `use` effect's `inputs`/`inline`, an `if`/`while` model template, an asset's `ref` — `{{x}}` still HTML-escapes as before; use `{{{x}}}`/`{{&x}}` there.
 - **`{{> name}}` splices in a declared prompt or an effect's text** — see [Prompt composition](#prompt-composition) for the full rule. It works in exactly the fields the no-escape rule above lists, plus tool `params`/`prompt`/`params_json` and `use` `inputs`/`inline` (where it still HTML-escapes anything else in the same template). Anywhere else — an `if`/`while` model template, an asset's `ref`, `expect.template` — a bare `{{> name}}` is still unconditionally an error, exactly as below.
