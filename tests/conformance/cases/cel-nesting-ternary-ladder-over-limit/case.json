@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778: an else-if ternary ladder is rejected by depth, not by its own operator count",
+  "description": "A 33-link `?:` else-if ladder -- each `?:` nesting one level deeper on its own false branch -- is one past MAX_CEL_NESTING_DEPTH (32), rejected when the document compiles.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

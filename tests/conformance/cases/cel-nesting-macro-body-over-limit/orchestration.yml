@@ -1,0 +1,8 @@
+name: cel-nesting-macro-body-over-limit
+effects:
+  - type: if
+    name: check
+    if:
+      mode: cel
+      expr: "[1].exists(x, (((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))) > 0)"
+    then: []

@@ -1,0 +1,8 @@
+name: cel-nesting-ternary-ladder-over-limit
+effects:
+  - type: if
+    name: check
+    if:
+      mode: cel
+      expr: "true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : 0"
+    then: []

@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778: a long run of the same operator is rejected by depth, not by its own length",
+  "description": "A run of 34 `true`s joined by `||` -- 33 links of the same operator, more than 32 of them -- is one past MAX_CEL_NESTING_DEPTH, rejected when the document compiles, even though every operand is the trivial literal `true`.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

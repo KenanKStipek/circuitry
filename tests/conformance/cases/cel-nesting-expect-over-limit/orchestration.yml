@@ -1,0 +1,7 @@
+name: cel-nesting-expect-over-limit
+effects:
+  - type: tool
+    name: step
+    provider: json
+    params: {mode: stringify, input: {ok: true}}
+    expect: "(((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))"
