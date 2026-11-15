@@ -520,6 +520,75 @@ class _SavedChildRun:
         return saved is not _UNSAVEABLE and saved == _saved_form(inputs)
 
 
+def _canonical_json_digest(doc: dict[str, Any]) -> str:
+    """The sha256 a reflector-generated document's ``meta.orchestration_sha256``
+    records: canonical JSON, not the document's own (nonexistent) YAML text.
+
+    Sorted keys and compact separators so the digest never depends on the
+    model's own key order, matching on both engines.
+    """
+    canonical = json.dumps(
+        doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _render_inline_document(
+    value: Any,
+    ctx: Mapping[str, Any],
+    *,
+    declared: Mapping[str, str],
+    known_effect_names: frozenset[str],
+) -> Any:
+    """Render every string leaf of *value* through
+    :func:`core.prompt_compose.render_with_composition` -- the same
+    composition an ordinary ``inline:`` field's own text gets as a whole,
+    applied leaf by leaf since there is no whole text here to render (a
+    reflector's generated plan is handed over already parsed, #778).
+    Equivalent for any document that parses as YAML in the first place: a
+    Mustache tag can only meaningfully sit inside one YAML scalar, never
+    span a structural boundary, so rendering each string leaf on its own
+    reproduces exactly what rendering the whole (re-dumped) text once did.
+    """
+    if isinstance(value, str):
+        return render_with_composition(
+            value, ctx, declared=declared, known_effect_names=known_effect_names, label="inline"
+        )
+    if isinstance(value, dict):
+        return {
+            k: _render_inline_document(
+                v, ctx, declared=declared, known_effect_names=known_effect_names
+            )
+            for k, v in value.items()
+        }
+    if isinstance(value, list):
+        return [
+            _render_inline_document(
+                v, ctx, declared=declared, known_effect_names=known_effect_names
+            )
+            for v in value
+        ]
+    return value
+
+
+def _validate_inline_document(parsed: Any) -> tuple[bool, list[str]]:
+    """Validate an already-parsed document the way :func:`_validate_inline_yaml`
+    validates text — shared by an ordinary ``inline:`` child (parsed from its
+    own rendered text) and a reflector's generated plan (handed over as a
+    document object, never dumped to YAML and reparsed).
+
+    Returns (ok, errors) where errors is a list of human-readable messages.
+    """
+    if not isinstance(parsed, dict):
+        return False, ["Inline orchestration must be a YAML mapping with an 'effects' key."]
+
+    if "effects" not in parsed:
+        return False, ["Inline orchestration is missing required 'effects' key."]
+
+    errors = structural_errors(parsed)
+    return (len(errors) == 0), errors
+
+
 def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
     """Validate an inline YAML string the way ``cof check`` validates a file.
 
@@ -535,14 +604,7 @@ def _validate_inline_yaml(yaml_text: str) -> tuple[bool, list[str]]:
     except _yaml.YAMLError as e:
         return False, [f"YAML parse error: {e}"]
 
-    if not isinstance(parsed, dict):
-        return False, ["Inline orchestration must be a YAML mapping with an 'effects' key."]
-
-    if "effects" not in parsed:
-        return False, ["Inline orchestration is missing required 'effects' key."]
-
-    errors = structural_errors(parsed)
-    return (len(errors) == 0), errors
+    return _validate_inline_document(parsed)
 
 
 def _clean_yaml_fences(text: str) -> str:
@@ -565,6 +627,16 @@ class UseDefinition:
     path: str | None = None
     orchestration: str | None = None
     inline: str | None = None
+    #: A reflector's generated plan, already parsed and normalized
+    #: (``core.reflector._extract_done_flag``) — never set by a document
+    #: author, and mutually exclusive with ``inline`` (only ``ReflectorRuntime``
+    #: builds a ``UseDefinition`` with this set, always alongside
+    #: ``force_generated=True``). Unlike ``inline``, this is handed to the
+    #: child as-is: no Mustache render, no YAML dump-and-reparse, so the plan
+    #: runs with its keys in the order the model wrote them. Its own
+    #: ``meta.orchestration_sha256`` is the sha256 of its canonical JSON text
+    #: (:func:`_canonical_json_digest`) rather than of rendered YAML text.
+    inline_document: dict[str, Any] | None = None
     inputs: dict[str, Any] | None = None
     #: name -> state path. Values may be the canonical ``{path: ...}`` object
     #: or the bare-path shorthand; both normalize through ``core.outputs``.
@@ -858,12 +930,41 @@ class UseRuntime:
         self, ctx: dict[str, Any]
     ) -> tuple[dict[str, Any], str, str, str]:
         """Load the child orchestration dict, a display label, a cycle-identity
-        string, and the SHA-256 of the YAML text it came from.
+        string, and the SHA-256 identifying it.
 
         Returns (orch_dict, label, identity, sha256).
         For file-based: identity is the absolute resolved path; the digest is of the file's bytes.
         For inline: identity is 'inline:<sha256-of-cleaned-yaml>'; the digest is of that YAML.
+        For inline_document (a reflector's generated plan): identity is
+        'inline:<sha256-of-canonical-json>'; the digest is of the rendered
+        document's own canonical JSON text (:func:`_canonical_json_digest`) —
+        there is no YAML text to hash, since this path never dumps one.
         """
+        if self.defn.inline_document is not None:
+            # Every string leaf composes against *ctx* exactly as an
+            # ordinary 'inline:' field's own text does -- the parsed
+            # document is new (#778), but the plan's own effects still see
+            # the reflector's enclosing scope the same way.
+            rendered = _render_inline_document(
+                self.defn.inline_document,
+                ctx,
+                declared=declared_prompts(self.runtime_config),
+                known_effect_names=known_effect_names(self.runtime_config),
+            )
+            if self.defn.validate:
+                ok, errors = _validate_inline_document(rendered)
+                if not ok:
+                    raise ValueError(
+                        "Inline orchestration validation failed:\n"
+                        + "\n".join(f"  - {e}" for e in errors)
+                    )
+            if not isinstance(rendered, dict):
+                raise ValueError(
+                    "Inline orchestration must be a YAML mapping with an 'effects' key."
+                )
+            digest = _canonical_json_digest(rendered)
+            return rendered, "inline", f"inline:{digest[:16]}", digest
+
         if self.defn.inline is not None:
             # Render Mustache template against parent context
             raw_yaml = render_with_composition(
@@ -1016,7 +1117,7 @@ class UseRuntime:
                 "",
             )
 
-        if self.defn.inline is None:
+        if self.defn.inline is None and self.defn.inline_document is None:
             # A path/ref/orchestration child loads from disk; it is its own,
             # independently trusted document unless the document that
             # carries this use effect is itself generated, in which case it
@@ -1240,7 +1341,7 @@ class UseRuntime:
         meta["created_at"] = _now_iso()
         meta["completed_at"] = None
         meta["orchestration"] = legacy_ref
-        meta["inline"] = self.defn.inline is not None
+        meta["inline"] = self.defn.inline is not None or self.defn.inline_document is not None
         meta["resolved_path"] = None
         meta["validation_errors"] = None
         meta["error"] = None
