@@ -28,11 +28,11 @@ Decisions" instead of citing an external project file repeatedly:
   the full conformance suite, `cof run` itself delegates execution to electricity (§12, M4) — one
   engine, with Python kept as the authoring tool.
 - CLI shape: `electricity run <orchestration.yml> [-e key=value]... [--config config.json]
-  [--out state.json] [--resume ...] [--pretty] [--profile <path>] [--allow-capabilities cap,cap]
-  [--adapter name] [--label TEXT] [--quiet]`, cof `run`'s own option names and meanings (issue #728) --
-  `--resume`/`--state`/`--force` are #727's own milestone and are not accepted by this build's
-  parser yet (an unrecognized option, same as any other); every other flag in this synopsis is.
-  The legacy
+  [--out state.json] [--state <file>] [--resume last] [--force] [--pretty] [--profile <path>]
+  [--allow-capabilities cap,cap] [--adapter name] [--label TEXT] [--quiet]`, cof `run`'s own
+  option names and meanings (issue #728) -- `--state`/`--resume`/`--force` are accepted, #727's
+  own milestone; `--resume <run-id>` (cof's own persistence-backed mode) is not -- only `--state
+  <file>`/`--resume last`. The legacy
   `electricity <config.json> <orchestration.yml> ...` form (config always the first positional,
   never discovered) keeps working as an alias. The orchestration file is always operator-chosen on
   the command line and therefore fully trusted — no document-discovery mechanism, no

@@ -35,8 +35,11 @@ Please **do not** open a public GitHub issue for vulnerabilities until a fix is 
 In scope:
 
 - The `circuitry` Python package and the `cof` CLI
-- Bundled tool plugins under `src/circuitry/plugins/` (currently `ffmpeg`, `comfyui`)
-- Bundled orchestrations under `src/circuitry/bundled/orchestrations/`
+- The `electricity` Rust runner and CLI under `electricity/`
+- The `osi` terminal UI under `oscilloscope/`
+- Tool plugins under `src/circuitry/plugins/`, every one registered in `PLUGIN_REGISTRY`
+  (`src/circuitry/plugins/factory.py`)
+- The bundled library under `src/circuitry/curation/`
 - The orchestration JSON Schema at `src/circuitry/schema/orchestration.schema.json`
 
 Out of scope:
