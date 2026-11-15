@@ -253,6 +253,17 @@
   },
   {
     "kind": "extract_done",
+    "input": "1: a\nb: c\neffects: []\n",
+    "ok": true,
+    "done": false,
+    "parsed": {
+      "1": "a",
+      "b": "c",
+      "effects": []
+    }
+  },
+  {
+    "kind": "extract_done",
     "input": "zeta: 1\neffects:\n  - type: prompt\n    name: a\n    template: hi\nalpha: 2\ndone: false\n",
     "ok": true,
     "done": false,

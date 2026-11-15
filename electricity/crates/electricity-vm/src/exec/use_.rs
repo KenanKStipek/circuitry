@@ -404,18 +404,86 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
+/// `core/use.py::_json_key_text` -- the JSON string `json.dumps` would
+/// write for a dict key: `"true"`/`"false"`/`"null"` for a bool/`None`,
+/// decimal text for an int or float, or the string itself.
+fn json_key_text(key: &Value) -> Result<String, String> {
+    electricity_json::stringify_key(key).map_err(|e| e.to_string())
+}
+
+/// `core/use.py::_KEY_TYPE_RANK` -- the tiebreak order [`canonical_key_order`]
+/// uses when two keys of different types write the same JSON text (e.g. the
+/// string `"true"` beside the bool `true`) -- arbitrary but fixed, so the
+/// order is total and the same on both engines.
+fn key_type_rank(key: &Value) -> u8 {
+    match key {
+        Value::Bool(_) => 0,
+        Value::Int(_) => 1,
+        Value::Float(_) => 2,
+        Value::None => 3,
+        Value::Str(_) => 4,
+        _ => 5,
+    }
+}
+
+/// `core/use.py::_canonical_key_order` -- *value* with every dict's
+/// entries reordered into the order [`canonical_json_digest`] hashes: by
+/// the JSON text each key would write, not by the keys themselves -- so
+/// a dict mixing key types `<` can't compare (e.g. a YAML 1.1 `on:` key
+/// read as the bool `true` beside a string key) still sorts,
+/// deterministically, instead of raising the way
+/// [`electricity_json::dumps_default_str`] faithfully does for a plain
+/// `sort_keys=true` write (#778; `yaml.dump`, which this replaced,
+/// tolerated it). For a dict whose keys are all strings -- the realistic
+/// shape of a reflector's plan -- the JSON text of a key is the key
+/// itself, so this sorts exactly as `sort_keys=true` always did.
+fn canonical_key_order(value: &Value) -> Result<Value, String> {
+    match value {
+        Value::Dict(dict) => {
+            let mut entries: Vec<(Value, Value)> = Vec::with_capacity(dict.len());
+            for (k, v) in dict.iter() {
+                entries.push((k.clone(), canonical_key_order(v)?));
+            }
+            let mut keyed = Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                let text = json_key_text(&k)?;
+                let rank = key_type_rank(&k);
+                keyed.push(((text, rank), (k, v)));
+            }
+            keyed.sort_by(|(a, _), (b, _)| a.cmp(b));
+            let mut out = Dict::new();
+            for (_, (k, v)) in keyed {
+                out.insert(k, v);
+            }
+            Ok(Value::Dict(out))
+        }
+        Value::List(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(canonical_key_order(item)?);
+            }
+            Ok(Value::List(out))
+        }
+        other => Ok(other.clone()),
+    }
+}
+
 /// `core/use.py::_canonical_json_digest` -- a reflector-generated
 /// document's own `meta.orchestration_sha256` (#778): sha256 of its
-/// canonical JSON text, sorted keys and compact separators, so the
-/// digest never depends on the model's own key order.
+/// canonical JSON text. Compact separators, and keys pre-sorted by
+/// [`canonical_key_order`] (then written with `sort_keys: false`, which
+/// only ever affects an unordered `Dict`, never this one) so the digest
+/// never depends on the model's own key order, matching on both engines.
 pub fn canonical_json_digest(value: &Value) -> Result<String, String> {
+    let ordered = canonical_key_order(value)?;
     let mode = electricity_json::WriteMode {
         indent: None,
-        sort_keys: true,
+        sort_keys: false,
         ensure_ascii: false,
         separators: electricity_json::Separators::Compact,
     };
-    let canonical = electricity_json::dumps_default_str(value, mode).map_err(|e| e.to_string())?;
+    let canonical =
+        electricity_json::dumps_default_str(&ordered, mode).map_err(|e| e.to_string())?;
     Ok(sha256_hex(canonical.as_bytes()))
 }
 
@@ -3658,6 +3726,55 @@ effects:\n  - type: tool\n    name: inner\n    provider: json\n    params: {mode
         assert_eq!(
             sha256_hex(b""),
             "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+    }
+
+    fn dict_of(pairs: Vec<(Value, Value)>) -> Value {
+        let mut d = Dict::new();
+        for (k, v) in pairs {
+            d.insert(k, v);
+        }
+        Value::Dict(d)
+    }
+
+    #[test]
+    fn canonical_json_digest_tolerates_a_yaml_1_1_bool_key() {
+        let doc = dict_of(vec![
+            (Value::Bool(true), Value::Str("push".to_string())),
+            (Value::Str("name".to_string()), Value::Str("x".to_string())),
+            (Value::Str("effects".to_string()), Value::List(vec![])),
+        ]);
+        let digest = canonical_json_digest(&doc).unwrap();
+        assert_eq!(digest.len(), 64);
+        let reordered = dict_of(vec![
+            (Value::Str("effects".to_string()), Value::List(vec![])),
+            (Value::Str("name".to_string()), Value::Str("x".to_string())),
+            (Value::Bool(true), Value::Str("push".to_string())),
+        ]);
+        assert_eq!(canonical_json_digest(&reordered).unwrap(), digest);
+    }
+
+    #[test]
+    fn canonical_json_digest_breaks_a_text_tie_by_key_type() {
+        let doc_a = dict_of(vec![
+            (Value::Str("true".to_string()), Value::from(1_i64)),
+            (Value::Bool(true), Value::from(2_i64)),
+            (Value::Str("effects".to_string()), Value::List(vec![])),
+        ]);
+        let doc_b = dict_of(vec![
+            (Value::Bool(true), Value::from(2_i64)),
+            (Value::Str("true".to_string()), Value::from(1_i64)),
+            (Value::Str("effects".to_string()), Value::List(vec![])),
+        ]);
+        assert_eq!(
+            canonical_json_digest(&doc_a).unwrap(),
+            canonical_json_digest(&doc_b).unwrap()
+        );
+        // Cross-engine parity: `_canonical_json_digest({'true': 1, True: 2,
+        // 'effects': []})` on cof.
+        assert_eq!(
+            canonical_json_digest(&doc_a).unwrap(),
+            "d8766587c932afe66f6184cd53a13129eedfe017fc86fbf4007ad4f3d3d0d46c"
         );
     }
 }

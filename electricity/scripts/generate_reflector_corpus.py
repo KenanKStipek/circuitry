@@ -95,9 +95,9 @@ def clean_fences_cases() -> list[dict]:
         "a\x1cb",
         "a\x1db",
         "a\x1eb",
-        "a b",
+        "a\u2028b",
         "a\x85b",
-        "a b",
+        "a\u2029b",
         "```\x0ceffects: []\x0c---\x0c```",
         "  \n```\n  \n",
         "no fences at all\njust plain text",
@@ -124,6 +124,12 @@ def extract_done_cases() -> list[dict]:
         "effects: [\n",  # unparseable YAML (syntax)
         "done: false\nsteps: not-a-list\neffects: []\n",
         "done: false\nplan: not-a-dict-or-list\n",
+        # Mixed key types -- `_extract_done_flag` never sorts (#778: no
+        # `yaml.dump` round trip left to hit a sort at all), so this
+        # parses and normalizes exactly like any other plan; mixed-type
+        # key sorting itself is `_canonical_json_digest`'s own concern,
+        # exercised by the reflector conformance cases instead.
+        "1: a\nb: c\neffects: []\n",
         # A plan whose own top-level keys are not in sorted order --
         # issue #778: no round trip through `yaml.dump` means the
         # parsed document keeps exactly this order, `done` included
@@ -183,7 +189,7 @@ def prime_cases() -> list[dict]:
         # No HTML escaping (#397/#778: a prompt template, like any
         # other) -- `&`/`<`/`>`/quotes survive verbatim.
         prime_case("Goal: {{goal}}", goal="Ben & Jerry's <ice> \"cream\""),
-        prime_case("Non-ascii: {{goal}}", goal="café \U0001f600"),
+        prime_case("Non-ascii: {{goal}}", goal="caf\u00e9 \U0001f600"),
         # A malformed Mustache template -- refused, never a raw-text
         # fallback (a document error at check/compile time for a real
         # orchestration; this generator calls the renderer directly).
@@ -215,7 +221,7 @@ def context_cases() -> list[dict]:
         context_case({}),
         context_case({"model": "gpt-4", "adapter": "openai", "plugins": ["json", "shell"]}),
         context_case({"model": None, "adapter": None, "plugins": None}),
-        context_case({"model": "café-\U0001f600", "adapter": "openai", "plugins": []}),
+        context_case({"model": "caf\u00e9-\U0001f600", "adapter": "openai", "plugins": []}),
         # A secret-shaped *value* inside one of the three fields
         # `_best_effort_context`'s own summary keeps (`model`/`adapter`/
         # `plugins`) -- PR #510's first review: an

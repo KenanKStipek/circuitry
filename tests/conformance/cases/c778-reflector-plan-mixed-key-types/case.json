@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778",
+  "description": "A generated plan whose top-level keys mix types (a tool's params mapping has a plain on: key, which YAML 1.1 resolves to the bool True, beside string keys) still runs, and its orchestration_sha256 is the sha256 of its canonical JSON text -- the canonical key order falls back to each key's own JSON text where native comparison can't order a bool key against a string one, rather than raising the way a plain sort_keys=True json.dumps call would.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

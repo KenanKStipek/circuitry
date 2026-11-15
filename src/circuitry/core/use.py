@@ -520,15 +520,77 @@ class _SavedChildRun:
         return saved is not _UNSAVEABLE and saved == _saved_form(inputs)
 
 
+#: The tiebreak order :func:`_json_key_sort_key` uses when two keys of
+#: different types write the same JSON text (e.g. the string ``"true"``
+#: beside the bool ``True``) -- arbitrary but fixed, so the order is total
+#: and the same on both engines.
+_KEY_TYPE_RANK = {bool: 0, int: 1, float: 2, type(None): 3, str: 4}
+
+
+def _json_key_text(key: Any) -> str:
+    """The JSON string ``json.dumps`` would write for a dict *key* --
+    ``"true"``/``"false"``/``"null"`` for a bool/``None``, decimal text
+    for an int or float, or the string itself.
+    """
+    if isinstance(key, str):
+        return key
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    if key is None:
+        return "null"
+    if isinstance(key, int):
+        return str(key)
+    if isinstance(key, float):
+        return json.dumps(key)
+    raise TypeError(f"keys must be str, int, float, bool or None, not {type(key).__name__}")
+
+
+def _json_key_sort_key(key: Any) -> tuple[str, int]:
+    """*key*'s own sort key for :func:`_canonical_key_order`: the JSON
+    text it would write, then its type's rank in :data:`_KEY_TYPE_RANK`
+    as a tiebreak for two keys whose JSON text is the same.
+    """
+    rank = _KEY_TYPE_RANK[bool if isinstance(key, bool) else type(key)]
+    return (_json_key_text(key), rank)
+
+
+def _canonical_key_order(value: Any) -> Any:
+    """*value* with every dict's keys reordered into the order
+    :func:`_canonical_json_digest` hashes: by the JSON text each key
+    would write, not by the keys themselves -- so a dict mixing key
+    types that ``<`` can't compare (e.g. a YAML 1.1 ``on:`` key read as
+    the bool ``True`` beside a string key) still sorts, deterministically,
+    instead of ``json.dumps(..., sort_keys=True)``'s own ``TypeError`` for
+    that case (#778; ``yaml.dump``, which this replaced, tolerated it).
+    For a dict whose keys are all the same type and all strings -- the
+    realistic shape of a reflector's plan -- the JSON text of a key is the
+    key itself, so this sorts exactly as ``sort_keys=True`` always did.
+    """
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda kv: _json_key_sort_key(kv[0]))
+        return {k: _canonical_key_order(v) for k, v in items}
+    if isinstance(value, list):
+        return [_canonical_key_order(v) for v in value]
+    return value
+
+
 def _canonical_json_digest(doc: dict[str, Any]) -> str:
     """The sha256 a reflector-generated document's ``meta.orchestration_sha256``
     records: canonical JSON, not the document's own (nonexistent) YAML text.
 
-    Sorted keys and compact separators so the digest never depends on the
-    model's own key order, matching on both engines.
+    Compact separators, and keys pre-sorted by :func:`_canonical_key_order`
+    (then written with ``sort_keys=False``, which only ever affects an
+    unordered ``dict`` literal, never this one) so the digest never
+    depends on the model's own key order, matching on both engines.
     """
     canonical = json.dumps(
-        doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str
+        _canonical_key_order(doc),
+        sort_keys=False,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        default=str,
     )
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -545,10 +607,14 @@ def _render_inline_document(
     composition an ordinary ``inline:`` field's own text gets as a whole,
     applied leaf by leaf since there is no whole text here to render (a
     reflector's generated plan is handed over already parsed, #778).
-    Equivalent for any document that parses as YAML in the first place: a
-    Mustache tag can only meaningfully sit inside one YAML scalar, never
-    span a structural boundary, so rendering each string leaf on its own
-    reproduces exactly what rendering the whole (re-dumped) text once did.
+
+    Not quite the same as rendering the whole (re-dumped) text once did:
+    a dict's own keys are never rendered (only values are, since a
+    document's structure -- which effect runs, under what name -- is
+    fixed by the model's parsed plan, not by a Mustache tag inside a
+    key), and there is no re-serialized YAML text left for a rendered
+    value's own quoting to break. A Mustache tag inside one *value*
+    still renders the same way either style would.
     """
     if isinstance(value, str):
         return render_with_composition(
@@ -631,9 +697,11 @@ class UseDefinition:
     #: (``core.reflector._extract_done_flag``) — never set by a document
     #: author, and mutually exclusive with ``inline`` (only ``ReflectorRuntime``
     #: builds a ``UseDefinition`` with this set, always alongside
-    #: ``force_generated=True``). Unlike ``inline``, this is handed to the
-    #: child as-is: no Mustache render, no YAML dump-and-reparse, so the plan
-    #: runs with its keys in the order the model wrote them. Its own
+    #: ``force_generated=True``). Every string leaf renders through Mustache
+    #: the same way ``inline``'s own text does (:func:`_render_inline_document`),
+    #: but unlike ``inline`` there is no YAML dump-and-reparse: the document
+    #: itself (keys included) is never rendered as a whole, so the plan runs
+    #: with its keys in the order the model wrote them. Its own
     #: ``meta.orchestration_sha256`` is the sha256 of its canonical JSON text
     #: (:func:`_canonical_json_digest`) rather than of rendered YAML text.
     inline_document: dict[str, Any] | None = None

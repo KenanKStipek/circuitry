@@ -775,6 +775,128 @@ fn extract_done_flag(plan_text: &str) -> Result<(bool, Option<Value>), String> {
 mod prime_tests {
     use super::*;
 
+    /// `_render_reflector_prime`'s exact output for the default prime and
+    /// the fields below, pinned once (#778) against what the old
+    /// `str.format` rendering of the pre-#778 template produced for the
+    /// same inputs -- confirmed byte for byte equal to that output, not
+    /// just containing its substrings (`tests/core/test_reflector.py`'s
+    /// own twin pins the same text).
+    const EXPECTED_DEFAULT_PRIME: &str = r##"CRITICAL: The next system will parse your response as YAML. If you include ANY markdown (like **bold**, *italics*, backticks, or headings), parsing fails.
+Do not output any '*' characters except as plain text INSIDE a YAML quoted string.
+Never use *, **, backticks, headings, or bullet prose outside YAML.
+Every line must be valid YAML.
+CRITICAL: Your output will be parsed by a YAML parser and then validated as a Circuitry orchestration.
+
+You MUST output ONE valid YAML document, and NOTHING ELSE.
+Do NOT wrap in ``` fences.
+Do NOT output '---' or multiple YAML documents.
+Do NOT include any markdown formatting (no **, *, backticks, headings, bullet prose).
+
+OUTPUT SHAPE (required):
+done: <true|false>
+effects:
+  - type: prompt
+    name: <snake_case>
+    template: <string>
+  - type: dynamic
+    name: <snake_case>
+    flow: chain
+    effects: [ ... ]
+  - type: use
+    name: <snake_case>
+    ref: <library_name>
+    inputs: { ... }
+
+HARD RULES:
+- The top-level YAML MUST be a dict with these keys: done, effects.
+- effects MUST be a YAML list.
+- Each effect MUST be a YAML dict containing at minimum:
+  - type (one of: prompt, dynamic, loop, if, use, tool)
+  - name (snake_case, letters/numbers/underscore only)
+  - AND the required fields for that type:
+    - prompt: template (non-empty string)
+    - dynamic: effects (a list), optional flow (chain|tree)
+    - loop: body (a list of effects), plus each or while
+    - if: if (condition), then (effects list)
+    - use: ref (library name) or path (filesystem) or inline (YAML template)
+    - tool: provider (plugin name)
+- NEVER emit alternative schemas such as:
+  - plan:
+  - plan: { effects: ... }
+  - step_1:
+  - id/action/description-only effects
+- NEVER include '*' characters outside of a YAML quoted string (single or double quotes).
+- Keep descriptions inside YAML strings only.
+
+=== LANGUAGE: SIMPLIFIED TECHNICAL ENGLISH ===
+Write the plan's step descriptions and every effect's `template` in
+Simplified Technical English (ASD-STE100 style). Small models and humans
+read this text next — short, imperative, unambiguous sentences carry
+further than free-register prose.
+- One instruction per sentence. Do not join two instructions with "and" or
+  "then" — write two sentences instead.
+- Active voice. Imperative mood for instructions: "Write the summary.",
+  not "The summary should be written."
+- Procedural sentences (instructions, steps): 20 words or fewer.
+- Descriptive sentences (facts, context): 25 words or fewer.
+- One meaning per word. Use the same word for the same thing every time —
+  never swap "step" for "phase" for "stage".
+- No noun cluster longer than 3 words. Write "the user login form", not
+  "the user account login authentication form".
+- No vague verbs. "handle", "manage", "process", and "deal with" name
+  nothing — name the actual action: "validate", "write", "delete", "send".
+- Do not drop articles: write "the file", "a question" — never "file" or
+  "question" alone as a noun phrase.
+These rules govern every `template` you generate, not just this prompt's
+own prose.
+
+CONTEXT:
+Goal:
+Summarize the project.
+
+Additional Context (may be empty):
+{
+  "adapter": "scripted",
+  "model": "test",
+  "plugins": []
+}
+
+TASK:
+Generate Circuitry effects to advance the Goal.
+- Keep the total number of top-level effects <= 8.
+- Prefer a small number of high-leverage effects.
+- Use prompts to ask for missing info or to produce artifacts.
+- Use dynamics to group related prompts.
+- Use `use` to invoke existing orchestrations by name.
+
+EXAMPLE (this is the exact style you must follow, in Simplified Technical
+English; do not copy the content literally):
+done: false
+effects:
+  - type: prompt
+    name: clarify_requirements
+    template: "Ask 3 short questions about the goal. Ask about the missing constraints."
+
+  - type: dynamic
+    name: draft_plan
+    flow: chain
+    effects:
+      - type: prompt
+        name: propose_architecture
+        template: "Propose a minimal architecture. List the key components."
+
+      - type: prompt
+        name: define_milestones
+        template: "List 3 milestones. Give one acceptance criterion for each milestone."
+
+  - type: prompt
+    name: summarize_next_actions
+    template: "Summarize the next actions. Write 5 bullets in one YAML string."
+
+END. Output YAML only.
+
+"##;
+
     #[test]
     fn renders_the_default_prime_byte_for_byte() {
         let fields: [(&str, Value); 3] = [
@@ -793,16 +915,7 @@ mod prime_tests {
             &fields,
         )
         .unwrap();
-        assert!(
-            rendered.starts_with("CRITICAL: The next system will parse your response as YAML.")
-        );
-        assert!(
-            rendered.contains("Goal:\nSummarize the project."),
-            "{rendered}"
-        );
-        assert!(rendered.contains("\"adapter\": \"scripted\""));
-        assert!(rendered.contains("<= 8."));
-        assert!(rendered.ends_with("\n\n"));
+        assert_eq!(rendered, EXPECTED_DEFAULT_PRIME);
     }
 
     #[test]
@@ -878,6 +991,68 @@ mod corpus_tests {
         }
     }
 
+    /// *v* with every `Dict` turned into its own entries, in order, as a
+    /// `Vec` -- so two trees that compare equal here compare equal under
+    /// [`Value`]'s own `==` *and* agree on every dict's own key order,
+    /// which `Value`'s `==` (`py_eq`, set equality) does not check on its
+    /// own. Parsed once from the corpus file's own JSON text through
+    /// [`electricity_json::load_json`] (whose `Dict` is an `IndexMap`,
+    /// insertion-ordered) rather than `serde_json` (whose default `Map`
+    /// sorts keys, discarding the file's own order before this test ever
+    /// sees it -- never add `serde_json`'s `preserve_order` feature to
+    /// recover it instead; see the crate-level docs on why).
+    #[derive(Debug, PartialEq)]
+    enum OrderedShape {
+        Leaf(Value),
+        List(Vec<OrderedShape>),
+        Dict(Vec<(String, OrderedShape)>),
+    }
+
+    /// *key*'s own text for [`ordered_shape`]/[`canonicalize_dict_keys`] --
+    /// the JSON text `json.dumps` would write for it (matching how the
+    /// corpus file's own JSON necessarily already stringified a non-str
+    /// key, e.g. the YAML int key `1`, by the time `serde_json`/
+    /// `electricity_json` read it back), falling back to a debug format
+    /// for the handful of types that aren't valid JSON keys at all
+    /// (`Bytes`/`Date`/`DateTime`/`List`/`Dict`), which can't reach here
+    /// from a real YAML-parsed plan's top-level mapping anyway.
+    fn key_text(k: &Value) -> String {
+        electricity_json::stringify_key(k).unwrap_or_else(|_| format!("{k:?}"))
+    }
+
+    fn ordered_shape(v: &Value) -> OrderedShape {
+        match v {
+            Value::List(items) => OrderedShape::List(items.iter().map(ordered_shape).collect()),
+            Value::Dict(d) => OrderedShape::Dict(
+                d.iter()
+                    .map(|(k, v)| (key_text(k), ordered_shape(v)))
+                    .collect(),
+            ),
+            other => OrderedShape::Leaf(other.clone()),
+        }
+    }
+
+    /// *v* with every `Dict` key turned into the `Value::Str` holding its
+    /// own [`key_text`] -- matching the string-keyed shape a corpus
+    /// case's own `parsed` field necessarily has, once it has gone
+    /// through the corpus file's JSON round trip (see [`key_text`]), so a
+    /// `parsed` value straight from a real YAML parse (which keeps a
+    /// non-string key's own type, e.g. `Value::Int`) compares equal to
+    /// it when the only difference is that lossless-vs-lossy round trip.
+    fn canonicalize_dict_keys(v: &Value) -> Value {
+        match v {
+            Value::List(items) => Value::List(items.iter().map(canonicalize_dict_keys).collect()),
+            Value::Dict(d) => {
+                let mut out = Dict::new();
+                for (k, v) in d.iter() {
+                    out.insert(Value::Str(key_text(k)), canonicalize_dict_keys(v));
+                }
+                Value::Dict(out)
+            }
+            other => other.clone(),
+        }
+    }
+
     #[test]
     fn matches_circuitrys_own_reflector_helpers() {
         let data = include_str!("../../tests/golden/reflector_corpus.json");
@@ -886,6 +1061,8 @@ mod corpus_tests {
             cases.len() > 20,
             "corpus should hold every documented category"
         );
+        let ordered_cases = electricity_json::load_json(data).unwrap();
+        let ordered_cases = ordered_cases.as_list().unwrap();
 
         let mut failures = Vec::new();
         for (i, case) in cases.iter().enumerate() {
@@ -910,9 +1087,25 @@ mod corpus_tests {
                                 serde_json::Value::Null => None,
                                 other => Some(json_to_value(other)),
                             };
-                            if done != expected_done || parsed != expected_parsed {
+                            // Canonicalized: the corpus file's own JSON
+                            // round trip already stringified any
+                            // non-string key the real parse keeps typed
+                            // (`key_text`'s own doc comment).
+                            let parsed_comparable = parsed.as_ref().map(canonicalize_dict_keys);
+                            if done != expected_done || parsed_comparable != expected_parsed {
                                 failures.push(format!(
-                                    "case {i} (extract_done): expected ({expected_done}, {expected_parsed:?}), got ({done}, {parsed:?})"
+                                    "case {i} (extract_done): expected ({expected_done}, {expected_parsed:?}), got ({done}, {parsed_comparable:?})"
+                                ));
+                            }
+                            let expected_parsed_ordered = ordered_cases[i]
+                                .as_dict()
+                                .and_then(|d| d.get(&Value::Str("parsed".to_string())))
+                                .filter(|v| !matches!(v, Value::None))
+                                .map(ordered_shape);
+                            let got_parsed_ordered = parsed.as_ref().map(ordered_shape);
+                            if got_parsed_ordered != expected_parsed_ordered {
+                                failures.push(format!(
+                                    "case {i} (extract_done): key order differs: expected {expected_parsed_ordered:?}, got {got_parsed_ordered:?}"
                                 ));
                             }
                         }
