@@ -265,6 +265,22 @@ def _end_events_by_path(events_text: str) -> dict[str, dict[str, Any]]:
     return out
 
 
+def _started_paths(events_text: str) -> set[str]:
+    """Every path with its own `start` event, from a raw `--events`
+    JSONL stream -- unlike `_end_events_by_path`, this also catches a
+    path a second signal killed outright, with no matching `end` event
+    at all, so a loop pass that merely never *finished* is not
+    mistaken for one that never *ran*."""
+    out: set[str] = set()
+    for line in events_text.splitlines():
+        if not line.strip():
+            continue
+        event = json.loads(line)
+        if event.get("ev") == "start":
+            out.add(event["path"])
+    return out
+
+
 def _without_volatile_values(value: Any) -> Any:
     """*value*, with every `_VOLATILE_KEYS` leaf collapsed to one shared
     placeholder (`None` kept as `None` -- see that set's own doc
@@ -555,15 +571,27 @@ def test_nested_finally_signal_does_not_cut_outer_cleanup_short(
 #: - `absorbed_followed`: same `on_error: continue`, but another effect
 #:   (`after`) follows `work` -- already correct on `main` on both
 #:   engines, kept here as a control: `after` must still never run.
+#: - `absorbed_skip`: the same as `absorbed_last`, but `work`'s own
+#:   `on_error` is `skip` rather than `continue` -- the same
+#:   degradation, the other spelling.
 #: - `unhandled`: `work` has no `on_error` (`fail`, the default) -- the
 #:   existing rule that an unmasked failure wins over a later signal
 #:   stays: exits 1, not 130/143/129, whether or not this fix changes
 #:   anything else.
-_LOST_INTERRUPT_ROWS = ("absorbed_last", "absorbed_followed", "unhandled")
+_LOST_INTERRUPT_ROWS = ("absorbed_last", "absorbed_followed", "absorbed_skip", "unhandled")
+#: `absorbed_skip`'s own `on_error`; every other row already has its own
+#: literal spelling inline in `_work_dynamic_lines`.
+_ROW_ON_ERROR = {"absorbed_skip": "skip"}
 #: Every placement issue #799 and its own fix must agree on: the
 #: document's own root effects, a `use` child's own root effects, and
 #: one pass of a named (chain-flow) loop's own body.
 _LOST_INTERRUPT_PLACEMENTS = ("top_level", "use_child", "loop_pass")
+#: *placement* -> how many effects actually run (`meta.completed_at`
+#: truthy) before every row's own shared `work`/`fails`/`cleanup` chain
+#: -- the same for every row, including `unhandled`: `after` (the
+#: `absorbed_followed` row's own extra sibling) never runs on any row,
+#: so it never adds to the count either.
+_LOST_INTERRUPT_EFFECTS_RUN = {"top_level": 4, "use_child": 5, "loop_pass": 5}
 
 
 def _work_dynamic_lines(row: str, *, indent: str) -> str:
@@ -572,7 +600,10 @@ def _work_dynamic_lines(row: str, *, indent: str) -> str:
     top-level `effects:`, a `use` child's own top-level `effects:`, or a
     `loop`'s own `body:`)."""
     field = indent + "  "
-    on_error = f"{field}on_error: continue\n" if row != "unhandled" else ""
+    if row == "unhandled":
+        on_error = ""
+    else:
+        on_error = f"{field}on_error: {_ROW_ON_ERROR.get(row, 'continue')}\n"
     lines = (
         f"{indent}- type: dynamic\n"
         f"{field}name: work\n"
@@ -698,14 +729,264 @@ def test_interrupt_during_finally_after_an_absorbed_failure_is_never_lost(
                 "cof" if ends is cof_ends else "electricity"
             ] / "after_ran").exists()
 
-    # `effects_run` agrees between the two engines either way (the
-    # per-path checks above already establish they agree on *which*
-    # effects ran).
-    cof_state = json.loads((cof_dir / "out.json").read_text(encoding="utf-8"))
-    elec_state = json.loads((elec_dir / "out.json").read_text(encoding="utf-8"))
-    assert _effects_run(cof_state) == _effects_run(elec_state), (
+    # The two engines agree on every event (#796's own normalized
+    # comparison, not just the per-path checks above).
+    cof_events_text = (cof_dir / "events.jsonl").read_text(encoding="utf-8")
+    elec_events_text = (elec_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert_events_equal(cof_events_text, elec_events_text)
+
+    # Each engine's own `effective_settings` echoes back its own
+    # absolute case directory -- see `test_interrupt_matches_across_
+    # engines`'s own identical substitution for why.
+    cof_text = (cof_dir / "out.json").read_text(encoding="utf-8").replace(
+        str(cof_dir), "<case>"
+    )
+    elec_text = (elec_dir / "out.json").read_text(encoding="utf-8").replace(
+        str(elec_dir), "<case>"
+    )
+    cof_state = json.loads(cof_text)
+    elec_state = json.loads(elec_text)
+    cof_run = _effects_run(cof_state)
+    assert cof_run == _effects_run(elec_state) == _LOST_INTERRUPT_EFFECTS_RUN[placement], (
         cof_state.get("runtime"), elec_state.get("runtime"),
     )
+    assert _without_volatile_values(cof_state) == _without_volatile_values(elec_state)
+
+
+#: A nested `work` (no `on_error` of its own: the existing #799 row-3
+#: rule already lets its own ordinary failure outrank the signal in its
+#: own `finally:`) sits inside a container whose *own* `on_error` is the
+#: thing that would otherwise swallow it: a `use`, a `dynamic` with no
+#: `finally:` of its own, and a loop (on a pass that is not its last).
+_ABSORBING_CONTAINER_CASES = ("use_continue", "dynamic_continue", "loop_break", "loop_continue")
+
+
+def _write_absorbing_container_case(case: str, case_dir: Path) -> None:
+    case_dir.mkdir(parents=True)
+    if case == "use_continue":
+        work = _work_dynamic_lines("unhandled", indent="  ")
+        (case_dir / "orchestration.yml").write_text(
+            "effects:\n  - type: use\n    name: wrap\n    path: child.yml\n"
+            "    on_error: continue\n",
+            encoding="utf-8",
+        )
+        (case_dir / "child.yml").write_text(f"effects:\n{work}", encoding="utf-8")
+    elif case == "dynamic_continue":
+        work = _work_dynamic_lines("unhandled", indent="      ")
+        doc = (
+            "effects:\n  - type: dynamic\n    name: wrap\n    on_error: continue\n"
+            f"    effects:\n{work}"
+        )
+        (case_dir / "orchestration.yml").write_text(doc, encoding="utf-8")
+    else:
+        assert case in ("loop_break", "loop_continue")
+        on_error = "break" if case == "loop_break" else "continue"
+        work = _work_dynamic_lines("unhandled", indent="      ")
+        doc = (
+            "interface:\n  inputs:\n    items: {default: [0, 1]}\n"
+            f"effects:\n  - type: loop\n    name: lp\n    on_error: {on_error}\n"
+            "    each: {in: input.items, as: x}\n    body:\n"
+            f"{work}"
+        )
+        (case_dir / "orchestration.yml").write_text(doc, encoding="utf-8")
+
+
+#: *case* -> `work`'s own path, and every container from `work` to the
+#: root, inclusive.
+_ABSORBING_CONTAINER_PATHS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "use_continue": ("prime.wrap.work", ("prime.wrap", "prime")),
+    "dynamic_continue": ("prime.wrap.work", ("prime.wrap", "prime")),
+    "loop_break": ("prime.lp.iter_0.work", ("prime.lp", "prime")),
+    "loop_continue": ("prime.lp.iter_0.work", ("prime.lp", "prime")),
+}
+
+
+@pytest.mark.parametrize("case", _ABSORBING_CONTAINER_CASES)
+def test_an_absorbing_containers_own_on_error_never_loses_a_signal_a_nested_effect_already_lost_to(
+    tmp_path: Path, electricity_binary: Path, case: str,
+) -> None:
+    """Issue #799's own rule applied one level further up: a container
+    whose own `on_error` is `continue`/`break` must not swallow a signal
+    along with a nested effect's already-settled, unrelated failure --
+    whether that container is a `use`, a `dynamic` with no `finally:` of
+    its own, or a loop pass that is not the loop's last.
+    """
+    env = _sandboxed_env(tmp_path)
+    results: dict[str, subprocess.CompletedProcess[str]] = {}
+    case_dirs: dict[str, Path] = {}
+    for engine in ENGINES:
+        case_dir = tmp_path / engine
+        _write_absorbing_container_case(case, case_dir)
+        case_dirs[engine] = case_dir
+        results[engine] = _run(engine, electricity_binary, case_dir, env)
+
+    cof_result, elec_result = results["cof"], results["electricity"]
+    assert cof_result.returncode == elec_result.returncode == 143, (
+        case, cof_result.stdout, cof_result.stderr, elec_result.stdout, elec_result.stderr,
+    )
+
+    cof_dir, elec_dir = case_dirs["cof"], case_dirs["electricity"]
+    work_path, containers = _ABSORBING_CONTAINER_PATHS[case]
+    for case_dir, result in ((cof_dir, cof_result), (elec_dir, elec_result)):
+        assert (case_dir / "cleanup_started").exists()
+        assert (case_dir / "out.json").exists()
+        summary = json.loads(result.stdout)
+        assert summary["ok"] is False
+        assert summary["error"] == "Interrupted (SIGTERM)", summary
+
+    cof_ends = _end_events_by_path((cof_dir / "events.jsonl").read_text(encoding="utf-8"))
+    elec_ends = _end_events_by_path((elec_dir / "events.jsonl").read_text(encoding="utf-8"))
+    for ends in (cof_ends, elec_ends):
+        assert ends[f"{work_path}.cleanup"]["ok"] is True, ends
+        # `work`'s own on_error is unset (`fail`), so its own failure
+        # still wins over the signal at its own level (#799's row 3) --
+        # only the container wrapping it is the thing that must not
+        # swallow it.
+        assert ends[work_path]["ok"] is False, ends
+        assert ends[work_path]["error"] != "Interrupted (SIGTERM)", ends
+        for container in containers:
+            # Every container's own `ok` must be `False` -- the
+            # intermediate one's own `error` text keeps whatever it
+            # already recorded for `work`'s own absorbed failure (#272's
+            # rule: an unrelated finally/absorption failure is a second
+            # note, never the thing that hides the original), the same
+            # way a `dynamic`'s own `meta.error` does; only the root's
+            # own `error` -- already checked above, via the run's own
+            # summary -- is always the interrupt's text.
+            assert ends[container]["ok"] is False, (container, ends)
+        assert ends["prime"]["error"] == "Interrupted (SIGTERM)", ends
+        if case in ("loop_break", "loop_continue"):
+            assert "prime.lp.iter_1.work" not in ends, (
+                "a loop must never run a later pass once a signal is "
+                "already pending from an earlier one", case, ends,
+            )
+            started = _started_paths(
+                (cof_dir if ends is cof_ends else elec_dir).joinpath(
+                    "events.jsonl"
+                ).read_text(encoding="utf-8")
+            )
+            assert "prime.lp.iter_1.work" not in started, (
+                "a loop must never even start a later pass once a signal "
+                "is already pending from an earlier one -- a second "
+                "self-inflicted signal from that pass re-running `work` "
+                "would otherwise exit the same way (143) and hide this",
+                case, started,
+            )
+
+    cof_events_text = (cof_dir / "events.jsonl").read_text(encoding="utf-8")
+    elec_events_text = (elec_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert_events_equal(cof_events_text, elec_events_text)
+
+    cof_text = (cof_dir / "out.json").read_text(encoding="utf-8").replace(str(cof_dir), "<case>")
+    elec_text = (elec_dir / "out.json").read_text(encoding="utf-8").replace(str(elec_dir), "<case>")
+    cof_state = json.loads(cof_text)
+    elec_state = json.loads(elec_text)
+    assert _effects_run(cof_state) == _effects_run(elec_state)
+    assert _without_volatile_values(cof_state) == _without_volatile_values(elec_state)
+
+
+_FAILING_CLEANUP_DOC = (
+    "effects:\n  - type: dynamic\n    name: work\n    on_error: continue\n"
+    "    effects:\n"
+    f"{_shell_step('fails', 'exit 3', indent='      ')}"
+    "    finally:\n"
+    f"{_shell_step('cleanup', 'touch cleanup_started; kill -TERM $PPID; sleep 1; exit 7', indent='      ')}"
+)
+
+
+def test_interrupt_during_finally_is_never_lost_even_when_the_cleanup_step_itself_then_fails(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """Issue #799's own `absorbed_last` row, with `cleanup` itself also
+    failing (an ordinary `exit 7`) right after sending the signal: the
+    run still ends interrupted, not with `cleanup`'s own ordinary
+    failure text, on both engines.
+    """
+    env = _sandboxed_env(tmp_path)
+    results: dict[str, subprocess.CompletedProcess[str]] = {}
+    case_dirs: dict[str, Path] = {}
+    for engine in ENGINES:
+        case_dir = tmp_path / engine
+        case_dir.mkdir()
+        (case_dir / "orchestration.yml").write_text(_FAILING_CLEANUP_DOC, encoding="utf-8")
+        case_dirs[engine] = case_dir
+        results[engine] = _run(engine, electricity_binary, case_dir, env)
+
+    cof_result, elec_result = results["cof"], results["electricity"]
+    assert cof_result.returncode == elec_result.returncode == 143, (
+        cof_result.stdout, cof_result.stderr, elec_result.stdout, elec_result.stderr,
+    )
+
+    cof_dir, elec_dir = case_dirs["cof"], case_dirs["electricity"]
+    for case_dir, result in ((cof_dir, cof_result), (elec_dir, elec_result)):
+        assert (case_dir / "cleanup_started").exists()
+        summary = json.loads(result.stdout)
+        assert summary["ok"] is False
+        assert summary["error"] == "Interrupted (SIGTERM)", summary
+
+    cof_ends = _end_events_by_path((cof_dir / "events.jsonl").read_text(encoding="utf-8"))
+    elec_ends = _end_events_by_path((elec_dir / "events.jsonl").read_text(encoding="utf-8"))
+    for ends in (cof_ends, elec_ends):
+        assert ends["prime"]["ok"] is False, ends
+        assert ends["prime"]["error"] == "Interrupted (SIGTERM)", ends
+
+    cof_events_text = (cof_dir / "events.jsonl").read_text(encoding="utf-8")
+    elec_events_text = (elec_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert_events_equal(cof_events_text, elec_events_text)
+
+
+_RETRIED_TOOL_DOC = (
+    "effects:\n  - type: tool\n    name: flaky\n    provider: shell\n"
+    "    on_error: continue\n    retries: {max_attempts: 3, backoff_ms: 10}\n"
+    "    params:\n      command: bash\n"
+    '      args: ["-c", "kill -TERM $PPID; exit 3"]\n'
+    '      allowed_commands: ["bash"]\n'
+)
+
+
+def test_a_tools_own_retries_never_lose_a_signal_that_arrives_mid_attempt(
+    tmp_path: Path, electricity_binary: Path,
+) -> None:
+    """A plain `tool` (no `dynamic`/`finally:` involved at all) whose own
+    `on_error: continue` and `retries:` would otherwise retry a failed
+    attempt: a signal landing during that very attempt must still end
+    the run interrupted, never quietly retried or absorbed as an
+    ordinary failure, on either engine.
+    """
+    env = _sandboxed_env(tmp_path)
+    results: dict[str, subprocess.CompletedProcess[str]] = {}
+    case_dirs: dict[str, Path] = {}
+    for engine in ENGINES:
+        case_dir = tmp_path / engine
+        case_dir.mkdir()
+        (case_dir / "orchestration.yml").write_text(_RETRIED_TOOL_DOC, encoding="utf-8")
+        case_dirs[engine] = case_dir
+        results[engine] = _run(engine, electricity_binary, case_dir, env)
+
+    cof_result, elec_result = results["cof"], results["electricity"]
+    assert cof_result.returncode == elec_result.returncode == 143, (
+        cof_result.stdout, cof_result.stderr, elec_result.stdout, elec_result.stderr,
+    )
+
+    cof_dir, elec_dir = case_dirs["cof"], case_dirs["electricity"]
+    for case_dir, result in ((cof_dir, cof_result), (elec_dir, elec_result)):
+        summary = json.loads(result.stdout)
+        assert summary["ok"] is False
+        assert summary["error"] == "Interrupted (SIGTERM)", summary
+
+    cof_ends = _end_events_by_path((cof_dir / "events.jsonl").read_text(encoding="utf-8"))
+    elec_ends = _end_events_by_path((elec_dir / "events.jsonl").read_text(encoding="utf-8"))
+    for ends in (cof_ends, elec_ends):
+        # The retried tool itself is killed mid-attempt, like a real
+        # signal landing on the main thread always leaves a leaf: no
+        # `end` event of its own, only the unpaired `start` (#796).
+        assert "prime.flaky" not in ends, ends
+        assert ends["prime"]["ok"] is False, ends
+        assert ends["prime"]["error"] == "Interrupted (SIGTERM)", ends
+
+    cof_events_text = (cof_dir / "events.jsonl").read_text(encoding="utf-8")
+    elec_events_text = (elec_dir / "events.jsonl").read_text(encoding="utf-8")
+    assert_events_equal(cof_events_text, elec_events_text)
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -719,7 +1000,7 @@ def test_interrupt_during_finally_after_absorbed_failure_resumes(
     `proceed` already on disk and skips the kill, and the whole run
     finishes normally, `ok: true`, exit 0.
     """
-    binary, _ = harness.resolve_electricity_binary()
+    binary = electricity_binary
     env = _sandboxed_env(tmp_path)
     case_dir = tmp_path / engine
     case_dir.mkdir()
