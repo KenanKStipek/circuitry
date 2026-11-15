@@ -46,8 +46,33 @@ iterated keys. A map is the only other iterable type here, and it isn't a
 `list`; the CEL spec only defines `+` between two lists (issue #783). `add` now requires the right-hand side to downcast to
 `DefaultList` too, raising the usual `UnsupportedBinaryOperator` error
 otherwise, same as every other `Adder` in this crate already does for a
-mismatched type. Nothing else in this copy differs from the published
-crate.
+mismatched type.
+
+### Nesting-depth bookkeeping for a consumer that counts from the AST
+
+Three constructs leave no trace of their own true nesting depth in the
+parsed tree: a grouping parenthesis (`(((1)))` parses to exactly the
+same tree as `1`), a prefix `!`/`-` run (collapsed to zero or one AST
+node by parity, regardless of the run's own length), and a macro's own
+target/arguments (woven into synthesized accumulator-loop boilerplate a
+consumer would otherwise have to walk, counting its own incidental
+depth instead of the argument's own). `common/ast/mod.rs`'s
+`SourceInfo` gained two side tables the parser's own visitor populates
+while it already has the information a later consumer would otherwise
+have lost: `nesting_override`/`add_nesting_override` (a grouping
+parenthesis, in `parser/parser.rs`'s `visit_Nested`; a prefix run's own
+full length, in `visit_LogicalNot`/`visit_Negate`; a single leading `-`
+that didn't merge into an adjacent numeric literal the way cof's own
+lexer would, via a new `record_unmerged_sign` helper called from
+`visit_Int`/`visit_Double`) and `macro_body_ids`/`set_macro_body_ids` (a
+macro's own original target and argument ids, keyed by its expansion's
+own result id, set once, generically, in `parser/macros.rs`'s
+`Macro::expand` -- every macro's single call site, built-in or custom).
+Neither table is read anywhere in this crate: `electricity-cel`'s own
+`nesting.rs` is the one consumer, matching `core/cel_eval.py`'s own
+depth count exactly for every construct (issue #778).
+
+Touched: `common/ast/mod.rs`, `parser/parser.rs`, `parser/macros.rs`.
 
 ## Keeping this in sync
 
@@ -55,4 +80,5 @@ If `cel` publishes a new version electricity wants, re-vendor by copying
 the new version's source over this directory (preserving this file,
 `LICENSE`, and the `indexmap` dependency) and re-applying the same
 source changes against the new version's `objects.rs`/
-`common/types/map.rs`/`src/lib.rs`/`common/types/list.rs`.
+`common/types/map.rs`/`src/lib.rs`/`common/types/list.rs`/
+`common/ast/mod.rs`/`parser/parser.rs`/`parser/macros.rs`.

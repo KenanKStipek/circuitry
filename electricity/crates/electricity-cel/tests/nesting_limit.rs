@@ -129,15 +129,14 @@ fn many_independent_list_elements_are_not_rejected_on_a_2mib_stack() {
     assert_not_rejected_for_nesting(&result);
 }
 
-/// A grouping parenthesis leaves no trace in `cel`'s own parsed tree
-/// (`nesting.rs`'s module docs), so a mix of grouping parens and some
-/// other construct is checked as two independent maxima, not one
-/// combined path -- a known, accepted imprecision for a shape this far
-/// outside anything an ordinary orchestration writes (module docs:
-/// this crate's own stack stays safe regardless, since both numbers
-/// individually have a wide margin under the real overflow floor).
+/// A grouping parenthesis around a chain adds to that chain's own
+/// depth rather than being checked separately from it (`nesting.rs`'s
+/// module docs): this expression nests `MAX_CEL_NESTING_DEPTH` parens
+/// around a chain already `MAX_CEL_NESTING_DEPTH` links deep, so its
+/// real depth is twice the limit, and it is refused the same way cof
+/// refuses it.
 #[test]
-fn a_paren_deep_expression_wrapping_a_chain_deep_one_still_evaluates_on_a_2mib_stack() {
+fn a_paren_deep_expression_wrapping_a_chain_deep_one_is_refused() {
     let expr = format!(
         "{}0{}{}",
         "(".repeat(MAX_CEL_NESTING_DEPTH),
@@ -146,5 +145,5 @@ fn a_paren_deep_expression_wrapping_a_chain_deep_one_still_evaluates_on_a_2mib_s
     );
     let result =
         run_on_2mib_stack(move || evaluate_condition(&expr, &Value::Dict(Dict::new()), false));
-    assert!(result.is_ok(), "expected Ok, got {result:?}");
+    assert_rejected_for_nesting(&result);
 }
