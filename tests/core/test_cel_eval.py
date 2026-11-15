@@ -1070,6 +1070,9 @@ class TestNestedTooDeeplyIsACheckError:
         "unary_neg": lambda n: ("- " * n) + "1",
         "chain_add": lambda n: "1" + " + 1" * n,
         "chain_relation": lambda n: "1" + " == 1" * n,
+        "ternary": lambda n: functools.reduce(
+            lambda s, _: f"true ? 1 : {s}", range(n), "0"
+        ),
     }
 
     @pytest.mark.parametrize("shape", sorted(_SHAPES))
@@ -1104,11 +1107,14 @@ class TestNestedTooDeeplyIsACheckError:
             validate_cel_syntax(expr, effect_path="prime.effects[0]")
         assert "nested too deeply" in str(excinfo.value)
 
-    def test_recursion_error_guard_in_compile_is_unreachable(self, monkeypatch):
+    def test_recursion_error_guard_reports_the_uniform_message(self, monkeypatch):
         """Simulates the walks after the depth check themselves overflowing
-        anyway -- proving _compile's own ``RecursionError`` guard (reached
-        only if that happened for real) still reports the same one line,
-        never a raw Python exception."""
+        anyway -- proving _compile's own ``RecursionError`` guard reports
+        the same one line, never a raw Python exception, if it is ever
+        reached. ``test_exactly_at_the_limit_is_accepted`` is the proof
+        that it isn't: every shape accepted at the limit evaluates
+        without error, so nothing admitted past this check can reach a
+        real ``RecursionError`` in the first place."""
         import circuitry.core.cel_eval as cel_eval_module
 
         def _raise(*_args, **_kwargs):

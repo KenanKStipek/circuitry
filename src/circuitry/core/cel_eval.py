@@ -1201,7 +1201,8 @@ _CACHE: dict[str, _Compiled] = {}
 #: on 3.10 and 3.11, failing during evaluation rather than at parse --
 #: every other shape's own floor is higher: parens/calls 55, an index
 #: chain 241, a method-call chain 299, a member-access chain 411, a
-#: logical or unary run 489). 32 sits well under that floor, with margin
+#: logical or unary run 489, an else-if ternary ladder 822). 32 sits
+#: well under that floor, with margin
 #: for a Python version this module has not been measured against yet
 #: and for however much of the budget the calling context (a `while`
 #: condition inside a `use` child, say) has already spent by the time an
@@ -1218,13 +1219,13 @@ MAX_CEL_NESTING_DEPTH = 32
 #: construct -- a binary arithmetic (``+ - * / %``), relational/equality
 #: (``< <= > >= == !=``) or ``in`` link for the first three, a ``&&``/
 #: ``||`` link for the last two -- with two (the left chain, recursed,
-#: and the right operand). Counted the same as the constructs the issue
-#: enumerates (parens, calls, literals, member/index/method links,
-#: logical and unary operators): every one of these recurses in the
-#: parsed tree exactly the same way, so a long chain of any of them can
-#: exhaust Python's recursion budget the same way a long accessor chain
-#: can, and the explicit limit would not be Python-independent if it
-#: left any of them uncounted.
+#: and the right operand). Counted the same as every other construct
+#: that nests (parens, calls, literals, member/index/method links,
+#: logical and unary operators, the ternary): every one of these
+#: recurses in the parsed tree exactly the same way, so a long chain of
+#: any of them can exhaust Python's recursion budget the same way a
+#: long accessor chain can, and the explicit limit would not be
+#: Python-independent if it left any of them uncounted.
 _CHAIN_RULES = frozenset(
     {"addition", "multiplication", "relation", "conditionaland", "conditionalor"}
 )
@@ -1255,11 +1256,18 @@ def _is_nesting_construct(node: lark.Tree) -> bool:
 
     ``unary`` is ``member | unary_not unary | unary_neg unary`` -- a
     pass-through to ``member`` with one child, or one prefix ``!``/``-``
-    link with two.
+    link with two. ``expr`` is ``conditionalor ["?" conditionalor ":"
+    expr]`` -- a pass-through with one child when there is no ``?:``, or
+    a ternary with three (the condition, the ``true`` branch, and the
+    ``false`` branch, itself an ``expr`` so an else-if ladder nests one
+    level deeper per link, on the right, the same way the chain rules
+    nest on the left).
     """
     data = str(node.data)
     if data == "unary" or data in _CHAIN_RULES:
         return len(node.children) == 2
+    if data == "expr":
+        return len(node.children) == 3
     return data in _ALWAYS_NESTS
 
 
