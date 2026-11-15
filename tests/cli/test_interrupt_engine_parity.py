@@ -857,8 +857,8 @@ def test_an_absorbing_containers_own_on_error_never_loses_a_signal_a_nested_effe
         assert ends["prime"]["error"] == "Interrupted (SIGTERM)", ends
         if case in ("loop_break", "loop_continue"):
             assert "prime.lp.iter_1.work" not in ends, (
-                "a loop must never run a later pass once a signal is "
-                "already pending from an earlier one", case, ends,
+                ("a loop must never run a later pass once a signal is "
+                 "already pending from an earlier one"), case, ends,
             )
             started = _started_paths(
                 (cof_dir if ends is cof_ends else elec_dir).joinpath(
@@ -866,10 +866,10 @@ def test_an_absorbing_containers_own_on_error_never_loses_a_signal_a_nested_effe
                 ).read_text(encoding="utf-8")
             )
             assert "prime.lp.iter_1.work" not in started, (
-                "a loop must never even start a later pass once a signal "
-                "is already pending from an earlier one -- a second "
-                "self-inflicted signal from that pass re-running `work` "
-                "would otherwise exit the same way (143) and hide this",
+                ("a loop must never even start a later pass once a signal "
+                 "is already pending from an earlier one -- a second "
+                 "self-inflicted signal from that pass re-running `work` "
+                 "would otherwise exit the same way (143) and hide this"),
                 case, started,
             )
 
@@ -969,7 +969,7 @@ def test_a_tools_own_retries_never_lose_a_signal_that_arrives_mid_attempt(
     )
 
     cof_dir, elec_dir = case_dirs["cof"], case_dirs["electricity"]
-    for case_dir, result in ((cof_dir, cof_result), (elec_dir, elec_result)):
+    for _case_dir, result in ((cof_dir, cof_result), (elec_dir, elec_result)):
         summary = json.loads(result.stdout)
         assert summary["ok"] is False
         assert summary["error"] == "Interrupted (SIGTERM)", summary
