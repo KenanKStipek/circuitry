@@ -1,0 +1,13 @@
+prime.plan_it.inner.propose_steps:
+  - text: |
+      effects:
+        - type: prompt
+          name: echo
+          template: "ok"
+      done: false
+    tokens_sent: 10
+    tokens_received: 20
+prime.plan_it.generated.iter_0.echo:
+  - text: "ok"
+    tokens_sent: 1
+    tokens_received: 2

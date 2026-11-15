@@ -7,7 +7,7 @@ effects:
     template: "Summarize the project."
   - type: reflector
     name: plan_it
-    prime_template: "Plan it. Goal: {goal}"
+    prime_template: "Plan it. Goal: {{goal}}"
     effects:
       - type: prompt
         name: propose_steps

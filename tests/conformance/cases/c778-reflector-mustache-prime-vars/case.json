@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778",
+  "description": "A custom prime_template using {{goal}}, {{context}} and {{max_effects}} -- Mustache, not str.format. The planner's own prompt_sent shows the interpolated values.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

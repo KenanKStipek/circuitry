@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #778",
+  "description": "A generated plan whose top-level keys are not in sorted order runs as the model wrote it: no YAML round trip reorders them. The generated child's own meta.orchestration_sha256 is the sha256 of the plan's canonical JSON text.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

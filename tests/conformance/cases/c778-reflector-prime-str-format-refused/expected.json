@@ -1,0 +1,3 @@
+{
+  "error": "prime.effects[1].prime_template: uses the str.format placeholder '{goal}'; write '{{goal}}' instead."
+}
