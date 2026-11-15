@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from functools import cache, lru_cache
 from pathlib import Path
@@ -91,10 +92,33 @@ def orchestration_schema() -> dict[str, Any]:
     return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def _describe_schema_error(err: Any) -> str:
-    """``<path>: <message>``, plus the deepest sub-error when there is one.
+#: `jsonschema.exceptions.ValidationError.json_path`'s own pattern for a
+#: property name plain enough to spell `.name` rather than `['name']`.
+_JSON_PATH_COMPATIBLE_PROPERTY_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
 
-    The path is spelled the way lint spells it (``effects[0].each``).
+
+def _error_where(err: Any) -> str:
+    """Where *err* occurred, the same way ``err.json_path`` renders it,
+    except a non-string mapping key (a float/bool/null YAML read as a key)
+    renders as its own text instead of crashing ``jsonschema``'s own
+    property, which assumes every path element is a string or an int.
+    """
+    path = "$"
+    for elem in err.absolute_path:
+        if isinstance(elem, int):
+            path += f"[{elem}]"
+        elif isinstance(elem, str) and _JSON_PATH_COMPATIBLE_PROPERTY_PATTERN.match(elem):
+            path += f".{elem}"
+        elif isinstance(elem, str):
+            escaped = elem.replace("\\", "\\\\").replace("'", r"\'")
+            path += f"['{escaped}']"
+        else:
+            path += f"[{elem!r}]"
+    return path.removeprefix("$").removeprefix(".") or "top level"
+
+
+def _error_message(err: Any) -> str:
+    """*err*'s own message, plus the deepest sub-error when there is one.
 
     ``EffectDef`` dispatches on ``type`` through nested if/then and several
     definitions use ``oneOf``, so the top-level message is often a bare "is
@@ -113,19 +137,28 @@ def _describe_schema_error(err: Any) -> str:
         sub = jsonschema.exceptions.best_match(err.context)
         if sub is not None and sub.message != err.message:
             message = f"{message} ({sub.message})"
-    where = err.json_path.removeprefix("$").removeprefix(".") or "top level"
-    return f"{where}: {message}"
+    return message
+
+
+def _describe_schema_error(err: Any) -> str:
+    """``<path>: <message>``. The path is spelled the way lint spells it
+    (``effects[0].each``)."""
+    return f"{_error_where(err)}: {_error_message(err)}"
 
 
 def schema_errors(orch: Any) -> list[str]:
-    """Every schema violation in *orch*; empty when it conforms."""
+    """Every schema violation in *orch*, sorted by (path, message) rather
+    than ``jsonschema``'s own ``str(err)`` — empty when it conforms. A
+    non-string mapping key anywhere in a violation's path never drops that
+    violation from the list (see :func:`_error_where`)."""
     import jsonschema  # type: ignore[import-untyped]
 
     validator = jsonschema.Draft7Validator(orchestration_schema())
-    return [
-        _describe_schema_error(err)
-        for err in sorted(validator.iter_errors(orch), key=str)
-    ]
+    errors = sorted(
+        validator.iter_errors(orch),
+        key=lambda err: (_error_where(err), _error_message(err)),
+    )
+    return [_describe_schema_error(err) for err in errors]
 
 
 @cache

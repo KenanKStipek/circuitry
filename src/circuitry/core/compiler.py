@@ -2189,6 +2189,13 @@ def _compile_prompt(
             f"Prompt '{name}': prompt_type '{prompt_type}' requires a 'schema' field."
         )
 
+    if schema is not None:
+        from .schema_corners import schema_well_formedness_error
+
+        malformed = schema_well_formedness_error(schema)
+        if malformed is not None:
+            raise ValueError(f"Prompt '{name}': schema is not a valid JSON Schema: {malformed}")
+
     # Model configuration
     model = effect.get("model")
     provider = effect.get("provider")
