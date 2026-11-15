@@ -3042,7 +3042,7 @@
         1
       ]
     ],
-    "message": null
+    "message": "[[1], [True], [1]] has non-unique elements"
   },
   {
     "name": "unique_items_a_big_int_equals_its_exact_float_counterpart",

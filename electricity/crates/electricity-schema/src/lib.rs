@@ -1022,6 +1022,19 @@ fn schema_well_formedness_error_impl(schema: &electricity_value::Value) -> Optio
     engine::clear_pattern_cache();
     engine::clear_fully_supported_cache();
 
+    if let Some(message) = engine::multiple_of_well_formedness_error(schema) {
+        return Some(message);
+    }
+
+    // Issue #778's own step 5: checked unconditionally, before the
+    // fully-supported branch below -- an ordinary `$ref` chain this
+    // engine fully understands never reaches this cap any other way,
+    // since `engine::evaluate` resolves it lazily with no chain-length
+    // limit of its own narrower than [`engine::MAX_RECURSION_DEPTH`].
+    if engine::ref_chain_depth_exceeds_cap(schema, schema) {
+        return Some(engine::ref_chain_error_message());
+    }
+
     if let Some(message) = engine::find_invalid_pattern(schema) {
         return Some(message);
     }
@@ -1048,8 +1061,6 @@ fn schema_well_formedness_error_impl(schema: &electricity_value::Value) -> Optio
             }
             _ => None,
         }
-    } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
-        Some("maximum recursion depth exceeded while calling a Python object".to_string())
     } else {
         let schema_json = value_to_json(schema);
         jsonschema::options()
@@ -1183,16 +1194,13 @@ fn validate_prompt_schema_impl(
         // reachable only through a *later* sibling (never visited by
         // that short-circuiting walk) still overflows the crate's own
         // eager, far-more-stack-hungry `$ref` resolution once it's deep
-        // enough -- a process abort with no state written at all, past
-        // roughly 30,000 hops even on this module's own dedicated,
-        // large-stack validation thread. Measured directly against the
-        // same cap [`engine::schema_is_fully_supported`]'s own walk
-        // already uses, so the verdict and text match the engine path's
-        // for the same chain length, and the crate is never even built
-        // on a schema already known to be this deep.
-        PromptSchemaCheck::SchemaError(
-            "maximum recursion depth exceeded while calling a Python object".to_string(),
-        )
+        // enough -- a process abort with no state written at all, well
+        // past [`engine::ref_chain_depth_exceeds_cap`]'s own cap, so
+        // the crate is never even built on a schema already known to be
+        // this deep (issue #778's own step 5: one shared message now,
+        // replacing the Python `RecursionError` text this used to
+        // reproduce).
+        PromptSchemaCheck::SchemaError(engine::ref_chain_error_message())
     } else {
         // The crate decides -- an unsupported keyword, or a pre-2020-12
         // draft (`DESIGN.md` §13 names both as accepted, narrower gaps
@@ -1436,8 +1444,7 @@ fn schema_errors_impl(
             }
         }
     } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
-        schema_error =
-            Some("maximum recursion depth exceeded while calling a Python object".to_string());
+        schema_error = Some(engine::ref_chain_error_message());
     } else {
         let schema_json = value_to_json(schema);
         match jsonschema::options()
@@ -1988,7 +1995,10 @@ fn is_json_path_compatible_property(segment: &str) -> bool {
 
 #[cfg(test)]
 mod prompt_schema_tests {
-    use super::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
+    use super::{
+        PromptSchemaCheck, engine, schema_well_formedness_error, validate_prompt_schema,
+        value_from_json,
+    };
     use serde_json::json;
 
     fn check(schema: serde_json::Value, instance: serde_json::Value) -> PromptSchemaCheck {
@@ -2202,6 +2212,34 @@ mod prompt_schema_tests {
             check(schema, json!("anything")),
             PromptSchemaCheck::SchemaError(_)
         ));
+    }
+
+    /// Issue #778's own step 5: `schema_well_formedness_error` (the
+    /// compile-time check `electricity-compiler::compile_prompt` runs
+    /// for a `prompt` effect's own `schema:`) catches a `$ref` chain
+    /// past the cap even when the schema is otherwise fully supported
+    /// (a plain `$defs`/`$ref` chain, no crate-only keyword) -- unlike
+    /// `validate_prompt_schema` itself, whose own fully-supported path
+    /// has no narrower limit than `engine::MAX_RECURSION_DEPTH`
+    /// (`ref_chain_stack_safety.rs`'s own
+    /// `a_1000_hop_ref_chain_is_accepted_on_a_2mib_caller_stack`): a
+    /// document this long is refused before it ever compiles, so that
+    /// wider limit never has to apply to it at all.
+    #[test]
+    fn well_formedness_error_catches_a_long_ref_chain_even_when_fully_supported() {
+        let mut defs = serde_json::Map::new();
+        for i in 0..1000usize {
+            defs.insert(
+                format!("L{i}"),
+                json!({"$ref": format!("#/$defs/L{}", i + 1)}),
+            );
+        }
+        defs.insert("L1000".to_string(), json!({"type": "string"}));
+        let schema = value_from_json(&json!({"$defs": defs, "$ref": "#/$defs/L0"}));
+        assert_eq!(
+            schema_well_formedness_error(&schema),
+            Some(engine::ref_chain_error_message())
+        );
     }
 }
 

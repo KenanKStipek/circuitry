@@ -146,15 +146,14 @@ def ref_chain_depth_exceeds_cap(schema: Any, *, limit: int = MAX_REF_CHAIN_HOPS)
             ref = node.get("$ref")
             if isinstance(ref, str) and _is_same_document_pointer(ref):
                 target = _resolve_same_document_ref(schema, ref)
-                if isinstance(target, (Mapping, list)):
-                    target_id = id(target)
-                    if target_id in ref_run_active:
-                        result = max(result, limit)
-                    else:
-                        result = max(
-                            result,
-                            longest(target, ref_hops + 1, ref_run_active | {node_id}),
-                        )
+                target_id = id(target)
+                if target_id in ref_run_active:
+                    result = max(result, limit)
+                else:
+                    result = max(
+                        result,
+                        longest(target, ref_hops + 1, ref_run_active | {node_id}),
+                    )
             for key, value in node.items():
                 if key == "$ref" or key in _NON_SCHEMA_STRUCTURAL_KEYS:
                     continue

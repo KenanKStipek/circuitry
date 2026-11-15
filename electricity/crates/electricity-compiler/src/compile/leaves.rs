@@ -352,6 +352,21 @@ pub(crate) fn compile_prompt(
         )));
     }
 
+    // `core/compiler.py::_compile_prompt`'s own well-formedness check
+    // (issue #778's own step 5): a `multipleOf` that isn't a number
+    // greater than zero, or a `$ref` chain past
+    // `electricity_schema::engine::MAX_REF_CHAIN_HOPS`, refuses the
+    // compile here too, with the same message, rather than reaching
+    // `validate_prompt_schema` at run time with a schema already known
+    // to be malformed.
+    if let Some(schema_value) = &schema {
+        if let Some(message) = electricity_schema::schema_well_formedness_error(schema_value) {
+            return Err(CompileError(format!(
+                "Prompt '{name}': schema is not a valid JSON Schema: {message}"
+            )));
+        }
+    }
+
     // Known divergence from `core/compiler.py`'s own
     // `PromptDefinition.template`/`.messages`, documented in
     // `electricity-bytecode`'s own crate docs: a document setting both

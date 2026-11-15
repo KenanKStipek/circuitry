@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """Generate electricity-schema's `validate_prompt_schema` golden corpus from
-Python's own ``jsonschema.validate`` (issue #498 ruling 6, tightened by PR
-#502's review, ruling 2).
+``core/prompt.py::PromptRuntime._validate_schema``'s own behavior (issue
+#498 ruling 6, tightened by PR #502's review, ruling 2; issue #778's own
+step 5).
 
-``core/prompt.py::PromptRuntime._validate_schema`` calls
-``jsonschema.validate(value, schema)``, which raises
+``_validate_schema`` builds a validator through
+``core.schema_corners.extended_validator`` (its own ``uniqueItems``
+keyword compares every pair, rather than ``jsonschema``'s own
+sort-then-compare-neighbours) and raises
 ``jsonschema.exceptions.best_match(validator.iter_errors(instance))`` on a
 mismatch -- so this corpus records, for each hand-written schema/instance
 pair, exactly the ``.message`` that call raises (or ``None`` for a pair that
@@ -12,10 +15,10 @@ validates). The Rust side (``electricity-schema``'s own
 ``validate_prompt_schema``) replays every pair and asserts its own message
 is identical.
 
-Must be run with ``jsonschema`` installed in the active interpreter (the
-lane venv locally; CI pins the version in ``generator-constraints.txt``, so
-a fresh install there is this same version). Usage:
-``python3 generate_prompt_schema_corpus.py [--check]``
+Must be run with the lane's own ``circuitry`` and ``jsonschema`` installed
+in the active interpreter (the lane venv locally; CI pins the ``jsonschema``
+version in ``generator-constraints.txt``, so a fresh install there is this
+same version). Usage: ``python3 generate_prompt_schema_corpus.py [--check]``
 """
 
 from __future__ import annotations
@@ -26,6 +29,8 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
+
+from circuitry.core.schema_corners import extended_validator
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -38,11 +43,9 @@ OUTPUT = (
 
 
 def _case(name: str, schema: dict, instance: Any) -> dict:
-    try:
-        jsonschema.validate(instance, schema)
-        message = None
-    except jsonschema.ValidationError as e:
-        message = e.message
+    validator = extended_validator(schema)
+    error = jsonschema.exceptions.best_match(validator.iter_errors(instance))
+    message = error.message if error is not None else None
     return {"name": name, "schema": schema, "instance": instance, "message": message}
 
 

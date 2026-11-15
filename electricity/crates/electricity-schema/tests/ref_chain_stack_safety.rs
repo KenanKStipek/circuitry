@@ -19,8 +19,19 @@
 //! A pure 1000-hop chain is Python's own accepted case (`cof` itself
 //! accepts it; Python's `RecursionError` starts somewhere between 1000
 //! and 2000 hops -- a documented threshold difference, `DESIGN.md`
-//! §13) and must stay `Valid` here too. 3000/4096/4097/10000 must never
-//! crash regardless of verdict.
+//! §13) and must stay `Valid` here too -- `validate_prompt_schema`'s
+//! own fully-supported path resolves an ordinary `$ref` chain lazily,
+//! with no narrower limit than `engine::MAX_RECURSION_DEPTH` of its
+//! own; issue #778's own step 5 added a narrower, explicit cap
+//! (`engine::MAX_REF_CHAIN_HOPS`, 200) only at the schema *well-
+//! formedness* check both engines run before this -- `cof`'s own
+//! compiler, and `electricity-compiler::compile_prompt` for a `prompt`
+//! effect's own `schema:` -- so a document whose `schema:` chains this
+//! long is refused before ever reaching this function with a real
+//! instance; this file is about `validate_prompt_schema` staying safe
+//! on an already-compiled schema regardless of chain length, a
+//! narrower, still-necessary guarantee this cap doesn't replace.
+//! 3000/4096/4097/10000 must never crash regardless of verdict.
 
 use electricity_schema::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
 use serde_json::json;
@@ -158,9 +169,13 @@ fn a_combined_deep_shape_with_several_ref_hops_per_level_is_accepted() {
     );
 }
 
+/// 198 hops, not 1000: this chain's own total hop count (`n + 1`,
+/// `crate_path_long_ref_chain.rs`'s own convention) must stay under
+/// the 200-hop cap so the `unevaluatedProperties` terminal -- not the
+/// cap -- is what this test exercises.
 #[test]
 fn a_ref_chain_ending_in_a_crate_only_construct_rejects_cleanly() {
-    let (schema, instance) = ref_chain_ending_in_crate_only_construct(1000);
+    let (schema, instance) = ref_chain_ending_in_crate_only_construct(198);
     match check_on_a_2mib_caller_stack(schema, instance) {
         PromptSchemaCheck::Invalid(_) => {}
         other => panic!("expected Invalid, got {other:?}"),
@@ -169,7 +184,7 @@ fn a_ref_chain_ending_in_a_crate_only_construct_rejects_cleanly() {
 
 #[test]
 fn a_ref_chain_ending_in_a_crate_only_construct_accepts_a_clean_instance() {
-    let (schema, _) = ref_chain_ending_in_crate_only_construct(1000);
+    let (schema, _) = ref_chain_ending_in_crate_only_construct(198);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, json!({})),
         PromptSchemaCheck::Valid

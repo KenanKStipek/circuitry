@@ -5,16 +5,20 @@
 //! pure hop chain uses) and to measure chains no real validator ever
 //! resolves (an unreferenced `$defs` entry, or a `"$ref"`-looking key
 //! sitting inside literal `const`/`enum`/`examples`/`default` data).
-//! Both are fixed here: only an actual `$ref` hop counts toward
-//! [`MAX_RECURSION_DEPTH`] (structural nesting gets its own, much
-//! larger budget), and a chain is only ever found by actually
-//! resolving a `$ref`, never by blindly walking `$defs`/`definitions`
-//! or a literal-data keyword's own value.
+//! Both stay fixed here: an ordinary structural edge (`properties`,
+//! `items`, ...) resets the running consecutive-`$ref` count to zero
+//! rather than merely counting toward a larger budget (issue #778's
+//! own step 5 -- a hop reached only by actually crossing a structural
+//! key moves to a different instance location, the same reason a
+//! recursive tree/linked-list schema stays finite for any real
+//! instance), and a chain is only ever found by actually resolving a
+//! `$ref`, never by blindly walking `$defs`/`definitions` or a
+//! literal-data keyword's own value.
 
 use electricity_schema::{PromptSchemaCheck, validate_prompt_schema};
 use electricity_value::Value;
 
-const RECURSION_ERROR_TEXT: &str = "maximum recursion depth exceeded while calling a Python object";
+const REF_CHAIN_ERROR_TEXT: &str = "$ref chain is too long (limit 200 consecutive references)";
 
 fn defs_chain_json(n: usize) -> String {
     let mut out = String::from("{");
@@ -30,9 +34,9 @@ fn defs_chain_json(n: usize) -> String {
 /// runs on) -- the same convention `crate_path_long_ref_chain.rs`
 /// uses. The chain itself has `n + 1` total `$ref` hops: the schema's
 /// own top-level `$ref` into `$defs.L0`, plus `n` more hops from
-/// [`defs_chain_json`]'s own `L0 -> L1 -> ... -> Ln` -- `n = 4094`
-/// is exactly [`engine::MAX_RECURSION_DEPTH`]'s own last accepted
-/// total (4095 hops), `n = 4095` its first rejected one (4096).
+/// [`defs_chain_json`]'s own `L0 -> L1 -> ... -> Ln` -- `n = 198`
+/// is exactly [`engine::MAX_REF_CHAIN_HOPS`]'s own last accepted
+/// total (199 hops), `n = 199` its first rejected one (200).
 fn crate_path_chain(n: usize) -> (Value, Value) {
     let schema = format!(
         "{{\"unevaluatedProperties\": false, \"$ref\": \"#/$defs/L0\", \"$defs\": {}}}",
@@ -45,8 +49,8 @@ fn crate_path_chain(n: usize) -> (Value, Value) {
 }
 
 #[test]
-fn a_4095_total_hop_chain_is_accepted_on_the_crate_path() {
-    let (schema, instance) = crate_path_chain(4094);
+fn a_199_total_hop_chain_is_accepted_on_the_crate_path() {
+    let (schema, instance) = crate_path_chain(198);
     assert_eq!(
         validate_prompt_schema(&schema, &instance),
         PromptSchemaCheck::Valid
@@ -54,21 +58,21 @@ fn a_4095_total_hop_chain_is_accepted_on_the_crate_path() {
 }
 
 #[test]
-fn a_4096_total_hop_chain_reports_the_recursion_cap_on_the_crate_path() {
-    let (schema, instance) = crate_path_chain(4095);
+fn a_200_total_hop_chain_reports_the_cap_on_the_crate_path() {
+    let (schema, instance) = crate_path_chain(199);
     assert_eq!(
         validate_prompt_schema(&schema, &instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
-/// The same total hop count as the accepted case above (4095), but
-/// every hop now sits three structural levels deep
+/// A chain whose every hop sits three structural levels deep
 /// (`properties.x.$ref`) rather than at the top of each `$defs`
-/// entry -- active-path-length-based accounting used to count
-/// structural nesting against the same cap a `$ref` hop uses, tripping
-/// at around 1,365 hops here (`4096 / 3`) long before the real hop
-/// count ever did.
+/// entry: structural descent resets the consecutive-`$ref` count, so
+/// every lap of this one starts over at zero, well under the cap no
+/// matter how many laps -- unlike the version of this walk that used
+/// to count structural nesting against the same cap a `$ref` hop
+/// uses, which tripped early on a chain shaped this way.
 #[test]
 fn a_ref_chain_nested_under_properties_x_is_not_capped_early() {
     let n = 4094usize;
