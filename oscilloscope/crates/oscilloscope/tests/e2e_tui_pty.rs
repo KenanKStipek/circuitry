@@ -21,11 +21,12 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use support::{
-    ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
-    drain_continuously, e2e_electricity_enabled, e2e_enabled, open_pty, osi_command, screen_grid,
-    screen_grid_fg, scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env,
-    wait_for_screen, wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts,
-    wait_for_step_start, wait_with_timeout, write_doc,
+    AutoKill, ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome,
+    assert_no_leftover_process, drain_continuously, e2e_electricity_enabled, e2e_enabled,
+    engine_pid_for_doc, open_pty, osi_command, screen_grid, screen_grid_fg, scripted_config,
+    send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen, wait_for_screen_text,
+    wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
+    write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -571,11 +572,11 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     let doc_arg = doc.as_os_str();
     let config_arg = config.as_os_str();
     let out_dir_arg = out_dir.path().as_os_str();
-    let child = spawn_osi_on_pty(
+    let mut child = AutoKill::new(spawn_osi_on_pty(
         &home,
         &slave_path,
         &[doc_arg, config_arg, OsStr::new("--out-dir"), out_dir_arg],
-    );
+    ));
 
     wait_for_pattern(&captured_buf, b"\x1b[?1049h", Duration::from_secs(20));
     wait_for_step_start(
@@ -616,6 +617,10 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
         entry["launcher"].as_str().unwrap(),
         format!("osi {}", env!("CARGO_PKG_VERSION"))
     );
+    // So this test's own cleanup can kill the engine directly, by its
+    // own pid, if `AutoKill`'s drop ever has to fall back to killing
+    // the launcher outright.
+    child.set_engine_pid(engine_pid_for_doc(&runs_dir, out_dir.path()));
 
     // Bare `osi`, without a TTY, lists this same run while it's
     // still live -- the content check the registry entry's own
@@ -677,7 +682,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     // plan to assert on it.
     wait_for_pattern(&captured_buf, b"Ended", Duration::from_secs(10));
     send_bytes(&mut master, b"q");
-    let status = wait_with_timeout(child, Duration::from_secs(30));
+    let status = wait_with_timeout(child.into_inner(), Duration::from_secs(30));
     assert!(status.success(), "osi should exit 0, got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));
