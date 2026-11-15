@@ -10,14 +10,13 @@ processing. A terminal UI comes first; a GUI can reuse the same core later.
 CYBERDINER_TOKEN=... osi do-thing.yml config.json
 ```
 
-**This is a preview.** Milestone O-1 (issue #424) filled in the core: `osi
-<orchestration>` launches and supervises `cof` or `electricity` and exits
-with the engine's own exit code; `osi watch <dir>` attaches to a run `osi`
-didn't start. Milestone O-2 (issue #434) adds the terminal UI below.
-electricity's own run path, `--events` and `--live-state` give
-`--engine electricity` the same live view `cof` does for the content it
-runs — see [`electricity/README.md`](../electricity/README.md)'s preview
-section for exactly what runs today. Anything it doesn't support yet is
+**This is a preview.** `osi <orchestration>` launches and supervises `cof`
+or `electricity` and exits with the engine's own exit code; `osi watch
+<dir>` attaches to a run `osi` didn't start. Both launch forms show the
+same terminal UI below. electricity's own run path, `--events` and
+`--live-state` give `--engine electricity` the same live view `cof` does
+for the content it runs — see [`electricity/README.md`](../electricity/README.md)'s
+preview section for exactly what runs today. Anything it doesn't support yet is
 refused up front, with a message naming the preview marker, before any
 state is written. See [`DESIGN.md`](DESIGN.md) §4.2.
 
@@ -29,10 +28,10 @@ osi watch ./run
 osi watch ./run --plan do-thing.yml --config config.json -e key=value
 ```
 
-`--label TEXT` (issue #752) passes literal text through to whichever engine
+`--label TEXT` passes literal text through to whichever engine
 runs the document, overriding its own `label:` template; `osi watch` has no
 `--label` of its own, since it never launches anything. Wherever osi shows a
-run's own generated name (issue #717's `amber-falcon`) -- the header, Select,
+run's own generated name (`amber-falcon`) -- the header, Select,
 Recent Runs, All's tile bands, the Combined Signal's legend and Per Run
 table, `--log` and the exit summary -- a labelled run shows its label
 instead, cleaned the same way both engines already clean it before writing
@@ -56,16 +55,16 @@ own `run_start`/state, which such an engine never writes it into.
   from the document uses the same `config.json`/`-e` pair passed on the
   command line (`electricity::check_options`, the exact options a real
   `electricity <config> <doc> -e k=v...` run would check it against). With
-  no `config.json` given here either, osi now mirrors `cof`'s own
+  no `config.json` given here either, osi mirrors `cof`'s own
   discovery for the plan too: `CIRCUITRY_CONFIG`, if set, replaces
   discovery entirely (the same precedence `cof run` itself uses);
   otherwise the global config (`~/.config/circuitry/config.json`) and a
   *trusted* project `circuitry.config.json`/`config.json` found in osi's
   own working directory are deep-merged the same way `cof run` layers
   them (`cof trust` still governs whether a discovered project config
-  applies at all). A document whose plan depends on a
-  `group:`/`concurrency_groups` defined only there no longer falls back
-  to no plan. `CIRCUITRY_*` per-setting environment overlays
+  applies at all), so a document whose plan depends on a
+  `group:`/`concurrency_groups` defined only there still compiles a plan.
+  `CIRCUITRY_*` per-setting environment overlays
   (`CIRCUITRY_MODEL`, `CIRCUITRY_ADAPTER`, ...) still apply on top once
   there's a file for them to layer onto, the same as `cof run`. An
   explicit `config.json` given here already wins over all of the above,
@@ -73,16 +72,20 @@ own `run_start`/state, which such an engine never writes it into.
   `--config`/`-e` for the same reason, independent of whatever the
   watched run itself was started with, and gets the same discovery with
   neither.
-- `--engine electricity` needs a config (electricity has no config
-  discovery yet). For a document outside electricity's current scope, it
-  shows electricity's own preview-marker refusal and exit code, the same
-  way osi shows any other pre-execution failure.
+- `--engine electricity` still needs a config on this command line: osi
+  launches it with the legacy `electricity <config.json> <orchestration.yml>`
+  form, which always takes its config as an explicit argument, rather than
+  the `electricity run` subcommand, which has the same config discovery as
+  `cof run` -- see [`electricity/README.md`](../electricity/README.md).
+  For a document outside electricity's current scope, it shows electricity's
+  own preview-marker refusal and exit code, the same way osi shows any other
+  pre-execution failure.
 - Run files (`state.live.json`, `state.json`, `events.jsonl`, `stdout.txt`,
   `stderr.txt`) go to a fresh temporary directory by default, printed when
   the run ends; `--out-dir DIR` keeps them in a chosen directory instead —
   the same layout `osi watch` reads.
-- `cof run --events` (issue #419) is detected from `cof run --help`, and
-  electricity's own `--events`/`--live-state` (issue #431) the same way from
+- `cof run --events` is detected from `cof run --help`, and
+  electricity's own `--events`/`--live-state` the same way from
   `electricity --help`; without them `osi` falls back to `--live-state`/
   `--out` alone, state-only (DESIGN.md §2's "From state alone" rules).
 - `osi watch <dir>` on a run with no `--events` stream has no engine pid to
@@ -215,7 +218,7 @@ does, and shows one of three screens:
 Keys: `↑↓`/`j k`/`Home End`/`g G` move the cursor (kept across every
 attach and `esc` back, not reset to the first run each time), `enter`
 attaches (or opens, on the empty screen), `T` cycles the colour theme
-(issue #714: the same one value every other screen shares, surviving
+(the same one value every other screen shares, surviving
 an attach and `esc` back), `?` shows Select's own Help (which lists `c`
 as inert here), `q` quits at once -- leaving Select, or an attached run,
 only ever stops watching, never cancels anything, so there is nothing to
@@ -321,8 +324,7 @@ that screen's own keys; and a Totals row (tokens sent/received and
 the total, the run's own deviation from its usual tokens once
 history has one, effects done of planned, the ETA and the run's own
 cost). `osi watch` names the document from the run's own
-`runtime.last_run.orchestration_path`, its own file name alone (issue
-#714: `--plan /path/to/ticket.yml` once showed the whole path; two
+`runtime.last_run.orchestration_path`, its own file name alone (two
 runs on the same file name are already told apart by the parent
 directory on Select and All).
 
@@ -335,7 +337,7 @@ in one of ten named colour themes (`dracula`, `nord`, `solarized-
 dark`/`-light`, `gruvbox-dark`/`-light`, `catppuccin-mocha`/`-latte`,
 `tokyo-night`, `one-dark`) instead of the terminal's own default
 colours; `T` cycles through them live, on every screen osi draws
-(issue #714: a single run's own four screens, Select, All, the
+(a single run's own four screens, Select, All, the
 Combined Signal and the full-screen step), sharing one theme across
 an attach, never persisted past this one session. `--no-animation`
 turns the scope icon's own trace off, on both `osi <doc>` and
@@ -538,7 +540,7 @@ it while Signal is on screen.
 
 ### Screen 2 (`flow`): the rail, as control flow
 
-The rail (issue #691, design v1 part 3) runs left to right instead of
+The rail runs left to right instead of
 top to bottom: a station per step, plan order, forking into lanes at a
 decision or a loop and rejoining. Each station is three lines (name,
 headline, detail) -- a finished tool's own command and duration, a
@@ -720,7 +722,7 @@ An area diagram of filled tiles, one per store (a leaf step) that has
 used tokens so far, drawn self-contained the same way the Tape, the
 Signal and the Flow are: a decision, loop, `dynamic` or `use` step is
 always a container, a darker surface holding its own children's
-tiles (in the `terminal` theme, issue #714: a leaf tile fills with
+tiles (in the `terminal` theme a leaf tile fills with
 bright black instead, and a container marks its own bounds with a
 guide line along its left edge, since no second ANSI colour reads as
 a safe fill against every terminal's own background); a loop pass
@@ -861,6 +863,6 @@ oscilloscope/
 
 ## Read more
 
-- [`DESIGN.md`](DESIGN.md) — the full design, moved from issue #418:
-  measurements of what `cof`'s live state and a new `--events` stream show,
-  the inference rules, engine launching, architecture and milestones.
+- [`DESIGN.md`](DESIGN.md) — the full design: measurements of what
+  `cof`'s live state and a new `--events` stream show, the inference
+  rules, engine launching, architecture and milestones.

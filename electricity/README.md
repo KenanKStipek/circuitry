@@ -7,89 +7,104 @@ to an internal bytecode and execute it, producing the same final state as
 tool — schema checking, linting, the wizard, document generation; electricity
 is the production runner.
 
-**This is a preview.** `electricity run <orchestration.yml>` -- cof's own `run` option names
-(`-e`, `--config`, `--out`, `--live-state`, `--events`, `--allow-capabilities`, `--adapter`,
-`--label`, `--quiet`), with the same config discovery as `cof run` when `--config` is omitted
-(`CIRCUITRY_CONFIG`, a trusted project config in the working directory, the global config); the
-legacy `electricity <config.json> <orchestration.yml>` form (config always explicit) keeps
-working as an alias -- runs
-documents built from `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
-`prompt` and `reflector` effects and `finally:` blocks, with the `json`,
-`shell`, `awk`, `imagemagick`, `ffmpeg`, `fs`, `env_vars`, `hash`, `uuid`,
-`clock`, `regex`, `http`, `validate_yaml`, `cel`, `gh`, `systemone`, `service` and `agent` tool
-providers, aiming at the same final state, `--live-state` and `--events` output as `cof run`.
-`runtime.secrets.<name>` (the Keychain, a command or an environment
-variable) and a document's own `{secret: <name>}` resolve at dispatch, in
-an `http` effect's `params.headers` or a subprocess tool's host `env`,
-the same way as `cof run` -- only a document run by path may name one,
-and the value never reaches state, events, logs or an error; an echo of
-it is replaced with `[secret:<name>]`. `http`'s own `save_to` writes a
-2xx body to a file as raw bytes, with `within`, `overwrite` and
-`max_bytes`. A top-level `prompts:` map and `{{> name}}` composition run too, in every
-field that reaches them (a tool's `prompt`/`params`/`params_json`, a
-`use`'s `inputs`/`inline`, a `yield`'s `template`, a `prompt`'s own
-`template`/`messages`). A `prompt` effect runs for real against a
-document's own top-level `adapter:`/a prompt's own `provider:` (native
-Ollama, the OpenAI-compatible family, `openai`, `anthropic`, `replicate`,
-`watsonx`, `cyberdiner`, `claude_code`, `pi`, and the `scripted` adapter,
-or the config's own `default_adapter` when a prompt names none) with its
-preflight check run for real too -- `litellm` is the only Circuitry-known
-adapter name with no electricity builder, and stays refused permanently
-(it embeds the Python `litellm` package, which electricity neither embeds
-nor reimplements), as does a `reflector`'s own generated plan naming it.
-Model-mode `if`/`while` conditions and `expect:` run too. While a `shell`, `awk`, `imagemagick`, `ffmpeg` or `gh` step is running, its node carries a
-`meta.live` snapshot of its output so far (the last 20 lines of each of stdout/stderr, at most 4
-KiB each, published at most once a second) -- removed again once the step finishes, so the final
-state is unaffected. An `agent` effect's `meta.live` is its own richer summary (turns, tool calls,
-tokens, the current tool, ...) instead, matching `cof run`'s own shape for the same tool. `--profile
-<path>` loads a profile (adapter/model/inputs/persistence overrides,
-routing pins and provider denials) from an explicit path -- no name
-discovery. `runtime.complexity` scoring, model routing and decomposition (splitting
-an over-threshold prompt into chunks, planned and executed as its own
-isolated child run) all run too, writing `meta.complexity`/
-`meta.decomposition` the same way `cof run` does -- including the size
-trigger (a prompt's rendered input over its own token budget, sliced
-deterministically into whole-unit parts and run the same way). `--state
-<path>`/`-s` resumes a run from a saved state file (every top-level key,
-not just `input`) the same way `cof run --state` does; combined with
-`--resume`, a named effect whose saved node already finished without
-error is skipped and reused -- a named loop resumes at its first
-unfinished pass, a named `if` continues inside the branch its saved node
-took when its condition selects that branch again, a `use` with
-`runtime.state.record_children` continues inside its child when the
-saved record's own digest and inputs still match, and `finally:` always
-reruns. A document that changed since the saved run is refused unless
-`--force`. A state file either engine wrote resumes on the other.
-`--resume last` resolves through the same `--last` stash both
-`cof run --last` and `electricity run --last` share
-(`~/.config/circuitry/last-run.json`): the prior run's own `--out`,
-with the same checks and messages on either engine (no previous run, an
-unreadable stash, a different orchestration, no `--out`, a gone `--out`
-file). A stash carrying a setting electricity's own CLI has no flag for
-(a run-library's own `service_profile`/`remote_library_source`, or any
-of `--dry-run`/`--skip-preflight`/`--model`/`--profile-from-state`/
-`--scoring`/`--routing`/`--decompose`/`--split`/`--decompose-out`)
-refuses plain `--last` outright, naming the setting, rather than
-replaying a run missing it; `cof run --last` still replays that stash in
-full. `--resume <run-id>` (cof's own persistence-backed mode) is still
-not supported -- only `--state <file>`/`--resume last`; a `--resume`
-with neither is refused the same way cof's own safety checks refuse it
-(before anything runs, writing no state, exit 1). [What
-electricity can't run yet](#what-electricity-cant-run-yet), below, still
-refuses with a preview message pointing at `cof run`. A document and its
-literal `use` children are checked before the run starts; an inline or
-templated `use` child is checked when it is loaded. `electricity --help`
-lists the options, and `--dump-ir` prints the compiled IR as unstable
-debugging JSON. Progress is tracked in issue #358. electricity shares the
-Python package's version and release tags; from this repository's next
-release on, its binaries and a container image are attached to the GitHub
-release alongside the Python distributions, marked as a preview.
+**This is a preview.** `electricity run <orchestration.yml>` aims at the same
+final state, `--live-state` and `--events` output as `cof run`, for a growing
+subset of the language:
+
+- **CLI and config.** `electricity run` takes `cof run`'s own option names
+  (`-e`, `--config`, `--out`, `--live-state`, `--events`,
+  `--allow-capabilities`, `--adapter`, `--label`, `--quiet`), with the same
+  config discovery as `cof run` when `--config` is omitted
+  (`CIRCUITRY_CONFIG`, a trusted project config in the working directory,
+  the global config). The legacy `electricity <config.json>
+  <orchestration.yml>` form (config always explicit) keeps working as an
+  alias. `--dump-ir` prints the compiled IR as unstable debugging JSON, and
+  `electricity --help` lists every option.
+- **Effects and tools.** `tool`, `dynamic`, `if`, `loop`, `use`, `yield`,
+  `prompt` and `reflector` effects and `finally:` blocks run, with the
+  following <!-- doc-counts:start electricity-tool-count -->18<!-- doc-counts:end electricity-tool-count --> tool providers: <!-- doc-counts:start electricity-tool-list -->`agent`, `awk`, `cel`, `clock`, `env_vars`, `ffmpeg`, `fs`, `gh`, `hash`, `http`, `imagemagick`, `json`, `regex`, `service`, `shell`, `systemone`, `uuid` and `validate_yaml`<!-- doc-counts:end electricity-tool-list -->.
+  [What electricity can't run yet](#what-electricity-cant-run-yet), below,
+  refuses anything else with a preview message pointing at `cof run`, before
+  any state is written.
+- **Secrets and `save_to`.** `runtime.secrets.<name>` (the Keychain, a
+  command or an environment variable) and a document's own
+  `{secret: <name>}` resolve at dispatch, in an `http` effect's
+  `params.headers` or a subprocess tool's host `env`, the same way as
+  `cof run` -- only a document run by path may name one, and the value
+  never reaches state, events, logs or an error; an echo of it is replaced
+  with `[secret:<name>]`. `http`'s own `save_to` writes a 2xx body to a
+  file as raw bytes, with `within`, `overwrite` and `max_bytes`.
+- **Templates.** A top-level `prompts:` map and `{{> name}}` composition
+  run too, in every field that reaches them (a tool's
+  `prompt`/`params`/`params_json`, a `use`'s `inputs`/`inline`, a `yield`'s
+  `template`, a `prompt`'s own `template`/`messages`).
+- **Adapters.** A `prompt` effect runs for real against a document's own
+  top-level `adapter:`/a prompt's own `provider:` (native Ollama, the
+  OpenAI-compatible family, `openai`, `anthropic`, `replicate`, `watsonx`,
+  `cyberdiner`, `claude_code`, `pi`, and the `scripted` adapter, or the
+  config's own `default_adapter` when a prompt names none), with its
+  preflight check run for real too -- `litellm` is the only Circuitry-known
+  adapter name with no electricity builder, and stays refused permanently
+  (it embeds the Python `litellm` package, which electricity neither embeds
+  nor reimplements), as does a `reflector`'s own generated plan naming it.
+  Model-mode `if`/`while` conditions and `expect:` run too.
+- **Live progress.** While a `shell`, `awk`, `imagemagick`, `ffmpeg` or `gh`
+  step is running, its node carries a `meta.live` snapshot of its output so
+  far (the last 20 lines of each of stdout/stderr, at most 4 KiB each,
+  published at most once a second) -- removed again once the step
+  finishes, so the final state is unaffected. An `agent` effect's
+  `meta.live` is its own richer summary (turns, tool calls, tokens, the
+  current tool, ...) instead, matching `cof run`'s own shape for the same
+  tool.
+- **Profiles and complexity.** `--profile <path>` loads a profile
+  (adapter/model/inputs/persistence overrides, routing pins and provider
+  denials) from an explicit path -- no name discovery. `runtime.complexity`
+  scoring, model routing and decomposition (splitting an over-threshold
+  prompt into chunks, planned and executed as its own isolated child run)
+  all run too, writing `meta.complexity`/`meta.decomposition` the same way
+  `cof run` does -- including the size trigger (a prompt's rendered input
+  over its own token budget, sliced deterministically into whole-unit
+  parts and run the same way).
+- **Resuming a run.** `--state <path>`/`-s` resumes a run from a saved
+  state file (every top-level key, not just `input`) the same way
+  `cof run --state` does; combined with `--resume`, a named effect whose
+  saved node already finished without error is skipped and reused -- a
+  named loop resumes at its first unfinished pass, a named `if` continues
+  inside the branch its saved node took when its condition selects that
+  branch again, a `use` with `runtime.state.record_children` continues
+  inside its child when the saved record's own digest and inputs still
+  match, and `finally:` always reruns. A document that changed since the
+  saved run is refused unless `--force`. A state file either engine wrote
+  resumes on the other.
+- **`--resume last`** resolves through the same `--last` stash both
+  `cof run --last` and `electricity run --last` share
+  (`~/.config/circuitry/last-run.json`): the prior run's own `--out`, with
+  the same checks and messages on either engine (no previous run, an
+  unreadable stash, a different orchestration, no `--out`, a gone `--out`
+  file). A stash carrying a setting electricity's own CLI has no flag for
+  (a run-library's own `service_profile`/`remote_library_source`, or any
+  of `--dry-run`/`--skip-preflight`/`--model`/`--profile-from-state`/
+  `--scoring`/`--routing`/`--decompose`/`--split`/`--decompose-out`)
+  refuses plain `--last` outright, naming the setting, rather than
+  replaying a run missing it; `cof run --last` still replays that stash in
+  full. `--resume <run-id>` (cof's own persistence-backed mode) is still
+  not supported -- only `--state <file>`/`--resume last`; a `--resume` with
+  neither is refused the same way cof's own safety checks refuse it
+  (before anything runs, writing no state, exit 1).
+- **Checking.** A document and its literal `use` children are checked
+  before the run starts; an inline or templated `use` child is checked
+  when it is loaded.
+- **Versioning.** electricity shares the Python package's version and
+  release tags; from this repository's next release on, its binaries and a
+  container image are attached to the GitHub release alongside the Python
+  distributions, marked as a preview. Progress is tracked in issue #358.
 
 ## What electricity can't run yet
 
-- **Tool providers.** electricity builds 17 of Circuitry's 76 tool
-  plugins (the list above). A document, or a `use: {path:}` child, naming
-  any of the other 59 is refused before the run starts; a plan compiled
+- **Tool providers.** electricity builds <!-- doc-counts:start electricity-tool-count -->18<!-- doc-counts:end electricity-tool-count --> of Circuitry's <!-- doc-counts:start tool-plugin-count -->76<!-- doc-counts:end tool-plugin-count --> tool plugins
+  (the list above). A document, or a `use: {path:}` child, naming any of the
+  other <!-- doc-counts:start electricity-unsupported-count -->58<!-- doc-counts:end electricity-unsupported-count --> is
+  refused before the run starts; a plan compiled
   mid-run that names one (an inline `use`, a reflector plan or a
   decomposition plan) stops the run there instead, and `on_error` never
   absorbs it. A name that isn't one of Circuitry's plugins at all fails
@@ -100,11 +115,13 @@ release alongside the Python distributions, marked as a preview.
   ASCII or Latin-1 fails the effect with the preview message.
 - **Adapters.** `litellm` is refused for good (above). `host_claude`
   can't be built from config on either engine.
-- **Persistence.** `runtime.persistence` is refused -- clients need the
-  `--state`-file/`--last`-stash resume paths first (#727, #760); a
-  backend can follow. `cof run --resume <run-id>` (looked up via a
-  `runtime.persistence` backend) still isn't supported -- `--resume`
-  always needs `--state <file>` or `--resume last`.
+- **Persistence.** `runtime.persistence` is refused. `electricity run`
+  already has the file-based resume paths (`--state <path>`/`-s`,
+  `--resume <mode>`, `--force` and `--last`, #727 and #760); a
+  `runtime.persistence` backend (SQL, SurrealDB) isn't built yet. `cof
+  run --resume <run-id>` (looked up via a `runtime.persistence` backend)
+  still isn't supported -- `--resume` always needs `--state <file>` or
+  `--resume last`.
 - **Runtime plugins** are refused: the `plugins:` list (the SQL,
   SurrealDB and JSONL observability plugins, and OpenTelemetry).
 - **CLI.** `electricity run <doc>` accepts cof's own `-e`, `--config`/`-c`,
