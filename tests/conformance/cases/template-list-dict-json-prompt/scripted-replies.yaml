@@ -2,5 +2,9 @@ prime.as_escaped:
   - text: "ok"
 prime.as_raw:
   - text: "ok"
+prime.obj_escaped:
+  - text: "ok"
+prime.obj_raw:
+  - text: "ok"
 prime.empty:
   - text: "ok"

@@ -1,6 +1,7 @@
 interface:
   inputs:
     items: {default: ["café", true, false, null, 2024-01-02]}
+    obj: {default: {k: 1, nested: ["x", "y"]}}
     empty_list: {default: []}
 effects:
   - type: report
@@ -9,6 +10,12 @@ effects:
   - type: report
     name: as_raw
     message: "raw={{{input.items}}}"
+  - type: report
+    name: obj_escaped
+    message: "escaped={{input.obj}}"
+  - type: report
+    name: obj_raw
+    message: "raw={{{input.obj}}}"
   - type: report
     name: empty
     message: "empty={{input.empty_list}}"
