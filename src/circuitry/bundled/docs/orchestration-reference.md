@@ -2458,18 +2458,24 @@ but a map's own key lookup does not cross between them:
 CEL evaluation failed for 'state.input.m[1u] == 1': cannot index a map with a uint
 ```
 
-An expression nested too deeply to parse — deep parenthesisation, a long
-accessor chain — is a compile-time rejection in both engines, named the same
-way as any other check error, never the parser's own dump or the whole
-expression quoted back:
+An expression nested deeper than 32 levels — parentheses, calls, list/map
+literals, member-access/index/method-call links, binary operators,
+`&&`/`||` links and prefix `!`/`-` each count as one level — is rejected
+as soon as it compiles, before any effect evaluates it, named the same
+way as any other check error, never a parser dump or the whole expression
+quoted back:
 
 ```
-CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply
+CEL expression at 'prime.effects[0]' (effect 'gate'): expression is nested too deeply (limit 32)
 ```
 
-The depth at which each engine gives up differs (Python's own recursion
-limit for cof, the `cel` crate's parser for electricity), but the text naming
-it does not.
+The limit is the same number, the same message and the same compile-time
+phase on both engines — cof and electricity reject exactly the same
+expressions, rather than each failing wherever its own recursion happened
+to give out, which used to differ by shape and by Python version. An
+expression that only exists at run time (a `use: inline` child rendered
+from a template) gets the same check the first time it compiles, which is
+when that effect runs, not when the parent document is checked.
 
 Reading *unset* state is not an error: see
 [Disabling Effects](#disabling-effects) — an unset read that decides the
