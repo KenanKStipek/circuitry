@@ -538,9 +538,9 @@ fn the_now_band_sits_at_the_lists_own_vertical_centre_during_a_live_run() {
 /// A run this `osi` launched has a registry entry while it's live --
 /// named by its own document and run directory in bare `osi`'s own
 /// non-TTY list too -- and that entry is gone once the run ends.
-/// Every wait here (two 20s pattern waits, two 10s polls, a 10s wait
-/// for `Ended`, a 30s exit wait) is its own named step with its own
-/// cap; none of them is a bare sleep, and none shares a cap with any
+/// Every wait here (two 20s pattern waits, a 10s poll, a 10s wait for
+/// `Ended`, a 30s exit wait) is its own named step with its own cap;
+/// none of them is a bare sleep, and none shares a cap with any
 /// other.
 #[test]
 fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits() {
@@ -627,45 +627,30 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     // assertions above can't give: a liveness or process-scan defect
     // that makes a real `cof` run look dead (or unmatched) would
     // prune the entry above right out from under this list, or never
-    // list it via the scan either. Polled rather than asked once: the
-    // registry entry just confirmed above is read again here through
-    // a *second* liveness check (this one backed by a fresh `ps -p`
-    // of its own, inside the discovery this spawns), and a `ps` under
-    // load can transiently fail to find a pid it would find a moment
-    // later -- the same reason none of this file's other waits is a
-    // single untried assertion.
-    let discover_deadline = Instant::now() + Duration::from_secs(10);
+    // list it via the scan either.
+    let discover = osi_command(&home)
+        .current_dir(work.path())
+        .output()
+        .expect("spawn bare osi");
+    assert!(discover.status.success());
+    let discover_stdout = String::from_utf8_lossy(&discover.stdout);
+    // Matched by this run's own, already-canonicalized orchestration
+    // path (the registry entry's own `orchestration` field), not a
+    // bare "do.yml" -- every pty test in this binary writes a
+    // document of that same name, and `OSI_PROCESS_SCAN` is left on
+    // for this one test (the one that exercises the scan itself), so
+    // a "do.yml" match could just as well land on a different test's
+    // own concurrently-running run.
     let own_orchestration = entry["orchestration"].as_str().unwrap();
-    let (discover_stdout, discover_line) = loop {
-        let discover = osi_command(&home)
-            .current_dir(work.path())
-            .output()
-            .expect("spawn bare osi");
-        assert!(discover.status.success());
-        let stdout = String::from_utf8_lossy(&discover.stdout).into_owned();
-        // Matched by this run's own, already-canonicalized
-        // orchestration path (the registry entry's own
-        // `orchestration` field), not a bare "do.yml" -- every pty
-        // test in this binary writes a document of that same name,
-        // and `OSI_PROCESS_SCAN` is left on for this one test (the
-        // one that exercises the scan itself), so a "do.yml" match
-        // could just as well land on a different test's own
-        // concurrently-running run.
-        let found = stdout
-            .lines()
-            .find(|l| l.contains(own_orchestration))
-            .map(str::to_string);
-        if let Some(line) = found {
-            break (stdout, line);
-        }
-        if Instant::now() >= discover_deadline {
+    let discover_line = discover_stdout
+        .lines()
+        .find(|l| l.contains(own_orchestration))
+        .unwrap_or_else(|| {
             panic!(
-                "expected a line naming this run's own document ({own_orchestration}), got:\n{stdout}"
-            );
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    };
-    assert!(discover_line.contains("cof"), "stdout:\n{discover_stdout}");
+                "expected a line naming this run's own document ({own_orchestration}), got:\n{discover_stdout}"
+            )
+        });
+    assert!(discover_line.contains("cof"));
     // The registry always wins over the process scan for a run found
     // by both (discovery.rs's own doc comment: deduplicated by pid,
     // registry entries added first) -- so the run directory bare
