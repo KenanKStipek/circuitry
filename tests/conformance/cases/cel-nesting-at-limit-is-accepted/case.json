@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #778: an expression at exactly the explicit nesting limit is accepted and runs",
+  "description": "A 32-level member-access chain -- exactly MAX_CEL_NESTING_DEPTH, the explicit limit both engines now enforce -- compiles and evaluates normally on both engines, resolving to the deeply nested true the -e input supplies.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": [
+    "-e",
+    "a={\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": true}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+  ]
+}

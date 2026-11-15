@@ -1,0 +1,8 @@
+name: cel-nesting-operator-run-over-limit
+effects:
+  - type: if
+    name: check
+    if:
+      mode: cel
+      expr: "true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true"
+    then: []

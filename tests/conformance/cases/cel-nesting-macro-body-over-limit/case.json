@@ -1,0 +1,6 @@
+{
+  "spec_case": "issue #778: a macro's own call adds one level over its body's own depth",
+  "description": "`exists`'s own predicate body is a 31-level grouping-parenthesis chain around its loop variable -- one level short of MAX_CEL_NESTING_DEPTH on its own -- so the macro call's own extra level tips the whole expression one past the limit, rejected when the document compiles.",
+  "engines": ["python", "electricity"],
+  "expect": "failure"
+}

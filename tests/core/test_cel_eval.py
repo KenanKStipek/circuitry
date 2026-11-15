@@ -8,10 +8,13 @@ framework contracts layered on top of it (absent state reads false,
 
 from __future__ import annotations
 
+import functools
+from collections.abc import Callable
 from typing import ClassVar
 
 import pytest
 
+from circuitry.core import cel_eval
 from circuitry.core.cel_eval import (
     CelEvaluationError,
     CelValidationError,
@@ -762,22 +765,25 @@ class TestAllExistsDecisiveElement:
 
 class TestNestingErrorWinsOverUnsetPath:
     def test_unset_read_past_the_nesting_cap_is_the_nesting_error_not_false(self):
-        # cof's nesting limit is Python's recursion limit, so the depth at
-        # which evaluation fails depends on the interpreter (3.12 moved it).
-        # Find it rather than assume one: below it, the unset read gives the
-        # unset-path rule's False; at it, the failure is the nesting error,
-        # never that False, as it was when the rule ran before evaluation.
+        # Below MAX_CEL_NESTING_DEPTH the unset read gives the unset-path
+        # rule's False; past it, the failure is the nesting error, never
+        # that False, as it was when the rule ran before evaluation.
+        # ``state.input.missing``'s own 2 member-access links, plus the
+        # trailing ``== 1``, cost 3 levels of depth on top of however many
+        # parens wrap them -- so ``depth`` parens lands at MAX_CEL_NESTING
+        # _DEPTH exactly 3 below the limit.
         def expr(depth: int) -> str:
             return "(" * depth + "state.input.missing" + ")" * depth + " == 1"
 
-        for depth in range(40, 141):
-            try:
-                result = evaluate_cel(expr(depth), {"input": {}})
-            except CelEvaluationError as exc:
-                assert "reads unset state path" not in str(exc)
-                return
-            assert result is False
-        pytest.fail("no depth up to 140 reached the nesting limit")
+        cel_eval.clear_expression_cache()
+        at_limit = cel_eval.MAX_CEL_NESTING_DEPTH - 3
+        assert evaluate_cel(expr(at_limit), {"input": {}}) is False
+
+        cel_eval.clear_expression_cache()
+        with pytest.raises(CelEvaluationError) as excinfo:
+            evaluate_cel(expr(at_limit + 1), {"input": {}})
+        assert "reads unset state path" not in str(excinfo.value)
+        assert "nested too deeply" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1034,7 +1040,7 @@ class TestNestedTooDeeplyIsACheckError:
         text = str(excinfo.value)
         assert text == (
             "CEL expression at 'prime.effects[0]' (effect 'g'): expression is "
-            "nested too deeply"
+            f"nested too deeply (limit {cel_eval.MAX_CEL_NESTING_DEPTH})"
         )
 
     def test_never_the_raw_recursion_error_text(self):
@@ -1044,26 +1050,91 @@ class TestNestedTooDeeplyIsACheckError:
         assert "maximum recursion depth" not in text
         assert "getting the str of an object" not in text
 
-    def test_chain_length_sweep_is_always_clean(self):
-        """Every length from just under to just over cof's own floor for a
-        member-access chain (614 links on 3.11, after this fix) is either
-        a clean success or exactly the one-line check error -- never a raw
-        ``RecursionError`` escaping uncaught."""
-        from circuitry.core import cel_eval
+    #: One builder per construct the depth count enumerates
+    #: (``cel_eval._CHAIN_RULES``/``_ALWAYS_NESTS``' own docstrings), each
+    #: producing an expression of exactly *n* nesting levels in that one
+    #: construct and nothing else.
+    _SHAPES: ClassVar[dict[str, Callable[[int], str]]] = {
+        "paren": lambda n: "(" * n + "1" + ")" * n,
+        "call": lambda n: "int(" * n + "1" + ")" * n,
+        "list": lambda n: functools.reduce(lambda s, _: f"[{s}]", range(n), "1"),
+        "map": lambda n: functools.reduce(
+            lambda s, _: f'{{"a": {s}}}', range(n), "1"
+        ),
+        "member": lambda n: "state" + ".a" * n,
+        "index": lambda n: "state" + "[0]" * n,
+        "method_call": lambda n: "[1]" + ".map(x, x)" * (n - 1),
+        "logical_and": lambda n: "true" + " && true" * n,
+        "logical_or": lambda n: "true" + " || true" * n,
+        "unary_not": lambda n: "!" * n + "true",
+        "unary_neg": lambda n: ("- " * n) + "1",
+        "chain_add": lambda n: "1" + " + 1" * n,
+        "chain_relation": lambda n: "1" + " == 1" * n,
+        "ternary": lambda n: functools.reduce(
+            lambda s, _: f"true ? 1 : {s}", range(n), "0"
+        ),
+    }
 
-        expected = (
-            "CEL expression at 'prime.effects[0]' (effect 'g'): expression is "
-            "nested too deeply"
-        )
-        for depth in range(590, 701):
-            cel_eval.clear_expression_cache()
-            expr = "state.input" + ".a" * depth
-            try:
-                validate_cel_syntax(
-                    expr, effect_path="prime.effects[0]", effect_name="g"
-                )
-            except CelValidationError as exc:
-                assert str(exc) == expected, (depth, str(exc))
+    @pytest.mark.parametrize("shape", sorted(_SHAPES))
+    def test_exactly_at_the_limit_is_accepted(self, shape: str):
+        """Every construct, alone, at exactly MAX_CEL_NESTING_DEPTH levels,
+        both compiles and evaluates without error -- proving the chosen
+        limit (32), picked with margin below every shape's own measured
+        floor (49 at the tightest, a nested list or map literal), never
+        rejects an expression Python's own recursion could in fact still
+        run."""
+        cel_eval.clear_expression_cache()
+        expr = self._SHAPES[shape](cel_eval.MAX_CEL_NESTING_DEPTH)
+        validate_cel_syntax(expr, effect_path="prime.effects[0]")
+        # Evaluating it must never raise the recursion-dependent failure
+        # this limit exists to replace -- whatever else it might raise
+        # (an index shape with no real data to index into, say) is a
+        # legitimate, unrelated evaluation error, not this test's concern.
+        try:
+            evaluate_cel_value(expr, {})
+        except CelEvaluationError as exc:
+            assert "nested too deeply" not in str(exc)
+            assert "recursion" not in str(exc).lower()
+
+    @pytest.mark.parametrize("shape", sorted(_SHAPES))
+    def test_one_level_over_the_limit_is_refused(self, shape: str):
+        """The same construct, one level deeper, is the one-line check
+        error -- never a bare ``RecursionError``, never a different error
+        for a different shape."""
+        cel_eval.clear_expression_cache()
+        expr = self._SHAPES[shape](cel_eval.MAX_CEL_NESTING_DEPTH + 1)
+        with pytest.raises(CelValidationError) as excinfo:
+            validate_cel_syntax(expr, effect_path="prime.effects[0]")
+        assert "nested too deeply" in str(excinfo.value)
+
+    def test_a_wide_in_list_of_300_elements_is_unaffected(self):
+        """A long, flat ``in [...]`` list is many siblings, not nesting:
+        300 independent elements must not be refused just because there
+        are more of them than MAX_CEL_NESTING_DEPTH -- the way to test
+        many alternatives instead of a long ``||`` chain."""
+        expr = "state.input.n in [" + ", ".join(str(i) for i in range(300)) + "]"
+        validate_cel_syntax(expr, effect_path="prime.effects[0]")
+        assert evaluate_cel(expr, {"input": {"n": 299}}) is True
+        assert evaluate_cel(expr, {"input": {"n": 300}}) is False
+
+    def test_recursion_error_guard_reports_the_uniform_message(self, monkeypatch):
+        """Simulates the walks after the depth check themselves overflowing
+        anyway -- proving _compile's own ``RecursionError`` guard reports
+        the same one line, never a raw Python exception, if it is ever
+        reached. ``test_exactly_at_the_limit_is_accepted`` is the proof
+        that it isn't: every shape accepted at the limit evaluates
+        without error, so nothing admitted past this check can reach a
+        real ``RecursionError`` in the first place."""
+        import circuitry.core.cel_eval as cel_eval_module
+
+        def _raise(*_args, **_kwargs):
+            raise RecursionError("maximum recursion depth exceeded")
+
+        monkeypatch.setattr(cel_eval_module, "_collect_state_paths", _raise)
+        cel_eval.clear_expression_cache()
+        with pytest.raises(CelValidationError) as excinfo:
+            validate_cel_syntax("state.a == 1", effect_path="prime.effects[0]")
+        assert "nested too deeply" in str(excinfo.value)
 
 
 # ---------------------------------------------------------------------------
@@ -1155,7 +1226,9 @@ class TestFreeIdentifiers:
         monkeypatch.setattr(cel_eval_module, "_walk_free_identifiers", _raise)
         with pytest.raises(CelValidationError) as excinfo:
             free_identifiers("state.a == 1")
-        assert str(excinfo.value) == "expression is nested too deeply"
+        assert str(excinfo.value) == (
+            f"expression is nested too deeply (limit {cel_eval.MAX_CEL_NESTING_DEPTH})"
+        )
 
     def test_macro_variable_named_like_a_loop_binding_is_bound(self):
         assert free_identifiers("state.input.items.all(unit, unit > 0)") == ("state",)

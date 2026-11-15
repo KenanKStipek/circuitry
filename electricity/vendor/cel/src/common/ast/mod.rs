@@ -197,6 +197,26 @@ pub struct ComprehensionExpr {
 pub struct SourceInfo {
     offsets: BTreeMap<u64, OffsetRange>,
     pub source: String,
+    /// Extra nesting levels a node's id carries that the AST itself has no
+    /// node for: a grouping parenthesis (`visit_Nested`, one per layer), or
+    /// a prefix `!`/`-` run collapsed by parity (`visit_LogicalNot`/
+    /// `visit_Negate`) to zero or one AST node regardless of its own
+    /// length. A consumer that counts nesting depth from the AST alone
+    /// adds this to whatever node ends up at the id -- the literal or
+    /// identifier a cancelled-out run still resolves to, or the single
+    /// node an odd run still wraps.
+    nesting_overrides: BTreeMap<u64, usize>,
+    /// A macro's own, user-authored argument expressions (the loop
+    /// variable and the predicate/transform body), keyed by the
+    /// [`Expr::Comprehension`](super::Expr::Comprehension) node id the
+    /// macro expanded to. The expander weaves each argument into its own
+    /// synthesized accumulator-loop boilerplate (`loop_step`, mostly) --
+    /// a fixed shape for any call to the same macro, never something the
+    /// expression's own author wrote -- so a consumer that wants the
+    /// depth of what the author wrote, not of the boilerplate around it,
+    /// finds each argument by its id here rather than walking the
+    /// comprehension's own fields.
+    macro_bodies: BTreeMap<u64, Vec<u64>>,
 }
 
 impl SourceInfo {
@@ -206,6 +226,25 @@ impl SourceInfo {
 
     pub fn offset_for(&self, id: u64) -> Option<(u32, u32)> {
         self.offsets.get(&id).map(|range| (range.start, range.stop))
+    }
+
+    pub fn add_nesting_override(&mut self, id: u64, extra: usize) {
+        *self.nesting_overrides.entry(id).or_insert(0) += extra;
+    }
+
+    pub fn nesting_override(&self, id: u64) -> usize {
+        self.nesting_overrides.get(&id).copied().unwrap_or(0)
+    }
+
+    pub fn set_macro_body_ids(&mut self, comprehension_id: u64, arg_ids: Vec<u64>) {
+        self.macro_bodies.insert(comprehension_id, arg_ids);
+    }
+
+    pub fn macro_body_ids(&self, comprehension_id: u64) -> &[u64] {
+        self.macro_bodies
+            .get(&comprehension_id)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
 
     pub(crate) fn pos_for(&self, id: u64) -> Option<(isize, isize)> {

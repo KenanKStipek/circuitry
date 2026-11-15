@@ -7319,7 +7319,7 @@
     "unset_path": null
   },
   {
-    "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "expr": "true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : 0",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7333,21 +7333,7 @@
     "unset_path": null
   },
   {
-    "expr": "(((((((((((((((((((((((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))))))))))))))))))))))",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": true
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "((((((((((((((((((((((((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "expr": "true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : true ? 1 : 0",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7361,7 +7347,7 @@
     "unset_path": null
   },
   {
-    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "expr": "[1].exists(x, ((((((((((((((((((((((((((((((x)))))))))))))))))))))))))))))) > 0)",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7375,21 +7361,7 @@
     "unset_path": null
   },
   {
-    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1)))))))))))))))))))))))))))))))))))))))))))))))))))))",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": true
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))))))))))))))))))))))))",
+    "expr": "[1].exists(x, (((((((((((((((((((((((((((((((x))))))))))))))))))))))))))))))) > 0)",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7403,7 +7375,7 @@
     "unset_path": null
   },
   {
-    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+    "expr": "((((((((((((((((0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7417,21 +7389,7 @@
     "unset_path": null
   },
   {
-    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": true
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+    "expr": "(((((((((((((((((0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1)))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7445,77 +7403,7 @@
     "unset_path": null
   },
   {
-    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": true
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": true
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
-    "mode": "condition",
-    "outcome": {
-      "kind": "ok",
-      "result": true
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
-    "mode": "condition",
-    "outcome": {
-      "kind": "error",
-      "message": null
-    },
-    "state": {
-      "t": "dict",
-      "v": []
-    },
-    "strict": false,
-    "unset_path": null
-  },
-  {
-    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "expr": "(((((((((((((((((((((((((((((false))))))))))))))))))))))))))))) || false || false || false",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7529,7 +7417,7 @@
     "unset_path": null
   },
   {
-    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "expr": "((((((((((((((((((((((((((((((false)))))))))))))))))))))))))))))) || false || false || false",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7543,7 +7431,7 @@
     "unset_path": null
   },
   {
-    "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
+    "expr": "((((((((((((((((((((((((((((((((1))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7557,7 +7445,7 @@
     "unset_path": null
   },
   {
-    "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
+    "expr": "(((((((((((((((((((((((((((((((((1)))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7571,7 +7459,7 @@
     "unset_path": null
   },
   {
-    "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
+    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7585,7 +7473,7 @@
     "unset_path": null
   },
   {
-    "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
+    "expr": "int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(int(1)))))))))))))))))))))))))))))))))",
     "mode": "condition",
     "outcome": {
       "kind": "error",
@@ -7599,7 +7487,231 @@
     "unset_path": null
   },
   {
-    "expr": "state.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a",
+    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':{'a':1}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "0+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1+1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": false
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "0<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1<1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true && true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true || true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!true",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "- - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 1",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7766,8 +7878,140 @@
                                                                                                                               "v": "a"
                                                                                                                             },
                                                                                                                             {
-                                                                                                                              "t": "bool",
-                                                                                                                              "v": true
+                                                                                                                              "t": "dict",
+                                                                                                                              "v": [
+                                                                                                                                [
+                                                                                                                                  {
+                                                                                                                                    "t": "str",
+                                                                                                                                    "v": "a"
+                                                                                                                                  },
+                                                                                                                                  {
+                                                                                                                                    "t": "dict",
+                                                                                                                                    "v": [
+                                                                                                                                      [
+                                                                                                                                        {
+                                                                                                                                          "t": "str",
+                                                                                                                                          "v": "a"
+                                                                                                                                        },
+                                                                                                                                        {
+                                                                                                                                          "t": "dict",
+                                                                                                                                          "v": [
+                                                                                                                                            [
+                                                                                                                                              {
+                                                                                                                                                "t": "str",
+                                                                                                                                                "v": "a"
+                                                                                                                                              },
+                                                                                                                                              {
+                                                                                                                                                "t": "dict",
+                                                                                                                                                "v": [
+                                                                                                                                                  [
+                                                                                                                                                    {
+                                                                                                                                                      "t": "str",
+                                                                                                                                                      "v": "a"
+                                                                                                                                                    },
+                                                                                                                                                    {
+                                                                                                                                                      "t": "dict",
+                                                                                                                                                      "v": [
+                                                                                                                                                        [
+                                                                                                                                                          {
+                                                                                                                                                            "t": "str",
+                                                                                                                                                            "v": "a"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                            "t": "dict",
+                                                                                                                                                            "v": [
+                                                                                                                                                              [
+                                                                                                                                                                {
+                                                                                                                                                                  "t": "str",
+                                                                                                                                                                  "v": "a"
+                                                                                                                                                                },
+                                                                                                                                                                {
+                                                                                                                                                                  "t": "dict",
+                                                                                                                                                                  "v": [
+                                                                                                                                                                    [
+                                                                                                                                                                      {
+                                                                                                                                                                        "t": "str",
+                                                                                                                                                                        "v": "a"
+                                                                                                                                                                      },
+                                                                                                                                                                      {
+                                                                                                                                                                        "t": "dict",
+                                                                                                                                                                        "v": [
+                                                                                                                                                                          [
+                                                                                                                                                                            {
+                                                                                                                                                                              "t": "str",
+                                                                                                                                                                              "v": "a"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                              "t": "dict",
+                                                                                                                                                                              "v": [
+                                                                                                                                                                                [
+                                                                                                                                                                                  {
+                                                                                                                                                                                    "t": "str",
+                                                                                                                                                                                    "v": "a"
+                                                                                                                                                                                  },
+                                                                                                                                                                                  {
+                                                                                                                                                                                    "t": "dict",
+                                                                                                                                                                                    "v": [
+                                                                                                                                                                                      [
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "t": "str",
+                                                                                                                                                                                          "v": "a"
+                                                                                                                                                                                        },
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "t": "dict",
+                                                                                                                                                                                          "v": [
+                                                                                                                                                                                            [
+                                                                                                                                                                                              {
+                                                                                                                                                                                                "t": "str",
+                                                                                                                                                                                                "v": "a"
+                                                                                                                                                                                              },
+                                                                                                                                                                                              {
+                                                                                                                                                                                                "t": "dict",
+                                                                                                                                                                                                "v": [
+                                                                                                                                                                                                  [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "t": "str",
+                                                                                                                                                                                                      "v": "a"
+                                                                                                                                                                                                    },
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "t": "bool",
+                                                                                                                                                                                                      "v": true
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                  ]
+                                                                                                                                                                                                ]
+                                                                                                                                                                                              }
+                                                                                                                                                                                            ]
+                                                                                                                                                                                          ]
+                                                                                                                                                                                        }
+                                                                                                                                                                                      ]
+                                                                                                                                                                                    ]
+                                                                                                                                                                                  }
+                                                                                                                                                                                ]
+                                                                                                                                                                              ]
+                                                                                                                                                                            }
+                                                                                                                                                                          ]
+                                                                                                                                                                        ]
+                                                                                                                                                                      }
+                                                                                                                                                                    ]
+                                                                                                                                                                  ]
+                                                                                                                                                                }
+                                                                                                                                                              ]
+                                                                                                                                                            ]
+                                                                                                                                                          }
+                                                                                                                                                        ]
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                  ]
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      ]
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              ]
                                                                                                                             }
                                                                                                                           ]
                                                                                                                         ]
@@ -7833,7 +8077,384 @@
     "unset_path": null
   },
   {
-    "expr": "state[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]",
+    "expr": "state.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a.a",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": [
+        [
+          {
+            "t": "str",
+            "v": "a"
+          },
+          {
+            "t": "dict",
+            "v": [
+              [
+                {
+                  "t": "str",
+                  "v": "a"
+                },
+                {
+                  "t": "dict",
+                  "v": [
+                    [
+                      {
+                        "t": "str",
+                        "v": "a"
+                      },
+                      {
+                        "t": "dict",
+                        "v": [
+                          [
+                            {
+                              "t": "str",
+                              "v": "a"
+                            },
+                            {
+                              "t": "dict",
+                              "v": [
+                                [
+                                  {
+                                    "t": "str",
+                                    "v": "a"
+                                  },
+                                  {
+                                    "t": "dict",
+                                    "v": [
+                                      [
+                                        {
+                                          "t": "str",
+                                          "v": "a"
+                                        },
+                                        {
+                                          "t": "dict",
+                                          "v": [
+                                            [
+                                              {
+                                                "t": "str",
+                                                "v": "a"
+                                              },
+                                              {
+                                                "t": "dict",
+                                                "v": [
+                                                  [
+                                                    {
+                                                      "t": "str",
+                                                      "v": "a"
+                                                    },
+                                                    {
+                                                      "t": "dict",
+                                                      "v": [
+                                                        [
+                                                          {
+                                                            "t": "str",
+                                                            "v": "a"
+                                                          },
+                                                          {
+                                                            "t": "dict",
+                                                            "v": [
+                                                              [
+                                                                {
+                                                                  "t": "str",
+                                                                  "v": "a"
+                                                                },
+                                                                {
+                                                                  "t": "dict",
+                                                                  "v": [
+                                                                    [
+                                                                      {
+                                                                        "t": "str",
+                                                                        "v": "a"
+                                                                      },
+                                                                      {
+                                                                        "t": "dict",
+                                                                        "v": [
+                                                                          [
+                                                                            {
+                                                                              "t": "str",
+                                                                              "v": "a"
+                                                                            },
+                                                                            {
+                                                                              "t": "dict",
+                                                                              "v": [
+                                                                                [
+                                                                                  {
+                                                                                    "t": "str",
+                                                                                    "v": "a"
+                                                                                  },
+                                                                                  {
+                                                                                    "t": "dict",
+                                                                                    "v": [
+                                                                                      [
+                                                                                        {
+                                                                                          "t": "str",
+                                                                                          "v": "a"
+                                                                                        },
+                                                                                        {
+                                                                                          "t": "dict",
+                                                                                          "v": [
+                                                                                            [
+                                                                                              {
+                                                                                                "t": "str",
+                                                                                                "v": "a"
+                                                                                              },
+                                                                                              {
+                                                                                                "t": "dict",
+                                                                                                "v": [
+                                                                                                  [
+                                                                                                    {
+                                                                                                      "t": "str",
+                                                                                                      "v": "a"
+                                                                                                    },
+                                                                                                    {
+                                                                                                      "t": "dict",
+                                                                                                      "v": [
+                                                                                                        [
+                                                                                                          {
+                                                                                                            "t": "str",
+                                                                                                            "v": "a"
+                                                                                                          },
+                                                                                                          {
+                                                                                                            "t": "dict",
+                                                                                                            "v": [
+                                                                                                              [
+                                                                                                                {
+                                                                                                                  "t": "str",
+                                                                                                                  "v": "a"
+                                                                                                                },
+                                                                                                                {
+                                                                                                                  "t": "dict",
+                                                                                                                  "v": [
+                                                                                                                    [
+                                                                                                                      {
+                                                                                                                        "t": "str",
+                                                                                                                        "v": "a"
+                                                                                                                      },
+                                                                                                                      {
+                                                                                                                        "t": "dict",
+                                                                                                                        "v": [
+                                                                                                                          [
+                                                                                                                            {
+                                                                                                                              "t": "str",
+                                                                                                                              "v": "a"
+                                                                                                                            },
+                                                                                                                            {
+                                                                                                                              "t": "dict",
+                                                                                                                              "v": [
+                                                                                                                                [
+                                                                                                                                  {
+                                                                                                                                    "t": "str",
+                                                                                                                                    "v": "a"
+                                                                                                                                  },
+                                                                                                                                  {
+                                                                                                                                    "t": "dict",
+                                                                                                                                    "v": [
+                                                                                                                                      [
+                                                                                                                                        {
+                                                                                                                                          "t": "str",
+                                                                                                                                          "v": "a"
+                                                                                                                                        },
+                                                                                                                                        {
+                                                                                                                                          "t": "dict",
+                                                                                                                                          "v": [
+                                                                                                                                            [
+                                                                                                                                              {
+                                                                                                                                                "t": "str",
+                                                                                                                                                "v": "a"
+                                                                                                                                              },
+                                                                                                                                              {
+                                                                                                                                                "t": "dict",
+                                                                                                                                                "v": [
+                                                                                                                                                  [
+                                                                                                                                                    {
+                                                                                                                                                      "t": "str",
+                                                                                                                                                      "v": "a"
+                                                                                                                                                    },
+                                                                                                                                                    {
+                                                                                                                                                      "t": "dict",
+                                                                                                                                                      "v": [
+                                                                                                                                                        [
+                                                                                                                                                          {
+                                                                                                                                                            "t": "str",
+                                                                                                                                                            "v": "a"
+                                                                                                                                                          },
+                                                                                                                                                          {
+                                                                                                                                                            "t": "dict",
+                                                                                                                                                            "v": [
+                                                                                                                                                              [
+                                                                                                                                                                {
+                                                                                                                                                                  "t": "str",
+                                                                                                                                                                  "v": "a"
+                                                                                                                                                                },
+                                                                                                                                                                {
+                                                                                                                                                                  "t": "dict",
+                                                                                                                                                                  "v": [
+                                                                                                                                                                    [
+                                                                                                                                                                      {
+                                                                                                                                                                        "t": "str",
+                                                                                                                                                                        "v": "a"
+                                                                                                                                                                      },
+                                                                                                                                                                      {
+                                                                                                                                                                        "t": "dict",
+                                                                                                                                                                        "v": [
+                                                                                                                                                                          [
+                                                                                                                                                                            {
+                                                                                                                                                                              "t": "str",
+                                                                                                                                                                              "v": "a"
+                                                                                                                                                                            },
+                                                                                                                                                                            {
+                                                                                                                                                                              "t": "dict",
+                                                                                                                                                                              "v": [
+                                                                                                                                                                                [
+                                                                                                                                                                                  {
+                                                                                                                                                                                    "t": "str",
+                                                                                                                                                                                    "v": "a"
+                                                                                                                                                                                  },
+                                                                                                                                                                                  {
+                                                                                                                                                                                    "t": "dict",
+                                                                                                                                                                                    "v": [
+                                                                                                                                                                                      [
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "t": "str",
+                                                                                                                                                                                          "v": "a"
+                                                                                                                                                                                        },
+                                                                                                                                                                                        {
+                                                                                                                                                                                          "t": "dict",
+                                                                                                                                                                                          "v": [
+                                                                                                                                                                                            [
+                                                                                                                                                                                              {
+                                                                                                                                                                                                "t": "str",
+                                                                                                                                                                                                "v": "a"
+                                                                                                                                                                                              },
+                                                                                                                                                                                              {
+                                                                                                                                                                                                "t": "dict",
+                                                                                                                                                                                                "v": [
+                                                                                                                                                                                                  [
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "t": "str",
+                                                                                                                                                                                                      "v": "a"
+                                                                                                                                                                                                    },
+                                                                                                                                                                                                    {
+                                                                                                                                                                                                      "t": "dict",
+                                                                                                                                                                                                      "v": [
+                                                                                                                                                                                                        [
+                                                                                                                                                                                                          {
+                                                                                                                                                                                                            "t": "str",
+                                                                                                                                                                                                            "v": "a"
+                                                                                                                                                                                                          },
+                                                                                                                                                                                                          {
+                                                                                                                                                                                                            "t": "bool",
+                                                                                                                                                                                                            "v": true
+                                                                                                                                                                                                          }
+                                                                                                                                                                                                        ]
+                                                                                                                                                                                                      ]
+                                                                                                                                                                                                    }
+                                                                                                                                                                                                  ]
+                                                                                                                                                                                                ]
+                                                                                                                                                                                              }
+                                                                                                                                                                                            ]
+                                                                                                                                                                                          ]
+                                                                                                                                                                                        }
+                                                                                                                                                                                      ]
+                                                                                                                                                                                    ]
+                                                                                                                                                                                  }
+                                                                                                                                                                                ]
+                                                                                                                                                                              ]
+                                                                                                                                                                            }
+                                                                                                                                                                          ]
+                                                                                                                                                                        ]
+                                                                                                                                                                      }
+                                                                                                                                                                    ]
+                                                                                                                                                                  ]
+                                                                                                                                                                }
+                                                                                                                                                              ]
+                                                                                                                                                            ]
+                                                                                                                                                          }
+                                                                                                                                                        ]
+                                                                                                                                                      ]
+                                                                                                                                                    }
+                                                                                                                                                  ]
+                                                                                                                                                ]
+                                                                                                                                              }
+                                                                                                                                            ]
+                                                                                                                                          ]
+                                                                                                                                        }
+                                                                                                                                      ]
+                                                                                                                                    ]
+                                                                                                                                  }
+                                                                                                                                ]
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ]
+                                                                                                                        ]
+                                                                                                                      }
+                                                                                                                    ]
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ]
+                                                                                                            ]
+                                                                                                          }
+                                                                                                        ]
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ]
+                                                                                                ]
+                                                                                              }
+                                                                                            ]
+                                                                                          ]
+                                                                                        }
+                                                                                      ]
+                                                                                    ]
+                                                                                  }
+                                                                                ]
+                                                                              ]
+                                                                            }
+                                                                          ]
+                                                                        ]
+                                                                      }
+                                                                    ]
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            ]
+                                                          }
+                                                        ]
+                                                      ]
+                                                    }
+                                                  ]
+                                                ]
+                                              }
+                                            ]
+                                          ]
+                                        }
+                                      ]
+                                    ]
+                                  }
+                                ]
+                              ]
+                            }
+                          ]
+                        ]
+                      }
+                    ]
+                  ]
+                }
+              ]
+            ]
+          }
+        ]
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]",
     "mode": "condition",
     "outcome": {
       "kind": "ok",
@@ -7900,8 +8521,68 @@
                                                                                   "t": "list",
                                                                                   "v": [
                                                                                     {
-                                                                                      "t": "bool",
-                                                                                      "v": true
+                                                                                      "t": "list",
+                                                                                      "v": [
+                                                                                        {
+                                                                                          "t": "list",
+                                                                                          "v": [
+                                                                                            {
+                                                                                              "t": "list",
+                                                                                              "v": [
+                                                                                                {
+                                                                                                  "t": "list",
+                                                                                                  "v": [
+                                                                                                    {
+                                                                                                      "t": "list",
+                                                                                                      "v": [
+                                                                                                        {
+                                                                                                          "t": "list",
+                                                                                                          "v": [
+                                                                                                            {
+                                                                                                              "t": "list",
+                                                                                                              "v": [
+                                                                                                                {
+                                                                                                                  "t": "list",
+                                                                                                                  "v": [
+                                                                                                                    {
+                                                                                                                      "t": "list",
+                                                                                                                      "v": [
+                                                                                                                        {
+                                                                                                                          "t": "list",
+                                                                                                                          "v": [
+                                                                                                                            {
+                                                                                                                              "t": "list",
+                                                                                                                              "v": [
+                                                                                                                                {
+                                                                                                                                  "t": "list",
+                                                                                                                                  "v": [
+                                                                                                                                    {
+                                                                                                                                      "t": "bool",
+                                                                                                                                      "v": true
+                                                                                                                                    }
+                                                                                                                                  ]
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      ]
                                                                                     }
                                                                                   ]
                                                                                 }
@@ -7942,6 +8623,213 @@
           ]
         }
       ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "state[0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0][0]",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "list",
+      "v": [
+        {
+          "t": "list",
+          "v": [
+            {
+              "t": "list",
+              "v": [
+                {
+                  "t": "list",
+                  "v": [
+                    {
+                      "t": "list",
+                      "v": [
+                        {
+                          "t": "list",
+                          "v": [
+                            {
+                              "t": "list",
+                              "v": [
+                                {
+                                  "t": "list",
+                                  "v": [
+                                    {
+                                      "t": "list",
+                                      "v": [
+                                        {
+                                          "t": "list",
+                                          "v": [
+                                            {
+                                              "t": "list",
+                                              "v": [
+                                                {
+                                                  "t": "list",
+                                                  "v": [
+                                                    {
+                                                      "t": "list",
+                                                      "v": [
+                                                        {
+                                                          "t": "list",
+                                                          "v": [
+                                                            {
+                                                              "t": "list",
+                                                              "v": [
+                                                                {
+                                                                  "t": "list",
+                                                                  "v": [
+                                                                    {
+                                                                      "t": "list",
+                                                                      "v": [
+                                                                        {
+                                                                          "t": "list",
+                                                                          "v": [
+                                                                            {
+                                                                              "t": "list",
+                                                                              "v": [
+                                                                                {
+                                                                                  "t": "list",
+                                                                                  "v": [
+                                                                                    {
+                                                                                      "t": "list",
+                                                                                      "v": [
+                                                                                        {
+                                                                                          "t": "list",
+                                                                                          "v": [
+                                                                                            {
+                                                                                              "t": "list",
+                                                                                              "v": [
+                                                                                                {
+                                                                                                  "t": "list",
+                                                                                                  "v": [
+                                                                                                    {
+                                                                                                      "t": "list",
+                                                                                                      "v": [
+                                                                                                        {
+                                                                                                          "t": "list",
+                                                                                                          "v": [
+                                                                                                            {
+                                                                                                              "t": "list",
+                                                                                                              "v": [
+                                                                                                                {
+                                                                                                                  "t": "list",
+                                                                                                                  "v": [
+                                                                                                                    {
+                                                                                                                      "t": "list",
+                                                                                                                      "v": [
+                                                                                                                        {
+                                                                                                                          "t": "list",
+                                                                                                                          "v": [
+                                                                                                                            {
+                                                                                                                              "t": "list",
+                                                                                                                              "v": [
+                                                                                                                                {
+                                                                                                                                  "t": "list",
+                                                                                                                                  "v": [
+                                                                                                                                    {
+                                                                                                                                      "t": "list",
+                                                                                                                                      "v": [
+                                                                                                                                        {
+                                                                                                                                          "t": "bool",
+                                                                                                                                          "v": true
+                                                                                                                                        }
+                                                                                                                                      ]
+                                                                                                                                    }
+                                                                                                                                  ]
+                                                                                                                                }
+                                                                                                                              ]
+                                                                                                                            }
+                                                                                                                          ]
+                                                                                                                        }
+                                                                                                                      ]
+                                                                                                                    }
+                                                                                                                  ]
+                                                                                                                }
+                                                                                                              ]
+                                                                                                            }
+                                                                                                          ]
+                                                                                                        }
+                                                                                                      ]
+                                                                                                    }
+                                                                                                  ]
+                                                                                                }
+                                                                                              ]
+                                                                                            }
+                                                                                          ]
+                                                                                        }
+                                                                                      ]
+                                                                                    }
+                                                                                  ]
+                                                                                }
+                                                                              ]
+                                                                            }
+                                                                          ]
+                                                                        }
+                                                                      ]
+                                                                    }
+                                                                  ]
+                                                                }
+                                                              ]
+                                                            }
+                                                          ]
+                                                        }
+                                                      ]
+                                                    }
+                                                  ]
+                                                }
+                                              ]
+                                            }
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[1].map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "ok",
+      "result": true
+    },
+    "state": {
+      "t": "dict",
+      "v": []
+    },
+    "strict": false,
+    "unset_path": null
+  },
+  {
+    "expr": "[1].map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x).map(x, x)",
+    "mode": "condition",
+    "outcome": {
+      "kind": "error",
+      "message": null
+    },
+    "state": {
+      "t": "dict",
+      "v": []
     },
     "strict": false,
     "unset_path": null

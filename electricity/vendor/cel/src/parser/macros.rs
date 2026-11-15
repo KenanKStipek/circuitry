@@ -157,6 +157,23 @@ impl Macro {
         args: &mut Vec<IdedExpr>,
     ) -> Result<Option<IdedExpr>, ParseError> {
         let lent = shape(target, args);
+        // The call's own target and argument ids, before the expander
+        // moves or restructures any of them into the expansion's
+        // synthesized accumulator-loop boilerplate: a consumer that
+        // wants the depth of what the expression's own author wrote,
+        // not of that boilerplate, needs these, by id, independent of
+        // where in the expansion they end up
+        // (`SourceInfo::macro_body_ids`'s own docs) -- the target
+        // included, since a receiver-style macro's own target (`X` in
+        // `X.map(...)`) becomes the comprehension's `iter_range`, not
+        // one of its own synthesized loop fields, but is just as much
+        // something the expression's own author wrote as the
+        // predicate/transform argument is.
+        let arg_ids: Vec<u64> = target
+            .iter()
+            .map(|t| t.id)
+            .chain(args.iter().map(|a| a.id))
+            .collect();
         let expansion = (self.expander)(helper, target, args)?;
         if expansion.is_none() && shape(target, args) != lent {
             return Err(helper.new_error(
@@ -166,6 +183,14 @@ impl Macro {
                     self.function
                 ),
             ));
+        }
+        if let Some(expanded) = &expansion {
+            if !arg_ids.is_empty() {
+                helper
+                    .helper
+                    .source_info
+                    .set_macro_body_ids(expanded.id, arg_ids);
+            }
         }
         Ok(expansion)
     }

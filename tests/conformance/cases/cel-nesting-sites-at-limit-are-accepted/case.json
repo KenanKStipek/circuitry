@@ -1,0 +1,10 @@
+{
+  "spec_case": "issue #778: every CEL site accepts an expression exactly at the explicit nesting limit",
+  "description": "An `if`, a `while` loop (`max_iterations: 1`), a tool's `expect:` and a `cel` tool each hold one expression at exactly MAX_CEL_NESTING_DEPTH (32) -- a different nesting shape per site (a member-access chain, an `&&` run, a grouping-parenthesis chain, and a list-literal chain) -- and the whole document compiles and runs to completion on both engines.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "cli_args": [
+    "-e",
+    "a={\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": {\"a\": true}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}}"
+  ]
+}

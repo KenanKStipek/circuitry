@@ -1,0 +1,13 @@
+name: cel-nesting-while-over-limit
+effects:
+  - type: loop
+    name: w
+    max_iterations: 5
+    while:
+      mode: cel
+      expr: "(((((((((((((((((((((((((((((((((true)))))))))))))))))))))))))))))))))"
+    body:
+      - type: tool
+        name: step
+        provider: json
+        params: {mode: stringify, input: {ok: true}}
