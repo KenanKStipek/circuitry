@@ -543,7 +543,7 @@ pub fn discover_runs(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::registry::RegistryEntry;
+    use crate::registry::{PidLiveness, RegistryEntry};
     use std::time::Duration;
 
     #[test]
@@ -558,8 +558,8 @@ mod tests {
 
     struct AllAlive;
     impl Liveness for AllAlive {
-        fn is_alive(&self, _pid: u32) -> bool {
-            true
+        fn check(&self, _pid: u32) -> PidLiveness {
+            PidLiveness::Alive
         }
     }
 

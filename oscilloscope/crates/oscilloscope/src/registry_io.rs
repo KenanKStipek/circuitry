@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 
 use oscilloscope_core::model::RunModel;
 use oscilloscope_core::observe::now_rfc3339;
-use oscilloscope_core::registry::{self, Liveness, RegistryEntry};
+use oscilloscope_core::registry::{self, Liveness, PidLiveness, RegistryEntry};
 
 use crate::history_io::absolute_path;
 
@@ -183,7 +183,13 @@ impl RegistryHandle {
             let existing_path = registry::registry_file_path(dir, run_id);
             if let Ok(bytes) = std::fs::read(&existing_path) {
                 if let Ok(existing) = serde_json::from_slice::<RegistryEntry>(&bytes) {
-                    if self.liveness.is_alive(existing.pid) {
+                    // Unknown is treated the same as alive here: an
+                    // `is_watch` handle must never overwrite an
+                    // entry it couldn't confirm was actually gone.
+                    if matches!(
+                        self.liveness.check(existing.pid),
+                        PidLiveness::Alive | PidLiveness::Unknown
+                    ) {
                         self.skip_write = true;
                         return;
                     }
@@ -296,8 +302,12 @@ mod tests {
 
     struct FixedLiveness(std::collections::HashSet<u32>);
     impl Liveness for FixedLiveness {
-        fn is_alive(&self, pid: u32) -> bool {
-            self.0.contains(&pid)
+        fn check(&self, pid: u32) -> PidLiveness {
+            if self.0.contains(&pid) {
+                PidLiveness::Alive
+            } else {
+                PidLiveness::Gone
+            }
         }
     }
 
