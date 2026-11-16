@@ -597,7 +597,7 @@ def _mask_profile_schema_validation_lines(
     now matches word for word, issue #528 -- that header reads "<X>
     validation failed:", never "failed schema validation:", so it is
     never touched here): profiles validate against a separate Rust
-    `jsonschema` crate instead (settled ruling 9), which words the same
+    `jsonschema` crate instead, which words the same
     violation differently.
     """
     marker = "failed schema validation:\n"

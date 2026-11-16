@@ -1,7 +1,6 @@
-"""Tests for ``scripts/generate-conformance-cases.py``'s own T3 checks
-
-(issue #778 step 6: the generator refuses a conformance case that pins
-third-party text exactly)."""
+"""Tests for the checks in ``scripts/generate-conformance-cases.py`` that
+refuse a conformance case pinning third-party text exactly (issue #778,
+step 6)."""
 
 from __future__ import annotations
 
