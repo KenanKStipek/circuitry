@@ -427,6 +427,21 @@ def run_curl(
     return _run_curl_posix(cmd, config_bytes, data)
 
 
+def probe_head(url: str, *, timeout_seconds: int) -> subprocess.CompletedProcess[str]:
+    """``HEAD url`` through the same ``--config`` plumbing as :func:`run_curl`
+    -- a schemeless ``url`` normalized and the proxy decision applied
+    before any I/O, argv carrying nothing a configured ``base_url``'s
+    userinfo could put on ``ps`` (issue #778), for a surface that only
+    needs to know a server answers, not to read its body.
+    """
+    config_bytes, cmd = _build_config_and_cmd(
+        url=url, headers=(), data=None, timeout_seconds=timeout_seconds, extra_args=("--head",)
+    )
+    if os.name == "nt":
+        return _run_curl_windows(cmd, config_bytes, None)
+    return _run_curl_posix(cmd, config_bytes, None)
+
+
 def run_curl_streaming(
     *,
     url: str,

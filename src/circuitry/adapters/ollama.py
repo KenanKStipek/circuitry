@@ -1,19 +1,17 @@
 from __future__ import annotations
 
 import json
-import os
 import shutil
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
 from .. import http_conventions
-from ..core.cancellation import run_tracked
 from ..curl_support import (
     curl_error_code,
     curl_failure_message,
     parse_error_body,
+    probe_head,
     redact_host_url,
     run_curl,
     run_curl_streaming,
@@ -430,33 +428,15 @@ class OllamaAdapter:
             # Probe the Ollama daemon. Failure here is non-fatal at validate
             # time; doctor surfaces it as actionable.
             try:
+                # Routed through the same `--config` plumbing as every
+                # other curl call this adapter makes -- never a bare
+                # `--proxy <url>` on argv, where `ps` would show a proxy
+                # credential, and a schemeless `base_url`
+                # (`localhost:11434`) normalized the same way
+                # `_build_config_and_cmd` normalizes one for `run_curl`,
+                # rather than checked raw (issue #778).
                 url = self.base_url.rstrip("/") + "/api/tags"
-                # Issue #778 step 7, H-review P1-4: checked and routed
-                # through curl's own `--proxy`/`--noproxy` flags -- H1's
-                # decision, never curl's own environment reading -- the
-                # same as every other curl call this adapter makes
-                # (`run_curl`), rather than this one bare probe deciding
-                # on its own.
-                http_conventions.check_url(url)
-                parts = urllib.parse.urlsplit(url)
-                proxy_url = http_conventions.resolve_proxy(
-                    parts.scheme, parts.hostname or "", os.environ, port=parts.port
-                )
-                proxy_args = (
-                    ["--proxy", proxy_url] if proxy_url is not None else ["--noproxy", "*"]
-                )
-                proc = run_tracked(
-                    [
-                        "curl",
-                        "-q",
-                        "--silent",
-                        "--max-time",
-                        "2",
-                        *proxy_args,
-                        "--head",
-                        url,
-                    ],
-                )
+                proc = probe_head(url, timeout_seconds=2)
                 if proc.returncode != 0:
                     missing.append(f"host:{redact_host_url(self.base_url)}")
             except Exception:
