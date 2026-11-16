@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H1 (http_proxy is used for an http URL, as an absolute-form request line)",
+  "spec_case": "issue #778 step 7 (http_proxy is used for an http URL, as an absolute-form request line)",
   "description": "`http_proxy` points at the mock server; the `http` tool's target URL names a `.invalid` host a direct connection could never reach, so success here is only possible through the proxy. The mock server, acting as the proxy, records the request's own absolute-form target (`http://example.invalid/widgets`) rather than an origin-form path alone.",
   "engines": ["python", "electricity"],
   "expect": "success",

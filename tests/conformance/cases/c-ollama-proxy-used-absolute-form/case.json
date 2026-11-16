@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H1 (http_proxy is used for a curl-based adapter's base_url, as an absolute-form request line)",
+  "spec_case": "issue #778 step 7 (http_proxy is used for a curl-based adapter's base_url, as an absolute-form request line)",
   "description": "Ollama's own base_url names a `.invalid` host a direct connection could never reach; `http_proxy` points at the mock server, which records the request's own absolute-form target (`http://example.invalid/api/generate`) exactly the way the http tool's own proxy case does -- curl's own argv never carries any of this (issue #778 step 7's own --config wiring).",
   "engines": ["python", "electricity"],
   "config": "config.json",

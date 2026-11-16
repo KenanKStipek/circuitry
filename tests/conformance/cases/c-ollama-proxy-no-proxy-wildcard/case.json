@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H1 (no_proxy: '*' bypasses every host for a curl-based adapter too)",
+  "spec_case": "issue #778 step 7 (no_proxy: '*' bypasses every host for a curl-based adapter too)",
   "description": "`http_proxy` points at a closed port; `no_proxy: '*'` must bypass it for every host, including the mock server's own.",
   "engines": ["python", "electricity"],
   "config": "config.json",

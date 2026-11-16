@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H4 (the http tool refuses any scheme other than http/https before any I/O, and a curl-based adapter refuses the same way for its own base_url)",
+  "spec_case": "issue #778 step 7 (the http tool refuses any scheme other than http/https before any I/O, and a curl-based adapter refuses the same way for its own base_url)",
   "description": "ftp://, file:///<a real file in this case directory>, and data: are each refused before any I/O, absorbed by on_error: continue. The file:// case proves no local file was ever read: secret.txt carries a distinctive marker that never appears anywhere in the captured state, and the error text is the scheme-refusal message, never a file-read error. The fourth effect's own adapter base_url names ftp://, refused the same way through the shared curl choke point.",
   "engines": ["python", "electricity"],
   "config": "config.json",

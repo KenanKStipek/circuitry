@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H1 (uppercase HTTP_PROXY is never read for an http URL)",
+  "spec_case": "issue #778 step 7 (uppercase HTTP_PROXY is never read for an http URL)",
   "description": "`HTTP_PROXY` (uppercase) points at a closed port; `no_proxy` is cleared so nothing else could mask a bug. The target names the mock server directly -- if the uppercase variable were ever read, the request would be routed to the closed port and fail outright instead of reaching the mock.",
   "engines": ["python", "electricity"],
   "expect": "success",

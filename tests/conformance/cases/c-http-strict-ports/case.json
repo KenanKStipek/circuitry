@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H3 (strict port parsing, refused before any I/O, with one message on both engines)",
+  "spec_case": "issue #778 step 7 (strict port parsing, refused before any I/O, with one message on both engines)",
   "description": "Six strictly-invalid ports in the http tool's own URL (+9, 0_9, a space, abc, 0, 65536), one in a curl-based adapter's base_url, and one in a proxy URL -- every one refused before any I/O, absorbed by on_error: continue, each comparing the exact same refusal text on both engines. No mock server is needed: a strict-port refusal happens before any connection is ever attempted, so nothing here reaches the network even if the check regressed into a real DNS lookup.",
   "engines": ["python", "electricity"],
   "config": "config.json",

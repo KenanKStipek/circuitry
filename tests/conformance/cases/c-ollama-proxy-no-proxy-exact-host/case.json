@@ -1,5 +1,5 @@
 {
-  "spec_case": "issue #778 step 7, H1 (no_proxy bypasses an exact host match for a curl-based adapter too)",
+  "spec_case": "issue #778 step 7 (no_proxy bypasses an exact host match for a curl-based adapter too)",
   "description": "`http_proxy` points at the mock server; `no_proxy` names the target's own host (`127.0.0.1`) exactly, so the request must bypass the proxy and reach the mock directly.",
   "engines": ["python", "electricity"],
   "config": "config.json",
