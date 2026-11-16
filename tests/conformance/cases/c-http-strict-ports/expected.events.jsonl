@@ -1,0 +1,20 @@
+{"v":1,"seq":0,"ts":"2026-11-16T11:53:19.084Z","ev":"run_start","run_id":"8980532d-c4c3-4c4f-8fee-4f98414e5bc4","orchestration":"orchestration.yml","config":"config.json","engine":"cof 0.1.0","pid":74145}
+{"v":1,"seq":1,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":0,"path":"prime"}
+{"v":1,"seq":2,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":1,"path":"prime.plus_sign"}
+{"v":1,"seq":3,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":1,"path":"prime.plus_sign","ok":false,"ms":0,"error":"invalid port in URL 'http://host:+9/x': '+9'"}
+{"v":1,"seq":4,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":2,"path":"prime.digit_grouping"}
+{"v":1,"seq":5,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":2,"path":"prime.digit_grouping","ok":false,"ms":0,"error":"invalid port in URL 'http://host:0_9/x': '0_9'"}
+{"v":1,"seq":6,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":3,"path":"prime.leading_space"}
+{"v":1,"seq":7,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":3,"path":"prime.leading_space","ok":false,"ms":0,"error":"invalid port in URL 'http://host: 9/x': ' 9'"}
+{"v":1,"seq":8,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":4,"path":"prime.non_digit"}
+{"v":1,"seq":9,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":4,"path":"prime.non_digit","ok":false,"ms":0,"error":"invalid port in URL 'http://host:abc/x': 'abc'"}
+{"v":1,"seq":10,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":5,"path":"prime.zero"}
+{"v":1,"seq":11,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":5,"path":"prime.zero","ok":false,"ms":0,"error":"invalid port in URL 'http://host:0/x': '0'"}
+{"v":1,"seq":12,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":6,"path":"prime.over_max"}
+{"v":1,"seq":13,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":6,"path":"prime.over_max","ok":false,"ms":0,"error":"invalid port in URL 'http://host:65536/x': '65536'"}
+{"v":1,"seq":14,"ts":"2026-11-16T11:53:19.086Z","ev":"start","id":7,"path":"prime.proxy_url_port"}
+{"v":1,"seq":15,"ts":"2026-11-16T11:53:19.086Z","ev":"end","id":7,"path":"prime.proxy_url_port","ok":false,"ms":0,"error":"invalid port in URL 'http://127.0.0.1:0': '0'"}
+{"v":1,"seq":16,"ts":"2026-11-16T11:53:19.087Z","ev":"start","id":8,"path":"prime.adapter_base_url_port"}
+{"v":1,"seq":17,"ts":"2026-11-16T11:53:19.089Z","ev":"end","id":8,"path":"prime.adapter_base_url_port","ok":false,"ms":2,"error":"All adapter attempts failed: [{'adapter': 'ollama', 'model': 'm', 'status': 'failed', 'error': \"invalid port in URL 'http://127.0.0.1:0/api/generate': '0'\", 'tokens_sent': None, 'tokens_received': None}]"}
+{"v":1,"seq":18,"ts":"2026-11-16T11:53:19.089Z","ev":"end","id":0,"path":"prime","ok":true,"ms":3}
+{"v":1,"seq":19,"ts":"2026-11-16T11:53:19.089Z","ev":"run_end","ok":true}

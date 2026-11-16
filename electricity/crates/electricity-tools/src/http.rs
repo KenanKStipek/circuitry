@@ -2019,19 +2019,44 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
 }
 
 /// [`http_client::ProxyTarget`] for the current hop, H1's rule end to
-/// end (issue #778 step 7): [`http_client::resolve_proxy`]'s own
+/// end (issue #778 step 7): [`http_client::resolve_proxy_checked`]'s own
 /// environment lookup/`no_proxy` bypass -- by hostname alone, port
 /// stripped, matching [`split_netloc`]'s own target-host comparison --
 /// then [`parse_proxy`] for the proxy value itself, unquoting both the
 /// hostport and (when both a user and a password are present) the
-/// `Basic` credentials. `pub` (not `pub(crate)`): `electricity-adapters::
-/// cyberdiner` -- the one adapter that speaks urllib's own wire shape
-/// instead of curl's -- reuses this directly for its own proxy
-/// resolution (issue #515), rather than re-deriving the proxy-URL/auth
-/// parsing a second time.
-pub fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::ProxyTarget> {
+/// `Basic` credentials. `Err` (H1/H3) when the proxy value itself names
+/// an unsupported scheme or a strictly invalid port -- refused before
+/// any I/O, the same as the request URL's own port
+/// ([`request_host_port`]), rather than silently falling through to a
+/// direct connection ([`http_client::resolve_proxy`]'s own, more
+/// permissive contract, kept for a caller -- `electricity-adapters::
+/// cyberdiner`, `systemone`'s own webhook probe -- that still wants
+/// "couldn't be used" treated as "no proxy" rather than a hard
+/// refusal). `pub` (not `pub(crate)`): `electricity-adapters::
+/// cyberdiner` reuses this directly for its own proxy resolution
+/// (issue #515), rather than re-deriving the proxy-URL/auth parsing a
+/// second time.
+pub fn resolve_proxy_target(
+    scheme: &str,
+    netloc: &str,
+) -> Result<Option<http_client::ProxyTarget>, String> {
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    resolve_proxy_target_from(scheme, netloc, &env)
+}
+
+/// [`resolve_proxy_target`], over an explicit environment snapshot --
+/// the pure, test-driven form (same split as [`http_client::
+/// resolve_proxy_checked`]/[`http_client::resolve_proxy`]'s own).
+fn resolve_proxy_target_from(
+    scheme: &str,
+    netloc: &str,
+    env: &[(String, String)],
+) -> Result<Option<http_client::ProxyTarget>, String> {
     let (host_for_bypass, _) = split_netloc(netloc);
-    let proxy_value = http_client::resolve_proxy(scheme, &host_for_bypass)?;
+    let Some(proxy_value) = http_client::resolve_proxy_checked(scheme, &host_for_bypass, env)?
+    else {
+        return Ok(None);
+    };
     let parsed = parse_proxy(&proxy_value);
     let hostport = http_url::unquote(&parsed.hostport);
     let (proxy_host, proxy_port) = split_netloc(&hostport);
@@ -2045,11 +2070,11 @@ pub fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::P
         }
         _ => None,
     };
-    Some(http_client::ProxyTarget {
+    Ok(Some(http_client::ProxyTarget {
         host: proxy_host,
         port: proxy_port,
         basic_auth,
-    })
+    }))
 }
 
 // ---------------------------------------------------------------------
@@ -2113,7 +2138,13 @@ impl ToolPlugin for HttpPlugin {
                 Scheme::Http
             };
             let (host, port) = request_host_port(&split.netloc, &split.scheme, &current_url)?;
-            let proxy = resolve_proxy_target(&split.scheme, &split.netloc);
+            let proxy = resolve_proxy_target(&split.scheme, &split.netloc).map_err(|message| {
+                ToolError {
+                    py_class: PyExc::ValueError,
+                    message,
+                    cause: ErrorCause::None,
+                }
+            })?;
 
             let mut target = split.path.clone();
             if target.is_empty() {
@@ -2629,6 +2660,32 @@ mod port_tests {
             );
             assert_eq!(err.cause, ErrorCause::None);
         }
+    }
+
+    #[test]
+    fn resolve_proxy_target_refuses_an_invalid_proxy_port_before_any_io() {
+        let env = vec![("http_proxy".to_string(), "http://proxy:0".to_string())];
+        let err = resolve_proxy_target_from("http", "example.invalid", &env).unwrap_err();
+        assert_eq!(err, "invalid port in URL 'http://proxy:0': '0'");
+    }
+
+    #[test]
+    fn resolve_proxy_target_resolves_a_valid_proxy() {
+        let env = vec![("http_proxy".to_string(), "http://proxy:3128".to_string())];
+        let target = resolve_proxy_target_from("http", "example.invalid", &env)
+            .unwrap()
+            .unwrap();
+        assert_eq!(target.host, "proxy");
+        assert_eq!(target.port, 3128);
+    }
+
+    #[test]
+    fn resolve_proxy_target_is_none_with_no_proxy_configured() {
+        assert!(
+            resolve_proxy_target_from("http", "example.invalid", &[])
+                .unwrap()
+                .is_none()
+        );
     }
 }
 

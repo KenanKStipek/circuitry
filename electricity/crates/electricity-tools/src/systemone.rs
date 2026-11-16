@@ -1196,10 +1196,13 @@ impl SystemOnePlugin {
             Scheme::Http
         };
         let loopback = is_loopback_host(&server.host.to_lowercase());
+        // Same prior, more permissive contract as `cyberdiner.rs`'s own
+        // call site: a proxy value this crate can't use falls through to
+        // a direct connection here too, never a hard refusal.
         let proxy = if loopback {
             None
         } else {
-            crate::http::resolve_proxy_target(&server.scheme, &server.netloc)
+            crate::http::resolve_proxy_target(&server.scheme, &server.netloc).unwrap_or(None)
         };
 
         let mut headers: Vec<(String, String)> = vec![

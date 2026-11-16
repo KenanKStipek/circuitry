@@ -296,8 +296,15 @@ fn connect_target_for(parsed: &ParsedUrl, port: u16) -> ConnectTarget {
     } else {
         Scheme::Http
     };
+    // `resolve_proxy_target` now refuses a proxy value with an invalid
+    // scheme/port outright (H1/H3) -- this adapter keeps its own prior,
+    // more permissive contract (unlike the `http` tool, cyberdiner.py
+    // never adopted `http_conventions`'s own proxy rule): a proxy value
+    // it can't use falls through to a direct connection, never a hard
+    // refusal, so `unwrap_or(None)` is deliberate, not a shortcut.
     let proxy =
-        electricity_tools::http::resolve_proxy_target(&parsed.scheme, &netloc_for_proxy(parsed));
+        electricity_tools::http::resolve_proxy_target(&parsed.scheme, &netloc_for_proxy(parsed))
+            .unwrap_or(None);
     ConnectTarget {
         scheme,
         host: parsed.host.clone(),
