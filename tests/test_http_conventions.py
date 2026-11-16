@@ -179,6 +179,26 @@ def test_check_proxy_url_rejects_an_invalid_port() -> None:
         check_proxy_url("http://host:99999")
 
 
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("proxy.corp", "http://proxy.corp:80"),
+        ("http://proxy.corp", "http://proxy.corp:80"),
+        ("http://proxy.corp:", "http://proxy.corp:80"),
+        ("http://user:pass@proxy.corp", "http://user:pass@proxy.corp:80"),
+        ("http://[::1]", "http://[::1]:80"),
+        ("http://proxy.corp:3128", "http://proxy.corp:3128"),
+    ],
+)
+def test_check_proxy_url_writes_the_default_port_80_explicitly(value: str, expected: str) -> None:
+    """Issue #778 step 7, H-review P1-6: curl's own default for a
+    schemeless/portless proxy is 1080 (its historic SOCKS convention),
+    never H1's own 80 -- the default is written into the normalized
+    proxy URL explicitly so curl's own guess never applies.
+    """
+    assert check_proxy_url(value) == expected
+
+
 def test_split_proxy_url_without_userinfo() -> None:
     result = split_proxy_url("http://proxy.corp:3128")
     assert result.hostport == "proxy.corp:3128"

@@ -148,7 +148,7 @@ pub fn redact_url(url: &str) -> String {
 /// The raw port text in *host_port* (userinfo already stripped by the
 /// caller): `None` with no `:` separator at all (or none after an IPv6
 /// literal's own `]`), otherwise the (possibly empty) text after it.
-fn host_port_text(host_port: &str) -> Option<&str> {
+pub(crate) fn host_port_text(host_port: &str) -> Option<&str> {
     let rest = if let Some(after_bracket) = host_port.strip_prefix('[') {
         match after_bracket.find(']') {
             Some(end) => &after_bracket[end + 1..],

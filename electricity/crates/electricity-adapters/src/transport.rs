@@ -196,7 +196,10 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     // non-http(s) `base_url` -- one shared check, one shared text.
     electricity_tools::http_conventions::check_scheme(&scheme, &normalized, &["http", "https"])
         .map_err(TransportFailure::Validation)?;
-    let split_at = rest.find(['/', '?']);
+    // The authority ends at `/`, `?` or `#` (issue #778 step 7,
+    // H-review P2-14) -- a bare fragment with no path/query of its own
+    // (`http://h:80#x`) must not be read as part of the port.
+    let split_at = rest.find(['/', '?', '#']);
     let (authority, path_and_query) = match split_at {
         Some(idx) => (&rest[..idx], &rest[idx..]),
         None => (rest, ""),
@@ -212,9 +215,18 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         Some(idx) => (Some(&authority[..idx]), &authority[idx + 1..]),
         None => (None, authority),
     };
+    // Issue #778 step 7, H-review P1-7: curl (and the `http` tool's own
+    // `split_proxy_url`) percent-decodes userinfo before using it --
+    // whether it names the request's own credentials or a proxy's.
     let userinfo = userinfo_raw.map(|raw| match raw.split_once(':') {
-        Some((user, pass)) => (user.to_string(), pass.to_string()),
-        None => (raw.to_string(), String::new()),
+        Some((user, pass)) => (
+            electricity_tools::http::http_url::unquote(user),
+            electricity_tools::http::http_url::unquote(pass),
+        ),
+        None => (
+            electricity_tools::http::http_url::unquote(raw),
+            String::new(),
+        ),
     });
     // H3: the port is parsed strictly -- a value `u16::parse` would
     // reject outright (`99999`) used to silently fall back to the
@@ -1105,6 +1117,17 @@ mod tests {
     }
 
     #[test]
+    fn the_authority_ends_at_a_fragment_too() {
+        // Issue #778 step 7, H-review P2-14: a bare fragment right after
+        // the port (`http://h:80#x`) must not be read as part of the
+        // port text -- `cof` (`urllib.parse.urlsplit`) already stops the
+        // authority there.
+        let parsed = parse_url("http://h:80#x").unwrap();
+        assert_eq!(parsed.host, "h");
+        assert_eq!(parsed.port, Some(80));
+    }
+
+    #[test]
     fn a_non_http_proxy_scheme_refusal_never_names_the_credential() {
         let env = vec![(
             "all_proxy".to_string(),
@@ -1222,6 +1245,22 @@ mod tests {
         assert_eq!(target.host, "proxy");
         assert_eq!(target.port, 3128);
         assert_eq!(target.basic_auth, Some("dXNlcjpwYXNz".to_string()));
+    }
+
+    #[test]
+    fn percent_encoded_proxy_userinfo_is_decoded_before_basic_auth() {
+        // Issue #778 step 7, H-review P1-7: curl percent-decodes a proxy
+        // URL's userinfo before building `Proxy-Authorization`.
+        let env = vec![(
+            "http_proxy".to_string(),
+            "http://us%40er:pa%3Ass@proxy:3128".to_string(),
+        )];
+        let target = resolve_curl_proxy_from("http", "example.com", &env)
+            .unwrap()
+            .unwrap();
+        use base64::Engine;
+        let expected = base64::engine::general_purpose::STANDARD.encode("us@er:pa:ss");
+        assert_eq!(target.basic_auth, Some(expected));
     }
 
     #[tokio::test]

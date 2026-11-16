@@ -2071,7 +2071,14 @@ fn resolve_proxy_target_from(
     let parsed = parse_proxy(&proxy_value);
     let hostport = http_url::unquote(&parsed.hostport);
     let (proxy_host, proxy_port) = split_netloc(&hostport);
-    let proxy_port = proxy_port.unwrap_or_else(|| default_port(scheme));
+    // H-review P1-6: `http_client::resolve_proxy_checked` already
+    // writes `:80` into a portless proxy value explicitly, so this
+    // never actually triggers in practice -- kept as a defensive
+    // fallback with H1's own default (the *proxy*'s scheme, always
+    // `http`), never `default_port(scheme)`'s own target-scheme-
+    // dependent guess (443 for an https target), which is urllib's own
+    // quirk, not H1's.
+    let proxy_port = proxy_port.unwrap_or(80);
     // H-review P1-7: `Basic` auth applies whenever a user is present,
     // even with no password at all (`user@proxy`) -- not only when both
     // pieces are non-empty.

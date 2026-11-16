@@ -140,10 +140,29 @@ def _normalize_proxy_url(value: str) -> str:
     return value if "://" in value else f"http://{value}"
 
 
+def _with_default_port(url: str, default_port: int) -> str:
+    """*url* with ``:<default_port>`` written into its authority when it
+    names no port of its own, not even an empty one (H3: an absent port
+    means the scheme's own default). Every surface that reads this
+    normalized proxy URL back out (curl's ``--config``, the ``http``
+    tool's ``Request.set_proxy``) must see the real default explicitly,
+    since curl's *own* default for a schemeless/portless proxy is 1080,
+    its historic SOCKS-proxy convention — never H1's own 80 (issue #778
+    step 7, H-review P1-6).
+    """
+    parts = urllib.parse.urlsplit(url)
+    host_port = parts.netloc.rpartition("@")[2]
+    if _host_port_text(host_port):
+        return url
+    netloc = parts.netloc if host_port.endswith(":") else f"{parts.netloc}:"
+    return urllib.parse.urlunsplit(parts._replace(netloc=f"{netloc}{default_port}"))
+
+
 def check_proxy_url(value: str) -> str:
     """*value*, normalized (H1), with its scheme and port checked before
     any I/O: only an ``http`` proxy scheme is supported, and its port
-    follows :func:`check_strict_port`.
+    follows :func:`check_strict_port`. The returned URL always names a
+    port explicitly (:func:`_with_default_port`, H-review P1-6).
     """
     normalized = _normalize_proxy_url(value)
     scheme = urllib.parse.urlsplit(normalized).scheme.lower()
@@ -153,7 +172,7 @@ def check_proxy_url(value: str) -> str:
             "only http:// proxies are supported"
         )
     check_strict_port(normalized)
-    return normalized
+    return _with_default_port(normalized, 80)
 
 
 def _env_first(env: Mapping[str, str], names: tuple[str, ...]) -> str | None:

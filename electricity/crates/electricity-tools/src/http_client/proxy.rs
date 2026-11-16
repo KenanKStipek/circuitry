@@ -100,8 +100,45 @@ pub fn resolve_proxy_checked(
     let netloc_len = after_scheme
         .find(['/', '?', '#'])
         .unwrap_or(after_scheme.len());
-    crate::http_conventions::strict_port(&after_scheme[..netloc_len], &normalized)?;
-    Ok(Some(normalized))
+    let netloc = &after_scheme[..netloc_len];
+    crate::http_conventions::strict_port(netloc, &normalized)?;
+    Ok(Some(with_default_port(
+        &normalized,
+        authority_start,
+        netloc_len,
+        80,
+    )))
+}
+
+/// *url* with `:<default_port>` written into its authority (the
+/// `authority_start..authority_start + netloc_len` span) when it names
+/// no port of its own, not even an empty one -- curl's own default for
+/// a schemeless/portless proxy is 1080, its historic SOCKS convention,
+/// never H1's own 80, so the default is written in explicitly rather
+/// than left for curl (or `http.rs`'s own port-defaulting, which would
+/// otherwise use the *target* URL's scheme) to guess (issue #778 step
+/// 7, H-review P1-6).
+fn with_default_port(
+    url: &str,
+    authority_start: usize,
+    netloc_len: usize,
+    default_port: u16,
+) -> String {
+    let netloc = &url[authority_start..authority_start + netloc_len];
+    let host_port = match netloc.rfind('@') {
+        Some(at) => &netloc[at + 1..],
+        None => netloc,
+    };
+    if crate::http_conventions::host_port_text(host_port).is_some_and(|text| !text.is_empty()) {
+        return url.to_string();
+    }
+    let insert_at = authority_start + netloc_len;
+    let separator = if host_port.ends_with(':') { "" } else { ":" };
+    format!(
+        "{}{separator}{default_port}{}",
+        &url[..insert_at],
+        &url[insert_at..]
+    )
 }
 
 #[cfg(test)]
@@ -218,5 +255,29 @@ mod tests {
     fn resolve_proxy_checked_rejects_an_invalid_proxy_port() {
         let e = env(&[("http_proxy", "http://host:99999")]);
         assert!(resolve_proxy_checked("http", "example.com", &e).is_err());
+    }
+
+    #[test]
+    fn resolve_proxy_checked_writes_the_default_port_80_explicitly() {
+        // Issue #778 step 7, H-review P1-6: never left for curl's own
+        // 1080 default, or for `http.rs`'s own target-scheme-dependent
+        // fallback, to decide.
+        for (value, expected) in [
+            ("proxy.corp", "http://proxy.corp:80"),
+            ("http://proxy.corp", "http://proxy.corp:80"),
+            ("http://proxy.corp:", "http://proxy.corp:80"),
+            (
+                "http://user:pass@proxy.corp",
+                "http://user:pass@proxy.corp:80",
+            ),
+            ("http://proxy.corp:3128", "http://proxy.corp:3128"),
+        ] {
+            let e = env(&[("http_proxy", value)]);
+            assert_eq!(
+                resolve_proxy_checked("http", "example.com", &e).unwrap(),
+                Some(expected.to_string()),
+                "value: {value}"
+            );
+        }
     }
 }
