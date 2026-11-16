@@ -1104,8 +1104,7 @@ pub(crate) async fn maybe_decompose(
     // `exec::prompt`'s `?` to propagate to its own `on_error` handling.
     // Run-absolute (#811), not local to this document -- see
     // `Frame::effect_path`'s own doc comment.
-    let generating_effect_path =
-        format!("decomposition of '{}'", frame.effect_path(&op.path));
+    let generating_effect_path = format!("decomposition of '{}'", frame.effect_path(&op.path));
     let problems = match validate_plan(
         &plan,
         dset.max_chunks,
