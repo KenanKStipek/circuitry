@@ -262,9 +262,21 @@ fn urllib_headers(
 /// host_header_value`'s curl-flavored default-port omission every
 /// other adapter in this crate uses).
 fn urllib_host_header(parsed: &ParsedUrl) -> String {
+    // An IPv6 `host` ([`ParsedUrl`]'s own field is already bracket-
+    // stripped) needs its brackets back before a port can be
+    // appended, or the result is ambiguous -- `::1:8080` reads back
+    // as some other address entirely, not `::1` port `8080` -- and
+    // `netloc_for_proxy` below, which reuses this, would otherwise
+    // feed `split_netloc` a string a `no_proxy=::1` entry can never
+    // match (issue #778).
+    let host = if parsed.host.contains(':') {
+        format!("[{}]", parsed.host)
+    } else {
+        parsed.host.clone()
+    };
     match parsed.port {
-        Some(port) => format!("{}:{port}", parsed.host),
-        None => parsed.host.clone(),
+        Some(port) => format!("{host}:{port}"),
+        None => host,
     }
 }
 
@@ -1020,6 +1032,31 @@ mod tests {
             "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         )
+    }
+
+    #[test]
+    fn urllib_host_header_brackets_an_ipv6_host_before_appending_a_port() {
+        // Issue #778: `ParsedUrl.host` is already bracket-stripped, so
+        // appending a port without putting the brackets back would be
+        // ambiguous (`::1:8080` isn't `::1` port `8080`).
+        let parsed = parse_url("http://[::1]:8080/x").unwrap();
+        assert_eq!(urllib_host_header(&parsed), "[::1]:8080");
+    }
+
+    #[test]
+    fn urllib_host_header_brackets_a_portless_ipv6_host_too() {
+        let parsed = parse_url("http://[::1]/x").unwrap();
+        assert_eq!(urllib_host_header(&parsed), "[::1]");
+    }
+
+    #[test]
+    fn netloc_for_proxy_round_trips_an_ipv6_host_through_split_netloc() {
+        // Issue #778: the whole point of bracketing in
+        // `urllib_host_header` -- `resolve_proxy_target`'s own
+        // `split_netloc` must read the same host back out, or a
+        // `no_proxy=::1` entry silently stops matching.
+        let parsed = parse_url("http://[::1]:8080/x").unwrap();
+        assert_eq!(netloc_for_proxy(&parsed), "[::1]:8080");
     }
 
     /// Accepts one connection per scripted response, in order -- a
