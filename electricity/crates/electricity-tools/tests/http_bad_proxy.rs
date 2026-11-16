@@ -1,6 +1,6 @@
 //! `HttpPlugin::execute` -- a proxy value it can't use (an unsupported
 //! scheme here) is refused outright before any I/O, never silently
-//! treated as "no proxy" and sent direct (issue #778, N4; the `http`
+//! treated as "no proxy" and sent direct (issue #778; the `http`
 //! tool's own twin of `run_curl_bad_proxy.rs`). A separate test binary
 //! on purpose: this is the one test in this crate that sets the real
 //! `http_proxy` process environment `resolve_proxy_target` reads, and

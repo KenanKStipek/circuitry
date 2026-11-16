@@ -372,8 +372,8 @@ def test_run_curl_delivers_headers_and_body_without_putting_them_on_argv(
 
 class _NotFoundHandler(http.server.BaseHTTPRequestHandler):
     """Answers every request with a plain 404 -- no body, no JSON --
-    for :func:`test_probe_head_succeeds_on_a_4xx_response` (issue #778,
-    B4)."""
+    for :func:`test_probe_head_succeeds_on_a_4xx_response` (issue
+    #778)."""
 
     def do_HEAD(self) -> None:
         self.send_response(404)
@@ -388,7 +388,7 @@ class _NotFoundHandler(http.server.BaseHTTPRequestHandler):
 def test_probe_head_succeeds_on_a_4xx_response() -> None:
     """``probe_head`` cares only that the host answered -- a 404 (or
     401/405) means reachable, matching main's own pre-#778 probe and
-    electricity's own ``head_probe`` (issue #778, B4): it never adds
+    electricity's own ``head_probe`` (issue #778): it never adds
     ``--fail-with-body``, unlike :func:`run_curl`, which must fail a
     4xx/5xx for its own callers.
     """

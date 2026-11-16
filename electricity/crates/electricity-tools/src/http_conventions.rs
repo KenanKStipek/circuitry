@@ -269,7 +269,7 @@ fn port_in_range(port_text: &str) -> Option<u16> {
 /// the "port" text is really a credential fragment: the refusal never
 /// echoes it, and names *original_url* with everything up to the LAST
 /// `@` cut away instead of the usual userinfo-stripped form (issue
-/// #778, B2).
+/// #778).
 pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, String> {
     let host_port = match netloc.rfind('@') {
         Some(at) => &netloc[at + 1..],

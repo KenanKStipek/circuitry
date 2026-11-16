@@ -1,7 +1,7 @@
 //! `CyberdinerAdapter::generate` -- a proxy value this adapter can't
 //! use (an unsupported scheme here) is refused outright before any
 //! I/O, never silently treated as "no proxy" and sent direct (issue
-//! #778, N4; cyberdiner's own twin of `run_curl_bad_proxy.rs`). A
+//! #778; cyberdiner's own twin of `run_curl_bad_proxy.rs`). A
 //! separate test binary on purpose: this is the one test in this crate
 //! that sets the real `https_proxy` process environment
 //! `resolve_proxy_target` reads, and cargo gives each integration-test

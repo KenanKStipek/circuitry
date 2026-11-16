@@ -253,7 +253,7 @@ def _proxy_cases() -> list[dict[str, Any]]:
     add({"http_proxy": "http://alice:pa/ss@proxy:3128"}, "http", "example.com")
     add({"http_proxy": "http://alice:pa?ss@proxy:3128"}, "http", "example.com")
     add({"http_proxy": "http://alice:pa#ss@proxy:3128"}, "http", "example.com")
-    # A common form (issue #778, N1): a trailing `/` after an explicit
+    # A common form (issue #778): a trailing `/` after an explicit
     # port still works, and a portless value still gets this module's
     # own default (80), never curl's historic SOCKS default (1080).
     add({"http_proxy": "http://proxy.corp:3128/"}, "http", "example.com")

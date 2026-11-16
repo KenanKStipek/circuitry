@@ -84,7 +84,7 @@ def test_check_strict_port_never_echoes_a_password_disguised_as_a_port(char: str
     past it. Refused with the shared text, cut to the last ``@`` and the
     port text omitted entirely, never echoing the fragment (``pa``)
     that would otherwise look like an ordinary invalid port (issue
-    #778, B2).
+    #778).
     """
     url = f"https://user:pa{char}ss@api.example.com/v1"
     with pytest.raises(ValueError) as exc_info:
@@ -159,7 +159,7 @@ def test_strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() -> Non
 
 
 def test_strip_request_url_userinfo_strips_userinfo_with_no_port() -> None:
-    """Issue #778, N5: CPython's own ``http.client`` raises a bare,
+    """Issue #778: CPython's own ``http.client`` raises a bare,
     credential-bearing ``InvalidURL("nonnumeric port: 'pass@host'")``
     when a plain ``urllib.request.Request`` is built from a URL like
     this -- the ``http`` tool and cyberdiner build their
@@ -387,7 +387,7 @@ def test_check_proxy_url_rejects_an_invalid_port() -> None:
         ("http://user:pass@proxy.corp", "http://user:pass@proxy.corp:80"),
         ("http://[::1]", "http://[::1]:80"),
         ("http://proxy.corp:3128", "http://proxy.corp:3128"),
-        # A common form (issue #778, N1): a trailing `/` after an
+        # A common form (issue #778): a trailing `/` after an
         # explicit port still works like main, and a portless value
         # with one still gets this module's own default, the `/`
         # itself preserved rather than dropped.

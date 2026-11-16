@@ -239,7 +239,7 @@ def test_generate_happy_path_submit_poll_complete(
 def test_userinfo_with_no_port_never_reaches_urllib_unstripped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #778, N5: an ``expo_url`` with userinfo and no port
+    """Issue #778: an ``expo_url`` with userinfo and no port
     (``https://user:pass@host/``) builds a plain
     ``urllib.request.Request`` whose ``host`` keeps the userinfo
     verbatim, which then makes CPython's own ``http.client`` raise a
@@ -707,7 +707,7 @@ def test_connection_error_wrapped_in_runtime_error(
 def test_connection_error_never_names_a_password_in_the_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #778, B3: the connection-failure message names the URL
+    """Issue #778: the connection-failure message names the URL
     through ``redact_url`` (``display_url``), so a password in
     ``expo_url`` never reaches it -- the same guarantee electricity's
     cyberdiner now gives too.

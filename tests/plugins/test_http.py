@@ -171,7 +171,7 @@ def test_query_params_are_appended(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_userinfo_with_no_port_never_reaches_urllib_unstripped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #778, N5: a URL with userinfo and no port
+    """Issue #778: a URL with userinfo and no port
     (``http://user:pass@host/``) builds a plain
     ``urllib.request.Request`` whose ``host`` keeps the userinfo
     verbatim, which then makes CPython's own ``http.client`` raise a
@@ -330,7 +330,7 @@ def test_url_error_raises_actionable_runtime_error(
 def test_url_error_never_names_a_password_in_the_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Issue #778, B3: the connection-failure message names the URL
+    """Issue #778: the connection-failure message names the URL
     through ``redact_url``, so a password in it never reaches the
     message -- the same guarantee electricity's ``http`` tool now
     gives too.

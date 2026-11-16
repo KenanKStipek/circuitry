@@ -248,7 +248,7 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     // (userinfo still attached, when present), never *hostport* --
     // `strict_port` needs the whole authority to tell a genuine
     // userinfo apart from a password hidden behind the authority's
-    // own `/`/`?`/`#` boundary (issue #778, B2).
+    // own `/`/`?`/`#` boundary (issue #778).
     let port = electricity_tools::http_conventions::strict_port(authority, &normalized)
         .map_err(TransportFailure::Validation)?;
     let host = if let Some(rest) = hostport.strip_prefix('[') {
@@ -331,8 +331,8 @@ pub(crate) fn proxy_wire_headers(
 }
 
 /// [`proxy_wire_headers`], minus `Proxy-Connection: Keep-Alive` --
-/// cyberdiner's own wire headers must match cof's exactly (issue #778,
-/// N6): cof's cyberdiner sends a plain (non-CONNECT) proxied request
+/// cyberdiner's own wire headers must match cof's exactly (issue
+/// #778): cof's cyberdiner sends a plain (non-CONNECT) proxied request
 /// through urllib, which (unlike curl) never adds that header on its
 /// own.
 pub(crate) fn cyberdiner_proxy_headers(

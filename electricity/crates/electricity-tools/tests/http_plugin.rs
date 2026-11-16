@@ -608,7 +608,7 @@ async fn a_connection_refused_raises_the_wrapped_runtime_error() {
 
 #[tokio::test]
 async fn a_connection_refused_never_names_a_password_in_the_url() {
-    // Issue #778, B3: `send_error_to_tool_error`'s own `original_url`
+    // `send_error_to_tool_error`'s own `original_url`
     // (what becomes `HTTP request to {url} failed: ...`) is redacted
     // the same way cof's `plugins/http.py` already redacts its own
     // `redact_url(url)`.

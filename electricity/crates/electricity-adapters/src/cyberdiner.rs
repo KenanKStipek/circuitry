@@ -1324,10 +1324,10 @@ mod tests {
 
     #[tokio::test]
     async fn generate_never_names_a_password_in_a_url_on_a_connection_failure() {
-        // Issue #778, B3: `send_error`'s own `url` (what becomes
-        // `cyberdiner: request to {url} failed: ...`) is redacted the
-        // same way cof's `cyberdiner.py::_request` already redacts
-        // its own `display_url`.
+        // `send_error`'s own `url` (what becomes `cyberdiner:
+        // request to {url} failed: ...`) is redacted the same way
+        // cof's `cyberdiner.py::_request` already redacts its own
+        // `display_url` (issue #778).
         let addr = crate::test_support::closed_port();
         let a = adapter(&format!("http://alice:s3cr3t@{addr}"));
         let token = CancellationToken::new();

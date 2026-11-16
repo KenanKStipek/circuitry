@@ -314,7 +314,7 @@ def test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied(
 # ---------------------------------------------------------------------------
 # `open_with_proxy_rule`'s own redirect handler (cyberdiner, ollama's
 # `list_models`) -- the shared :class:`_OpenWithProxyRuleRedirectHandler`
-# in ``http_conventions``, never exercised until now (issue #778, N3).
+# in ``http_conventions``, never exercised until now (issue #778).
 # ---------------------------------------------------------------------------
 
 
@@ -324,7 +324,7 @@ def test_open_with_proxy_rule_strips_proxy_authorization_on_a_redirect_to_a_non_
     """Only ``http_proxy`` is set, so a redirect from a proxied
     ``http://`` URL to an ``https://`` one (no ``https_proxy``/
     ``all_proxy``) must not carry the first hop's ``Proxy-authorization``
-    to the now-direct connection (issue #778, N3) -- the same guarantee
+    to the now-direct connection (issue #778) -- the same guarantee
     ``test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied``
     pins for the ``http`` tool's own redirect handler, here for
     ``open_with_proxy_rule``'s instead.
@@ -350,7 +350,7 @@ def test_open_with_proxy_rule_refuses_a_redirect_to_a_non_http_scheme(
 ) -> None:
     """A redirect target's scheme is checked once the hop is actually
     followed -- ``file:``/``ftp:``/anything but http(s) is refused with
-    the shared text, never silently followed (issue #778, N3).
+    the shared text, never silently followed (issue #778).
     """
     _clear_proxy_env(monkeypatch)
     monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy.port}")
