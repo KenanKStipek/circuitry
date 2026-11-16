@@ -272,9 +272,10 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
 pub(crate) fn resolve_curl_proxy(
     scheme: &str,
     host: &str,
+    port: Option<u16>,
 ) -> Result<Option<ProxyTarget>, TransportFailure> {
     let env: Vec<(String, String)> = std::env::vars().collect();
-    resolve_curl_proxy_from(scheme, host, &env)
+    resolve_curl_proxy_from(scheme, host, port, &env)
 }
 
 /// The extra headers curl itself sends for a plain (non-CONNECT)
@@ -311,10 +312,12 @@ fn proxy_wire_headers(proxy: &Option<ProxyTarget>, scheme: Scheme) -> Vec<(Strin
 fn resolve_curl_proxy_from(
     scheme: &str,
     host: &str,
+    port: Option<u16>,
     env: &[(String, String)],
 ) -> Result<Option<ProxyTarget>, TransportFailure> {
-    let Some(value) = electricity_tools::http_client::resolve_proxy_checked(scheme, host, env)
-        .map_err(TransportFailure::Validation)?
+    let Some(value) =
+        electricity_tools::http_client::resolve_proxy_checked_with_port(scheme, host, port, env)
+            .map_err(TransportFailure::Validation)?
     else {
         return Ok(None);
     };
@@ -507,7 +510,7 @@ fn prepare_request(
     validate_request(url, headers)?;
     let parsed = parse_url(url)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
-    let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host)?;
+    let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port)?;
     let scheme_enum = if parsed.scheme == "https" {
         Scheme::Https
     } else {
@@ -729,7 +732,7 @@ pub async fn head_probe(url: &str, timeout: Duration) -> bool {
     } else {
         Scheme::Http
     };
-    let Ok(proxy) = resolve_curl_proxy(&parsed.scheme, &parsed.host) else {
+    let Ok(proxy) = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port) else {
         return false;
     };
     let Ok(client) = http_client::build_client() else {
@@ -1107,7 +1110,7 @@ mod tests {
     #[test]
     fn a_non_http_proxy_scheme_is_refused_before_any_io() {
         let env = vec![("http_proxy".to_string(), "socks5://proxy:1".to_string())];
-        let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
+        let err = resolve_curl_proxy_from("http", "example.com", None, &env).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
                 assert!(text.contains("unsupported proxy scheme"));
@@ -1133,7 +1136,7 @@ mod tests {
             "all_proxy".to_string(),
             "socks5://user:s3cr3t@proxy:1080".to_string(),
         )];
-        let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
+        let err = resolve_curl_proxy_from("http", "example.com", None, &env).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
                 assert_eq!(
@@ -1151,7 +1154,7 @@ mod tests {
     #[test]
     fn a_scheme_less_proxy_value_defaults_to_http_like_curl() {
         let env = vec![("http_proxy".to_string(), "proxy.corp:3128".to_string())];
-        let target = resolve_curl_proxy_from("http", "example.com", &env)
+        let target = resolve_curl_proxy_from("http", "example.com", None, &env)
             .unwrap()
             .unwrap();
         assert_eq!(target.host, "proxy.corp");
@@ -1239,7 +1242,7 @@ mod tests {
             "http_proxy".to_string(),
             "http://user:pass@proxy:3128".to_string(),
         )];
-        let target = resolve_curl_proxy_from("http", "example.com", &env)
+        let target = resolve_curl_proxy_from("http", "example.com", None, &env)
             .unwrap()
             .unwrap();
         assert_eq!(target.host, "proxy");
@@ -1255,7 +1258,7 @@ mod tests {
             "http_proxy".to_string(),
             "http://us%40er:pa%3Ass@proxy:3128".to_string(),
         )];
-        let target = resolve_curl_proxy_from("http", "example.com", &env)
+        let target = resolve_curl_proxy_from("http", "example.com", None, &env)
             .unwrap()
             .unwrap();
         use base64::Engine;

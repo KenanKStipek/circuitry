@@ -440,7 +440,7 @@ class OllamaAdapter:
                 http_conventions.check_url(url)
                 parts = urllib.parse.urlsplit(url)
                 proxy_url = http_conventions.resolve_proxy(
-                    parts.scheme, parts.hostname or "", os.environ
+                    parts.scheme, parts.hostname or "", os.environ, port=parts.port
                 )
                 proxy_args = (
                     ["--proxy", proxy_url] if proxy_url is not None else ["--noproxy", "*"]

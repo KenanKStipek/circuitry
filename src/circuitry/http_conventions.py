@@ -30,6 +30,7 @@ the real process environment, since every caller they have wants that.
 from __future__ import annotations
 
 import base64
+import ipaddress
 import os
 import re
 import urllib.parse
@@ -183,28 +184,76 @@ def _env_first(env: Mapping[str, str], names: tuple[str, ...]) -> str | None:
     return None
 
 
-def _no_proxy_bypasses(no_proxy: str, host: str) -> bool:
+def _is_ip_address(text: str) -> bool:
+    try:
+        ipaddress.ip_address(text)
+    except ValueError:
+        return False
+    return True
+
+
+def _host_matches_entry(host_lower: str, entry: str) -> bool:
+    """*host_lower* matches a bare (no-port) ``no_proxy`` *entry*: once
+    *host_lower* is itself an IP address, only an exact match counts --
+    never a domain suffix (H-review P2-13 — ``0.0.1`` must never bypass
+    ``127.0.0.1`` just because the text happens to end the same way a
+    real domain suffix would); a named host matches *host_lower*
+    exactly or as a domain suffix (a leading dot optional).
+    """
+    if _is_ip_address(host_lower):
+        return host_lower == entry
+    return host_lower == entry or host_lower.endswith(f".{entry}")
+
+
+def _no_proxy_bypasses(no_proxy: str, host: str, port: int | None) -> bool:
     if no_proxy.strip() == "*":
         return True
     host_lower = host.lower()
     for raw_entry in no_proxy.split(","):
-        entry = raw_entry.strip().lower().lstrip(".")
+        entry = raw_entry.strip().lower()
         if not entry:
             continue
-        if host_lower == entry or host_lower.endswith(f".{entry}"):
+        if _is_ip_address(entry) or _is_ip_address(host_lower):
+            # A bare IP (v4, or v6 with no brackets) is never split for
+            # a port -- its own colons are address separators, not a
+            # port delimiter (an IPv6 entry bracketed *with* a port,
+            # `[::1]:8080`, isn't supported either way); once *host* is
+            # an IP, only an exact match counts even against a non-IP
+            # (malformed) entry text.
+            if host_lower == entry:
+                return True
+            continue
+        # H-review P2-13: a `host:port` entry bypasses only that host on
+        # that exact port -- never any other port the same host is
+        # reached on.
+        entry_host, colon, entry_port_text = entry.rpartition(":")
+        if colon and entry_host and entry_port_text.isdigit():
+            if (
+                port is not None
+                and int(entry_port_text) == port
+                and _host_matches_entry(host_lower, entry_host.lstrip("."))
+            ):
+                return True
+            continue
+        if _host_matches_entry(host_lower, entry.lstrip(".")):
             return True
     return False
 
 
-def resolve_proxy(scheme: str, host: str, env: Mapping[str, str]) -> str | None:
-    """The proxy URL for *scheme*/*host* under H1's rule, normalized and
-    checked (:func:`check_proxy_url`), or ``None`` when no proxy applies —
-    no proxy is configured for *scheme*, or ``no_proxy``/``NO_PROXY``
-    bypasses *host*. *env* is an explicit snapshot, never read from the
-    real process environment by this function.
+def resolve_proxy(
+    scheme: str, host: str, env: Mapping[str, str], *, port: int | None = None
+) -> str | None:
+    """The proxy URL for *scheme*/*host*(:*port*) under H1's rule,
+    normalized and checked (:func:`check_proxy_url`), or ``None`` when no
+    proxy applies — no proxy is configured for *scheme*, or
+    ``no_proxy``/``NO_PROXY`` bypasses *host*. *port* only ever matters
+    for a ``host:port`` ``no_proxy`` entry (H-review P2-13); omit it (or
+    pass ``None``) where the caller has no port to give, which simply
+    means no such entry can ever match. *env* is an explicit snapshot,
+    never read from the real process environment by this function.
     """
     no_proxy = _env_first(env, ("no_proxy", "NO_PROXY")) or ""
-    if _no_proxy_bypasses(no_proxy, host):
+    if _no_proxy_bypasses(no_proxy, host, port):
         return None
     if scheme == "http":
         names: tuple[str, ...] = ("http_proxy",)
@@ -259,8 +308,8 @@ def apply_request_proxy(req: urllib.request.Request) -> None:
     (:func:`resolve_proxy`, :func:`check_proxy_url`) still takes an
     explicit mapping.
     """
-    host = urllib.parse.urlsplit(req.full_url).hostname or ""
-    proxy_url = resolve_proxy(req.type, host, os.environ)
+    split = urllib.parse.urlsplit(req.full_url)
+    proxy_url = resolve_proxy(req.type, split.hostname or "", os.environ, port=split.port)
     if proxy_url is None:
         return
     proxy = split_proxy_url(proxy_url)

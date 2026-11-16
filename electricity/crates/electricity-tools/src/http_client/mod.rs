@@ -44,7 +44,7 @@
 
 mod proxy;
 
-pub use proxy::resolve_proxy_checked;
+pub use proxy::{resolve_proxy_checked, resolve_proxy_checked_with_port};
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Full};

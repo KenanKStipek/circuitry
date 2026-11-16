@@ -159,6 +159,23 @@ def test_no_proxy_uppercase_fallback() -> None:
     assert resolve_proxy("http", "example.com", env) is None
 
 
+def test_no_proxy_ip_entry_matches_only_that_exact_ip() -> None:
+    """Issue #778 step 7, H-review P2-13: an IP entry is never a domain
+    suffix -- ``0.0.1`` must not bypass ``127.0.0.1``.
+    """
+    env = {"http_proxy": "http://p:1", "no_proxy": "0.0.1"}
+    assert resolve_proxy("http", "127.0.0.1", env) == "http://p:1"
+    assert resolve_proxy("http", "0.0.1", env) is None
+
+
+def test_no_proxy_host_port_entry_matches_only_that_host_on_that_port() -> None:
+    """Issue #778 step 7, H-review P2-13."""
+    env = {"http_proxy": "http://p:1", "no_proxy": "example.com:8080"}
+    assert resolve_proxy("http", "example.com", env, port=8080) is None
+    assert resolve_proxy("http", "example.com", env, port=80) == "http://p:1"
+    assert resolve_proxy("http", "example.com", env) == "http://p:1"
+
+
 def test_no_proxy_entries_are_comma_separated() -> None:
     env = {"http_proxy": "http://p:1", "no_proxy": "a.com, example.com ,b.com"}
     assert resolve_proxy("http", "example.com", env) is None

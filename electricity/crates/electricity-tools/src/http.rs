@@ -2063,8 +2063,13 @@ fn resolve_proxy_target_from(
     netloc: &str,
     env: &[(String, String)],
 ) -> Result<Option<http_client::ProxyTarget>, String> {
-    let (host_for_bypass, _) = split_netloc(netloc);
-    let Some(proxy_value) = http_client::resolve_proxy_checked(scheme, &host_for_bypass, env)?
+    let (host_for_bypass, port_for_bypass) = split_netloc(netloc);
+    let Some(proxy_value) = http_client::resolve_proxy_checked_with_port(
+        scheme,
+        &host_for_bypass,
+        port_for_bypass,
+        env,
+    )?
     else {
         return Ok(None);
     };

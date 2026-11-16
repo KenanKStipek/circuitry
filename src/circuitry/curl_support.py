@@ -368,7 +368,9 @@ def _build_config_and_cmd(
     normalized_url = url if "://" in url else f"http://{url}"
     http_conventions.check_url(normalized_url)
     parts = urllib.parse.urlsplit(normalized_url)
-    proxy_url = http_conventions.resolve_proxy(parts.scheme, parts.hostname or "", os.environ)
+    proxy_url = http_conventions.resolve_proxy(
+        parts.scheme, parts.hostname or "", os.environ, port=parts.port
+    )
 
     header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
     config_bytes = _curl_config_file(url, header_items, proxy_url=proxy_url).encode()

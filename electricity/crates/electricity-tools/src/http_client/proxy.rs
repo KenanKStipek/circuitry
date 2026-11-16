@@ -29,31 +29,80 @@ fn env_first(env: &[(String, String)], names: &[&str]) -> Option<String> {
     None
 }
 
+fn is_ip_address(text: &str) -> bool {
+    text.parse::<std::net::IpAddr>().is_ok()
+}
+
+/// *host_lower* matches a bare (no-port) `no_proxy` *entry*: once
+/// *host_lower* is itself an IP address, only an exact match counts --
+/// never a domain suffix (issue #778 step 7, H-review P2-13 -- `0.0.1`
+/// must never bypass `127.0.0.1` just because the text happens to end
+/// the same way a real domain suffix would); a named host matches
+/// *host_lower* exactly or as a domain suffix (a leading dot optional).
+fn host_matches_entry(host_lower: &str, entry: &str) -> bool {
+    if is_ip_address(host_lower) {
+        return host_lower == entry;
+    }
+    host_lower == entry || host_lower.ends_with(&format!(".{entry}"))
+}
+
 /// H1's `no_proxy`/`NO_PROXY`: a comma-separated list; `*` bypasses
-/// everything, and an entry matches *host* exactly or as a domain suffix
-/// (a leading dot is optional). An IP entry matches that IP; CIDR is not
-/// supported.
-fn no_proxy_bypasses(no_proxy: &str, host: &str) -> bool {
+/// everything, and a named entry matches *host* exactly or as a domain
+/// suffix (a leading dot is optional). An IP entry matches only that
+/// exact IP (no suffix, no CIDR). A `host:port` entry (the host part
+/// not itself an IP) bypasses only that host on that exact *port* --
+/// `None` (no port to compare against) means such an entry can never
+/// match (issue #778 step 7, H-review P2-13).
+fn no_proxy_bypasses(no_proxy: &str, host: &str, port: Option<u16>) -> bool {
     if no_proxy.trim() == "*" {
         return true;
     }
     let host_lower = host.to_ascii_lowercase();
-    no_proxy.split(',').any(|raw_entry| {
-        let entry = raw_entry
-            .trim()
-            .trim_start_matches('.')
-            .to_ascii_lowercase();
-        !entry.is_empty() && (host_lower == entry || host_lower.ends_with(&format!(".{entry}")))
-    })
+    for raw_entry in no_proxy.split(',') {
+        let entry = raw_entry.trim().to_ascii_lowercase();
+        if entry.is_empty() {
+            continue;
+        }
+        if is_ip_address(&entry) || is_ip_address(&host_lower) {
+            if host_lower == entry {
+                return true;
+            }
+            continue;
+        }
+        if let Some((entry_host, entry_port_text)) = entry.rsplit_once(':') {
+            if !entry_host.is_empty()
+                && !entry_port_text.is_empty()
+                && entry_port_text.chars().all(|c| c.is_ascii_digit())
+            {
+                if let (Some(port), Ok(entry_port)) = (port, entry_port_text.parse::<u16>()) {
+                    if entry_port == port
+                        && host_matches_entry(&host_lower, entry_host.trim_start_matches('.'))
+                    {
+                        return true;
+                    }
+                }
+                continue;
+            }
+        }
+        if host_matches_entry(&host_lower, entry.trim_start_matches('.')) {
+            return true;
+        }
+    }
+    false
 }
 
 /// H1's scheme-specific lookup, before the `all_proxy`/`ALL_PROXY`
 /// fallback: an `http` URL uses `http_proxy`, lowercase only -- uppercase
 /// `HTTP_PROXY` is never read; an `https` URL uses `https_proxy`, then
 /// `HTTPS_PROXY`.
-fn proxy_value(scheme: &str, host: &str, env: &[(String, String)]) -> Option<String> {
+fn proxy_value(
+    scheme: &str,
+    host: &str,
+    port: Option<u16>,
+    env: &[(String, String)],
+) -> Option<String> {
     let no_proxy = env_first(env, &["no_proxy", "NO_PROXY"]).unwrap_or_default();
-    if no_proxy_bypasses(&no_proxy, host) {
+    if no_proxy_bypasses(&no_proxy, host, port) {
         return None;
     }
     let scheme_specific = match scheme {
@@ -64,19 +113,35 @@ fn proxy_value(scheme: &str, host: &str, env: &[(String, String)]) -> Option<Str
     scheme_specific.or_else(|| env_first(env, &["all_proxy", "ALL_PROXY"]))
 }
 
-/// H1's rule for *scheme*/*host*, normalized and checked -- *env* an
-/// explicit snapshot, never read from the real process environment by
-/// this function. `Ok(None)` when no proxy applies (unset, or `no_proxy`
-/// bypasses *host*); `Ok(Some(url))` with a `http://`-scheme URL (a
-/// value with no `scheme://` prefix defaults to that); `Err` with
-/// Circuitry's own refusal text when the value names an unsupported
-/// proxy scheme, or its port is strictly invalid (H3).
+/// [`resolve_proxy_checked_with_port`] with no port to compare a
+/// `host:port` `no_proxy` entry against -- the plain form every
+/// existing test (and `electricity-adapters::transport`'s own two real
+/// call sites' *predecessor*) uses.
 pub fn resolve_proxy_checked(
     scheme: &str,
     host: &str,
     env: &[(String, String)],
 ) -> Result<Option<String>, String> {
-    let Some(value) = proxy_value(scheme, host, env) else {
+    resolve_proxy_checked_with_port(scheme, host, None, env)
+}
+
+/// H1's rule for *scheme*/*host*(:*port*), normalized and checked --
+/// *env* an explicit snapshot, never read from the real process
+/// environment by this function. `Ok(None)` when no proxy applies
+/// (unset, or `no_proxy` bypasses *host*); `Ok(Some(url))` with a
+/// `http://`-scheme URL (a value with no `scheme://` prefix defaults to
+/// that); `Err` with Circuitry's own refusal text when the value names
+/// an unsupported proxy scheme, or its port is strictly invalid (H3).
+/// *port* only ever matters for a `host:port` `no_proxy` entry (issue
+/// #778 step 7, H-review P2-13); `None` means such an entry can never
+/// match.
+pub fn resolve_proxy_checked_with_port(
+    scheme: &str,
+    host: &str,
+    port: Option<u16>,
+    env: &[(String, String)],
+) -> Result<Option<String>, String> {
+    let Some(value) = proxy_value(scheme, host, port, env) else {
         return Ok(None);
     };
     let normalized = if value.contains("://") {
@@ -227,6 +292,39 @@ mod tests {
         );
         assert_eq!(
             resolve_proxy_checked("http", "notexample.com", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+    }
+
+    #[test]
+    fn no_proxy_ip_entry_matches_only_that_exact_ip() {
+        // Issue #778 step 7, H-review P2-13: `0.0.1` must not bypass
+        // `127.0.0.1` by suffix.
+        let e = env(&[("http_proxy", "http://p:1"), ("no_proxy", "0.0.1")]);
+        assert_eq!(
+            resolve_proxy_checked("http", "127.0.0.1", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+        assert_eq!(resolve_proxy_checked("http", "0.0.1", &e).unwrap(), None);
+    }
+
+    #[test]
+    fn no_proxy_host_port_entry_matches_only_that_host_on_that_port() {
+        // Issue #778 step 7, H-review P2-13.
+        let e = env(&[
+            ("http_proxy", "http://p:1"),
+            ("no_proxy", "example.com:8080"),
+        ]);
+        assert_eq!(
+            resolve_proxy_checked_with_port("http", "example.com", Some(8080), &e).unwrap(),
+            None
+        );
+        assert_eq!(
+            resolve_proxy_checked_with_port("http", "example.com", Some(80), &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+        assert_eq!(
+            resolve_proxy_checked("http", "example.com", &e).unwrap(),
             Some("http://p:1".to_string())
         );
     }
