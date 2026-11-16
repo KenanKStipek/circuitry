@@ -6,39 +6,6 @@
 //! this is never third-party text -- it is Circuitry's own, compared
 //! exactly.
 
-/// `curl_support.py::_URL_USERINFO_RE` -- `://user[:pass]@` becomes
-/// `://`, wherever it occurs in *text* (hint/prose text included, not
-/// just a bare URL), for a refusal message -- never the raw value,
-/// which can carry a credential. Shared with `electricity-adapters::
-/// curl_text`, which re-exports this rather than keeping a second copy.
-pub fn strip_url_userinfo(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    loop {
-        let Some(scheme_idx) = rest.find("://") else {
-            out.push_str(rest);
-            break;
-        };
-        let after_scheme = &rest[scheme_idx + 3..];
-        // The authority ends at the first `/` or whitespace; a password
-        // inside it can itself contain `@`, so the userinfo is everything
-        // up to the *last* `@` in that span, not the first one (issue
-        // #778) -- stopping at the first would
-        // leave a fragment of the password (e.g. `ss@proxy` out of
-        // `alice:p@ss@proxy`) in the stripped text.
-        let boundary = after_scheme
-            .find(|c: char| c.is_whitespace() || c == '/')
-            .unwrap_or(after_scheme.len());
-        let authority = &after_scheme[..boundary];
-        out.push_str(&rest[..scheme_idx + 3]);
-        match authority.rfind('@') {
-            Some(last_at) => rest = &after_scheme[last_at + 1..],
-            None => rest = after_scheme,
-        }
-    }
-    out
-}
-
 /// `curl_support.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
 /// *search* (not a full match) for any of these words anywhere in a
 /// query key.
@@ -139,8 +106,7 @@ pub fn mask_credential_query_params(url: &str) -> String {
 
 /// `http_conventions._strip_request_url_userinfo` -- the LAST `@`
 /// inside [`crate::http::http_url::urlsplit`]'s own `netloc`, not a
-/// `/`, `?`, `#` or whitespace boundary the way [`strip_url_userinfo`]
-/// (a free-text scrub) needs to stay inside: this always receives one
+/// `/`, `?`, `#` or whitespace boundary: this always receives one
 /// whole URL, never prose with one embedded somewhere, so building the
 /// redaction from the parsed authority directly -- instead of a regex-
 /// style heuristic -- means a password containing any ASCII control
@@ -304,17 +270,11 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
     if let Some(value) = port_in_range(port_text) {
         return Ok(Some(value));
     }
+    let redacted = redact_request_url(original_url);
     if at_follows_netloc(original_url, netloc) {
-        return Err(format!(
-            "invalid port in URL '{}'",
-            redact_proxy_value(original_url)
-        ));
+        return Err(format!("invalid port in URL '{redacted}'"));
     }
-    Err(format!(
-        "invalid port in URL '{}': '{}'",
-        redact_url(original_url),
-        port_text
-    ))
+    Err(format!("invalid port in URL '{redacted}': '{port_text}'"))
 }
 
 /// Like [`strict_port`], but for a proxy value: its host[:port] text
@@ -339,22 +299,29 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
     ))
 }
 
-/// *url*, redacted for any refusal or `host:` text that names a
-/// request URL: [`redact_proxy_value`] when [`at_follows_netloc`] is
-/// true (a password hidden behind a `/`, `?` or `#` can still smuggle
-/// a second, real host past the parsed authority, so the whole value
-/// -- never just the authority's own userinfo -- is cut away at the
-/// LAST `@`); [`redact_url`] otherwise (issue #778). Shared by every
-/// surface that names a request URL after parsing it: [`check_scheme`],
-/// `curl_text::redact_host_url`, and every adapter error that names a
-/// request URL after I/O.
+/// *url*, redacted for any refusal, warning, event, state, hint or
+/// `host:` text that names a request URL -- the one function every
+/// such caller uses, never [`redact_url`] or [`redact_proxy_value`]
+/// directly: [`redact_proxy_value`] when [`at_follows_netloc`] is true
+/// (a password hidden behind a `/`, `?` or `#` can still smuggle a
+/// second, real host past the parsed authority, so the whole value --
+/// never just the authority's own userinfo -- is cut away at the LAST
+/// `@`); [`strip_request_url_userinfo`] otherwise. Either way, the cut
+/// runs *before* any credential-like query parameter is masked:
+/// masking first re-encodes a query string's own `@` as `%40`, so a
+/// cut that ran afterward would no longer find it (issue #778). Shared
+/// by every surface that names a request URL after parsing it:
+/// [`check_scheme`], [`strict_port`], `curl_text::redact_host_url`,
+/// `curl_text::curl_failure_message`, and every adapter error that
+/// names a request URL after I/O.
 pub fn redact_request_url(url: &str) -> String {
     let netloc = crate::http::http_url::urlsplit(url, "").netloc;
-    if at_follows_netloc(url, &netloc) {
+    let cut = if at_follows_netloc(url, &netloc) {
         redact_proxy_value(url)
     } else {
-        redact_url(url)
-    }
+        strip_request_url_userinfo(url)
+    };
+    mask_credential_query_params(&cut)
 }
 
 /// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
@@ -402,27 +369,6 @@ pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn strip_url_userinfo_removes_credentials() {
-        assert_eq!(
-            strip_url_userinfo("http://user:pass@host/x"),
-            "http://host/x"
-        );
-    }
-
-    #[test]
-    fn strip_url_userinfo_leaves_a_plain_url_unchanged() {
-        assert_eq!(strip_url_userinfo("http://host/x"), "http://host/x");
-    }
-
-    #[test]
-    fn strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() {
-        let redacted = strip_url_userinfo("socks5://alice:p@ss@proxy:1080/x");
-        assert_eq!(redacted, "socks5://proxy:1080/x");
-        assert!(!redacted.contains("alice"));
-        assert!(!redacted.contains("p@ss"));
-    }
 
     #[test]
     fn strict_port_accepts_an_absent_or_empty_port() {

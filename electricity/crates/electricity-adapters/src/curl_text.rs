@@ -1,13 +1,17 @@
 //! `curl_support.py`'s own failure-message/masking helpers, ported --
-//! `curl_failure_message`, `parse_error_body`, the three maskers, and
-//! the curl exit-code-to-[`RetryInfo`] mapping. Every adapter in this
-//! crate that calls [`crate::transport::run_curl`] builds its own
-//! failure message through [`curl_failure_message`], never directly:
-//! this is the one place a secret gets masked out of a message before
-//! it is ever returned (issue #503's own "Security" section -- no
-//! request/response body, header value or key is ever logged, and
-//! every failure text passes through this module's own masking before
-//! `exec/prompt.rs`'s `redact()` ever sees it).
+//! `curl_failure_message`, `parse_error_body`, and the curl exit-code-
+//! to-[`RetryInfo`] mapping. Every adapter in this crate that calls
+//! [`crate::transport::run_curl`] builds its own failure message
+//! through [`curl_failure_message`], never directly: this is the one
+//! place a secret gets masked out of a message before it is ever
+//! returned (issue #503's own "Security" section -- no request/
+//! response body, header value or key is ever logged, and every
+//! failure text passes through this module's own masking before
+//! `exec/prompt.rs`'s `redact()` ever sees it). A request URL is named
+//! only through [`electricity_tools::http_conventions::redact_request_
+//! url`] (issue #778) -- never the weaker userinfo/query maskers that
+//! function itself is built from, which stay private to
+//! `electricity-tools::http_conventions`.
 
 use crate::transport::CurlOutcome;
 use electricity_value::Value;
@@ -99,14 +103,6 @@ fn mask_secrets(text: &str, secrets: &[&str]) -> String {
     out
 }
 
-/// Moved to `electricity_tools::http_conventions` (issue #778 step 7),
-/// which has every other scheme/port refusal's own message-masking
-/// logic now too -- re-exported under these same names so every
-/// existing call site and test in this module is unaffected.
-pub(crate) use electricity_tools::http_conventions::{
-    mask_credential_query_params, strip_url_userinfo,
-};
-
 /// `curl_support.py::redact_host_url` -- masks a URL for a preflight
 /// `host:{url}` requirement text: userinfo stripped, then any
 /// credential-like query parameter masked, the same two masks
@@ -124,8 +120,14 @@ pub fn redact_host_url(url: &str) -> String {
 /// without ever including the request body/headers. *secrets* are the
 /// raw credential values this request sent; masked out of *stdout*/
 /// *stderr* before the body is parsed, and out of the final message
-/// (and its embedded URL/hint) again afterward, so a secret split by
-/// truncation can't survive as a partial match.
+/// again afterward, so a secret split by truncation can't survive as a
+/// partial match. *url* is named through [`electricity_tools::
+/// http_conventions::redact_request_url`] -- the one function that
+/// redacts a request URL for error text on either engine -- so a
+/// password hidden anywhere in it, including behind a `/`, `?` or `#`,
+/// never reaches the message. *hint* is never redacted here: a caller
+/// that builds one naming a URL (`ollama.rs::ollama_hint`) must redact
+/// it itself before passing it in, through the same function.
 #[allow(clippy::too_many_arguments)]
 pub fn curl_failure_message(
     source: &str,
@@ -153,14 +155,13 @@ pub fn curl_failure_message(
     };
     let mut message = format!(
         "{source} request failed (curl exit {returncode}){model_part} url={}: {detail}",
-        mask_credential_query_params(url)
+        electricity_tools::http_conventions::redact_request_url(url)
     );
     if !hint.is_empty() {
         message.push(' ');
         message.push_str(hint);
     }
-    message = mask_secrets(&message, &secrets);
-    strip_url_userinfo(&message)
+    mask_secrets(&message, &secrets)
 }
 
 /// `adapters/_retry.py::classify_curl_exit`, re-shaped around
@@ -287,30 +288,6 @@ mod tests {
         assert_eq!(
             parse_error_body("<html>oops</html>"),
             Some("<html>oops</html>".to_string())
-        );
-    }
-
-    #[test]
-    fn mask_credential_query_params_masks_matching_keys_only() {
-        let url = "https://api.example.com/search?key=secret&q=weather";
-        assert_eq!(
-            mask_credential_query_params(url),
-            "https://api.example.com/search?key=%2A%2A%2A&q=weather"
-        );
-    }
-
-    #[test]
-    fn mask_credential_query_params_leaves_a_url_with_no_query_unchanged() {
-        let url = "https://api.example.com/search";
-        assert_eq!(mask_credential_query_params(url), url);
-    }
-
-    #[test]
-    fn strip_url_userinfo_removes_credentials_wherever_they_occur() {
-        let text = "connect to http://user:pass@127.0.0.1:1 failed";
-        assert_eq!(
-            strip_url_userinfo(text),
-            "connect to http://127.0.0.1:1 failed"
         );
     }
 

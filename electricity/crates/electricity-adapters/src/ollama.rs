@@ -174,9 +174,10 @@ fn ollama_hint(
 ) -> String {
     match returncode {
         7 => format!(
-            "Ollama at {base_url} is not reachable. Start it (`ollama serve`), or set \
+            "Ollama at {} is not reachable. Start it (`ollama serve`), or set \
              `runtime.adapters.{name}.base_url` in your config. Run `cof doctor` to verify \
-             connectivity."
+             connectivity.",
+            redact_host_url(base_url)
         ),
         28 => format!(
             "The model didn't finish within {timeout_seconds}s. Raise \
@@ -897,6 +898,37 @@ mod tests {
     fn build_ollama_defaults_the_base_url() {
         let adapter = build_ollama("ollama", &Value::None).unwrap();
         assert_eq!(adapter.name(), "ollama");
+    }
+
+    #[tokio::test]
+    async fn generate_refused_port_never_echoes_a_password_hidden_past_the_authority() {
+        // A `base_url` whose authority ends at a closed port (a valid
+        // port on its own) hides a second `@` -- and a real host --
+        // behind it: the "not reachable" hint and the failure's own
+        // `url=` field must both name only the part after the LAST `@`,
+        // never the port-shaped credential fragment in between (issue
+        // #778).
+        let addr = crate::test_support::closed_port();
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://{addr}/ss@x")),
+            streams: false,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("ss"), "{}", err.message);
+        assert!(!err.message.contains(&format!("{addr}")), "{}", err.message);
+        assert!(err.message.contains("Ollama at http://x is not reachable"));
+        assert!(err.message.contains("url=http://x"));
     }
 
     #[tokio::test]

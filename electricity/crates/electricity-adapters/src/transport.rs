@@ -181,13 +181,14 @@ pub(crate) fn default_port(scheme: &str) -> u16 {
 
 /// A URL for use in electricity's own refusal text -- never the raw
 /// value, which can carry userinfo or a credential-looking query
-/// parameter from a misconfigured `base_url`/proxy: the same two
-/// maskers [`crate::curl_text::curl_failure_message`] itself applies
-/// to a successful request's own failure text, applied here too since
-/// these errors happen *before* a [`CurlOutcome`] exists at all and
-/// so never reach that function.
+/// parameter from a misconfigured `base_url`/proxy: the same one
+/// function -- [`electricity_tools::http_conventions::redact_request_
+/// url`] -- every other refusal/warning/event/state/hint text that
+/// names a request URL on either engine uses, applied here too since
+/// these errors happen *before* a [`CurlOutcome`] exists at all and so
+/// never reach [`crate::curl_text::curl_failure_message`].
 pub(crate) fn redact_url_for_error(url: &str) -> String {
-    crate::curl_text::strip_url_userinfo(&crate::curl_text::mask_credential_query_params(url))
+    electricity_tools::http_conventions::redact_request_url(url)
 }
 
 pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {

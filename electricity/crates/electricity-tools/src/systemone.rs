@@ -118,8 +118,12 @@ struct Server {
     /// `netloc_host_as_written`/`resolve_proxy_target`, issue #486):
     /// brackets kept for an IPv6 literal, an explicit default port kept.
     netloc: String,
-    /// `base_url.strip().rstrip("/")` -- the text every error message
-    /// below names, never re-derived from the parsed parts.
+    /// `base_url.strip().rstrip("/")`, redacted through
+    /// [`electricity_tools::http_conventions::redact_request_url`]
+    /// (issue #778): the text every error message below names, never
+    /// re-derived from the parsed parts, and never the raw value --
+    /// a password hidden behind the path (`http://127.0.0.1:443/
+    /// ss@x`, say) must not reach it.
     display: String,
 }
 
@@ -204,8 +208,8 @@ fn validate_base_url(base_url: Option<&Value>, allow_remote: bool) -> Result<Ser
             ));
         }
     };
-    let display = raw.trim().trim_end_matches('/').to_string();
-    let split = crate::http::http_url::urlsplit(&display, "");
+    let trimmed = raw.trim().trim_end_matches('/').to_string();
+    let split = crate::http::http_url::urlsplit(&trimmed, "");
     let netloc = parse_netloc(&split.netloc);
     if netloc.bad_port {
         return Err(value_error(
@@ -237,6 +241,7 @@ fn validate_base_url(base_url: Option<&Value>, allow_remote: bool) -> Result<Ser
         )));
     }
     let port = netloc.port.unwrap_or_else(|| default_port(&split.scheme));
+    let display = crate::http_conventions::redact_request_url(&trimmed);
     Ok(Server {
         scheme: split.scheme,
         host: netloc.host,
@@ -1556,6 +1561,20 @@ mod tests {
     }
 
     #[test]
+    fn validate_base_url_redacts_a_password_hidden_past_the_authority_in_display() {
+        // `http://127.0.0.1:443/ss@x`'s authority ends at `:443` (a port
+        // valid on its own), hiding a second `@` behind it -- `display`
+        // must name only the part after the LAST `@`, never the
+        // port-shaped credential fragment (`443/ss`) in between (issue
+        // #778).
+        let server =
+            validate_base_url(Some(&Value::from("http://127.0.0.1:443/ss@x")), false).unwrap();
+        assert_eq!(server.display, "http://x");
+        assert!(!server.display.contains("443/"));
+        assert!(!server.display.contains("ss"));
+    }
+
+    #[test]
     fn validate_base_url_refuses_a_non_string_value() {
         let err = validate_base_url(Some(&Value::from(123)), false).unwrap_err();
         assert!(err.message.contains("base_url is required"));
@@ -1944,6 +1963,40 @@ mod tests {
             request.starts_with("POST /api/v1/systemone "),
             "request line: {request:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn execute_refused_port_never_echoes_a_password_hidden_past_the_authority() {
+        // A `base_url` whose authority ends at a port that is itself a
+        // refused connection hides a second `@` -- and a real host --
+        // behind it: the "not reachable" message must name only the
+        // part after the LAST `@`, never the port-shaped credential
+        // fragment in between (issue #778).
+        let port = {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            listener.local_addr().unwrap().port()
+        };
+        let plugin = SystemOnePlugin {
+            base_url: Some(Value::from(format!("http://127.0.0.1:{port}/ss@x"))),
+            api_key_env: None,
+            allow_remote: false,
+        };
+        let token = CancellationToken::new();
+        let config = Value::None;
+        let err = plugin
+            .execute(
+                params(vec![
+                    ("model", Value::from("m")),
+                    ("questions", Value::Dict(one_question())),
+                    ("state", Value::from("s")),
+                ]),
+                &call(&token, &config),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(err.message, "systemone server not reachable at http://x");
+        assert!(!err.message.contains(&format!("{port}/")));
+        assert!(!err.message.contains("ss"));
     }
 
     #[tokio::test]
