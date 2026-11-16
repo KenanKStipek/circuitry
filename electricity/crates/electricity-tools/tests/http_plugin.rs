@@ -624,7 +624,10 @@ async fn a_connection_refused_never_names_a_password_in_the_url() {
     .unwrap_err();
     assert!(!err.message.contains("alice"), "{}", err.message);
     assert!(!err.message.contains("s3cr3t"), "{}", err.message);
-    assert!(err.message.starts_with(&format!("HTTP request to http://{addr}/ failed:")));
+    assert!(
+        err.message
+            .starts_with(&format!("HTTP request to http://{addr}/ failed:"))
+    );
 }
 
 /// A `save_to_temp_dir`'s own directory, removed on `Drop` -- unlike a

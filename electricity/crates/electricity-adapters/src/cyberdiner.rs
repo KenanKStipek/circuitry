@@ -1343,7 +1343,11 @@ mod tests {
             .unwrap_err();
         assert!(!err.message.contains("alice"), "{}", err.message);
         assert!(!err.message.contains("s3cr3t"), "{}", err.message);
-        assert!(err.message.contains("cyberdiner: request to"), "{}", err.message);
+        assert!(
+            err.message.contains("cyberdiner: request to"),
+            "{}",
+            err.message
+        );
     }
 
     #[tokio::test]
