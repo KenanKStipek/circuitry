@@ -26,6 +26,7 @@ from circuitry.curl_support import (
     curl_failure_message,
     extract_retry_after,
     parse_error_code,
+    probe_head,
     redact_host_url,
     run_curl,
 )
@@ -367,6 +368,34 @@ def test_run_curl_delivers_headers_and_body_without_putting_them_on_argv(
     assert "canary prompt text" not in cmd_str
     assert calls[0][0] == "curl"
     assert calls[0][1] == "-q"
+
+
+class _NotFoundHandler(http.server.BaseHTTPRequestHandler):
+    """Answers every request with a plain 404 -- no body, no JSON --
+    for :func:`test_probe_head_succeeds_on_a_4xx_response` (issue #778,
+    B4)."""
+
+    def do_HEAD(self) -> None:
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        pass
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_probe_head_succeeds_on_a_4xx_response() -> None:
+    """``probe_head`` cares only that the host answered -- a 404 (or
+    401/405) means reachable, matching main's own pre-#778 probe and
+    electricity's own ``head_probe`` (issue #778, B4): it never adds
+    ``--fail-with-body``, unlike :func:`run_curl`, which must fail a
+    4xx/5xx for its own callers.
+    """
+    with local_server(_NotFoundHandler) as base_url:
+        proc = probe_head(base_url + "/api/tags", timeout_seconds=5)
+
+    assert proc.returncode == 0
 
 
 @pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")

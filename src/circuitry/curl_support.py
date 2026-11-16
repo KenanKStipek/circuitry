@@ -351,6 +351,7 @@ def _build_config_and_cmd(
     data: str | None,
     timeout_seconds: int,
     extra_args: Sequence[str] = (),
+    fail: bool = True,
 ) -> tuple[bytes, list[str]]:
     """``(config_bytes, cmd)`` shared by :func:`run_curl` and
     :func:`run_curl_streaming`: the same ``--config`` file content, the
@@ -365,6 +366,12 @@ def _build_config_and_cmd(
     alone. The proxy decision is Circuitry's own
     (:func:`http_conventions.resolve_proxy`), written into the config
     file so curl's own environment reading never applies either way.
+
+    *fail* (default ``True``) adds ``--fail-with-body``, so a 4xx/5xx
+    response fails the curl invocation itself -- :func:`probe_head`
+    passes ``False``, since any HTTP response (even 401/404/405) means
+    the host answered, matching main's own pre-#778 probe and
+    electricity's own ``head_probe`` (issue #778).
     """
     normalized_url = url if "://" in url else f"http://{url}"
     http_conventions.check_url(normalized_url)
@@ -385,7 +392,7 @@ def _build_config_and_cmd(
         "-q",
         "--silent",
         "--show-error",
-        "--fail-with-body",
+        *(["--fail-with-body"] if fail else []),
         "--max-time",
         str(int(timeout_seconds)),
     ]
@@ -433,10 +440,19 @@ def probe_head(url: str, *, timeout_seconds: int) -> subprocess.CompletedProcess
     -- a schemeless ``url`` normalized and the proxy decision applied
     before any I/O, argv carrying nothing a configured ``base_url``'s
     userinfo could put on ``ps`` (issue #778), for a surface that only
-    needs to know a server answers, not to read its body.
+    needs to know a server answers, not to read its body. ``fail=False``:
+    any HTTP response, even a 401/404/405, means the host is reachable --
+    this probe cares only about a connection-level failure, matching
+    main's own pre-#778 probe and electricity's own ``head_probe`` (issue
+    #778).
     """
     config_bytes, cmd = _build_config_and_cmd(
-        url=url, headers=(), data=None, timeout_seconds=timeout_seconds, extra_args=("--head",)
+        url=url,
+        headers=(),
+        data=None,
+        timeout_seconds=timeout_seconds,
+        extra_args=("--head",),
+        fail=False,
     )
     if os.name == "nt":
         return _run_curl_windows(cmd, config_bytes, None)
