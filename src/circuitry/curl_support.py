@@ -36,6 +36,7 @@ from typing import Any
 from . import http_conventions
 from .core.cancellation import run_tracked
 
+
 def redact_host_url(url: str) -> str:
     """Mask a URL for a preflight ``host:{url}`` requirement text.
 
