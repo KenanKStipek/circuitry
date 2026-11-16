@@ -1,8 +1,7 @@
 {
   "spec_case": "issue #723",
-  "description": "A dict-shaped `schema:` that is not itself a well-formed JSON Schema is refused before the run, the same way `cof check` refuses it, naming the effect.",
+  "description": "A dict-shaped `schema:` that is not itself a well-formed JSON Schema is refused before the run, the same way `cof check` refuses it, naming the effect. The `jsonschema` Rust crate's own `SchemaError` wording after 'is not a valid JSON Schema: ' is third-party text, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md).",
   "engines": ["python", "electricity"],
   "expect": "failure",
-  "error_compare": "location",
-  "location_pattern": "Tool effect 'gate' \\(cel\\) at 'prime\\.effects\\[0\\]': params\\.schema is not a valid JSON Schema"
+  "error_compare": "location"
 }

@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 import tempfile
 from pathlib import Path
@@ -52,12 +53,71 @@ from tests.conformance.normalize import (  # noqa: E402
     assert_events_equal,
     assert_states_equal,
     canonicalize_http_requests,
+    mask_known_third_party_text,
+    mask_known_third_party_text_in,
     normalize,
-    redact_events_text,
+    redact_events_text_pair,
     redact_leaked_paths,
     redact_runtime_strings,
-    redact_third_party_text_lines,
+    serialize_events_text,
 )
+
+
+def _check_error_not_pinning_third_party_text(
+    case_dir: Path, metadata: dict[str, Any], error: str
+) -> None:
+    """Issue #778 step 6: an `error_compare: "exact"` (the default when the
+    key is omitted) on a failure case's captured error pins it byte for
+    byte -- refused when that text matches `tests/conformance/normalize.py`'s
+    own message-shape catalogue (the same one `assert_errors_equal` masks
+    with at comparison time), since that means it embeds a third-party
+    library's own wording. Use `error_compare: "location"` instead -- the
+    catalogue then masks the third-party tail and still compares every
+    Circuitry-owned part (prefix, location, effect name) exactly."""
+    if metadata.get("error_compare", "exact") != "exact":
+        return
+    if mask_known_third_party_text(error) == error:
+        return
+    raise ValueError(
+        f'{case_dir.name}: case.json sets error_compare: "exact", but the captured error '
+        f'matches tests/conformance/normalize.py\'s own message-shape catalogue -- set '
+        f'error_compare: "location" instead (tests/conformance/README.md\'s "Message '
+        f'shapes" section):\n  {error!r}'
+    )
+
+
+def _resolve_third_party_text_value(state: Any, location: str) -> Any:
+    node = state
+    segments = location.split(".")
+    for segment in segments[:-1]:
+        node = node[int(segment)] if isinstance(node, list) else node[segment]
+    last = segments[-1]
+    return node[int(last)] if isinstance(node, list) else node[last]
+
+
+def _check_third_party_text_not_redundant(
+    case_dir: Path, specs: list[dict[str, str]], state: Any
+) -> None:
+    """Issue #778 step 6: a case's own `third_party_text` entry whose
+    `pattern` is a literal (non-wildcard) copy of the captured value --
+    `re.escape(value) == pattern` -- pins that value exactly in every way
+    that matters, the same way `error_compare: "exact"` would; refused when
+    the value also matches the message-shape catalogue, since the entry is
+    then redundant with (and no safer than) just leaving the location
+    uncovered -- the catalogue already masks it, and the case should drop
+    this entry rather than keep a stale, over-specific pattern."""
+    for spec in specs:
+        location = spec["location"]
+        pattern = spec["pattern"]
+        value = _resolve_third_party_text_value(state, location)
+        if not isinstance(value, str):
+            continue
+        if pattern == re.escape(value) and mask_known_third_party_text(value) != value:
+            raise ValueError(
+                f"{case_dir.name}: case.json's third_party_text location {location!r} has a "
+                f"literal (non-wildcard) pattern pinning text tests/conformance/normalize.py's "
+                f"own message-shape catalogue already masks -- drop this entry:\n  {value!r}"
+            )
 
 
 def _redact_and_reserialize(
@@ -91,8 +151,13 @@ def _warnings_text(stderr: str, metadata: dict[str, Any]) -> bytes:
     stale expected file is, rather than leaving a no-longer-applicable
     file silently uncompared.
     """
+    # No message-shape masking here (issue #778 step 6) -- the committed
+    # fixture holds the real, unmasked capture, same as `expected.json`
+    # does for state; both pytest runners mask *this* file too (not just
+    # the live stderr) at comparison time, so a committed file written
+    # before a shape existed never needs regenerating when the catalogue
+    # changes.
     lines = harness.warning_lines(stderr, sort=metadata.get("sort_warnings", False))
-    lines = redact_third_party_text_lines(lines, metadata.get("third_party_text", []))
     text = "".join(f"{line}\n" for line in lines)
     return text.encode("utf-8")
 
@@ -147,11 +212,12 @@ def _generate_success(
         # mock-HTTP-backed adapter case, can carry the mock server's own
         # ephemeral port (issue #503) the same way a captured `base_url`/
         # recorded request does, so this still needs the same redaction
-        # state gets.
-        "expected.events.jsonl": redact_events_text(
-            events_path.read_text(encoding="utf-8"),
-            replacements,
-            metadata.get("third_party_text", []),
+        # state gets. No message-shape masking here -- `serialize_events_
+        # text` commits the real, unmasked capture, same as `expected.json`
+        # does for state; `redact_events_text_pair` masks both sides only
+        # at comparison time (issue #778 step 6).
+        "expected.events.jsonl": serialize_events_text(
+            events_path.read_text(encoding="utf-8"), replacements
         ).encode("utf-8"),
         "expected.warnings.txt": _warnings_text(result.stderr, metadata),
     }
@@ -182,6 +248,11 @@ def _generate_success(
         files["expected.http_requests.json"] = (
             json.dumps(canonical_requests, indent=2, ensure_ascii=True) + "\n"
         ).encode("utf-8")
+    third_party_text = metadata.get("third_party_text", [])
+    if third_party_text:
+        _check_third_party_text_not_redundant(
+            case_dir, third_party_text, json.loads(files["expected.json"])
+        )
     return files
 
 
@@ -211,6 +282,7 @@ def _generate_failure(
         leftover_replies_path, case_dir=case_dir, metadata=metadata, case_name=case_dir.name
     )
     error = redact_runtime_strings(harness.parse_cli_error(result.stdout), replacements)
+    _check_error_not_pinning_third_party_text(case_dir, metadata, error)
     payload = {"error": error}
     text = json.dumps(payload, indent=2, ensure_ascii=True, sort_keys=True) + "\n"
     # `cof run` writes `--out` on any failure too (run-wiring step 20,
@@ -230,6 +302,11 @@ def _generate_failure(
     }
     if metadata.get("compare_run_warnings"):
         files["expected.run_warnings.txt"] = _run_warnings_text(result.stderr)
+    third_party_text = metadata.get("third_party_text", [])
+    if third_party_text:
+        _check_third_party_text_not_redundant(
+            case_dir, third_party_text, json.loads(files["expected.out.json"])
+        )
     return files
 
 
@@ -277,10 +354,10 @@ def _content_is_current(
         return True
     if filename.endswith(".jsonl"):
         try:
-            assert_events_equal(
-                redact_events_text(generated.decode("utf-8"), [], third_party_text),
-                redact_events_text(current.decode("utf-8"), [], third_party_text),
+            generated_masked, current_masked = redact_events_text_pair(
+                generated.decode("utf-8"), current.decode("utf-8"), [], third_party_text
             )
+            assert_events_equal(generated_masked, current_masked)
         except AssertionError:
             return False
         return True
@@ -297,8 +374,8 @@ def _content_is_current(
     if redact_leaked_paths(current_value) != current_value:
         return False
     try:
-        current_normalized = normalize(current_value)
-        generated_normalized = normalize(generated_value)
+        current_normalized = normalize(mask_known_third_party_text_in(current_value))
+        generated_normalized = normalize(mask_known_third_party_text_in(generated_value))
         if third_party_text:
             current_normalized = apply_third_party_text(current_normalized, third_party_text)
             generated_normalized = apply_third_party_text(generated_normalized, third_party_text)
@@ -338,6 +415,7 @@ def main() -> int:
         case_dirs = all_case_dirs
 
     stale: list[str] = []
+    failed = False
     for case_dir in case_dirs:
         metadata = harness.load_case(case_dir)
         python_runner_versions = metadata["python_runner_versions"]
@@ -358,9 +436,10 @@ def main() -> int:
 
         try:
             files = generate_case(case_dir)
-        except Exception as exc:  # stop at the first case that fails to run
+        except Exception as exc:  # keep going, so one run reports every failing case
             print(f"FAIL {case_dir.name}: {exc}", file=sys.stderr)
-            return 1
+            failed = True
+            continue
 
         third_party_text = metadata.get("third_party_text", [])
         for filename, content in files.items():
@@ -388,9 +467,9 @@ def main() -> int:
         )
         for path in stale:
             print(f"  {path}", file=sys.stderr)
-        return 1
+        failed = True
 
-    return 0
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":
