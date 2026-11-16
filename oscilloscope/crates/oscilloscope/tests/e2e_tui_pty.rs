@@ -23,10 +23,10 @@ use std::time::{Duration, Instant};
 use support::{
     AutoKill, ELECTRICITY_CONFIG, SCRIPTED_CONFIG, SIGNAL_DELAY, TestHome,
     assert_no_leftover_process, drain_continuously, e2e_electricity_enabled, e2e_enabled,
-    engine_pid_for_doc, open_pty, osi_command, screen_grid, screen_grid_fg, scripted_config,
-    send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen, wait_for_screen_text,
-    wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
-    write_doc,
+    engine_pid_for_doc, open_pty, osi_command, registry_json_entries, screen_grid, screen_grid_fg,
+    scripted_config, send_bytes, spawn_osi_on_pty, spawn_osi_on_pty_with_env, wait_for_screen,
+    wait_for_screen_text, wait_for_screen_text_gone, wait_for_screen_texts, wait_for_step_start,
+    wait_with_timeout, write_doc,
 };
 
 /// The `(row, col)` of the first `glyph` character on whichever grid
@@ -593,9 +593,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut entries = Vec::new();
     while Instant::now() < deadline {
-        entries = std::fs::read_dir(&runs_dir)
-            .map(|rd| rd.flatten().collect::<Vec<_>>())
-            .unwrap_or_default();
+        entries = registry_json_entries(&runs_dir);
         if !entries.is_empty() {
             break;
         }
@@ -607,7 +605,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
         "expected exactly one registry entry while the run is live, in {runs_dir:?}"
     );
     let entry: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(&entries[0]).unwrap()).unwrap();
     assert_eq!(entry["engine"], "cof");
     assert_eq!(
         std::fs::canonicalize(entry["run_dir"].as_str().unwrap()).unwrap(),
@@ -666,9 +664,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
          {discover_line:?}"
     );
     assert_eq!(
-        std::fs::read_dir(&runs_dir)
-            .map(|rd| rd.count())
-            .unwrap_or(0),
+        registry_json_entries(&runs_dir).len(),
         1,
         "discovery must not have disturbed the still-live entry"
     );
@@ -686,9 +682,7 @@ fn a_launched_run_appears_in_the_registry_while_live_and_is_gone_after_it_exits(
     assert!(status.success(), "osi should exit 0, got {status:?}");
 
     std::thread::sleep(Duration::from_millis(200));
-    let remaining = std::fs::read_dir(&runs_dir)
-        .map(|rd| rd.count())
-        .unwrap_or(0);
+    let remaining = registry_json_entries(&runs_dir).len();
     assert_eq!(
         remaining, 0,
         "expected the registry entry to be gone once the run ended"
@@ -2646,9 +2640,7 @@ fn osi_watch_writes_its_own_registry_entry_and_removes_it_on_detach() {
     let deadline = Instant::now() + Duration::from_secs(10);
     let mut entries = Vec::new();
     while Instant::now() < deadline {
-        entries = std::fs::read_dir(&runs_dir)
-            .map(|rd| rd.flatten().collect::<Vec<_>>())
-            .unwrap_or_default();
+        entries = registry_json_entries(&runs_dir);
         if !entries.is_empty() {
             break;
         }
@@ -2660,7 +2652,7 @@ fn osi_watch_writes_its_own_registry_entry_and_removes_it_on_detach() {
         "expected exactly one registry entry while the watch is live, in {runs_dir:?}"
     );
     let entry: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(entries[0].path()).unwrap()).unwrap();
+        serde_json::from_slice(&std::fs::read(&entries[0]).unwrap()).unwrap();
     assert_eq!(
         entry["launcher"].as_str().unwrap(),
         format!("osi {} watch", env!("CARGO_PKG_VERSION"))
@@ -2673,9 +2665,7 @@ fn osi_watch_writes_its_own_registry_entry_and_removes_it_on_detach() {
     let status = wait_with_timeout(child, Duration::from_secs(30));
     assert!(status.success(), "osi watch should exit 0, got {status:?}");
 
-    let remaining = std::fs::read_dir(&runs_dir)
-        .map(|rd| rd.count())
-        .unwrap_or(0);
+    let remaining = registry_json_entries(&runs_dir).len();
     assert_eq!(
         remaining, 0,
         "expected the watch's own registry entry to be gone once it detached"
