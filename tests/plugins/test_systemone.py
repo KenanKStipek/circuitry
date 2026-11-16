@@ -923,6 +923,46 @@ def test_allow_remote_accepts_a_remote_base_url() -> None:
     assert plugin.check().ok is True
 
 
+def test_a_loopback_server_never_applies_h1s_proxy_rule(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #778 step 7, H-review P1-5: systemone's own rule, loopback
+    never proxied, is never overridden by H1."""
+    calls: list[str] = []
+    monkeypatch.setattr(
+        systemone_module.http_conventions, "apply_request_proxy", lambda req: calls.append(req.full_url)
+    )
+    server.reply_answers()
+
+    result = _plugin(server).execute(params=_params(), timeout_seconds=10)
+
+    assert result.ok is True, result.stderr
+    assert calls == []
+
+
+def test_a_remote_server_applies_h1s_proxy_rule(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Issue #778 step 7, H-review P1-5: a server that isn't loopback
+    (``allow_remote: true``) follows H1 like every other surface, instead
+    of urllib's own default proxy-reading convention."""
+    monkeypatch.setattr(systemone_module, "is_loopback_host", lambda host: False)
+    calls: list[str] = []
+    real_apply = systemone_module.http_conventions.apply_request_proxy
+
+    def recording_apply(req: Any) -> None:
+        calls.append(req.full_url)
+        real_apply(req)
+
+    monkeypatch.setattr(systemone_module.http_conventions, "apply_request_proxy", recording_apply)
+    server.reply_answers()
+
+    result = _plugin(server, allow_remote=True).execute(params=_params(), timeout_seconds=10)
+
+    assert result.ok is True, result.stderr
+    assert calls == [server.url + systemone_module.ENDPOINT_PATH]
+
+
 def test_allow_remote_is_false_unless_the_config_says_true() -> None:
     for value in (None, False, "false", "no", 0):
         plugin = build_plugin(

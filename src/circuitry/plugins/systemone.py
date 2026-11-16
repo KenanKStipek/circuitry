@@ -48,6 +48,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .. import http_conventions
 from ..core.prompt_files import _WITHIN_INPUT_PATH, path_is_inside
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool, http_error_excerpt
@@ -90,7 +91,12 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 def is_loopback_host(host: str) -> bool:
     """True for the literal hosts ``localhost``, ``127.0.0.0/8`` and ``::1``.
 
-    Any other name is remote; no DNS lookup decides it.
+    Any other name is remote; no DNS lookup decides it. systemone's own
+    rule, not H1's: a loopback server is never proxied at all, whatever
+    ``*_proxy``/``no_proxy`` says, since it is always a local service
+    this process is talking to directly (issue #778 step 7, H-review
+    P1-5) -- a non-loopback one (``allow_remote: true``) follows H1
+    like every other surface.
     """
     if host.lower() == "localhost":
         return True
@@ -767,11 +773,15 @@ class SystemOnePlugin:
         if key is not None:
             request.add_header("Authorization", f"Bearer {key}")
 
-        handlers: list[Any] = [_NoRedirect]
+        # Issue #778 step 7, H-review P1-5: a loopback server is never
+        # proxied at all -- systemone's own rule, since it talks to a
+        # local service, documented alongside `is_loopback_host` below --
+        # and a non-loopback one (``allow_remote: true``) follows H1,
+        # never urllib's own default proxy-reading convention.
+        opener = urllib.request.build_opener(_NoRedirect, urllib.request.ProxyHandler({}))
         hostname = urllib.parse.urlsplit(server).hostname or ""
-        if is_loopback_host(hostname):
-            handlers.append(urllib.request.ProxyHandler({}))
-        opener = urllib.request.build_opener(*handlers)
+        if not is_loopback_host(hostname):
+            http_conventions.apply_request_proxy(request)
 
         def scrub(text: str) -> str:
             return text.replace(key, "[redacted]") if key else text
