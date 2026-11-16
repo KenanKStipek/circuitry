@@ -24,14 +24,19 @@ from circuitry.core.schema_corners import (
         ([True, False], False),
         ([float("nan"), float("nan")], False),
         ([float("nan")], False),
+        ([float("inf"), float("inf")], True),
+        ([float("inf"), float("-inf")], False),
+        ([float("-inf"), float("-inf")], True),
         ([{"a": 1, "b": 2}, {"b": 2, "a": 1}], True),
         ([{"a": 1, "b": 2}, {"a": 1, "b": 3}], False),
         ([[1], [True]], False),
         ([[1], [1]], True),
         # jsonschema's own `_utils.uniq` sorts then compares only adjacent
-        # pairs; with a value its own `<` can't order sitting between two
-        # equal ones, the old algorithm misses the duplicate it would find
-        # if those two were adjacent instead.
+        # pairs; `[True]` (which its own `<` can't order against `[1]` at
+        # all) sits between the two `[1]` elements once sorted, so the old
+        # algorithm never compares them and misses the duplicate -- real
+        # `jsonschema` confirmed to call this array unique.
+        ([[1], [True], [1]], True),
         ([0, 1, True, 1.0], True),
         ([], False),
         ([1], False),
@@ -69,9 +74,9 @@ def test_ref_chain_1000_hops_exceeds_the_cap() -> None:
     assert f"limit {MAX_REF_CHAIN_HOPS}" in (schema_well_formedness_error(schema) or "")
 
 
-def test_ref_chain_within_the_cap_is_well_formed() -> None:
+def test_ref_chain_of_exactly_the_cap_is_well_formed() -> None:
     defs = {}
-    hops = MAX_REF_CHAIN_HOPS - 1
+    hops = MAX_REF_CHAIN_HOPS
     for i in range(hops):
         defs[f"L{i}"] = {"$ref": f"#/$defs/L{i + 1}"} if i + 1 < hops else {"type": "object"}
     schema = {"$defs": defs, "$ref": "#/$defs/L0"}
@@ -79,11 +84,61 @@ def test_ref_chain_within_the_cap_is_well_formed() -> None:
     assert schema_well_formedness_error(schema) is None
 
 
+def test_ref_chain_one_past_the_cap_exceeds_it() -> None:
+    defs = {}
+    hops = MAX_REF_CHAIN_HOPS + 1
+    for i in range(hops):
+        defs[f"L{i}"] = {"$ref": f"#/$defs/L{i + 1}"} if i + 1 < hops else {"type": "object"}
+    schema = {"$defs": defs, "$ref": "#/$defs/L0"}
+    assert ref_chain_depth_exceeds_cap(schema)
+    assert schema_well_formedness_error(schema) is not None
+
+
 def test_two_schema_ref_cycle_exceeds_the_cap() -> None:
     schema = {
         "$defs": {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}},
         "$ref": "#/$defs/A",
     }
+    assert ref_chain_depth_exceeds_cap(schema)
+    assert schema_well_formedness_error(schema) is not None
+
+
+def test_self_ref_exceeds_the_cap() -> None:
+    schema = {"$ref": "#"}
+    assert ref_chain_depth_exceeds_cap(schema)
+    assert schema_well_formedness_error(schema) is not None
+
+
+def test_a_cycle_through_an_in_place_applicator_exceeds_the_cap() -> None:
+    schema = {"allOf": [{"$ref": "#"}]}
+    assert ref_chain_depth_exceeds_cap(schema)
+    assert schema_well_formedness_error(schema) is not None
+
+
+def test_two_schema_cycle_through_any_of_exceeds_the_cap() -> None:
+    schema = {
+        "$defs": {
+            "A": {"anyOf": [{"$ref": "#/$defs/B"}]},
+            "B": {"anyOf": [{"$ref": "#/$defs/A"}]},
+        },
+        "$ref": "#/$defs/A",
+    }
+    assert ref_chain_depth_exceeds_cap(schema)
+    assert schema_well_formedness_error(schema) is not None
+
+
+def test_a_dangling_ref_counts_as_a_hop() -> None:
+    schema = {"$ref": "#/$defs/missing"}
+    assert not ref_chain_depth_exceeds_cap(schema)
+    assert schema_well_formedness_error(schema) is None
+
+
+def test_a_chain_of_dangling_refs_past_the_cap_exceeds_it() -> None:
+    defs = {}
+    hops = MAX_REF_CHAIN_HOPS + 1
+    for i in range(hops):
+        defs[f"L{i}"] = {"$ref": f"#/$defs/L{i + 1}"}
+    schema = {"$defs": defs, "$ref": "#/$defs/L0"}
     assert ref_chain_depth_exceeds_cap(schema)
     assert schema_well_formedness_error(schema) is not None
 

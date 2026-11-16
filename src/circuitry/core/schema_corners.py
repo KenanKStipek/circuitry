@@ -68,13 +68,38 @@ def _is_finite(value: float) -> bool:
     return value == value and value not in (float("inf"), float("-inf"))
 
 
+#: Keywords whose own value is literal instance data, never a subschema —
+#: a key named ``multipleOf`` written *inside* one of these (``const: {
+#: multipleOf: 0}``) is someone's own data, not this module's keyword.
+_LITERAL_DATA_KEYS = frozenset({"const", "enum", "examples", "default"})
+
+#: Keywords whose own value maps a *name* (a property name, a pattern, a
+#: definition name) to a subschema: the mapping's own keys are names, not
+#: keywords, so a mapping with a key literally spelled ``multipleOf``
+#: (``properties: {multipleOf: {type: number}}``) is a property named
+#: "multipleOf", not an occurrence of the keyword — only each *value* is
+#: itself a schema worth walking.
+_NAME_MAP_SCHEMA_KEYS = frozenset(
+    {"properties", "patternProperties", "dependentSchemas", "$defs", "definitions"}
+)
+
+
 def _multiple_of_well_formedness_error(node: Any) -> str | None:
     """:data:`MULTIPLE_OF_ERROR` if some ``multipleOf`` anywhere in *node*
     (recursively) isn't a number greater than zero; ``None`` otherwise."""
     if isinstance(node, Mapping):
         if "multipleOf" in node and _multiple_of_is_malformed(node["multipleOf"]):
             return MULTIPLE_OF_ERROR
-        for value in node.values():
+        for key, value in node.items():
+            if key in _LITERAL_DATA_KEYS:
+                continue
+            if key in _NAME_MAP_SCHEMA_KEYS:
+                if isinstance(value, Mapping):
+                    for subschema in value.values():
+                        found = _multiple_of_well_formedness_error(subschema)
+                        if found is not None:
+                            return found
+                continue
             found = _multiple_of_well_formedness_error(value)
             if found is not None:
                 return found
@@ -90,9 +115,15 @@ def _is_same_document_pointer(ref: str) -> bool:
     return ref == "#" or ref.startswith("#/")
 
 
+#: :func:`_resolve_same_document_ref`'s own return value for a pointer
+#: that does not resolve at all — distinct from a pointer that resolves
+#: to the literal JSON ``null``, which is a found value like any other.
+_UNRESOLVED = object()
+
+
 def _resolve_same_document_ref(root: Any, ref: str) -> Any:
     """The node *ref* (a same-document JSON pointer) names in *root*, or
-    ``None`` when it does not resolve."""
+    :data:`_UNRESOLVED` when it does not resolve."""
     pointer = unquote(ref[1:])
     if pointer == "":
         return root
@@ -106,67 +137,159 @@ def _resolve_same_document_ref(root: Any, ref: str) -> Any:
             try:
                 index = int(segment)
             except ValueError:
-                return None
+                return _UNRESOLVED
             if 0 <= index < len(node):
                 node = node[index]
                 continue
-        return None
+        return _UNRESOLVED
     return node
+
+#: Keywords whose own subschema applies to a *different* part of the
+#: instance than the keyword's own location, each reached directly (not
+#: through a name map). An edge through one of these resets the running
+#: `$ref` chain to zero — the same distinction a recursive tree/linked-
+#: list schema relies on to stay finite for any real instance despite its
+#: own schema graph being cyclic. ``items`` is handled separately: its
+#: value is either one of these (a single schema) or a list, like
+#: :data:`_INSTANCE_DESCENDING_LIST_SCHEMA_KEYS`'s own.
+_INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS = frozenset(
+    {"additionalProperties", "contains", "propertyNames"}
+)
+
+#: Keywords whose own value is a list of subschemas, each applied to a
+#: different part of the instance (each list element); see
+#: :data:`_INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`.
+_INSTANCE_DESCENDING_LIST_SCHEMA_KEYS = frozenset({"prefixItems"})
+
+#: Keywords whose own value maps a name (a property name, a pattern) to
+#: a subschema, each applied to a different part of the instance (the
+#: value or property the name picks out); see
+#: :data:`_INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`.
+_INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS = frozenset({"properties", "patternProperties"})
+
+#: Keywords whose own subschema applies at the *same* instance location
+#: as the keyword itself (an in-place applicator): an edge through one of
+#: these carries the running `$ref` chain through unchanged, rather than
+#: resetting it the way an instance-descending edge does.
+_IN_PLACE_LIST_SCHEMA_KEYS = frozenset({"allOf", "anyOf", "oneOf"})
+_IN_PLACE_SINGLE_SCHEMA_KEYS = frozenset({"not", "if", "then", "else"})
+_IN_PLACE_MAPPING_SCHEMA_KEYS = frozenset({"dependentSchemas"})
 
 
 def ref_chain_depth_exceeds_cap(schema: Any, *, limit: int = MAX_REF_CHAIN_HOPS) -> bool:
     """Whether *schema* chains more than *limit* consecutive bare `$ref`
-    resolutions at one instance location.
+    resolutions at one instance location, never descending into the
+    instance in between. A chain of exactly *limit* resolutions is fine;
+    one more is not.
 
-    Only an actual `$ref`-to-`$ref` hop, with nothing else evaluated at
-    that same location in between, counts: a hop reached through an
-    ordinary structural key (``properties``, ``items``, ...) resets the
-    count, since evaluating it moves to a different part of the instance —
-    the same distinction a recursive tree/linked-list schema relies on to
-    stay finite for any real instance despite its own schema graph being
-    cyclic. A genuine cycle with no such structural key anywhere in it (two
-    schemas each only `$ref`-ing the other) can never move to a different
-    instance location at all, so it counts as exceeding the cap immediately
-    once found, rather than being mistaken for one of those legitimate
-    cycles.
+    An edge through an instance-descending keyword (``properties``,
+    ``items``, ...) resets the running chain to zero, since evaluating it
+    moves to a different part of the instance — the same distinction a
+    recursive tree/linked-list schema relies on to stay finite for any
+    real instance despite its own schema graph being cyclic. An edge
+    through an in-place applicator (``allOf``, ``not``, ``if``, ...)
+    carries the running chain through unchanged instead, since it applies
+    at the very same instance location as the keyword it came from — a
+    schema that cycles back to a node already active in the *current*
+    chain (whether through `$ref` hops alone or mixed with in-place
+    applicators) can never move to a different instance location at all,
+    so it counts as exceeding the cap immediately once found, rather than
+    being mistaken for one of those legitimate, instance-descending
+    cycles. A `$ref` that does not resolve still consumes one hop, the
+    same as a hop that lands on an ordinary leaf schema.
+
+    *memo* caches ``longest(node, ref_hops, ...)`` by ``(node id,
+    ref_hops)`` once computed, reused by a later call reaching the same
+    node at the same hop count by a different path — without it, a
+    `$defs` graph where many nodes `$ref` the same, deeper shared targets
+    revisits those targets once per distinct path to them, which grows
+    exponentially with depth even though the graph itself has few nodes.
+    A cycle within the *current* run is still caught first, before the
+    cache is ever consulted, by *ref_run_active*/*structural_active*
+    (both scoped to one real call path, never memoized) — the cache only
+    ever serves a call already known clean of that.
     """
     structural_active: set[int] = set()
+    memo: dict[tuple[int, int], int] = {}
 
     def longest(node: Any, ref_hops: int, ref_run_active: frozenset[int]) -> int:
         if not isinstance(node, Mapping):
             return ref_hops
         node_id = id(node)
+        if node_id in ref_run_active:
+            return limit + 1
         if node_id in structural_active:
             return 0
-        if ref_hops >= limit:
+        if ref_hops > limit:
             return ref_hops
+        cache_key = (node_id, ref_hops)
+        if cache_key in memo:
+            return memo[cache_key]
         structural_active.add(node_id)
         try:
             result = ref_hops
+            run_active = ref_run_active | {node_id}
             ref = node.get("$ref")
             if isinstance(ref, str) and _is_same_document_pointer(ref):
                 target = _resolve_same_document_ref(schema, ref)
-                target_id = id(target)
-                if target_id in ref_run_active:
-                    result = max(result, limit)
+                if target is _UNRESOLVED:
+                    result = max(result, ref_hops + 1)
                 else:
-                    result = max(
-                        result,
-                        longest(target, ref_hops + 1, ref_run_active | {node_id}),
-                    )
+                    result = max(result, longest(target, ref_hops + 1, run_active))
             for key, value in node.items():
                 if key == "$ref" or key in _NON_SCHEMA_STRUCTURAL_KEYS:
                     continue
+                if key == "items":
+                    if isinstance(value, Mapping):
+                        result = max(result, longest(value, 0, frozenset()))
+                    elif isinstance(value, list):
+                        for item in value:
+                            result = max(result, longest(item, 0, frozenset()))
+                    continue
+                if key in _INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS:
+                    if isinstance(value, Mapping):
+                        result = max(result, longest(value, 0, frozenset()))
+                    continue
+                if key in _INSTANCE_DESCENDING_LIST_SCHEMA_KEYS:
+                    if isinstance(value, list):
+                        for item in value:
+                            result = max(result, longest(item, 0, frozenset()))
+                    continue
+                if key in _INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS:
+                    if isinstance(value, Mapping):
+                        for subschema in value.values():
+                            result = max(result, longest(subschema, 0, frozenset()))
+                    continue
+                if key in _IN_PLACE_LIST_SCHEMA_KEYS:
+                    if isinstance(value, list):
+                        for item in value:
+                            result = max(result, longest(item, ref_hops, run_active))
+                    continue
+                if key in _IN_PLACE_SINGLE_SCHEMA_KEYS:
+                    if isinstance(value, Mapping):
+                        result = max(result, longest(value, ref_hops, run_active))
+                    continue
+                if key in _IN_PLACE_MAPPING_SCHEMA_KEYS:
+                    if isinstance(value, Mapping):
+                        for subschema in value.values():
+                            result = max(result, longest(subschema, ref_hops, run_active))
+                    continue
+                # Any other key (an unrecognized/custom keyword) is
+                # treated the same as an instance-descending one: the
+                # same conservative default the walk always used, which
+                # keeps a chain hiding behind one bounded, rather than
+                # carried through as if it applied at the same location.
                 if isinstance(value, Mapping):
                     result = max(result, longest(value, 0, frozenset()))
                 elif isinstance(value, list):
                     for item in value:
                         result = max(result, longest(item, 0, frozenset()))
+            memo[cache_key] = result
             return result
         finally:
             structural_active.discard(node_id)
 
-    return longest(schema, 0, frozenset()) >= limit
+    return longest(schema, 0, frozenset()) > limit
 
 
 def ref_chain_error(schema: Any, *, limit: int = MAX_REF_CHAIN_HOPS) -> str | None:
@@ -194,17 +317,22 @@ def schema_well_formedness_error(schema: Mapping[str, Any]) -> str | None:
     return None
 
 
+def _is_nan(value: float) -> bool:
+    return value != value
+
+
 def _canonical_key(value: Any) -> Any:
-    """A hashable key such that two JSON values are equal under J1's rule
-    (numbers by value across int/float, a boolean distinct from any
+    """A hashable key such that two JSON values are equal under this
+    module's own rule for ``uniqueItems`` (numbers by value across int/float — including ``Infinity``, equal to
+    another ``Infinity`` of the same sign — a boolean distinct from any
     number, ``NaN`` never equal to anything, deep structural equality for
     arrays/objects) iff their canonical keys are equal — or ``None`` when
-    *value* contains a ``NaN``/non-finite float anywhere, which this rule
-    never treats as a duplicate of anything, including itself."""
+    *value* contains a ``NaN`` anywhere, which this rule never treats as a
+    duplicate of anything, including itself."""
     if isinstance(value, bool):
         return ("bool", value)
     if isinstance(value, (int, float)):
-        if isinstance(value, float) and not _is_finite(value):
+        if isinstance(value, float) and _is_nan(value):
             return None
         return ("num", value)
     if isinstance(value, str):

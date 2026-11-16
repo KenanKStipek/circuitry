@@ -79,13 +79,6 @@ fn get<'a>(dict: &'a Dict, name: &str) -> Option<&'a Value> {
 pub(crate) struct Violation<'a> {
     pub(crate) kind: Kind<'a>,
     pub(crate) path: Vec<PathSegment>,
-    /// The path to the keyword that fired, in `err.schema_path` terms --
-    /// `["properties", "a", "required"]` for a nested property, not
-    /// just `["required"]`. Needed only by the orchestration (draft-07)
-    /// document-check sort, which breaks a message+keyword tie this way
-    /// instead of porting `pprint`; irrelevant for prompt-schema
-    /// validation's own `best_match`, which never reads it.
-    pub(crate) schema_path: Vec<PathSegment>,
     local_schema: &'a Value,
     pub(crate) local_instance: &'a Value,
 }
@@ -120,39 +113,6 @@ pub(crate) enum PathSegment {
     // a `tests/depth_safety.rs` case over its 2 MiB thread stack before
     // this was boxed.
     NonStringKey(Box<Value>),
-}
-
-/// `jsonschema._utils.format_as_index`'s own index text (the part after
-/// the container name): `"".join(f"[{index!r}]" for index in indices)`.
-///
-/// `core/document_check.py::schema_errors` sorts by `str(err)`, which
-/// (once the message itself ties) next compares `repr(err.validator)`,
-/// then this same text for `err.schema_path`, then the *schema*'s own
-/// `pprint`, then this text again for `err.path`, then the *instance*'s
-/// own `pprint` -- in that order, since it's one literal f-string
-/// compared left to right. Given two errors with equal message and
-/// keyword, their schema_path text alone decides the order *before*
-/// either pprint is ever reached, unless schema_path (hence this text)
-/// also ties -- but a tied schema_path names the exact same schema
-/// subtree (this engine's own schema is static per call), so the
-/// schema's own pprint can't differ either; the same argument applies
-/// to a tied path/instance pair. So comparing `(message, keyword,
-/// schema_path text, path text)` as a 4-tuple is a faithful stand-in
-/// for the full `str(err)` order -- it can never put two errors in a
-/// different relative order than Python would, without ever rendering
-/// either `pprint`.
-pub(crate) fn format_as_index(segments: &[PathSegment]) -> String {
-    let mut out = String::new();
-    for segment in segments {
-        out.push('[');
-        match segment {
-            PathSegment::Key(s) => out.push_str(&Value::Str(s.clone()).py_repr()),
-            PathSegment::Index(i) => out.push_str(&i.to_string()),
-            PathSegment::NonStringKey(v) => out.push_str(&v.py_repr()),
-        }
-        out.push(']');
-    }
-    out
 }
 
 /// `error.path`/`error.relative_path`'s own comparison (a `deque`, compared
@@ -553,51 +513,6 @@ fn relevance_cmp(a: &Violation<'_>, b: &Violation<'_>) -> std::cmp::Ordering {
         })
 }
 
-/// `err.validator` -- the keyword name a violation's own message is
-/// about, `None` only for a bare `false` subschema (Python's own
-/// `ValidationError` has no keyword there either, since no keyword
-/// function ever ran to produce it). Appended to a violation's own
-/// [`Violation::schema_path`] prefix to get the full `err.schema_path`
-/// the orchestration document-check sort needs; never used by
-/// prompt-schema validation's own `best_match`, which only reads
-/// [`relevance_cmp`].
-pub(crate) fn keyword_name(kind: &Kind<'_>) -> Option<&'static str> {
-    Some(match kind {
-        Kind::Type => "type",
-        Kind::Required { .. } => "required",
-        Kind::Enum => "enum",
-        Kind::Const => "const",
-        Kind::AdditionalPropertiesPlain { .. } | Kind::AdditionalPropertiesPatterned { .. } => {
-            "additionalProperties"
-        }
-        Kind::MinItems { .. } => "minItems",
-        Kind::MaxItems { .. } => "maxItems",
-        Kind::MinLength { .. } => "minLength",
-        Kind::MaxLength { .. } => "maxLength",
-        Kind::MinProperties { .. } => "minProperties",
-        Kind::MaxProperties { .. } => "maxProperties",
-        Kind::Minimum => "minimum",
-        Kind::Maximum => "maximum",
-        Kind::ExclusiveMinimum => "exclusiveMinimum",
-        Kind::ExclusiveMaximum => "exclusiveMaximum",
-        Kind::MultipleOf => "multipleOf",
-        Kind::Pattern => "pattern",
-        Kind::UniqueItems => "uniqueItems",
-        Kind::AnyOfNotValid { .. } => "anyOf",
-        Kind::OneOfNotValid { .. } | Kind::OneOfMultipleValid { .. } => "oneOf",
-        Kind::FalseSchema => return None,
-        Kind::Not { .. } => "not",
-        Kind::DependentRequired { .. } => "dependentRequired",
-        // Draft 7 (the only draft that ever reaches these through
-        // `draft7_mode_active()`) has no `minContains`/`maxContains` at
-        // all -- every `contains` failure there is this one keyword.
-        Kind::ContainsNone | Kind::MinContains { .. } | Kind::MaxContains { .. } => "contains",
-        Kind::ItemsFalse { .. } => "items",
-        Kind::AdditionalItemsFalse { .. } => "additionalItems",
-        Kind::Dependencies { .. } => "dependencies",
-    })
-}
-
 /// `jsonschema.exceptions.best_match`: `max(violations, key=relevance)`
 /// (Python's plain `max` keeps the *first* maximal element whenever
 /// [`relevance_cmp`] reports every candidate as equal to the current
@@ -821,15 +736,27 @@ fn numeric_sign(value: &Value) -> Option<std::cmp::Ordering> {
     }
 }
 
+/// Keywords whose own value is literal instance data, never a subschema
+/// -- a key named `multipleOf` written *inside* one of these (`const:
+/// {multipleOf: 0}`) is someone's own data, not this module's keyword.
+const LITERAL_DATA_KEYS: &[&str] = &["const", "enum", "examples", "default"];
+
+/// Keywords whose own value maps a *name* (a property name, a pattern,
+/// a definition name) to a subschema: the mapping's own keys are names,
+/// not keywords, so a mapping with a key literally spelled `multipleOf`
+/// (`properties: {multipleOf: {type: number}}`) is a property named
+/// "multipleOf", not an occurrence of the keyword -- only each *value*
+/// is itself a schema worth walking.
+const NAME_MAP_SCHEMA_KEYS: &[&str] = &[
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "$defs",
+    "definitions",
+];
+
 /// [`MULTIPLE_OF_ERROR`] if some `multipleOf` anywhere in *node*
 /// (recursively) isn't a number greater than zero; `None` otherwise.
-/// Walks every dict value and list element unconditionally, the same
-/// way [`schema_json_for_well_formedness_probe`]'s own non-finite
-/// stand-in does, rather than tracking which keys a schema actually
-/// applies `multipleOf` through -- a property genuinely named
-/// `"multipleOf"` holding this shape is vanishingly unlikely, and this
-/// check only ever adds a stricter, better-worded refusal on top of
-/// `jsonschema`'s own, never a new acceptance.
 pub(crate) fn multiple_of_well_formedness_error(node: &Value) -> Option<String> {
     if let Value::Dict(dict) = node {
         if let Some(value) = dict.get(&Value::Str("multipleOf".to_string())) {
@@ -837,7 +764,23 @@ pub(crate) fn multiple_of_well_formedness_error(node: &Value) -> Option<String> 
                 return Some(MULTIPLE_OF_ERROR.to_string());
             }
         }
-        for (_, value) in dict.iter() {
+        for (key, value) in dict.iter() {
+            let Some(key_str) = key.as_str() else {
+                continue;
+            };
+            if LITERAL_DATA_KEYS.contains(&key_str) {
+                continue;
+            }
+            if NAME_MAP_SCHEMA_KEYS.contains(&key_str) {
+                if let Value::Dict(name_map) = value {
+                    for (_, subschema) in name_map.iter() {
+                        if let Some(found) = multiple_of_well_formedness_error(subschema) {
+                            return Some(found);
+                        }
+                    }
+                }
+                continue;
+            }
             if let Some(found) = multiple_of_well_formedness_error(value) {
                 return Some(found);
             }
@@ -1061,10 +1004,11 @@ pub(crate) fn with_draft7_mode<T>(f: impl FnOnce() -> T) -> T {
 /// property schema's own violation never carries the property's own name
 /// at all, on either path, not even once it bubbles up through the
 /// `"properties"` keyword's own (unskipped) append of `"properties"`
-/// itself. See [`Kind::FalseSchema`]'s own doc for why
-/// [`describe_schema_error_engine`]'s sort key needs this exactness and
-/// not just the display text (which never reads `path` for a `false`
-/// schema either way, so this would be invisible without that key).
+/// itself -- `lib.rs::describe_schema_error_engine`'s own displayed
+/// location, built from `path`, needs this exactness: a `false`
+/// property schema's own violation must report its *enclosing*
+/// location, not one with the property's own name appended, to match
+/// Python's `json_path` exactly.
 #[inline(never)]
 fn evaluate_false_property<'a>(
     false_schema: &'a Value,
@@ -1139,7 +1083,6 @@ pub(crate) fn evaluate<'a>(
         out.push(Violation {
             kind: Kind::FalseSchema,
             path: path.to_vec(),
-            schema_path: schema_path.to_vec(),
             local_schema: schema,
             local_instance: instance,
         });
@@ -1175,7 +1118,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Type,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1187,7 +1129,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Enum,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1199,7 +1140,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Const,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1217,7 +1157,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Required { property: name },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1441,7 +1380,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1501,7 +1439,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::AdditionalItemsFalse { joined, verb },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1578,7 +1515,6 @@ pub(crate) fn evaluate<'a>(
                             rest_repr,
                         },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1635,7 +1571,6 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1650,7 +1585,6 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1665,7 +1599,6 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1680,7 +1613,6 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1695,7 +1627,6 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1710,7 +1641,6 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1724,7 +1654,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Minimum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1737,7 +1666,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Maximum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1753,7 +1681,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::ExclusiveMinimum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1769,7 +1696,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::ExclusiveMaximum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1780,7 +1706,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::MultipleOf,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1792,7 +1717,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Pattern,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1805,7 +1729,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::UniqueItems,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1834,7 +1757,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::AnyOfNotValid { context },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1869,7 +1791,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::OneOfNotValid { context },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1886,7 +1807,6 @@ pub(crate) fn evaluate<'a>(
                                     matching: more_valid,
                                 },
                                 path: path.to_vec(),
-                                schema_path: schema_path.to_vec(),
                                 local_schema: schema,
                                 local_instance: instance,
                             });
@@ -1916,7 +1836,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Not { not_schema: value },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1957,7 +1876,6 @@ pub(crate) fn evaluate<'a>(
                             out.push(Violation {
                                 kind: Kind::DependentRequired { each, property },
                                 path: path.to_vec(),
-                                schema_path: schema_path.to_vec(),
                                 local_schema: schema,
                                 local_instance: instance,
                             });
@@ -2018,7 +1936,6 @@ pub(crate) fn evaluate<'a>(
                                             dependency: dependency_name,
                                         },
                                         path: path.to_vec(),
-                                        schema_path: schema_path.to_vec(),
                                         local_schema: schema,
                                         local_instance: instance,
                                     });
@@ -2078,7 +1995,6 @@ pub(crate) fn evaluate<'a>(
                                 .expect("set whenever too_many is true"),
                         },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -2096,7 +2012,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -3199,19 +3114,24 @@ fn schema_is_fully_supported_inner(
 /// eager `$ref` resolution, which needs far more native stack per hop
 /// than this walk ever has to.
 ///
-/// Only an actual `$ref`-to-`$ref` hop, with nothing else evaluated at
-/// that same instance location in between, counts toward the cap: a hop
-/// reached through an ordinary structural key (`properties`, `items`,
-/// `allOf`, ...) resets the running count to zero, since evaluating it
-/// moves to a different part of the instance -- the same distinction a
-/// recursive tree/linked-list schema relies on to stay finite for any
+/// Only an actual `$ref`-to-`$ref` hop, or an edge through an in-place
+/// applicator ([`IN_PLACE_LIST_SCHEMA_KEYS`]/[`IN_PLACE_SINGLE_SCHEMA_
+/// KEYS`]/[`IN_PLACE_MAPPING_SCHEMA_KEYS`]) -- which, like a `$ref`
+/// itself, evaluates at the very same instance location -- counts
+/// toward the cap: an edge through an instance-descending key
+/// ([`INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`]/[`INSTANCE_DESCENDING_
+/// LIST_SCHEMA_KEYS`]/[`INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS`],
+/// `items`) resets the running count to zero instead, since evaluating
+/// it moves to a different part of the instance -- the same distinction
+/// a recursive tree/linked-list schema relies on to stay finite for any
 /// real instance despite its own schema graph being cyclic (every lap
-/// around such a cycle must cross at least one structural key). A back
-/// edge to a node the *current pure-`$ref`-only run* (never reset since
-/// entering it) has already visited can never reach a different
-/// instance location at all, so it counts as exceeding the cap
-/// immediately once found, rather than being mistaken for one of those
-/// legitimate, structurally-bounded cycles.
+/// around such a cycle must cross at least one instance-descending
+/// key). A back edge to a node the *current* chain (never reset since
+/// entering it, `$ref` hops and in-place applicators both) has already
+/// visited can never reach a different instance location at all, so it
+/// counts as exceeding the cap immediately once found, rather than
+/// being mistaken for one of those legitimate, instance-descending
+/// cycles.
 ///
 /// Every dict value and list element but [`NON_SCHEMA_STRUCTURAL_KEYS`]'s
 /// own (`$defs`/`definitions`, reached only through an actual `$ref`,
@@ -3222,22 +3142,31 @@ fn schema_is_fully_supported_inner(
 /// own recursion) but never toward the hop total itself.
 ///
 /// *structural_active* cuts a genuinely infinite structural cycle so
-/// this walk itself always terminates (the same role `active` played in
-/// the version of this walk that used to treat *every* cycle as
-/// legitimate); never memoized across calls, unlike that version -- the
-/// value a node contributes now depends on which pure-`$ref` run reached
-/// it, not on the node alone, so a cache keyed on node identity could
-/// read a stale answer from a different run. [`MAX_REF_CHAIN_HOPS`] is
-/// small enough that this costs nothing worth measuring.
+/// this walk itself always terminates; *ref_run_active* (checked first)
+/// instead signals a genuine, unbounded cycle outright by returning
+/// past [`MAX_REF_CHAIN_HOPS`]. A chain of exactly that many
+/// resolutions is fine; one more is not. *memo* caches a call's own
+/// result by `(node, ref_hops)` once computed, reused by a later call
+/// reaching the same node at the same hop count by a different path --
+/// without it, a `$defs` graph where many nodes `$ref` the same, deeper
+/// shared targets revisits those targets once per distinct path to
+/// them, which grows exponentially with depth even though the graph
+/// itself has few nodes. A cycle within the *current* run is still
+/// caught first, before the cache is ever consulted, by *ref_run_
+/// active*/*structural_active* (both scoped to one real call path,
+/// never memoized) -- the cache only ever serves a call already known
+/// clean of that.
 pub(crate) fn ref_chain_depth_exceeds_cap(schema: &Value, root: &Value) -> bool {
     let mut structural_active = std::collections::HashSet::new();
+    let mut memo = std::collections::HashMap::new();
     longest_ref_chain(
         schema,
         root,
         &mut structural_active,
+        &mut memo,
         0,
         &std::collections::HashSet::new(),
-    ) >= MAX_REF_CHAIN_HOPS
+    ) > MAX_REF_CHAIN_HOPS
 }
 
 /// Structural nesting (an ordinary `properties`/`items`/`allOf`/...
@@ -3275,51 +3204,92 @@ const NON_SCHEMA_STRUCTURAL_KEYS: &[&str] = &[
     "default",
 ];
 
-/// *ref_run_active* names every node the *current* consecutive-`$ref`
-/// run has already chased through, never reset until that run itself
-/// resets (a structural edge, below) -- a target already in it is a
-/// genuine, unbounded ping-pong (two schemas each only `$ref`-ing the
-/// other, say), counted as exceeding the cap outright. *structural_
-/// active* is this whole walk's own, never-reset-within-one-call
-/// termination guard, covering every kind of edge.
+/// Keywords whose own subschema applies to a *different* part of the
+/// instance than the keyword's own location, each reached directly (not
+/// through a name map); an edge through one of these resets the
+/// running `$ref` chain to zero. `items` is handled separately in
+/// [`longest_ref_chain`]: its value is either one of these (a single
+/// schema) or a list, like [`INSTANCE_DESCENDING_LIST_SCHEMA_KEYS`]'s
+/// own.
+const INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS: &[&str] =
+    &["additionalProperties", "contains", "propertyNames"];
+
+/// Keywords whose own value is a list of subschemas, each applied to a
+/// different part of the instance (each list element); see
+/// [`INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`].
+const INSTANCE_DESCENDING_LIST_SCHEMA_KEYS: &[&str] = &["prefixItems"];
+
+/// Keywords whose own value maps a name (a property name, a pattern) to
+/// a subschema, each applied to a different part of the instance (the
+/// value or property the name picks out); see
+/// [`INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`].
+const INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS: &[&str] = &["properties", "patternProperties"];
+
+/// Keywords whose own subschema applies at the *same* instance location
+/// as the keyword itself (an in-place applicator): an edge through one
+/// of these carries the running `$ref` chain through unchanged, rather
+/// than resetting it the way an instance-descending edge does.
+const IN_PLACE_LIST_SCHEMA_KEYS: &[&str] = &["allOf", "anyOf", "oneOf"];
+const IN_PLACE_SINGLE_SCHEMA_KEYS: &[&str] = &["not", "if", "then", "else"];
+const IN_PLACE_MAPPING_SCHEMA_KEYS: &[&str] = &["dependentSchemas"];
+
+/// *ref_run_active* names every node the *current* chain (`$ref` hops
+/// and in-place applicators both) has already passed through, never
+/// reset until an instance-descending edge resets it -- a node already
+/// in it is a genuine, unbounded cycle, counted as exceeding the cap
+/// outright. *structural_active* is this whole walk's own, never-
+/// reset-within-one-call termination guard, covering every kind of
+/// edge; checked only once *ref_run_active* has not already settled the
+/// question, so a cycle mixing `$ref` hops and in-place applicators is
+/// never mistaken for the legitimate, instance-descending kind
+/// [`structural_active`] alone would otherwise silently truncate to
+/// zero.
 fn longest_ref_chain(
     node: &Value,
     root: &Value,
     structural_active: &mut std::collections::HashSet<*const Value>,
+    memo: &mut std::collections::HashMap<(*const Value, usize), usize>,
     ref_hops: usize,
     ref_run_active: &std::collections::HashSet<*const Value>,
 ) -> usize {
     let ptr: *const Value = node;
+    if ref_run_active.contains(&ptr) {
+        return MAX_REF_CHAIN_HOPS + 1;
+    }
     if structural_active.contains(&ptr) {
         return 0;
     }
-    if ref_hops >= MAX_REF_CHAIN_HOPS {
+    if ref_hops > MAX_REF_CHAIN_HOPS {
         return ref_hops;
     }
+    if let Some(&cached) = memo.get(&(ptr, ref_hops)) {
+        return cached;
+    }
     if structural_active.len() >= STRUCTURAL_DEPTH_CAP || stack_budget_exceeded() {
-        return MAX_REF_CHAIN_HOPS;
+        return MAX_REF_CHAIN_HOPS + 1;
     }
     let Value::Dict(dict) = node else {
         return ref_hops;
     };
     structural_active.insert(ptr);
     let mut result = ref_hops;
+    let mut run_active = ref_run_active.clone();
+    run_active.insert(ptr);
     if let Some(Value::Str(pointer)) = dict.get(&Value::Str("$ref".to_string())) {
         if is_same_document_pointer_syntax(pointer) {
-            if let Some(resolved) = resolve_ref(root, pointer) {
-                let target_ptr: *const Value = resolved;
-                if ref_run_active.contains(&target_ptr) {
-                    result = result.max(MAX_REF_CHAIN_HOPS);
-                } else {
-                    let mut extended = ref_run_active.clone();
-                    extended.insert(ptr);
+            match resolve_ref(root, pointer) {
+                Some(resolved) => {
                     result = result.max(longest_ref_chain(
                         resolved,
                         root,
                         structural_active,
+                        memo,
                         ref_hops + 1,
-                        &extended,
+                        &run_active,
                     ));
+                }
+                None => {
+                    result = result.max(ref_hops + 1);
                 }
             }
         }
@@ -3331,6 +3301,120 @@ fn longest_ref_chain(
         if key_str == "$ref" || NON_SCHEMA_STRUCTURAL_KEYS.contains(&key_str) {
             continue;
         }
+        if key_str == "items" {
+            match v {
+                Value::List(items) => {
+                    for item in items {
+                        result = result.max(longest_ref_chain(
+                            item,
+                            root,
+                            structural_active,
+                            memo,
+                            0,
+                            &std::collections::HashSet::new(),
+                        ));
+                    }
+                }
+                _ => {
+                    result = result.max(longest_ref_chain(
+                        v,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
+                }
+            }
+            continue;
+        }
+        if INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS.contains(&key_str) {
+            result = result.max(longest_ref_chain(
+                v,
+                root,
+                structural_active,
+                memo,
+                0,
+                &std::collections::HashSet::new(),
+            ));
+            continue;
+        }
+        if INSTANCE_DESCENDING_LIST_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::List(items) = v {
+                for item in items {
+                    result = result.max(longest_ref_chain(
+                        item,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
+                }
+            }
+            continue;
+        }
+        if INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::Dict(name_map) = v {
+                for (_, subschema) in name_map.iter() {
+                    result = result.max(longest_ref_chain(
+                        subschema,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
+                }
+            }
+            continue;
+        }
+        if IN_PLACE_LIST_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::List(items) = v {
+                for item in items {
+                    result = result.max(longest_ref_chain(
+                        item,
+                        root,
+                        structural_active,
+                        memo,
+                        ref_hops,
+                        &run_active,
+                    ));
+                }
+            }
+            continue;
+        }
+        if IN_PLACE_SINGLE_SCHEMA_KEYS.contains(&key_str) {
+            result = result.max(longest_ref_chain(
+                v,
+                root,
+                structural_active,
+                memo,
+                ref_hops,
+                &run_active,
+            ));
+            continue;
+        }
+        if IN_PLACE_MAPPING_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::Dict(name_map) = v {
+                for (_, subschema) in name_map.iter() {
+                    result = result.max(longest_ref_chain(
+                        subschema,
+                        root,
+                        structural_active,
+                        memo,
+                        ref_hops,
+                        &run_active,
+                    ));
+                }
+            }
+            continue;
+        }
+        // Any other key (an unrecognized/custom keyword) is treated
+        // the same as an instance-descending one: the same
+        // conservative default the walk always used, which keeps a
+        // chain hiding behind one bounded, rather than carried through
+        // as if it applied at the same location.
         match v {
             Value::List(items) => {
                 for item in items {
@@ -3338,6 +3422,7 @@ fn longest_ref_chain(
                         item,
                         root,
                         structural_active,
+                        memo,
                         0,
                         &std::collections::HashSet::new(),
                     ));
@@ -3348,6 +3433,7 @@ fn longest_ref_chain(
                     v,
                     root,
                     structural_active,
+                    memo,
                     0,
                     &std::collections::HashSet::new(),
                 ));
@@ -3355,7 +3441,9 @@ fn longest_ref_chain(
         }
     }
     structural_active.remove(&ptr);
-    result.min(MAX_REF_CHAIN_HOPS)
+    let capped = result.min(MAX_REF_CHAIN_HOPS + 1);
+    memo.insert((ptr, ref_hops), capped);
+    capped
 }
 
 /// Whether *instance* validates against *branch* at all, via this
@@ -3696,6 +3784,34 @@ mod tests {
         assert!(has_duplicate(&with_duplicate));
     }
 
+    /// A pattern compiles once per (pattern, backtrack limit) until the
+    /// cache is cleared; a compile error is cached and returned as is.
+    #[test]
+    fn compiled_pattern_compiles_once_per_pattern_and_limit() {
+        clear_pattern_cache();
+        let a = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        let b = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        assert!(
+            std::rc::Rc::ptr_eq(&a, &b),
+            "same pattern and limit: a cache hit"
+        );
+        let c = compiled_pattern("^a+$", "^a+$", 2000).expect("compiles");
+        assert!(
+            !std::rc::Rc::ptr_eq(&a, &c),
+            "a different limit is its own entry"
+        );
+        clear_pattern_cache();
+        let d = compiled_pattern("^a+$", "^a+$", 1000).expect("compiles");
+        assert!(
+            !std::rc::Rc::ptr_eq(&a, &d),
+            "a cleared cache compiles again"
+        );
+        let e1 = compiled_pattern("(", "(", 1000).expect_err("an unbalanced group");
+        let e2 = compiled_pattern("(", "(", 1000).expect_err("an unbalanced group");
+        assert_eq!(e1, e2);
+        clear_pattern_cache();
+    }
+
     /// A `List`/`Dict` element recurses through [`canonical_key`] just
     /// like a scalar, so a large array of them stays on the same
     /// hash-bucketed fast path above rather than falling back to an
@@ -3868,6 +3984,62 @@ mod tests {
                 .collect();
             let _ = has_duplicate(&items); // must not panic, whatever the verdict
         }
+    }
+
+    /// A schema that `$ref`s itself never descends into the instance
+    /// at all -- a pure `$ref` cycle, caught immediately by
+    /// *ref_run_active* rather than the generic *structural_active*
+    /// guard (which would otherwise silently cap it at zero, the same
+    /// miss a `RecursionError` at run time used to follow from).
+    #[test]
+    fn ref_chain_self_ref_exceeds_the_cap() {
+        let schema: Value = electricity_json::loads(r##"{"$ref": "#"}"##).unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A cycle through an in-place applicator (`allOf`) applies at the
+    /// very same instance location as a bare `$ref` would, so it must
+    /// count toward the cap the same way, not reset it the way a
+    /// `properties`/`items` edge does.
+    #[test]
+    fn ref_chain_cycle_through_an_in_place_applicator_exceeds_the_cap() {
+        let schema: Value = electricity_json::loads(r##"{"allOf": [{"$ref": "#"}]}"##).unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A two-schema cycle reached only through `anyOf` (never a bare
+    /// `$ref`-to-`$ref` hop) is just as unbounded as the two-`$ref`
+    /// cycle other tests cover, and must be caught the same way.
+    #[test]
+    fn ref_chain_two_schema_cycle_through_any_of_exceeds_the_cap() {
+        let schema: Value = electricity_json::loads(
+            r##"{"$defs": {"A": {"anyOf": [{"$ref": "#/$defs/B"}]}, "B": {"anyOf": [{"$ref": "#/$defs/A"}]}}, "$ref": "#/$defs/A"}"##,
+        )
+        .unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A `$ref` that doesn't resolve at all still counts as a hop --
+    /// matching `cof`'s own `schema_corners.ref_chain_depth_exceeds_cap`
+    /// exactly, the same as a hop that lands on an ordinary leaf schema.
+    #[test]
+    fn ref_chain_dangling_ref_counts_as_a_hop() {
+        let schema: Value = electricity_json::loads(r##"{"$ref": "#/$defs/missing"}"##).unwrap();
+        assert!(!ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A chain of dangling `$ref`s past the cap exceeds it the same way
+    /// a chain of resolving ones does.
+    #[test]
+    fn ref_chain_of_dangling_refs_past_the_cap_exceeds_it() {
+        let mut defs = String::new();
+        for i in 0..=MAX_REF_CHAIN_HOPS {
+            defs.push_str(&format!("\"L{i}\": {{\"$ref\": \"#/$defs/L{}\"}}, ", i + 1));
+        }
+        let schema_text =
+            format!("{{\"$defs\": {{{defs}\"Lx\": {{}}}}, \"$ref\": \"#/$defs/L0\"}}");
+        let schema: Value = electricity_json::loads(&schema_text).unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
     }
 
     /// Issue #498's own follow-up: `anyOf`

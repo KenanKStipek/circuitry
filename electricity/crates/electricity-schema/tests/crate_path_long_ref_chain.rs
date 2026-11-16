@@ -83,17 +83,27 @@ fn check_on_a_2mib_caller_stack(schema: Value, instance: Value) -> PromptSchemaC
         .expect("the spawned thread must not panic")
 }
 
-/// One hop short of the cap is still accepted -- the boundary both
-/// engines agree on (`cof`'s own `test_ref_chain_within_the_cap_is_
-/// well_formed` pins the same boundary). 198 `$defs` entries plus the
-/// schema's own `$ref` into the chain is 199 total hops, one under the
-/// 200-hop cap.
+/// Exactly the cap itself is still accepted -- the boundary both
+/// engines agree on (`cof`'s own `test_ref_chain_of_exactly_the_cap_
+/// is_well_formed` pins the same boundary). 199 `$defs` entries plus
+/// the schema's own `$ref` into the chain is 200 total hops, exactly
+/// at the cap.
 #[test]
-fn root_unevaluated_properties_199_hops_is_accepted() {
-    let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(198);
+fn root_unevaluated_properties_200_hops_is_accepted() {
+    let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(199);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
         PromptSchemaCheck::Valid
+    );
+}
+
+/// One hop past the cap is refused.
+#[test]
+fn root_unevaluated_properties_201_hops_exceeds_the_cap() {
+    let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(200);
+    assert_eq!(
+        check_on_a_2mib_caller_stack(schema, instance),
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
@@ -134,11 +144,20 @@ fn root_unevaluated_properties_100000_hops_reports_the_cap_not_a_crash() {
 }
 
 #[test]
-fn root_nested_id_199_hops_is_accepted() {
-    let (schema, instance) = root_nested_id_with_long_ref_chain(198);
+fn root_nested_id_200_hops_is_accepted() {
+    let (schema, instance) = root_nested_id_with_long_ref_chain(199);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
         PromptSchemaCheck::Valid
+    );
+}
+
+#[test]
+fn root_nested_id_201_hops_exceeds_the_cap() {
+    let (schema, instance) = root_nested_id_with_long_ref_chain(200);
+    assert_eq!(
+        check_on_a_2mib_caller_stack(schema, instance),
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 

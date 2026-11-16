@@ -34,9 +34,9 @@ fn defs_chain_json(n: usize) -> String {
 /// runs on) -- the same convention `crate_path_long_ref_chain.rs`
 /// uses. The chain itself has `n + 1` total `$ref` hops: the schema's
 /// own top-level `$ref` into `$defs.L0`, plus `n` more hops from
-/// [`defs_chain_json`]'s own `L0 -> L1 -> ... -> Ln` -- `n = 198`
+/// [`defs_chain_json`]'s own `L0 -> L1 -> ... -> Ln` -- `n = 199`
 /// is exactly [`engine::MAX_REF_CHAIN_HOPS`]'s own last accepted
-/// total (199 hops), `n = 199` its first rejected one (200).
+/// total (200 hops), `n = 200` its first rejected one (201).
 fn crate_path_chain(n: usize) -> (Value, Value) {
     let schema = format!(
         "{{\"unevaluatedProperties\": false, \"$ref\": \"#/$defs/L0\", \"$defs\": {}}}",
@@ -49,8 +49,8 @@ fn crate_path_chain(n: usize) -> (Value, Value) {
 }
 
 #[test]
-fn a_199_total_hop_chain_is_accepted_on_the_crate_path() {
-    let (schema, instance) = crate_path_chain(198);
+fn a_200_total_hop_chain_is_accepted_on_the_crate_path() {
+    let (schema, instance) = crate_path_chain(199);
     assert_eq!(
         validate_prompt_schema(&schema, &instance),
         PromptSchemaCheck::Valid
@@ -58,8 +58,8 @@ fn a_199_total_hop_chain_is_accepted_on_the_crate_path() {
 }
 
 #[test]
-fn a_200_total_hop_chain_reports_the_cap_on_the_crate_path() {
-    let (schema, instance) = crate_path_chain(199);
+fn a_201_total_hop_chain_reports_the_cap_on_the_crate_path() {
+    let (schema, instance) = crate_path_chain(200);
     assert_eq!(
         validate_prompt_schema(&schema, &instance),
         PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
