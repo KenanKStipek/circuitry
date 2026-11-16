@@ -20,7 +20,7 @@ from .normalize import (
     assert_values_equal,
     normalize_for_comparison,
     prepare_for_comparison,
-    redact_events_text,
+    redact_events_text_pair,
     redact_runtime_strings,
     redact_third_party_text_lines,
 )
@@ -40,6 +40,12 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     actual = redact_third_party_text_lines(actual, metadata.get("third_party_text", []))
     expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
     expected = [line for line in expected_text.splitlines() if line]
+    # Masked the same way *actual* is: the message-shape catalogue applies
+    # unconditionally (issue #778 step 6), so a committed fixture written
+    # before a shape existed, or with an older/wider per-case third_party_
+    # text pattern, still compares correctly without needing to be
+    # regenerated -- re-masking an already-masked placeholder is a no-op.
+    expected = redact_third_party_text_lines(expected, metadata.get("third_party_text", []))
     assert actual == expected, (
         f"{case_dir.name}: stderr warning lines mismatch\n  got: {actual}\n  want: {expected}"
     )
@@ -128,10 +134,10 @@ def test_case(case_dir: Path, tmp_path: Path) -> None:
         )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
-        assert_events_equal(
-            redact_events_text(events_path.read_text(encoding="utf-8"), replacements, third_party_text),
-            redact_events_text(expected_events_text, replacements, third_party_text),
+        actual_events_masked, expected_events_masked = redact_events_text_pair(
+            events_path.read_text(encoding="utf-8"), expected_events_text, replacements, third_party_text
         )
+        assert_events_equal(actual_events_masked, expected_events_masked)
 
         # `--live-state`'s final write always ends equal to `--out`
         # (electricity/DESIGN.md §10.5, issue #431's acceptance criterion).

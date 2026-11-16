@@ -28,7 +28,7 @@ from .normalize import (
     assert_out_serialization,
     assert_states_equal,
     prepare_for_comparison,
-    redact_events_text,
+    redact_events_text_pair,
     redact_runtime_strings,
     redact_third_party_text_lines,
 )
@@ -73,6 +73,10 @@ def _assert_warnings_match(case_dir: Path, metadata: dict, stderr: str) -> None:
     actual = redact_third_party_text_lines(actual, metadata.get("third_party_text", []))
     expected_text = (case_dir / "expected.warnings.txt").read_text(encoding="utf-8")
     expected = [line for line in expected_text.splitlines() if line]
+    # Masked the same way *actual* is -- see test_python_runner.py's own
+    # counterpart for why this makes a committed fixture's masking vintage
+    # (none, or an older/wider per-case pattern) irrelevant.
+    expected = redact_third_party_text_lines(expected, metadata.get("third_party_text", []))
     assert actual == expected, (
         f"{case_dir.name}: stderr warning lines mismatch\n  got: {actual}\n  want: {expected}"
     )
@@ -353,10 +357,10 @@ def test_case(case_dir: Path, tmp_path: Path, electricity_binary: Path | None) -
         )
 
         expected_events_text = (case_dir / "expected.events.jsonl").read_text(encoding="utf-8")
-        assert_events_equal(
-            redact_events_text(events_path.read_text(encoding="utf-8"), replacements, third_party_text),
-            redact_events_text(expected_events_text, replacements, third_party_text),
+        actual_events_masked, expected_events_masked = redact_events_text_pair(
+            events_path.read_text(encoding="utf-8"), expected_events_text, replacements, third_party_text
         )
+        assert_events_equal(actual_events_masked, expected_events_masked)
 
         # `--live-state`'s final write always ends equal to `--out`
         # (electricity/DESIGN.md §10.5, issue #431's acceptance criterion).
@@ -544,7 +548,7 @@ def test_split_text_join_cof_and_electricity_agree_live(
         prepare_for_comparison(cof_state, replacements, []),
     )
 
-    assert_events_equal(
-        redact_events_text(electricity_events.read_text(encoding="utf-8"), replacements, []),
-        redact_events_text(cof_events.read_text(encoding="utf-8"), replacements, []),
+    electricity_events_masked, cof_events_masked = redact_events_text_pair(
+        electricity_events.read_text(encoding="utf-8"), cof_events.read_text(encoding="utf-8"), replacements, []
     )
+    assert_events_equal(electricity_events_masked, cof_events_masked)

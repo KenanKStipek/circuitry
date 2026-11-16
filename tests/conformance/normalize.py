@@ -289,11 +289,262 @@ def apply_known_divergence(state: Any, *, location: str, value: Any) -> Any:
 
 
 def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]) -> Any:
-    """`redact_runtime_strings` then `normalize()` -- the one call every
-    comparison (and the generator, before writing) makes from here on, so
-    a case-directory/fakes-directory/mock-port leak and a volatile-field
+    """`redact_runtime_strings`, then `mask_known_third_party_text_in`
+    (the message-shape catalogue below), then `normalize()` -- the one
+    call every comparison (and the generator, before writing) makes from
+    here on, so a case-directory/fakes-directory/mock-port leak, a
+    recognised third-party message shape, and a volatile-field
     substitution are never applied out of order or only partially."""
-    return normalize(redact_runtime_strings(value, replacements))
+    return normalize(mask_known_third_party_text_in(redact_runtime_strings(value, replacements)))
+
+
+# ---- Message-shape catalogue (issue #778 step 6, `tests/conformance/README.md`'s
+# "Message shapes" section) ----
+#
+# Each entry below recognises one place Circuitry's own error text embeds a
+# third-party library's wording (cel-python/the `cel` crate, PyYAML, curl,
+# Python's `re`, `jsonschema`'s own `SchemaError`/a Rust `jsonschema` crate) --
+# matched by a fixed, literal marker that is Circuitry's own text, never the
+# library's, so a library wording change can never make the match itself
+# drift. Only the text *after* the marker (named group `tp`) is ever
+# replaced, with `THIRD_PARTY_TEXT_PLACEHOLDER` -- the location, the effect
+# name and every other Circuitry-authored part of the same string is left
+# untouched and still has to compare exactly. A string that matches no
+# marker here is unaffected and still compares byte for byte.
+
+#: `core/cel_eval.py`'s own `f"{where}: expression does not parse ({exc}). "
+#: f"Expression: {expr!r}"` (only the `Parse` failure shape has this
+#: trailing `Expression: ` repeat of the document's own expression text --
+#: electricity's `CelSyntaxError::is_parse_error` reconstructs the same
+#: suffix only for its own `Parse` variant, never for `TooDeeplyNested`/
+#: `Empty`/`TooLong`, whose text is entirely Circuitry's own and never
+#: matches this). The parser's own diagnostic (the caret-pointing
+#: multi-line text inside the parens) is third-party; the repeated
+#: `Expression: '<expr>'` after it is just a repr of the document's own
+#: text and stays exact. Greedy + `DOTALL` so a diagnostic that itself
+#: contains `). Expression: ` is still split at the *last* occurrence.
+_CEL_PARSE_ERROR_RE = re.compile(
+    r"CEL expression at '[^']+' \(effect '[^']+'\): expression does not parse \("
+    r"(?P<tp>.*)"
+    r"\)\. Expression: ",
+    re.DOTALL,
+)
+
+#: `core/cel_eval.py`'s own `f"CEL evaluation failed for {expr!r}: {exc}"` --
+#: everything after the colon is the evaluator's own exception text
+#: (`division by zero`, `no such key: 'zz'`, ...). Non-`DOTALL`, so `.`
+#: never crosses a newline: a combined-failure summary
+#: (`tree-failure-class-names-3`) embeds several of these, one per line,
+#: and each must stop at its own line's end rather than swallowing the
+#: rest of the summary.
+_CEL_EVAL_ERROR_RE = re.compile(
+    r"CEL evaluation failed for (?:'[^']*'|\"[^\"]*\"): (?P<tp>.*)"
+)
+
+#: `plugins/validate_yaml.py`/`core/decompose.py`/`core/use.py`'s own
+#: `f"YAML parse error: {exc}"`, and `core/reflector.py`'s own
+#: `f"parse_failed: {e}"` (a generated plan that isn't valid YAML at all,
+#: issue #778) -- both wrap PyYAML's own (multi-line, caret-pointing)
+#: `YAMLError` text verbatim. `DOTALL`: PyYAML's own message is always
+#: multi-line and there is at most one per string.
+_YAML_PARSE_ERROR_RE = re.compile(r"(?:YAML parse error|parse_failed): (?P<tp>.*)", re.DOTALL)
+
+#: `curl_support.py::curl_failure_message`'s own `f"... url={url}: {detail}"`
+#: -- `detail` is curl's own stderr text (`curl: (N) ...`) whenever the
+#: request never got a complete reply; a trailing hint (`adapters/ollama.py`
+#: `_raise_curl_failure`'s own three fixed templates, joined with a literal
+#: leading space by `curl_failure_message` itself) is Circuitry's own and
+#: stays exact -- the only adapter that ever passes one. Keep the leading
+#: space in the lookahead (not in `tp`) so the placeholder reads cleanly as
+#: `<THIRD_PARTY_TEXT> <hint>` rather than swallowing that space too.
+_OLLAMA_HINT_RE = (
+    r" Ollama at \S+ is not reachable\. Start it \(`ollama serve`\), or set "
+    r"`runtime\.adapters\.\w+\.base_url` in your config\. Run `cof doctor` to verify connectivity\."
+    r"| The model didn't finish within \d+s\. Raise `runtime\.adapters\.\w+\.timeout_seconds` "
+    r"in your config \(a prompt's `timeout_ms` can only shorten it\), or use a smaller/faster model\."
+    r"| Try `ollama pull [^`]+` first\."
+)
+_CURL_DETAIL_RE = re.compile(
+    r"curl: \(\d+\) (?P<tp>.*?)(?=" + _OLLAMA_HINT_RE + r"|$)", re.DOTALL
+)
+
+#: `plugins/regex.py`'s own `f"regex: invalid pattern: {exc}"`, wrapping a
+#: `re.error` verbatim -- its own class is already named by the fixed
+#: `regex: invalid pattern: ` prefix, and `re.error`'s own trailing
+#: `" at position N"` (optionally `" (line L, column C)"`) is kept exact,
+#: since it's a location, not library wording; only the message between
+#: the two is third-party. `electricity-pyre` imitates CPython's own `re`
+#: error wording for this shape (DESIGN.md's own "regex parity gap",
+#: "accept and document", not a settled guarantee the two engines must
+#: always agree on it), so this is masked even though the two happen to
+#: agree today.
+_REGEX_INVALID_PATTERN_RE = re.compile(
+    r"regex: invalid pattern: (?P<tp>.*?)(?= at position \d+(?: \(line \d+, column \d+\))?$|$)",
+    re.DOTALL,
+)
+
+#: `core/schema_corners.py::schema_well_formedness_error`'s own
+#: `jsonschema.SchemaError` fallback, wrapped by every caller
+#: (`core/compiler.py`, `plugins/cel.py`, `plugins/agent.py`) as
+#: `f"...: schema is not a valid JSON Schema: {malformed}"` -- third-party
+#: (`electricity/DESIGN.md`'s own note that the `cel` tool's malformed-
+#: schema compile error "uses the jsonschema Rust crate's own text, not
+#: Python's"), *except* when `malformed` is one of this module's own two
+#: fixed templates (`_multiple_of_well_formedness_error`'s own
+#: `MULTIPLE_OF_ERROR`, `ref_chain_error`'s own message) -- both
+#: Circuitry's own text, excluded by the negative lookahead so they stay
+#: exact.
+_SCHEMA_WELL_FORMEDNESS_KNOWN_RE = re.compile(
+    r"\$ref chain is too long \(limit \d+ consecutive references\)$"
+    r"|multipleOf must be a number greater than 0$"
+)
+_SCHEMA_WELL_FORMEDNESS_RE = re.compile(r"(?m)is not a valid JSON Schema: (?P<tp>.*)$")
+
+#: `plugins/systemone.py`'s own `f"...cannot be read: {exc.strerror}"` --
+#: `exc.strerror` is the OS's own short message (`"No such file or
+#: directory"`), never Circuitry's. The only `OSError.strerror` text a
+#: document effect can surface through `cof run` (the TUI/CLI call sites
+#: that format the same way -- `tui/inspector.py`, `cli/last_run.py` --
+#: are never reached by a run this suite drives).
+_OS_STRERROR_RE = re.compile(r"(?m)cannot be read: (?P<tp>.*)$")
+
+
+def _mask_tp_group(text: str, pattern: re.Pattern[str], *, skip: re.Pattern[str] | None = None) -> str:
+    """Every match of *pattern* (which must have a named group `tp`) in
+    *text*, with that group's own span replaced by
+    `THIRD_PARTY_TEXT_PLACEHOLDER` -- everything else in the match (and in
+    the rest of *text*) is untouched. *skip*, when given, is checked
+    against the matched `tp` text with `fullmatch`; a match is left alone
+    entirely (not even the surrounding marker is touched, since nothing
+    needs to change) when it matches -- `_SCHEMA_WELL_FORMEDNESS_RE`'s own
+    carve-out for Circuitry's two fixed well-formedness messages."""
+
+    def _replace(match: re.Match[str]) -> str:
+        tail = match.group("tp")
+        if skip is not None and skip.fullmatch(tail):
+            return match.group(0)
+        whole = match.group(0)
+        start = match.start("tp") - match.start(0)
+        end = match.end("tp") - match.start(0)
+        return whole[:start] + THIRD_PARTY_TEXT_PLACEHOLDER + whole[end:]
+
+    return pattern.sub(_replace, text)
+
+
+def _mask_profile_schema_validation_lines(text: str) -> str:
+    """`cli/profiles.py::_validate_profile_schema`'s own
+    `f"Profile {name!r} at {path} failed schema validation:\\n"` followed
+    by one `f"  - {location}: {e.message}"` line per violation -- a real
+    `jsonschema` `ValidationError.message`, third-party here (unlike the
+    orchestration/inline-document schema-error lines `core/use.py`/
+    `cli/runtime_shim.py` build the same way, which electricity's own
+    schema engine now matches word for word, issue #528 -- that header
+    reads "<X> validation failed:", never "failed schema validation:", so
+    it is never touched here): profiles validate against a separate Rust
+    `jsonschema` crate instead (settled ruling 9), which words the same
+    violation differently. Masks every consecutive `  - <location>: `
+    line's own message after the header, stopping at the first line that
+    doesn't match that shape.
+    """
+    marker = "failed schema validation:\n"
+    idx = text.find(marker)
+    if idx == -1:
+        return text
+    head_end = idx + len(marker)
+    lines = text[head_end:].split("\n")
+    changed = False
+    for i, line in enumerate(lines):
+        match = re.match(r"(  - [^\n:]+: )(.*)", line)
+        if match is None:
+            break
+        lines[i] = match.group(1) + THIRD_PARTY_TEXT_PLACEHOLDER
+        changed = True
+    if not changed:
+        return text
+    return text[:head_end] + "\n".join(lines)
+
+
+#: Every `tp`-group-bearing catalogue pattern, with its own `skip`
+#: (`None` when there isn't one) -- the single list `mask_known_third_
+#: party_text` walks in sequence, and `mask_known_third_party_text_to_end`
+#: searches for the *earliest* match of any one of, for a field a fixed
+#: byte/character cap can truncate (see that function's own docstring).
+#: `_mask_profile_schema_validation_lines` isn't here: it masks whole
+#: lines by a literal header search, not one `tp`-bearing regex match, so
+#: it has no place in an "earliest match" scan and is applied to `text`
+#: separately in `mask_known_third_party_text` only -- no committed
+#: `--events` field is ever profile-schema-validation text.
+_TP_GROUP_SHAPES: tuple[tuple[re.Pattern[str], re.Pattern[str] | None], ...] = (
+    (_CEL_PARSE_ERROR_RE, None),
+    (_CEL_EVAL_ERROR_RE, None),
+    (_YAML_PARSE_ERROR_RE, None),
+    (_CURL_DETAIL_RE, None),
+    (_REGEX_INVALID_PATTERN_RE, None),
+    (_SCHEMA_WELL_FORMEDNESS_RE, _SCHEMA_WELL_FORMEDNESS_KNOWN_RE),
+    (_OS_STRERROR_RE, None),
+)
+
+
+def mask_known_third_party_text(text: str) -> str:
+    """*text* with every message-shape catalogue entry's own third-party
+    tail replaced by `THIRD_PARTY_TEXT_PLACEHOLDER`, applied in sequence --
+    the entries match disjoint, fixed Circuitry-authored markers, so
+    applying them one after another (rather than needing one combined
+    pattern) never double-matches the same span. A string with none of
+    these markers is returned unchanged."""
+    for pattern, skip in _TP_GROUP_SHAPES:
+        text = _mask_tp_group(text, pattern, skip=skip)
+    return _mask_profile_schema_validation_lines(text)
+
+
+#: `cli/events.py::_ERROR_MAX_CHARS` / electricity's own `events.rs::
+#: ERROR_MAX_CHARS` -- the one field either engine's own `--events`
+#: writer truncates, by character count, before this harness ever sees
+#: it. `mask_known_third_party_text_to_end`/`redact_events_text_pair`'s
+#: own docstrings explain why a field at or over this length needs a
+#: different mask than everywhere else.
+_EVENTS_ERROR_TRUNCATION_LIMIT = 500
+
+
+def mask_known_third_party_text_to_end(text: str) -> str:
+    """*text* with everything from the *earliest* third-party tail any
+    catalogue shape recognises onward replaced by one
+    `THIRD_PARTY_TEXT_PLACEHOLDER` -- unlike `mask_known_third_party_text`,
+    which stops each shape's own mask at that shape's own tail (keeping a
+    curl hint, an `Expression: ...` repr, or anything else Circuitry's own
+    after it exact), this is only correct for a field a fixed-length cap
+    can truncate: once the field might have been cut off *inside* a
+    third-party tail, the entire *rest* of the field -- Circuitry's own
+    text included -- depends on exactly how long that tail happened to be
+    on this particular run, and is third-party by inheritance. Returns
+    *text* unchanged when no shape matches at all."""
+    earliest: int | None = None
+    for pattern, skip in _TP_GROUP_SHAPES:
+        match = pattern.search(text)
+        if match is None:
+            continue
+        tail = match.group("tp")
+        if skip is not None and skip.fullmatch(tail):
+            continue
+        start = match.start("tp")
+        if earliest is None or start < earliest:
+            earliest = start
+    if earliest is None:
+        return text
+    return text[:earliest] + THIRD_PARTY_TEXT_PLACEHOLDER
+
+
+def mask_known_third_party_text_in(value: Any) -> Any:
+    """`mask_known_third_party_text` recursively over every string leaf of
+    *value* -- a state tree, an events line's own parsed object, or a bare
+    string alike, the same recursion shape `redact_runtime_strings` uses."""
+    if isinstance(value, dict):
+        return {k: mask_known_third_party_text_in(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [mask_known_third_party_text_in(v) for v in value]
+    if isinstance(value, str):
+        return mask_known_third_party_text(value)
+    return value
 
 
 #: `case.json`'s own `third_party_text` key (issue #503's own harness
@@ -410,16 +661,73 @@ def redact_third_party_text_lines(
     `log::error!`/`logger.error` call alike. Normalized back to the
     raise-site's own wording first, so a `third_party_text` pattern
     crafted against `meta.error`'s own text (never "for expr") still
-    matches this line's text too.
+    matches this line's text too. `mask_known_third_party_text` (the
+    message-shape catalogue) runs unconditionally, the same way
+    `redact_events_text` runs it on every events line regardless of
+    whether the case also declares a `third_party_text` spec.
     """
-    if not third_party_text:
-        return list(lines)
-    patterns = [spec["pattern"] for spec in third_party_text]
     normalized = [
         line.replace("CEL evaluation failed for expr ", "CEL evaluation failed for ")
         for line in lines
     ]
+    normalized = [mask_known_third_party_text(line) for line in normalized]
+    if not third_party_text:
+        return normalized
+    patterns = [spec["pattern"] for spec in third_party_text]
     return [_redact_third_party_patterns(line, patterns) for line in normalized]
+
+
+def _redact_events_lines(
+    events: list[dict[str, Any]],
+    replacements: Sequence[tuple[str, str]],
+    third_party_text: Sequence[dict[str, str]],
+    truncatable_paths: frozenset[str],
+) -> str:
+    """`redact_events_text`/`redact_events_text_pair`'s shared body: each
+    already-parsed event, `redact_runtime_strings`-redacted, then
+    catalogue-masked -- with its own `error` field (if any) remasked with
+    `mask_known_third_party_text_to_end` instead, mask-to-end rather than
+    mask-to-tail, when its own `path` is in *truncatable_paths* -- and,
+    when *third_party_text* is given, `_redact_third_party_patterns` on
+    top, then re-serialized one JSON object per line in the exact wire
+    format (`separators=(",", ":")`, `ensure_ascii=True`)
+    `_assert_compact_wire_format` itself checks for."""
+    patterns = [spec["pattern"] for spec in third_party_text]
+    lines = []
+    for event in events:
+        redacted = redact_runtime_strings(event, replacements)
+        raw_error = redacted.get("error")
+        masked = mask_known_third_party_text_in(redacted)
+        if redacted.get("path") in truncatable_paths and isinstance(raw_error, str):
+            masked = {**masked, "error": mask_known_third_party_text_to_end(raw_error)}
+        if patterns:
+            masked = _redact_third_party_patterns(masked, patterns)
+        lines.append(json.dumps(masked, separators=(",", ":"), ensure_ascii=True))
+    return "".join(f"{line}\n" for line in lines)
+
+
+def _parse_event_lines_raw(text: str) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in text.splitlines() if line.strip()]
+
+
+def serialize_events_text(text: str, replacements: Sequence[tuple[str, str]]) -> str:
+    """`redact_runtime_strings` applied to each `--events` JSONL line's own
+    parsed object, then re-serialized in the exact wire format
+    (`separators=(",", ":")`, `ensure_ascii=True`) `_assert_compact_wire_
+    format` itself checks for -- no message-shape masking at all, so
+    `scripts/generate-conformance-cases.py` commits a case's
+    `expected.events.jsonl` holding the real, unmasked capture, the same
+    convention `expected.json` already follows for state: masking only
+    ever happens at comparison time (`redact_events_text_pair`), never
+    baked into a committed fixture, so a later catalogue change (a new
+    shape, a narrower or wider mask) never makes a committed file stale
+    on its own.
+    """
+    lines = [
+        json.dumps(redact_runtime_strings(event, replacements), separators=(",", ":"), ensure_ascii=True)
+        for event in _parse_event_lines_raw(text)
+    ]
+    return "".join(f"{line}\n" for line in lines)
 
 
 def redact_events_text(
@@ -427,32 +735,62 @@ def redact_events_text(
     replacements: Sequence[tuple[str, str]],
     third_party_text: Sequence[dict[str, str]] = (),
 ) -> str:
-    """`redact_runtime_strings` (and, when *third_party_text* is given,
-    `_redact_third_party_patterns`) applied to each `--events` JSONL
-    line's own parsed object, then re-serialized in the exact wire format
-    (`separators=(",", ":")`, `ensure_ascii=True`) `_assert_compact_wire_
-    format` itself checks for -- issue #503's own harness addition: a
-    failed prompt dispatch's own `end` event embeds the full failure
-    message (`cli/events.py`'s own event record), which, for a mock-HTTP-
-    backed adapter case, carries the mock server's ephemeral port the
-    same way a captured `base_url`/recorded-request host does, and can
-    carry the same curl-version-dependent text a case's own
-    `third_party_text` spec already masks in state. Applied both before a
-    case's `expected.events.jsonl` is ever written (`scripts/generate-
-    conformance-cases.py`) and at comparison time (both pytest runners),
-    so the two can never drift -- the same convention `normalize_for_
-    comparison`'s own state redaction already follows.
+    """`_redact_events_lines`, with no `--events` field treated as
+    truncatable -- issue #503's own harness addition: a failed prompt
+    dispatch's own `end` event embeds the full failure message (`cli/
+    events.py`'s own event record), which, for a mock-HTTP-backed adapter
+    case, carries the mock server's ephemeral port the same way a
+    captured `base_url`/recorded-request host does, and can carry the
+    same curl-version-dependent text a case's own `third_party_text` spec
+    already masks in state. Comparing one stream in isolation (the only
+    way to call this rather than `redact_events_text_pair`) can't tell
+    whether its own `error` field was truncated *relative to the other
+    side*, so this never applies the mask-to-end treatment -- call
+    `redact_events_text_pair` instead whenever both an actual and an
+    expected stream are being compared against each other.
     """
-    patterns = [spec["pattern"] for spec in third_party_text]
-    lines = []
-    for line in text.splitlines():
-        if not line.strip():
-            continue
-        parsed = redact_runtime_strings(json.loads(line), replacements)
-        if patterns:
-            parsed = _redact_third_party_patterns(parsed, patterns)
-        lines.append(json.dumps(parsed, separators=(",", ":"), ensure_ascii=True))
-    return "".join(f"{line}\n" for line in lines)
+    return _redact_events_lines(
+        _parse_event_lines_raw(text), replacements, third_party_text, frozenset()
+    )
+
+
+def redact_events_text_pair(
+    actual_text: str,
+    expected_text: str,
+    replacements: Sequence[tuple[str, str]],
+    third_party_text: Sequence[dict[str, str]] = (),
+) -> tuple[str, str]:
+    """`redact_events_text`'s own pair-aware twin for the one field cof's
+    and electricity's own `--events` writer each truncate to a fixed
+    length (`_EVENTS_ERROR_TRUNCATION_LIMIT`, an `end` event's own
+    `error`) -- call this, never two separate `redact_events_text` calls,
+    whenever both streams are being compared against each other, so a
+    path whose raw `error` hit that cap on *either* side gets the same
+    aggressive, mask-to-end-of-field treatment (`mask_known_third_party_
+    text_to_end`) on both: once a recognised shape's own third-party tail
+    might have been cut off partway through, everything after where that
+    tail starts depends on the tail's own length on this particular run,
+    so it's third-party by inheritance too -- not just the shape's own
+    un-truncated extent `mask_known_third_party_text` would stop at
+    (`tests/conformance/README.md`'s own "Message shapes" section). A
+    path present on only one side, or whose raw `error` is under the cap
+    on both sides, is unaffected -- `redact_events_text`'s own per-line
+    masking still applies to everything else, on both sides alike.
+    """
+    actual_events = _parse_event_lines_raw(actual_text)
+    expected_events = _parse_event_lines_raw(expected_text)
+    truncatable_paths = frozenset(
+        event["path"]
+        for events in (actual_events, expected_events)
+        for event in events
+        if isinstance(event.get("path"), str)
+        and isinstance(event.get("error"), str)
+        and len(event["error"]) >= _EVENTS_ERROR_TRUNCATION_LIMIT
+    )
+    return (
+        _redact_events_lines(actual_events, replacements, third_party_text, truncatable_paths),
+        _redact_events_lines(expected_events, replacements, third_party_text, truncatable_paths),
+    )
 
 
 def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
@@ -563,9 +901,18 @@ def assert_errors_equal(
     location_pattern: str | None = None,
 ) -> None:
     """Compare a failure's message per §12: Circuitry's own messages
-    byte-for-byte (`byte_for_byte=True`); a third-party library's message
-    only for "failed in the same place, with a non-empty message"
-    (`byte_for_byte=False`) — never byte-for-byte, per the spec."""
+    byte-for-byte (`byte_for_byte=True`, the raw text, never masked --
+    pinning it exactly is only valid when it names no third-party shape
+    at all, which `scripts/generate-conformance-cases.py` checks
+    statically); a third-party library's message (`byte_for_byte=False`)
+    first through `mask_known_third_party_text` (the message-shape
+    catalogue): if that alone makes the two sides equal, Circuitry's own
+    part (prefix, location, effect name) matched exactly and the
+    third-party tail is masked out, so there's nothing left to check.
+    Otherwise, when *location_pattern* is given, fall back to the older,
+    weaker check this replaces for a shape the catalogue doesn't
+    recognise yet: "failed in the same place, with a non-empty message"
+    -- never byte-for-byte."""
     if byte_for_byte:
         if actual != expected:
             raise AssertionError(
@@ -576,19 +923,27 @@ def assert_errors_equal(
         raise AssertionError("actual error message is empty")
     if not expected:
         raise AssertionError("fixture's expected error message is empty")
-    if location_pattern is not None:
-        actual_match = re.search(location_pattern, actual)
-        expected_match = re.search(location_pattern, expected)
-        if actual_match is None or expected_match is None:
-            raise AssertionError(
-                f"location pattern {location_pattern!r} not found in one of the two "
-                f"error messages:\n  actual:   {actual!r}\n  expected: {expected!r}"
-            )
-        if actual_match.group(0) != expected_match.group(0):
-            raise AssertionError(
-                f"failed at different locations: "
-                f"{actual_match.group(0)!r} != {expected_match.group(0)!r}"
-            )
+    masked_actual = mask_known_third_party_text(actual)
+    masked_expected = mask_known_third_party_text(expected)
+    if masked_actual == masked_expected:
+        return
+    if location_pattern is None:
+        raise AssertionError(
+            "error text differs even after masking every known third-party shape:\n"
+            f"  actual:   {masked_actual!r}\n  expected: {masked_expected!r}"
+        )
+    actual_match = re.search(location_pattern, actual)
+    expected_match = re.search(location_pattern, expected)
+    if actual_match is None or expected_match is None:
+        raise AssertionError(
+            f"location pattern {location_pattern!r} not found in one of the two "
+            f"error messages:\n  actual:   {actual!r}\n  expected: {expected!r}"
+        )
+    if actual_match.group(0) != expected_match.group(0):
+        raise AssertionError(
+            f"failed at different locations: "
+            f"{actual_match.group(0)!r} != {expected_match.group(0)!r}"
+        )
 
 
 def assert_out_serialization(raw_text: str, *, pretty: bool) -> None:
