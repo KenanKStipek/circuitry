@@ -1268,6 +1268,24 @@ pub fn engine_pid_for_doc(runs_dir: &Path, out_dir: &Path) -> (u32, PathBuf) {
     panic!("no registry entry under {runs_dir:?} has run_dir {out_dir:?}");
 }
 
+/// The run registry's own entries under `runs_dir`: only `*.json`
+/// files, sorted by name. The registry writes each entry to
+/// `<run_id>.json.tmp` and renames it into place, so a listing that
+/// counts every file can see the temporary file just before the
+/// rename, and reading it then fails with `NotFound`.
+pub fn registry_json_entries(runs_dir: &Path) -> Vec<PathBuf> {
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(runs_dir)
+        .map(|rd| {
+            rd.flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|x| x.to_str()) == Some("json"))
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.sort();
+    entries
+}
+
 /// Polls `runs_dir` until it holds at least `want` entries, capped
 /// at `timeout` -- the registry entry is written once `run_start` is
 /// known, not instantly at spawn.

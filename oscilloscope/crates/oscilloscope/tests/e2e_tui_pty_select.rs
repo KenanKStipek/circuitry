@@ -27,9 +27,9 @@ use std::time::Duration;
 use support::{
     AutoKill, SCRIPTED_CONFIG, SELECT_SLOW_DOC, SIGNAL_DELAY, TestHome, assert_no_leftover_process,
     drain_continuously, e2e_enabled, engine_pid_for_doc, launch_osi_log, open_pty, osi_command,
-    scripted_config, send_bytes, spawn_osi_on_pty, wait_for_registry_entries, wait_for_screen_text,
-    wait_for_screen_texts, wait_for_step_start, wait_with_timeout,
-    wait_with_timeout_capturing_stdout, write_doc,
+    registry_json_entries, scripted_config, send_bytes, spawn_osi_on_pty,
+    wait_for_registry_entries, wait_for_screen_text, wait_for_screen_texts, wait_for_step_start,
+    wait_with_timeout, wait_with_timeout_capturing_stdout, write_doc,
 };
 
 /// Serialises every test in this file against every other (see the
@@ -149,9 +149,7 @@ fn bare_osi_lists_two_live_runs_and_the_esc_round_trip_returns_to_select() {
     child_a.set_engine_pid(engine_pid_for_doc(&runs_dir, out_a.path()));
     child_b.set_engine_pid(engine_pid_for_doc(&runs_dir, out_b.path()));
     assert_eq!(
-        std::fs::read_dir(&runs_dir)
-            .map(|rd| rd.flatten().count())
-            .unwrap_or(0),
+        registry_json_entries(&runs_dir).len(),
         2,
         "expected two registry entries while both runs are live, in {runs_dir:?}"
     );
