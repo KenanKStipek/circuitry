@@ -1,8 +1,8 @@
 {
   "spec_case": "runtime-semantics.md §8.1 (preflight)",
-  "description": "Both a missing scripted replies file (adapter) and a non-executable configured awk binary (tool) fail preflight at once: the combined error joins both messages with '; ', adapter before tool (preflight's own result order).",
+  "description": "Both a missing scripted replies file (adapter) and a non-executable configured awk binary (tool) fail preflight at once: the combined error joins both messages with '; ', adapter before tool (preflight's own result order). The missing-replies-file branch's own OS strerror text is third-party, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md); the errno and the path stay exact.",
   "engines": ["python", "electricity"],
   "config": "config.json",
   "expect": "failure",
-  "error_compare": "exact"
+  "error_compare": "location"
 }
