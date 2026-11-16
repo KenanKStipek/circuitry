@@ -13,7 +13,6 @@ decision tables electricity's port has to match exactly:
   shapes, the exit-code-to-hint table, token coercion, secret
   masking), driven by scripted triples through the same monkeypatch;
 - the pure helpers in `curl_support.py` (`parse_error_body`,
-  `_mask_credential_query_params`, `_strip_url_userinfo`,
   `curl_failure_message`, and `run_curl`'s own control-character and
   `--config`-size checks).
 
@@ -49,8 +48,6 @@ from circuitry.adapters.replicate import ReplicateAdapter  # noqa: E402
 from circuitry.curl_support import (  # noqa: E402
     _MAX_CONFIG_BYTES,
     _curl_config_file,
-    _mask_credential_query_params,
-    _strip_url_userinfo,
     _validate_no_control_chars,
     curl_failure_message,
     parse_error_body,
@@ -255,28 +252,6 @@ def _parse_error_code_cases() -> list[dict[str, Any]]:
         "null",
     ]
     return [{"stdout": body, "expected": parse_error_code(body)} for body in bodies]
-
-
-def _mask_credential_query_params_cases() -> list[dict[str, Any]]:
-    urls = [
-        "https://api.example.com/search",
-        "https://api.example.com/search?key=secret&q=weather",
-        "http://127.0.0.1:8080/v1/chat/completions?api_key=s3cr3t",
-        "https://x.com/?Authorization=tok&other=1",
-        "https://x.com/?a=1&a=2",
-        "https://x.com/?weird%20key=value+with+space",
-    ]
-    return [{"url": url, "expected": _mask_credential_query_params(url)} for url in urls]
-
-
-def _strip_url_userinfo_cases() -> list[dict[str, Any]]:
-    texts = [
-        "connect to http://user:pass@127.0.0.1:1 failed",
-        "no credentials here at all",
-        "two: http://a:b@x.com and https://c:d@y.com",
-        "http://justuser@host/path",
-    ]
-    return [{"text": text, "expected": _strip_url_userinfo(text)} for text in texts]
 
 
 def _curl_failure_message_cases() -> list[dict[str, Any]]:
@@ -490,10 +465,19 @@ def _ollama_outcome_cases() -> list[dict[str, Any]]:
         (6, "", ""),
         (35, "", ""),
         (60, "", ""),
+        # Issue #778: a refused port whose authority ends at a valid
+        # port number (`443`) hides a second `@` -- and a real host --
+        # behind it. The "not reachable" hint and the failure's own
+        # `url=` field must both name only the part after the LAST
+        # `@`, never the port-shaped credential fragment (`443/ss`) in
+        # between.
+        (7, "", "", "http://127.0.0.1:443/ss@localhost:11434"),
     ]
     cases = []
-    for returncode, stdout, stderr in scripted:
-        adapter = OllamaAdapter(base_url="http://localhost:11434", streams=False)
+    for scripted_case in scripted:
+        returncode, stdout, stderr = scripted_case[:3]
+        base_url = scripted_case[3] if len(scripted_case) > 3 else "http://localhost:11434"
+        adapter = OllamaAdapter(base_url=base_url, streams=False)
         _captured, result = _call_generate(
             "circuitry.adapters.ollama",
             lambda a=adapter: a.generate(model="m", prompt="hi", timeout_seconds=30),
@@ -508,7 +492,7 @@ def _ollama_outcome_cases() -> list[dict[str, Any]]:
                 "stderr": stderr,
                 "model": "m",
                 "timeout_seconds": 30,
-                "base_url": "http://localhost:11434",
+                "base_url": base_url,
                 "result": result,
             }
         )
@@ -1146,8 +1130,6 @@ def build_corpus() -> dict[str, Any]:
     return {
         "parse_error_body_cases": _parse_error_body_cases(),
         "parse_error_code_cases": _parse_error_code_cases(),
-        "mask_credential_query_params_cases": _mask_credential_query_params_cases(),
-        "strip_url_userinfo_cases": _strip_url_userinfo_cases(),
         "curl_failure_message_cases": _curl_failure_message_cases(),
         "control_char_cases": _control_char_cases(),
         "config_size_cases": _config_size_cases(),

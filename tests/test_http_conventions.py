@@ -11,11 +11,11 @@ from circuitry.http_conventions import (
     check_strict_port,
     check_url,
     redact_proxy_value,
+    redact_request_url,
     redact_url,
     resolve_proxy,
     split_proxy_url,
     strip_request_url_userinfo,
-    strip_url_userinfo,
 )
 
 # ---------------------------------------------------------------------------
@@ -193,28 +193,8 @@ def test_check_url_control_character_refusal_never_echoes_a_password_hidden_past
 
 
 # ---------------------------------------------------------------------------
-# strip_url_userinfo
+# strip_request_url_userinfo
 # ---------------------------------------------------------------------------
-
-
-def test_strip_url_userinfo_removes_credentials() -> None:
-    assert strip_url_userinfo("http://user:pass@host/x") == "http://host/x"
-
-
-def test_strip_url_userinfo_leaves_a_plain_url_unchanged() -> None:
-    assert strip_url_userinfo("http://host/x") == "http://host/x"
-
-
-def test_strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() -> None:
-    """Issue #778: a password containing ``@`` (and ``:``) must be
-    removed in full -- stopping at the *first* ``@`` would leave a
-    fragment of it (``ss@proxy:1080``) in the redacted text.
-    """
-    redacted = strip_url_userinfo("socks5://alice:p@ss@proxy:1080/x")
-    assert redacted == "socks5://proxy:1080/x"
-    assert "alice" not in redacted
-    assert "p@ss" not in redacted
-    assert "ss" not in redacted
 
 
 def test_strip_request_url_userinfo_strips_userinfo_with_no_port() -> None:
@@ -248,6 +228,21 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
     assert redacted == "http://host:1234/x"
     assert "alice" not in redacted
     assert password not in redacted
+
+
+def test_redact_request_url_masks_a_credential_query_param_behind_a_hidden_at_sign() -> None:
+    """Issue #778: once the authority's own boundary hides a second
+    ``@`` (so the whole value is cut at the LAST one, through
+    :func:`redact_proxy_value`, rather than just the authority's own
+    userinfo), the query string still carries its own credential-like
+    key and must still be masked -- the cut runs first, since masking
+    first would re-encode the query string's own ``@`` as ``%40`` and
+    the cut would no longer find it.
+    """
+    redacted = redact_request_url("https://alice:443/x@api.example.com/v1?api_key=sk")
+    assert redacted == "https://api.example.com/v1?api_key=%2A%2A%2A"
+    assert "alice" not in redacted
+    assert "sk" not in redacted
 
 
 @pytest.mark.parametrize("char", (" ", "\r"))

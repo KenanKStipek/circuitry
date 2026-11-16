@@ -541,6 +541,24 @@ def test_a_refused_connection_names_the_url_and_is_retryable() -> None:
     assert classify_exception(excinfo.value).retryable is True
 
 
+def test_a_refused_port_never_echoes_a_password_hidden_past_the_authority() -> None:
+    """A `base_url` whose authority ends at a port that is itself a
+    refused connection hides a second `@` -- and a real host -- behind
+    it: the "not reachable" message must name only the part after the
+    LAST `@`, never the port-shaped credential fragment in between
+    (issue #778).
+    """
+    port = _closed_port()
+    url = f"http://127.0.0.1:{port}/ss@x"
+    with pytest.raises(RuntimeError) as excinfo:
+        SystemOnePlugin(base_url=url).execute(params=_params(), timeout_seconds=5)
+
+    message = str(excinfo.value)
+    assert message == "systemone server not reachable at http://x"
+    assert f"{port}/" not in message
+    assert "ss" not in message
+
+
 def test_a_timeout_names_the_url_and_the_seconds_and_is_retryable() -> None:
     with socket.socket() as silent:
         silent.bind(("127.0.0.1", 0))

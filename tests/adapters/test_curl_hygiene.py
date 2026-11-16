@@ -208,6 +208,30 @@ def test_ollama_curl_failure_message_has_no_argv(
     assert "cmd=" not in str(exc.value)
 
 
+def test_ollama_refused_port_never_echoes_a_password_hidden_past_the_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A `base_url` whose authority ends at `:443` (a valid port on its
+    own) hides a second `@` -- and a real host, `localhost:11434` --
+    behind it: the "not reachable" hint and the failure's own `url=`
+    field must both name only the part after the LAST `@`, never the
+    port-shaped credential fragment (`443/ss`) in between (issue #778).
+    """
+
+    def fake_run(*args: Any, **kwargs: Any) -> FakeProc:
+        del args, kwargs
+        return FakeProc(returncode=7, stderr="curl: (7) Failed to connect")
+
+    monkeypatch.setattr("subprocess.Popen", fake_run)
+    adapter = OllamaAdapter(base_url="http://127.0.0.1:443/ss@localhost:11434", streams=False)
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="phi3", prompt="x")
+    message = str(exc.value)
+    assert "443/" not in message
+    assert "ss" not in message
+    assert "localhost:11434" in message
+
+
 # ---------------------------------------------------------------------------
 # End to end against a local HTTP server, never a live provider.
 # ---------------------------------------------------------------------------

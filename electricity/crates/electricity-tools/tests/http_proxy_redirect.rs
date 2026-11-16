@@ -54,7 +54,13 @@ async fn a_redirect_through_a_proxy_to_a_no_proxy_host_carries_no_proxy_authoriz
     });
 
     // SAFETY: the only `#[test]` in this process -- see the module doc.
+    // `NO_PROXY`/`all_proxy`/`ALL_PROXY` are cleared first, so a
+    // developer's own shell can't substitute a different proxy decision
+    // out from under this test (issue #778).
     unsafe {
+        std::env::remove_var("NO_PROXY");
+        std::env::remove_var("all_proxy");
+        std::env::remove_var("ALL_PROXY");
         std::env::set_var("http_proxy", format!("http://alice:s3cret@{proxy_addr}"));
         std::env::set_var("no_proxy", origin_addr.ip().to_string());
     }

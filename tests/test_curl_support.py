@@ -50,10 +50,14 @@ def test_url_userinfo_is_stripped() -> None:
     assert "example.test/v1/chat" in message
 
 
-def test_url_userinfo_in_hint_is_also_stripped() -> None:
-    """The ollama exit-7 hint interpolates `self.base_url` directly, not the
-    `url` argument — the stripping must apply to the whole rendered message,
-    not just the `url=` field."""
+def test_hint_is_passed_through_verbatim_the_caller_must_redact_it_first() -> None:
+    """`curl_failure_message` only redacts its own `url=` field (issue
+    #778) -- a caller that builds a `hint` naming a URL (the ollama
+    exit-7 hint interpolates `self.base_url` directly, not the `url`
+    argument) must redact it itself, through
+    :func:`circuitry.http_conventions.redact_request_url` or
+    :func:`redact_host_url`, before passing it in; see
+    `adapters/ollama.py::_raise_curl_failure`."""
     message = curl_failure_message(
         source="ollama",
         model=None,
@@ -61,9 +65,9 @@ def test_url_userinfo_in_hint_is_also_stripped() -> None:
         returncode=7,
         stdout="",
         stderr="curl: (7) Failed to connect",
-        hint="Ollama at http://user:canarypw@example.test:11434 is not reachable.",
+        hint="Ollama at http://example.test:11434 is not reachable.",
     )
-    assert "canarypw" not in message
+    assert message.endswith("Ollama at http://example.test:11434 is not reachable.")
 
 
 def test_redact_host_url_strips_userinfo_for_a_preflight_host_text() -> None:

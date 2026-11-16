@@ -43,7 +43,14 @@ async fn check_over_a_plain_http_proxy_sends_absolute_form_with_proxy_authorizat
     });
 
     // SAFETY: the only `#[test]` in this process -- see the module doc.
+    // `no_proxy`/`all_proxy` (either case) are cleared first, so a
+    // developer's own shell can't bypass the proxy this test sets or
+    // substitute a different one out from under it (issue #778).
     unsafe {
+        std::env::remove_var("no_proxy");
+        std::env::remove_var("NO_PROXY");
+        std::env::remove_var("all_proxy");
+        std::env::remove_var("ALL_PROXY");
         std::env::set_var("http_proxy", format!("http://alice:s3cret@{proxy_addr}"));
     }
     let adapter = build_cyberdiner("cyberdiner", &config("http://cyberdiner.invalid")).unwrap();

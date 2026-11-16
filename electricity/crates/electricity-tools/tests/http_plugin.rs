@@ -611,7 +611,7 @@ async fn a_connection_refused_never_names_a_password_in_the_url() {
     // `send_error_to_tool_error`'s own `original_url`
     // (what becomes `HTTP request to {url} failed: ...`) is redacted
     // the same way cof's `plugins/http.py` already redacts its own
-    // `redact_url(url)`.
+    // `redact_request_url(url)`.
     let addr = closed_port();
     let token = CancellationToken::new();
     let url = format!("http://alice:s3cr3t@{addr}/");

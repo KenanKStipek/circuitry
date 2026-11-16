@@ -91,50 +91,6 @@
       "expected": null
     }
   ],
-  "mask_credential_query_params_cases": [
-    {
-      "url": "https://api.example.com/search",
-      "expected": "https://api.example.com/search"
-    },
-    {
-      "url": "https://api.example.com/search?key=secret&q=weather",
-      "expected": "https://api.example.com/search?key=%2A%2A%2A&q=weather"
-    },
-    {
-      "url": "http://127.0.0.1:8080/v1/chat/completions?api_key=s3cr3t",
-      "expected": "http://127.0.0.1:8080/v1/chat/completions?api_key=%2A%2A%2A"
-    },
-    {
-      "url": "https://x.com/?Authorization=tok&other=1",
-      "expected": "https://x.com/?Authorization=%2A%2A%2A&other=1"
-    },
-    {
-      "url": "https://x.com/?a=1&a=2",
-      "expected": "https://x.com/?a=1&a=2"
-    },
-    {
-      "url": "https://x.com/?weird%20key=value+with+space",
-      "expected": "https://x.com/?weird+key=%2A%2A%2A"
-    }
-  ],
-  "strip_url_userinfo_cases": [
-    {
-      "text": "connect to http://user:pass@127.0.0.1:1 failed",
-      "expected": "connect to http://127.0.0.1:1 failed"
-    },
-    {
-      "text": "no credentials here at all",
-      "expected": "no credentials here at all"
-    },
-    {
-      "text": "two: http://a:b@x.com and https://c:d@y.com",
-      "expected": "two: http://x.com and https://y.com"
-    },
-    {
-      "text": "http://justuser@host/path",
-      "expected": "http://host/path"
-    }
-  ],
   "curl_failure_message_cases": [
     {
       "source": "ollama",
@@ -688,6 +644,25 @@
         "message": "ollama request failed (curl exit 60) model='m' url=http://localhost:11434/api/generate: no response body",
         "retry": {
           "retryable": false,
+          "status": null,
+          "retry_after": null,
+          "error_code": null
+        }
+      }
+    },
+    {
+      "returncode": 7,
+      "stdout": "",
+      "stderr": "",
+      "model": "m",
+      "timeout_seconds": 30,
+      "base_url": "http://127.0.0.1:443/ss@localhost:11434",
+      "result": {
+        "ok": false,
+        "class": "AdapterCallError",
+        "message": "ollama request failed (curl exit 7) model='m' url=http://localhost:11434/api/generate: no response body Ollama at http://localhost:11434 is not reachable. Start it (`ollama serve`), or set `runtime.adapters.ollama.base_url` in your config. Run `cof doctor` to verify connectivity.",
+        "retry": {
+          "retryable": true,
           "status": null,
           "retry_after": null,
           "error_code": null

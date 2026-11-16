@@ -203,6 +203,10 @@
     {
       "url": "http://alice:pa:ss@host:1234/x",
       "redacted": "http://host:1234/x"
+    },
+    {
+      "url": "https://alice:443/x@api.example.com/v1?api_key=sk",
+      "redacted": "https://api.example.com/v1?api_key=%2A%2A%2A"
     }
   ],
   "proxy_redaction_cases": [

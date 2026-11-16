@@ -132,7 +132,9 @@ def _strict_port_cases() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
-# 3. Userinfo/credential redaction -- `redact_url`.
+# 3. Userinfo/credential redaction -- `redact_request_url`, the one
+#    function every refusal/warning/event/state/hint/`host:` text that
+#    names a request URL on either engine uses (issue #778).
 # ---------------------------------------------------------------------
 
 
@@ -149,8 +151,13 @@ def _redaction_cases() -> list[dict[str, Any]]:
         "http://alice:pa ss@host:1234/x",
         "http://alice:pa\rss@host:1234/x",
         "http://alice:pa:ss@host:1234/x",
+        # A credential-like query key behind an `@` that follows the
+        # authority (issue #778): the cut to the last `@` must run
+        # *before* the query is masked, or the mask's own re-encoding of
+        # a literal `@` as `%40` would hide it from the cut.
+        "https://alice:443/x@api.example.com/v1?api_key=sk",
     ]
-    return [{"url": url, "redacted": http_conventions.redact_url(url)} for url in urls]
+    return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
 
 
 def _proxy_redaction_cases() -> list[dict[str, Any]]:
