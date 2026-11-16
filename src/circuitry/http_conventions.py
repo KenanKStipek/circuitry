@@ -138,8 +138,8 @@ def strip_request_url_userinfo(url: str) -> str:
     which end ``urlsplit``'s own ``netloc`` the way ``/`` does) still
     comes out fully removed (issue #778).
 
-    Also used, directly (not only through :func:`redact_url`), by every
-    surface that builds a plain :class:`urllib.request.Request` (the
+    Also used, directly (not only through :func:`redact_request_url`),
+    by every surface that builds a plain :class:`urllib.request.Request` (the
     ``http`` tool, cyberdiner): urllib keeps a URL's userinfo verbatim
     in ``Request.host`` and never turns it into an ``Authorization``
     header the way electricity's own wire building does, so a userinfo
@@ -291,8 +291,8 @@ def _check_no_control_or_whitespace(value: str, *, redact: Callable[[str], str])
     """Refuses *value* before any I/O when it contains any ASCII control
     character or whitespace (issue #778) -- one shared message on both
     engines, never a surface-specific one. *redact* is whichever of
-    :func:`redact_url`/:func:`redact_proxy_value` fits *value*'s own
-    shape.
+    :func:`redact_request_url`/:func:`redact_proxy_value` fits *value*'s
+    own shape.
     """
     if _CONTROL_OR_WHITESPACE_RE.search(value):
         raise ValueError(

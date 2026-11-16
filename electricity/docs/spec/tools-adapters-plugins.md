@@ -993,7 +993,7 @@ a native client must still guarantee:
    `NO_PROXY`) silently rerouting a request — electricity should document (and pin, where the
    host config specifies a `base_url`) whether it honors system proxy env vars at all.
 3. **Failure messages must mask secrets and credential-shaped URL components**, mirroring
-   `curl_failure_message`/`_mask_secrets`/`_strip_url_userinfo`/`_mask_credential_query_params`
+   `curl_failure_message`/`_mask_secrets`/`redact_host_url`/`http_conventions.redact_request_url`
    (`curl_support.py:106-143`, `:33-69`): a failure message names the source, target host
    (userinfo and credential-looking query params masked), HTTP status, and the provider's own
    (already-redacted) error detail — never the raw request or response body, and never a secret
