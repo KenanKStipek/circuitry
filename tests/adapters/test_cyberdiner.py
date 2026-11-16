@@ -1,8 +1,11 @@
 """Tests for the CyberDiner adapter (submit/poll job broker).
 
-Fakes ``urllib.request.urlopen`` per the idiom in
-``tests/plugins/test_http.py``, and fakes ``time.monotonic``/``time.sleep``
-so poll-cadence and timeout behavior is deterministic without real delays.
+Fakes every opener's own ``open`` (the adapter now always builds an
+explicit opener, H1, rather than calling the bare ``urllib.request.
+urlopen`` convenience function -- see ``_patch_opener_open``, the same
+idiom ``tests/plugins/test_http.py`` uses), and fakes ``time.monotonic``/
+``time.sleep`` so poll-cadence and timeout behavior is deterministic
+without real delays.
 """
 
 from __future__ import annotations
@@ -78,6 +81,20 @@ class _FakeClock:
 
     def sleep(self, seconds: float) -> None:
         self.now += seconds
+
+
+def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
+    """Replaces every opener's own ``open`` -- a single choke point both
+    the bare ``urllib.request.urlopen`` convenience function and an
+    explicit ``build_opener(...).open(...)`` call (what
+    ``http_conventions.open_with_proxy_rule`` now uses, issue #778 step 7
+    H-review P1-3) go through, so either call shape lands on *fake*.
+    """
+
+    def bound(self: Any, req: Any, data: Any = None, timeout: Any = None) -> Any:
+        return fake(req, timeout)
+
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", bound)
 
 
 def _install_clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
@@ -190,7 +207,7 @@ def test_generate_happy_path_submit_poll_complete(
             ),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter()
     result = adapter.generate(model="good-fast", prompt="hi", timeout_seconds=10)
@@ -228,7 +245,7 @@ def test_submit_request_body_is_exactly_prompt_and_tier_name(
     """
     _install_clock(monkeypatch)
     scripted = _ScriptedUrlopen([_job(jobId="job-b", status="complete", result="ok")])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
 
@@ -248,7 +265,7 @@ def test_generate_accepts_both_terminal_success_spellings(
             _job(jobId="job-1c", status=terminal_status, result="both work"),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     result = _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
 
@@ -268,7 +285,7 @@ def test_generate_treats_assigned_as_in_flight(
             _job(jobId="job-1d", status="complete", result="done"),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     result = _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
 
@@ -283,7 +300,7 @@ def test_generate_tokens_received_is_none_when_expo_omits_the_counter(
     scripted = _ScriptedUrlopen(
         [_job(jobId="job-1e", status="complete", result="ok", tokensProcessed=None)]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     result = _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
 
@@ -302,7 +319,7 @@ def test_missing_envelope_on_submit_is_actionable_not_a_key_error(
     _install_clock(monkeypatch)
     # Root-level camelCase, no envelope — what a non-expo server might answer.
     scripted = _ScriptedUrlopen([{"jobId": "job-8", "status": "complete"}])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     with pytest.raises(RuntimeError, match="`data` object") as exc:
         _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
@@ -319,7 +336,7 @@ def test_missing_envelope_on_poll_is_actionable(
             {"jobId": "job-9", "status": "complete", "result": "nope"},
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     with pytest.raises(RuntimeError, match="`data` object") as exc:
         _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
@@ -329,7 +346,7 @@ def test_missing_envelope_on_poll_is_actionable(
 def test_null_envelope_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     _install_clock(monkeypatch)
     scripted = _ScriptedUrlopen([{"data": None, "error": "something went sideways"}])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     with pytest.raises(RuntimeError, match="not a CyberDiner job envelope"):
         _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
@@ -340,7 +357,7 @@ def test_envelope_without_job_id_is_actionable(
 ) -> None:
     _install_clock(monkeypatch)
     scripted = _ScriptedUrlopen([_job(status="pending", tierName="cheap")])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     with pytest.raises(RuntimeError, match="missing jobId"):
         _adapter().generate(model="cheap", prompt="hi", timeout_seconds=10)
@@ -353,7 +370,7 @@ def test_generate_uses_default_tier_when_model_empty(
     scripted = _ScriptedUrlopen(
         [_job(jobId="job-2", status="complete", result="ok")]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter(default_tier="good")
     result = adapter.generate(model="", prompt="hi", timeout_seconds=10)
@@ -369,7 +386,7 @@ def test_generate_uses_default_tier_when_model_is_whitespace(
     scripted = _ScriptedUrlopen(
         [_job(jobId="job-2b", status="complete", result="ok")]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter(default_tier="good-cheap")
     result = adapter.generate(model="   ", prompt="hi", timeout_seconds=10)
@@ -395,7 +412,7 @@ def test_generate_unknown_tier_is_submitted_and_expo_400_surfaces_actionably(
             fp=io.BytesIO(b'{"error":"unknown tier \'gpt-4o-mini\'"}'),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="HTTP 400") as exc:
@@ -409,7 +426,7 @@ def test_generate_valid_tiers_opt_in_raises_before_any_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     scripted = _ScriptedUrlopen([_job(jobId="job-x", status="complete")])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter(valid_tiers=("cheap", "good-fast"))
     with pytest.raises(ValueError, match="valid_tiers: cheap, good-fast"):
@@ -437,7 +454,7 @@ def test_generate_failed_status_raises_with_error_message(
             ),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="model exploded"):
@@ -463,7 +480,7 @@ def test_generate_timed_out_status_is_terminal_and_stops_polling(
             _job(jobId="job-9", status=wire_status),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter(poll_interval_ms=500)
     with pytest.raises(RuntimeError) as exc:
@@ -496,7 +513,7 @@ def test_generate_timed_out_status_includes_expo_error_fields(
             ),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter()
     with pytest.raises(RuntimeError) as exc:
@@ -515,7 +532,7 @@ def test_generate_cancelled_status_raises(monkeypatch: pytest.MonkeyPatch) -> No
             _job(jobId="job-4", status="cancelled"),
         ]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="cancelled"):
@@ -539,7 +556,7 @@ def test_poll_timeout_raises_naming_timeout_and_job_id(
             body = _job(jobId="job-5", status="running")
         return _FakeResponse(status=200, body=_json.dumps(body).encode("utf-8"))
 
-    monkeypatch.setattr("urllib.request.urlopen", always_running)
+    _patch_opener_open(monkeypatch, always_running)
 
     adapter = _adapter(poll_interval_ms=500)
     with pytest.raises(RuntimeError, match=r"timed out after 1s.*job-5") as exc:
@@ -563,7 +580,7 @@ def test_poll_cadence_honors_poll_interval(monkeypatch: pytest.MonkeyPatch) -> N
             body = _job(jobId="job-6", status="running")
         return _FakeResponse(status=200, body=_json.dumps(body).encode("utf-8"))
 
-    monkeypatch.setattr("urllib.request.urlopen", always_running)
+    _patch_opener_open(monkeypatch, always_running)
 
     adapter = _adapter(poll_interval_ms=500)
     with pytest.raises(RuntimeError, match="timed out"):
@@ -585,7 +602,7 @@ def test_bearer_header_sent_with_token(monkeypatch: pytest.MonkeyPatch) -> None:
     scripted = _ScriptedUrlopen(
         [_job(jobId="job-7", status="complete", result="ok")]
     )
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     adapter = _adapter(token="ck_super_secret")
     adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
@@ -616,7 +633,7 @@ def test_http_error_wrapped_in_runtime_error(monkeypatch: pytest.MonkeyPatch) ->
             fp=io.BytesIO(b"boom"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="HTTP 500") as exc:
@@ -630,7 +647,7 @@ def test_connection_error_wrapped_in_runtime_error(
     def fake_urlopen(req: Any, timeout: float = 0) -> Any:
         raise URLError("Name or service not known")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter()
     with pytest.raises(RuntimeError, match="Name or service not known") as exc:
@@ -674,7 +691,7 @@ def test_a_500_from_cyberdiner_retries_through_the_prompt_retry_loop(
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter()
     orch = {
@@ -717,7 +734,7 @@ def test_a_400_from_cyberdiner_does_not_retry(
             fp=io.BytesIO(b"bad tier"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter()
     orch = {
@@ -746,7 +763,7 @@ def test_a_400_from_cyberdiner_does_not_retry(
 
 def test_check_missing_token_is_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     scripted = _ScriptedUrlopen([{"jobs": []}])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     r = _adapter(token="").check()
     assert r.ok is False
@@ -763,7 +780,7 @@ def test_check_unreachable_expo_reports_host(monkeypatch: pytest.MonkeyPatch) ->
     def fake_urlopen(req: Any, timeout: float = 0) -> Any:
         raise URLError("Connection refused")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     r = _adapter().check()
     assert r.ok is False
@@ -776,7 +793,7 @@ def test_check_unreachable_expo_masks_userinfo_in_the_host_text(
     def fake_urlopen(req: Any, timeout: float = 0) -> Any:
         raise URLError("Connection refused")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     r = _adapter(expo_url="https://user:secret@expo.example.test").check()
     assert r.ok is False
@@ -786,7 +803,7 @@ def test_check_unreachable_expo_masks_userinfo_in_the_host_text(
 
 def test_check_ok_when_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     scripted = _ScriptedUrlopen([{"jobs": []}])
-    monkeypatch.setattr("urllib.request.urlopen", scripted)
+    _patch_opener_open(monkeypatch, scripted)
 
     r = _adapter().check()
     assert r.ok is True
@@ -807,7 +824,7 @@ def test_check_ok_when_server_answers_with_http_error(
             fp=io.BytesIO(b""),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     r = _adapter().check()
     assert r.ok is True
@@ -902,7 +919,7 @@ def test_max_in_flight_zero_does_not_gate_concurrent_calls(
         job = {"data": {"jobId": "job-1", "status": "complete", "result": "ok"}}
         return _FakeResponse(status=200, body=_json.dumps(job).encode("utf-8"))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter()  # max_in_flight defaults to 0
 
@@ -973,7 +990,7 @@ def test_max_in_flight_caps_concurrent_submissions(
         job = {"data": {"jobId": "job-1", "status": "complete", "result": "ok"}}
         return _FakeResponse(status=200, body=_json.dumps(job).encode("utf-8"))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     adapter = _adapter(max_in_flight=cap)
     results: list[str] = []
@@ -1076,7 +1093,7 @@ def test_bundled_example_puts_a_real_tier_on_the_wire(
         body = _job(jobId="job-demo", status="complete", result="Cybernetics is.")
         return _FakeResponse(status=200, body=_json.dumps(body).encode("utf-8"))
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     orch_path = resolve_bundled("learn/cyberdiner_hello")
     assert orch_path is not None and orch_path.exists()

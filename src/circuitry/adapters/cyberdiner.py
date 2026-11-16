@@ -69,6 +69,7 @@ import urllib.request
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+from .. import http_conventions
 from ..core.cancellation import acquire_promptly
 from ..curl_support import redact_host_url
 from ..preflight import CheckResult
@@ -218,6 +219,11 @@ class CyberdinerAdapter:
         payload: dict[str, Any] | None,
         timeout: float,
     ) -> dict[str, Any]:
+        # Issue #778 step 7, H-review P1-3: checked and proxied the same
+        # way the `http` tool is -- never urllib's own default opener,
+        # which would decide the proxy under its own, different
+        # convention and let a `file://` `expo_url` read a local file.
+        http_conventions.check_url(url)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
@@ -225,7 +231,7 @@ class CyberdinerAdapter:
             req.add_header("Content-Type", "application/json")
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            with http_conventions.open_with_proxy_rule(req, timeout=timeout) as resp:
                 text = resp.read().decode("utf-8", errors="replace")
         except urllib.error.HTTPError as exc:
             detail = ""
@@ -385,12 +391,16 @@ class CyberdinerAdapter:
             )
             return CheckResult(ok=False, missing=missing)
 
-        req = urllib.request.Request(
-            self.expo_url.rstrip("/") + "/beta/jobs", method="GET"
-        )
+        url = self.expo_url.rstrip("/") + "/beta/jobs"
+        req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {self.token}")
         try:
-            with urllib.request.urlopen(req, timeout=2):
+            # Issue #778 step 7, H-review P1-3: checked and proxied like
+            # every other request this adapter makes -- a bad `expo_url`
+            # (wrong scheme/port) or an unusable proxy counts as
+            # unreachable here too, the same as a connection failure.
+            http_conventions.check_url(url)
+            with http_conventions.open_with_proxy_rule(req, timeout=2):
                 pass
         except urllib.error.HTTPError:
             # Any HTTP response (even 401/404/405) means the host answered —
