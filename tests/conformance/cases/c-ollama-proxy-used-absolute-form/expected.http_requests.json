@@ -1,0 +1,31 @@
+[
+  {
+    "method": "POST",
+    "path": "/api/generate",
+    "query": [],
+    "headers": [
+      [
+        "accept",
+        "*/*"
+      ],
+      [
+        "content-length",
+        "54"
+      ],
+      [
+        "content-type",
+        "application/json"
+      ],
+      [
+        "host",
+        "example.invalid"
+      ],
+      [
+        "proxy-connection",
+        "Keep-Alive"
+      ]
+    ],
+    "body": "{\"model\": \"m\", \"stream\": false, \"prompt\": \"say hello\"}",
+    "absolute_form_target": "http://example.invalid/api/generate"
+  }
+]

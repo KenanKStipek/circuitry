@@ -1,0 +1,6 @@
+name: c-ollama-proxy-userinfo-basic-auth
+model: m
+effects:
+  - type: prompt
+    name: greeting
+    template: "say hello"

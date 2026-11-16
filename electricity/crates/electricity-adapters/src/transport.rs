@@ -265,6 +265,37 @@ pub(crate) fn resolve_curl_proxy(
     resolve_curl_proxy_from(scheme, host, &env)
 }
 
+/// The extra headers curl itself sends for a plain (non-CONNECT)
+/// proxied `http` request: `Proxy-Authorization` (built from the
+/// proxy URL's own userinfo, exactly the way the request URL's own
+/// userinfo becomes `Authorization`) and `Proxy-Connection: Keep-
+/// Alive`. Neither is ever sent for an `https` request, which tunnels
+/// through `CONNECT` instead -- a tunneled request sends its own
+/// `basic_auth` on the `CONNECT` line itself (`http_client::send`'s
+/// own doc comment on [`ProxyTarget::basic_auth`]), and has no proxy-
+/// facing keep-alive of its own. A pure function, not inlined at its
+/// one call site, so a unit test can check it directly without going
+/// through [`resolve_curl_proxy`]'s own real-environment read (issue
+/// #778 step 7: this crate reproduces what curl observably puts on
+/// the wire, not merely what Circuitry's own adapter code configured).
+fn proxy_wire_headers(proxy: &Option<ProxyTarget>, scheme: Scheme) -> Vec<(String, String)> {
+    if scheme != Scheme::Http {
+        return Vec::new();
+    }
+    let Some(proxy) = proxy else {
+        return Vec::new();
+    };
+    let mut headers = Vec::new();
+    if let Some(basic_auth) = &proxy.basic_auth {
+        headers.push((
+            "Proxy-Authorization".to_string(),
+            format!("Basic {basic_auth}"),
+        ));
+    }
+    headers.push(("Proxy-Connection".to_string(), "Keep-Alive".to_string()));
+    headers
+}
+
 fn resolve_curl_proxy_from(
     scheme: &str,
     host: &str,
@@ -498,6 +529,7 @@ fn prepare_request(
         "User-Agent".to_string(),
         format!("electricity/{}", env!("CARGO_PKG_VERSION")),
     ));
+    wire_headers.extend(proxy_wire_headers(&proxy, scheme_enum));
 
     let wire_target = match (&proxy, scheme_enum) {
         (Some(_), Scheme::Http) => {
@@ -1101,6 +1133,43 @@ mod tests {
             .unwrap();
         assert_eq!(target.host, "proxy.corp");
         assert_eq!(target.port, 3128);
+    }
+
+    #[test]
+    fn proxy_wire_headers_adds_keep_alive_only_for_a_proxied_plain_http_request() {
+        let proxy = Some(ProxyTarget {
+            host: "proxy.corp".to_string(),
+            port: 3128,
+            basic_auth: None,
+        });
+        assert_eq!(
+            proxy_wire_headers(&proxy, Scheme::Http),
+            vec![("Proxy-Connection".to_string(), "Keep-Alive".to_string())]
+        );
+        assert_eq!(proxy_wire_headers(&proxy, Scheme::Https), Vec::new());
+        assert_eq!(proxy_wire_headers(&None, Scheme::Http), Vec::new());
+    }
+
+    #[test]
+    fn proxy_wire_headers_adds_proxy_authorization_from_the_proxy_urls_own_userinfo() {
+        let proxy = Some(ProxyTarget {
+            host: "proxy.corp".to_string(),
+            port: 3128,
+            basic_auth: Some("cHJveHl1c2VyOnByb3h5cGFzcw==".to_string()),
+        });
+        assert_eq!(
+            proxy_wire_headers(&proxy, Scheme::Http),
+            vec![
+                (
+                    "Proxy-Authorization".to_string(),
+                    "Basic cHJveHl1c2VyOnByb3h5cGFzcw==".to_string()
+                ),
+                ("Proxy-Connection".to_string(), "Keep-Alive".to_string())
+            ]
+        );
+        // Never on the `https` path -- that request tunnels through
+        // `CONNECT` instead, which sends `basic_auth` on its own line.
+        assert_eq!(proxy_wire_headers(&proxy, Scheme::Https), Vec::new());
     }
 
     #[test]

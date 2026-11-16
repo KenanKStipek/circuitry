@@ -1,0 +1,10 @@
+{
+  "runtime": {
+    "adapters": {
+      "ollama": {
+        "base_url": "http://example.invalid",
+        "stream": false
+      }
+    }
+  }
+}
