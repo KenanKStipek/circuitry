@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #778 step 7, H2 (an invalid Retry-After value is ignored; the normal backoff applies instead)",
+  "description": "A 503 carries Retry-After: inf (RFC 9110 §10.2.3 explicitly calls this out as an invalid, ignorable form -- a sign, a fraction, inf/nan, internal whitespace, or an unparseable date). The parser must ignore it entirely rather than crash or saturate; the step retries with the normal exponential backoff and succeeds on the second attempt (meta.retries_used: 1).",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://127.0.0.1:__MOCK_HTTP_PORT__"]
+}
