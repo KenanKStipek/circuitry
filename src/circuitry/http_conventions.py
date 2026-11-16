@@ -215,6 +215,23 @@ def _at_follows_netloc(url: str, netloc: str) -> bool:
     return "@" in rest
 
 
+def redact_request_url(url: str) -> str:
+    """*url*, redacted for any refusal or ``host:`` text that names a
+    request URL: :func:`redact_proxy_value` when :func:`_at_follows_netloc`
+    is true (a password hidden behind a ``/``, ``?`` or ``#`` can still
+    smuggle a second, real host past the parsed authority, so the whole
+    value -- never just the authority's own userinfo -- is cut away at
+    the LAST ``@``); :func:`redact_url` otherwise (issue #778). Shared
+    by every surface that names a request URL after parsing it:
+    :func:`check_url`, :func:`curl_support.redact_host_url`, and every
+    adapter error that names a request URL after I/O.
+    """
+    netloc = _urlsplit(url).netloc
+    if _at_follows_netloc(url, netloc):
+        return redact_proxy_value(url)
+    return redact_url(url)
+
+
 def _host_port_text(netloc: str) -> str | None:
     """The raw port text in *netloc* (userinfo already stripped by the
     caller): ``None`` with no ``:`` separator at all (or none after an
@@ -289,12 +306,12 @@ def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -
     """Refuses *url* before any I/O: its scheme must be one of
     *allowed_schemes*, and its port must pass :func:`check_strict_port`.
     """
-    _check_no_control_or_whitespace(url, redact=redact_url)
+    _check_no_control_or_whitespace(url, redact=redact_request_url)
     scheme = _urlsplit(url).scheme.lower()
     if scheme not in allowed_schemes:
         allowed = " or ".join(allowed_schemes)
         raise ValueError(
-            f"unsupported URL scheme '{scheme}' in '{redact_url(url)}': "
+            f"unsupported URL scheme '{scheme}' in '{redact_request_url(url)}': "
             f"only {allowed} is supported"
         )
     check_strict_port(url)

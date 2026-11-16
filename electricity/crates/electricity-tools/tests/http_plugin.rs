@@ -630,6 +630,29 @@ async fn a_connection_refused_never_names_a_password_in_the_url() {
     );
 }
 
+#[tokio::test]
+async fn a_connection_refused_never_names_a_password_hidden_behind_a_slash() {
+    // `urlsplit`'s own netloc for this ends at the first `/`, so it
+    // never sees the `@` that follows -- the rest of the password
+    // must still never reach the connection-failure message (issue
+    // #778).
+    let addr = closed_port();
+    let token = CancellationToken::new();
+    let url = format!("http://{addr}/secret@elsewhere");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(url))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.message.contains("secret"), "{}", err.message);
+    assert!(
+        err.message
+            .starts_with("HTTP request to http://elsewhere failed:")
+    );
+}
+
 /// A `save_to_temp_dir`'s own directory, removed on `Drop` -- unlike a
 /// bare `PathBuf`, nothing this file's own tests do with the returned
 /// value leaves it behind afterward (issue #661's own fixed-cap

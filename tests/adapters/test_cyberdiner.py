@@ -727,6 +727,32 @@ def test_connection_error_never_names_a_password_in_the_url(
     assert message.startswith("cyberdiner: request to https://expo.example.test/beta/jobs failed:")
 
 
+def test_connection_error_never_names_a_password_hidden_behind_a_slash_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778: a password made only of digits before the ``/``
+    passes the strict-port check (the host is legitimately ``alice``),
+    but the rest of it, hidden behind the ``/``, must still never reach
+    the connection-failure message -- a plain ``redact_url`` leaves it
+    untouched, since the parsed netloc (``alice:443``) has no ``@`` of
+    its own.
+    """
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        raise URLError("Name or service not known")
+
+    _patch_opener_open(monkeypatch, fake_urlopen)
+
+    adapter = _adapter(expo_url="https://alice:443/secret@expo.example.test")
+    with pytest.raises(RuntimeError) as exc_info:
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
+    message = str(exc_info.value)
+    assert "secret" not in message
+    assert message.startswith(
+        "cyberdiner: request to https://expo.example.test/beta/jobs failed:"
+    )
+
+
 def test_a_500_from_cyberdiner_retries_through_the_prompt_retry_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

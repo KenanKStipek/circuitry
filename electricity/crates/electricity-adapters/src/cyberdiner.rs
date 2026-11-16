@@ -190,7 +190,7 @@ fn resolve_tier(
 /// a job response; a response without a top-level `data` *object*
 /// means this isn't talking to the API it thinks it is.
 fn unwrap_envelope(body: &Value, url: &str) -> Result<Dict, AdapterError> {
-    let url = electricity_tools::http_conventions::redact_url(url);
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     match body
         .as_dict()
         .and_then(|d| d.get(&Value::Str("data".to_string())))
@@ -341,7 +341,7 @@ fn connect_target_for(parsed: &ParsedUrl, port: u16) -> Result<ConnectTarget, Tr
 /// unconditionally retryable; `IncompleteRead` (an `http.client.
 /// HTTPException`, none of the three) is not.
 fn send_error(url: &str, err: SendError) -> AdapterError {
-    let url = electricity_tools::http_conventions::redact_url(url);
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     match err {
         SendError::Connect { text, .. } => AdapterError {
             message: format!("cyberdiner: request to {url} failed: {text}"),
@@ -421,7 +421,7 @@ fn http_error(
     detail: &str,
     retry_after: Option<&str>,
 ) -> AdapterError {
-    let url = electricity_tools::http_conventions::redact_url(url);
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     let message = if detail.is_empty() {
         format!("cyberdiner: HTTP {status} from {url}: {reason}")
     } else {
@@ -440,7 +440,7 @@ fn http_error(
 }
 
 fn non_json_error(url: &str, text: &str) -> AdapterError {
-    let url = electricity_tools::http_conventions::redact_url(url);
+    let url = electricity_tools::http_conventions::redact_request_url(url);
     AdapterError {
         message: format!(
             "cyberdiner: non-JSON response from {url}: {}",
@@ -1343,6 +1343,33 @@ mod tests {
             .unwrap_err();
         assert!(!err.message.contains("alice"), "{}", err.message);
         assert!(!err.message.contains("s3cr3t"), "{}", err.message);
+        assert!(
+            err.message.contains("cyberdiner: request to"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_never_names_a_password_hidden_behind_a_slash_on_a_connection_failure() {
+        // `urlsplit`'s own netloc for this ends at the first `/`, so it
+        // never sees the `@` that follows -- the rest of the password
+        // must still never reach the connection-failure message (issue
+        // #778).
+        let addr = crate::test_support::closed_port();
+        let a = adapter(&format!("http://{addr}/secret@elsewhere"));
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = a
+            .generate(
+                "cheap",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("secret"), "{}", err.message);
         assert!(
             err.message.contains("cyberdiner: request to"),
             "{}",

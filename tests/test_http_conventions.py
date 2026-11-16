@@ -153,6 +153,45 @@ def test_check_url_also_checks_the_port() -> None:
         check_url("http://host:99999/x")
 
 
+@pytest.mark.parametrize("char", ("/", "?", "#"))
+def test_check_url_scheme_refusal_never_echoes_a_password_hidden_past_the_authority(
+    char: str,
+) -> None:
+    """Issue #778: the parsed netloc for this is ``user:pa`` (the
+    authority ends at ``char``), with no ``@`` of its own -- a plain
+    :func:`redact_url` leaves the rest of the password (``ss``)
+    untouched.
+    """
+    url = f"ftp://user:pa{char}ss@host/x"
+    with pytest.raises(ValueError) as exc_info:
+        check_url(url)
+    message = str(exc_info.value)
+    assert message == (
+        "unsupported URL scheme 'ftp' in 'ftp://host/x': only http or https is supported"
+    )
+    assert "user" not in message
+    assert "pa" not in message
+    assert "ss" not in message
+
+
+@pytest.mark.parametrize("char", ("/", "?", "#"))
+def test_check_url_control_character_refusal_never_echoes_a_password_hidden_past_the_authority(
+    char: str,
+) -> None:
+    """Same hidden-password shape as the scheme refusal above, but for
+    the control-character/whitespace check, which runs first (issue
+    #778).
+    """
+    url = f"http://user:qq{char}rr@host\0/x"
+    with pytest.raises(ValueError) as exc_info:
+        check_url(url)
+    message = str(exc_info.value)
+    assert message.startswith("URL contains a control character or whitespace: ")
+    assert "user" not in message
+    assert "qq" not in message
+    assert "rr" not in message
+
+
 # ---------------------------------------------------------------------------
 # strip_url_userinfo
 # ---------------------------------------------------------------------------

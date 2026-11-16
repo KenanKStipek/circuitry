@@ -63,6 +63,30 @@
     {
       "url": "http://host/x",
       "error": "URL contains a control character or whitespace: 'http://host/x'"
+    },
+    {
+      "url": "ftp://user:pa/ss@host/x",
+      "error": "unsupported URL scheme 'ftp' in 'ftp://host/x': only http or https is supported"
+    },
+    {
+      "url": "ftp://user:pa?ss@host/x",
+      "error": "unsupported URL scheme 'ftp' in 'ftp://host/x': only http or https is supported"
+    },
+    {
+      "url": "ftp://user:pa#ss@host/x",
+      "error": "unsupported URL scheme 'ftp' in 'ftp://host/x': only http or https is supported"
+    },
+    {
+      "url": "http://user:pa/ss@host\u0000/x",
+      "error": "URL contains a control character or whitespace: 'http://host\u0000/x'"
+    },
+    {
+      "url": "http://user:pa?ss@host\t/x",
+      "error": "URL contains a control character or whitespace: 'http://host\t/x'"
+    },
+    {
+      "url": "http://user:pa#ss@host\n/x",
+      "error": "URL contains a control character or whitespace: 'http://host\n/x'"
     }
   ],
   "strict_port_cases": [

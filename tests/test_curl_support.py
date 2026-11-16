@@ -87,6 +87,26 @@ def test_redact_host_url_leaves_a_plain_url_untouched() -> None:
     assert redact_host_url("http://localhost:11434") == "http://localhost:11434"
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://user:pa/ss@example.test:11434",
+        "http://user:pa?ss@example.test:11434",
+        "http://user:pa#ss@example.test:11434",
+    ],
+)
+def test_redact_host_url_masks_a_password_hidden_behind_a_slash_question_mark_or_hash(
+    url: str,
+) -> None:
+    """Issue #778: `urlsplit`'s own netloc for these ends at the first
+    `/`, `?` or `#`, so it never sees the `@` that follows -- the
+    password must still come out fully removed."""
+    redacted = redact_host_url(url)
+    assert redacted == "http://example.test:11434"
+    assert "pa" not in redacted
+    assert "ss" not in redacted
+
+
 def test_redact_host_url_coerces_a_non_string_value_with_str() -> None:
     """Issue #515: a misconfigured non-string
     `base_url`/`expo_url` (`runtime.adapters.ollama.base_url: 5`) must

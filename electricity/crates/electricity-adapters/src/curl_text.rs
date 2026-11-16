@@ -112,9 +112,12 @@ pub(crate) use electricity_tools::http_conventions::{
 /// credential-like query parameter masked, the same two masks
 /// [`curl_failure_message`] already applies to a request URL. Shared
 /// by every `check()` that reports `host:{base_url}` -- `ollama`'s own
-/// (`ollama.rs`) and `cyberdiner`'s.
+/// (`ollama.rs`) and `cyberdiner`'s. Uses
+/// `http_conventions::redact_request_url`, not `redact_url` directly:
+/// a password hidden behind a `/`, `?` or `#` in `url` (issue #778)
+/// must not reach this preflight text either.
 pub fn redact_host_url(url: &str) -> String {
-    electricity_tools::http_conventions::redact_url(url)
+    electricity_tools::http_conventions::redact_request_url(url)
 }
 
 /// `curl_support.py::curl_failure_message` -- renders a curl failure
@@ -333,6 +336,20 @@ mod tests {
             redact_host_url("http://localhost:11434"),
             "http://localhost:11434"
         );
+    }
+
+    #[test]
+    fn redact_host_url_masks_a_password_hidden_behind_a_slash_question_mark_or_hash() {
+        // `urlsplit`'s own netloc for these ends at the first `/`,
+        // `?` or `#`, so it never sees the `@` that follows -- the
+        // password must still come out fully removed (issue #778).
+        for sep in ['/', '?', '#'] {
+            let url = format!("http://user:pa{sep}ss@example.test:11434");
+            let redacted = redact_host_url(&url);
+            assert_eq!(redacted, "http://example.test:11434");
+            assert!(!redacted.contains("pa"));
+            assert!(!redacted.contains("ss"));
+        }
     }
 
     #[test]

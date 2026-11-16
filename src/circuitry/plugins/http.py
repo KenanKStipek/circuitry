@@ -388,7 +388,7 @@ def _save_body(resp: Any, target: _SaveTarget, url: str) -> tuple[int, str]:
     The body goes to a temporary file next to the target, which is removed
     on every failure; only a complete body is moved into place. No error
     quotes any of it."""
-    url = http_conventions.redact_url(url)
+    url = http_conventions.redact_request_url(url)
     declared_text = resp.headers.get("Content-Length")
     declared = (
         int(declared_text.strip())
@@ -629,7 +629,7 @@ class HttpPlugin:
         except urllib.error.URLError as exc:
             # DNS / connection failure — true execution error.
             raise RuntimeError(
-                f"HTTP request to {http_conventions.redact_url(url)} failed: {exc.reason}"
+                f"HTTP request to {http_conventions.redact_request_url(url)} failed: {exc.reason}"
             ) from exc
 
         ok = not (

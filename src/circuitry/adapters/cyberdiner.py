@@ -145,7 +145,7 @@ def _unwrap(body: dict[str, Any], url: str) -> dict[str, Any]:
     data = body.get("data")
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"cyberdiner: response from {http_conventions.redact_url(url)} is not a "
+            f"cyberdiner: response from {http_conventions.redact_request_url(url)} is not a "
             "CyberDiner job envelope — expected a top-level `data` object (expo wraps "
             f"every job in ApiEnvelope). Got: {json.dumps(body)[:200]}"
         )
@@ -224,7 +224,7 @@ class CyberdinerAdapter:
         # under its own, different convention and let a `file://`
         # `expo_url` read a local file (issue #778).
         http_conventions.check_url(url)
-        display_url = http_conventions.redact_url(url)
+        display_url = http_conventions.redact_request_url(url)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         # Userinfo stripped before urllib ever sees it (issue #778):
         # `Request.host` keeps it verbatim otherwise, so a userinfo

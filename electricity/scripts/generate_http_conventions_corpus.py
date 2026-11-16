@@ -62,6 +62,18 @@ def _scheme_detection_cases() -> list[dict[str, Any]]:
         "http://host\t/x",
         "http://host\n/x",
         "http://host/\x7fx",
+        # A refused scheme with a password hidden behind the
+        # authority's own boundary (issue #778): the refusal must
+        # never echo it.
+        "ftp://user:pa/ss@host/x",
+        "ftp://user:pa?ss@host/x",
+        "ftp://user:pa#ss@host/x",
+        # A control character or whitespace, with the same hidden
+        # password (issue #778): checked before the scheme, but the
+        # refusal must still never echo it.
+        "http://user:pa/ss@host\0/x",
+        "http://user:pa?ss@host\t/x",
+        "http://user:pa#ss@host\n/x",
     ]
     cases = []
     for url in urls:

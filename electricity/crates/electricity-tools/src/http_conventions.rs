@@ -339,6 +339,24 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
     ))
 }
 
+/// *url*, redacted for any refusal or `host:` text that names a
+/// request URL: [`redact_proxy_value`] when [`at_follows_netloc`] is
+/// true (a password hidden behind a `/`, `?` or `#` can still smuggle
+/// a second, real host past the parsed authority, so the whole value
+/// -- never just the authority's own userinfo -- is cut away at the
+/// LAST `@`); [`redact_url`] otherwise (issue #778). Shared by every
+/// surface that names a request URL after parsing it: [`check_scheme`],
+/// `curl_text::redact_host_url`, and every adapter error that names a
+/// request URL after I/O.
+pub fn redact_request_url(url: &str) -> String {
+    let netloc = crate::http::http_url::urlsplit(url, "").netloc;
+    if at_follows_netloc(url, &netloc) {
+        redact_proxy_value(url)
+    } else {
+        redact_url(url)
+    }
+}
+
 /// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
 /// (space is 0x20, already inside that first range) -- a URL or proxy
 /// value containing one is refused before any I/O, on both engines,
@@ -366,7 +384,7 @@ pub(crate) fn check_no_control_or_whitespace(
 /// that check needs to live to cover every URL/proxy value either engine
 /// checks at all.
 pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Result<(), String> {
-    check_no_control_or_whitespace(original_url, redact_url)?;
+    check_no_control_or_whitespace(original_url, redact_request_url)?;
     if allowed
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(scheme))
@@ -376,7 +394,7 @@ pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Resul
     Err(format!(
         "unsupported URL scheme '{}' in '{}': only {} is supported",
         scheme.to_ascii_lowercase(),
-        redact_url(original_url),
+        redact_request_url(original_url),
         allowed.join(" or ")
     ))
 }
@@ -510,6 +528,40 @@ mod tests {
             err,
             "unsupported URL scheme 'ftp' in 'ftp://host/x': only http or https is supported"
         );
+    }
+
+    #[test]
+    fn check_scheme_refusal_never_echoes_a_password_hidden_past_the_authority() {
+        // The parsed netloc for each of these is `user:pa` (the
+        // authority ends at the hidden-password separator), with no
+        // `@` of its own -- a plain `redact_url` leaves the rest of
+        // the password (`ss`) untouched (issue #778).
+        for sep in ['/', '?', '#'] {
+            let url = format!("ftp://user:pa{sep}ss@host/x");
+            let err = check_scheme("ftp", &url, &["http", "https"]).unwrap_err();
+            assert_eq!(
+                err,
+                "unsupported URL scheme 'ftp' in 'ftp://host/x': only http or https is supported"
+            );
+            assert!(!err.contains("user"));
+            assert!(!err.contains("pa"));
+            assert!(!err.contains("ss"));
+        }
+    }
+
+    #[test]
+    fn check_scheme_control_character_refusal_never_echoes_a_password_hidden_past_the_authority() {
+        // Same hidden-password shape as the scheme refusal above, but
+        // for the control-character/whitespace check, which runs
+        // first (issue #778).
+        for sep in ['/', '?', '#'] {
+            let url = format!("http://user:qq{sep}rr@host\0/x");
+            let err = check_scheme("http", &url, &["http", "https"]).unwrap_err();
+            assert!(err.starts_with("URL contains a control character or whitespace: "));
+            assert!(!err.contains("user"));
+            assert!(!err.contains("qq"));
+            assert!(!err.contains("rr"));
+        }
     }
 
     #[test]

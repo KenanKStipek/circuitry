@@ -137,6 +137,20 @@ def test_ollama_adapter_masks_userinfo_in_the_host_text() -> None:
     assert not any("secret" in m for m in r.missing)
 
 
+def test_ollama_adapter_masks_a_password_hidden_behind_a_slash_in_the_host_text() -> None:
+    """Issue #778: `check()`'s `host:` text must never echo a password
+    hidden behind a `/` in `base_url` -- `redact_host_url` now routes
+    through `http_conventions.redact_request_url`, not `redact_url`,
+    which otherwise leaves it untouched (the netloc `urlsplit` reads is
+    `user:pa`, with no `@` of its own to strip)."""
+    from circuitry.adapters.ollama import OllamaAdapter
+
+    r = OllamaAdapter(base_url="http://user:pa/ss@127.0.0.1:9").check()
+    assert r.ok is False
+    assert any(m.startswith("host:http://127.0.0.1:9") for m in r.missing)
+    assert not any("pa" in m or "ss" in m for m in r.missing)
+
+
 # ---------- tool plugin check() impls ----------
 
 

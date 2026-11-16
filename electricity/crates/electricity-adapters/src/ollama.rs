@@ -1116,6 +1116,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn check_masks_a_password_hidden_behind_a_slash_in_the_missing_host_text() {
+        // `urlsplit`'s own netloc for this ends at the first `/`, so a
+        // plain `redact_url` leaves the rest of the password (`ss`)
+        // untouched -- `redact_host_url` now routes through
+        // `http_conventions::redact_request_url` instead (issue #778).
+        let addr = crate::test_support::closed_port();
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("http://user:pa/ss@{addr}")),
+            streams: false,
+        };
+        let result = adapter.check().await;
+        assert!(!result.ok);
+        assert_eq!(result.missing, vec![format!("host:http://{addr}")]);
+        assert!(
+            !result
+                .missing
+                .iter()
+                .any(|m| m.contains("pa") || m.contains("ss"))
+        );
+    }
+
+    #[tokio::test]
     async fn check_is_reachable_for_any_http_response_including_404() {
         let addr = spawn_ollama_server_status("HTTP/1.1 404 Not Found", "");
         let adapter = OllamaAdapter {
