@@ -304,25 +304,32 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
 
 /// *url*, redacted for any refusal, warning, event, state, hint or
 /// `host:` text that names a request URL -- the one function every
-/// such caller uses, never [`redact_url`] or [`redact_proxy_value`]
-/// directly: [`redact_proxy_value`] when *url* has no `://` at all (a
-/// userinfo-bearing value with no scheme, the same shape
-/// [`redact_proxy_value`] already handles for a proxy) or
-/// [`at_follows_netloc`] is true (a password hidden behind a `/`, `?`
-/// or `#` can still smuggle a second, real host past the parsed
-/// authority, so the whole value -- never just the authority's own
-/// userinfo -- is cut away at the LAST `@`); [`strip_request_url_
-/// userinfo`] otherwise. Either way, the cut runs *before* any
-/// credential-like query parameter is masked: masking first
-/// re-encodes a query string's own `@` as `%40`, so a cut that ran
-/// afterward would no longer find it (issue #778). Shared by every
-/// surface that names a request URL after parsing it: [`check_scheme`],
-/// [`strict_port`], `curl_text::redact_host_url`,
-/// `curl_text::curl_failure_message`, and every adapter error that
-/// names a request URL after I/O.
+/// such caller uses, never `redact_url` (the private test helper) or
+/// [`redact_proxy_value`] directly: the whole value is cut at the
+/// LAST `@` (never just the authority's own userinfo) when *url*'s
+/// parsed `netloc` is empty (a userinfo-bearing value with no scheme
+/// at all, or one whose scheme has no `//` authority of its own even
+/// though the literal text `://` appears somewhere later in it, e.g.
+/// in a query value -- neither leaves [`crate::http::http_url::urlsplit`]
+/// any authority for [`strip_request_url_userinfo`] to find anything
+/// in) or [`at_follows_netloc`] is true (a password hidden behind a
+/// `/`, `?` or `#` can still smuggle a second, real host past the
+/// parsed authority); [`strip_request_url_userinfo`] otherwise. Either
+/// way, the cut runs *before* any credential-like query parameter is
+/// masked: masking first re-encodes a query string's own `@` as
+/// `%40`, so a cut that ran afterward would no longer find it (issue
+/// #778). Shared by every surface that names a request URL after
+/// parsing it: [`check_scheme`], [`strict_port`],
+/// `curl_text::redact_host_url`, `curl_text::curl_failure_message`,
+/// and every adapter error that names a request URL after I/O.
 pub fn redact_request_url(url: &str) -> String {
     let netloc = crate::http::http_url::urlsplit(url, "").netloc;
-    let cut = if !url.contains("://") || at_follows_netloc(url, &netloc) {
+    let cut = if netloc.is_empty() {
+        match url.rsplit_once('@') {
+            Some((_, after)) => after.to_string(),
+            None => url.to_string(),
+        }
+    } else if at_follows_netloc(url, &netloc) {
         redact_proxy_value(url)
     } else {
         strip_request_url_userinfo(url)
@@ -355,7 +362,13 @@ pub(crate) fn check_no_control_or_whitespace(
 /// removed. Checked first (issue #778, [`check_no_control_or_whitespace`]): every caller of this
 /// function reaches it before [`strict_port`], so this is the one place
 /// that check needs to live to cover every URL/proxy value either engine
-/// checks at all.
+/// checks at all. *scheme* itself is named through [`redact_request_url`]
+/// too, not just *original_url*: every other caller's *scheme* comes
+/// from a real [`crate::http::http_url::urlsplit`], but
+/// `electricity-adapters::transport`'s own caller finds its scheme by
+/// cutting at the first literal `://` -- for a malformed value like
+/// `alice:pw@host/x?next=http://y`, that is almost the whole value,
+/// userinfo included (issue #778).
 pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Result<(), String> {
     check_no_control_or_whitespace(original_url, redact_request_url)?;
     if allowed
@@ -366,7 +379,7 @@ pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Resul
     }
     Err(format!(
         "unsupported URL scheme '{}' in '{}': only {} is supported",
-        scheme.to_ascii_lowercase(),
+        redact_request_url(&scheme.to_ascii_lowercase()),
         redact_request_url(original_url),
         allowed.join(" or ")
     ))

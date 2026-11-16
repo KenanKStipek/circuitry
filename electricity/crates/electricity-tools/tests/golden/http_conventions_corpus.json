@@ -215,6 +215,14 @@
     {
       "url": "alice:pw@localhost:11434",
       "redacted": "localhost:11434"
+    },
+    {
+      "url": "alice:pw@host/x?next=http://y",
+      "redacted": "host/x?next=http%3A%2F%2Fy"
+    },
+    {
+      "url": "alice:p://w@host/x",
+      "redacted": "host/x"
     }
   ],
   "proxy_redaction_cases": [

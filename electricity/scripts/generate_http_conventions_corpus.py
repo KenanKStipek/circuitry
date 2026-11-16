@@ -162,6 +162,12 @@ def _redaction_cases() -> list[dict[str, Any]]:
         # searched for the LAST `@`, same as it would be.
         "alice:pw@host/x",
         "alice:pw@localhost:11434",
+        # The same shape, but with a literal `://` elsewhere in the
+        # value (issue #778): the parsed `netloc` is still empty, so
+        # the whole value must still be cut at the LAST `@`, not just
+        # left alone because `"://" in url` is true.
+        "alice:pw@host/x?next=http://y",
+        "alice:p://w@host/x",
     ]
     return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
 

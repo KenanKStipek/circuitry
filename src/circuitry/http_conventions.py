@@ -204,24 +204,29 @@ def redact_request_url(url: str) -> str:
     """*url*, redacted for any refusal, warning, event, state, hint or
     ``host:`` text that names a request URL -- the one function every
     such caller uses, never :func:`_redact_url` or :func:`redact_proxy_value`
-    directly: :func:`redact_proxy_value` when *url* has no ``://`` at all
-    (a userinfo-bearing value with no scheme, the same shape
-    :func:`redact_proxy_value` already handles for a proxy) or
+    directly: the whole value is cut at the LAST ``@`` (never just the
+    authority's own userinfo) when *url*'s parsed ``netloc`` is empty
+    (a userinfo-bearing value with no scheme at all, or one whose
+    scheme has no ``//`` authority of its own even though the literal
+    text ``://`` appears somewhere later in it, e.g. in a query value --
+    neither leaves :func:`urlsplit` any authority for
+    :func:`strip_request_url_userinfo` to find anything in) or
     :func:`_at_follows_netloc` is true (a password hidden behind a
     ``/``, ``?`` or ``#`` can still smuggle a second, real host past the
-    parsed authority, so the whole value -- never just the authority's
-    own userinfo -- is cut away at the LAST ``@``); :func:`strip_request_
-    url_userinfo` otherwise. Either way, the cut runs *before* any
-    credential-like query parameter is masked: masking first re-encodes
-    a query string's own ``@`` as ``%40``, so a cut that ran afterward
-    would no longer find it (issue #778). Shared by every surface that
-    names a request URL after parsing it: :func:`check_url`,
-    :func:`check_strict_port`, :func:`curl_support.redact_host_url`,
+    parsed authority); :func:`strip_request_url_userinfo` otherwise.
+    Either way, the cut runs *before* any credential-like query
+    parameter is masked: masking first re-encodes a query string's own
+    ``@`` as ``%40``, so a cut that ran afterward would no longer find
+    it (issue #778). Shared by every surface that names a request URL
+    after parsing it: :func:`check_url`, :func:`check_strict_port`,
+    :func:`curl_support.redact_host_url`,
     :func:`curl_support.curl_failure_message`, and every adapter error
     that names a request URL after I/O.
     """
     netloc = _urlsplit(url).netloc
-    if "://" not in url or _at_follows_netloc(url, netloc):
+    if not netloc:
+        cut = url.rpartition("@")[2]
+    elif _at_follows_netloc(url, netloc):
         cut = redact_proxy_value(url)
     else:
         cut = strip_request_url_userinfo(url)
