@@ -217,7 +217,8 @@ _PROXY_URL_ENV_VARS = frozenset(PROXY_ENV_VARS) - {"no_proxy", "NO_PROXY", "REQU
 #: right before the subprocess runs, same as `cli_args`) or a closed
 #: loopback port (`127.0.0.1:1`, for a 'this proxy must be ignored' case) --
 #: never a real host a case subprocess could actually be routed through
-#: (issue #778 step 7's own conformance cases, C1's isolation rule).
+#: -- no conformance case may ever let a subprocess reach a real network
+#: service (issue #778 step 7's own conformance cases).
 #: Optional `scheme://` and `user[:pass]@` prefixes are allowed, since a
 #: case may be proving exactly that a schemeless or userinfo-bearing proxy
 #: value is still accepted.
