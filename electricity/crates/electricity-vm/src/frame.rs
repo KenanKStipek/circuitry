@@ -308,10 +308,10 @@ impl Frame {
     /// a caller that specifically wants the path *this* document's own
     /// text would show it (`core/store/store.py::Store.effect_path`'s own
     /// semantics on a `use`/decomposition child's fresh, unprefixed
-    /// store): naming the effect that generated a document (#772) in a
-    /// refusal, which Python names from the *local* document regardless
-    /// of how deep a `use` chain put it in the overall run, never the
-    /// globally-namespaced path [`Frame::effect_path`] gives `--events`.
+    /// store). No longer used to name the effect that generated a
+    /// document in a refusal (#811) -- that now always uses the
+    /// globally-namespaced path [`Frame::effect_path`] gives `--events`,
+    /// same as `core/effect_identity.py::call_path`.
     pub fn local_effect_path(&self, path: &EffectPath) -> EffectPath {
         let resolved = path
             .resolve_passes(&self.pass_indices)

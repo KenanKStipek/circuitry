@@ -24,7 +24,7 @@ from .cancellation import (
     signal_outranked_by_failure,
 )
 from .document_check import structural_errors
-from .effect_identity import model_call, nested_container
+from .effect_identity import call_path, model_call, nested_container
 from .expect import ExpectDef, evaluate_expect, expect_failure_summary
 from .interface_inputs import check_interface_inputs
 from .outputs import normalize_outputs
@@ -1108,7 +1108,7 @@ class UseRuntime:
             )
 
     def _check_generated_document(
-        self, child_orch: dict[str, Any], node_path: str
+        self, child_orch: dict[str, Any], node_path: str, *, absolute_node_path: str
     ) -> tuple[bool, frozenset[str], frozenset[str], str]:
         """Refuse a generated child that widens the shell allowlist, enables
         a service's shell, or uses a tool provider its enclosing document
@@ -1211,7 +1211,11 @@ class UseRuntime:
             if not generated:
                 return _fresh_ceiling()
 
-        generating_path = self.defn.generating_effect_path_override or node_path
+        # Named in a refusal as the generating effect's run-absolute path
+        # (#811), not merely relative to a `flow: tree` pass's own
+        # isolated store -- the override already carries the absolute
+        # path when one is set (e.g. a reflector's synthetic use).
+        generating_path = self.defn.generating_effect_path_override or absolute_node_path
         errors: list[str] = []
         overreach = sorted(self.defn.allow_tools - enclosing_providers)
         if own_doc_is_generated and overreach:
@@ -1553,7 +1557,11 @@ class UseRuntime:
                         child_tool_providers,
                         child_shell_commands,
                         child_generating_path,
-                    ) = self._check_generated_document(child_orch, node_path)
+                    ) = self._check_generated_document(
+                        child_orch,
+                        node_path,
+                        absolute_node_path=call_path(store, self.defn.name),
+                    )
 
                     # Cycle detection — runtime call-stack tracking by resolved identity.
                     # The stack is derived per call-path rather than mutated in place:

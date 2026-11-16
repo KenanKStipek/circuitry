@@ -1102,8 +1102,10 @@ pub(crate) async fn maybe_decompose(
     // (`validate_plan`'s own doc comment) -- raised here the same way,
     // bypassing `dset.on_failure`/`failure_result` entirely, for
     // `exec::prompt`'s `?` to propagate to its own `on_error` handling.
+    // Run-absolute (#811), not local to this document -- see
+    // `Frame::effect_path`'s own doc comment.
     let generating_effect_path =
-        format!("decomposition of '{}'", frame.local_effect_path(&op.path));
+        format!("decomposition of '{}'", frame.effect_path(&op.path));
     let problems = match validate_plan(
         &plan,
         dset.max_chunks,
@@ -2456,7 +2458,9 @@ async fn maybe_split(
     base.insert(key("yaml"), Value::Str(plan_yaml.clone()));
     base.insert(key("result_path"), Value::Str(result_path.clone()));
 
-    let generating_effect_path = format!("split of '{}'", frame.local_effect_path(&op.path));
+    // Run-absolute (#811), not local to this document -- see
+    // `Frame::effect_path`'s own doc comment.
+    let generating_effect_path = format!("split of '{}'", frame.effect_path(&op.path));
     let problems = validate_generated_yaml(
         &plan_yaml,
         &result_path,

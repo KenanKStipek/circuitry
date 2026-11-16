@@ -75,7 +75,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from .effect_identity import nested_container
+from .effect_identity import call_path, nested_container
 from .split import NoSplitPoint, split_list, split_mapping, split_text
 from .split import estimate_tokens as _estimate_tokens
 from .store import Store
@@ -262,6 +262,10 @@ def maybe_decompose(
         )
 
     node_path = store.effect_path(defn.name)
+    # Named in a refusal as the generating effect's run-absolute path
+    # (#811), never merely relative to a `flow: tree` pass's own isolated
+    # store.
+    absolute_node_path = call_path(store, defn.name)
 
     try:
         plan = _run_planner(
@@ -301,7 +305,7 @@ def maybe_decompose(
         plan,
         max_chunks=dset.max_chunks,
         runtime_config=runtime_config,
-        generating_effect_path=f"decomposition of '{node_path}'",
+        generating_effect_path=f"decomposition of '{absolute_node_path}'",
     )
     if problems:
         return _failure(base, dset, "invalid_plan", "; ".join(problems), fallback)
@@ -313,6 +317,7 @@ def maybe_decompose(
             store=store,
             node=node,
             node_path=node_path,
+            generating_node_path=absolute_node_path,
             ctx=ctx,
             adapter=adapter,
             model=model,
@@ -906,6 +911,7 @@ def _execute_plan(
     store: Store,
     node: dict[str, Any],
     node_path: str,
+    generating_node_path: str,
     ctx: Mapping[str, Any],
     adapter: Adapter,
     model: str,
@@ -941,7 +947,8 @@ def _execute_plan(
         "_use_call_stack": [*parent_stack, identity],
         _DEPTH_KEY: depth + 1,
         **_plan_tool_ceiling_overlay(
-            runtime_config, generating_effect_path=f"decomposition of '{node_path}'"
+            runtime_config,
+            generating_effect_path=f"decomposition of '{generating_node_path}'",
         ),
     }
 
@@ -1371,6 +1378,10 @@ def _maybe_split(
     base["chunk_count"] = n_parts
 
     node_path = store.effect_path(defn.name)
+    # Named in a refusal as the generating effect's run-absolute path
+    # (#811), never merely relative to a `flow: tree` pass's own isolated
+    # store.
+    absolute_node_path = call_path(store, defn.name)
     parts_key, plan_dict, result_path = _generate_split_plan(
         defn,
         prep=prep,
@@ -1390,7 +1401,7 @@ def _maybe_split(
         plan_yaml,
         result_path,
         runtime_config=runtime_config,
-        generating_effect_path=f"split of '{node_path}'",
+        generating_effect_path=f"split of '{absolute_node_path}'",
     )
     if problems:
         logger.warning(
@@ -1407,6 +1418,7 @@ def _maybe_split(
             store=store,
             node=node,
             node_path=node_path,
+            generating_node_path=absolute_node_path,
             ctx=ctx,
             adapter=adapter,
             model=model,
@@ -2003,6 +2015,7 @@ def _execute_split_plan(
     store: Store,
     node: dict[str, Any],
     node_path: str,
+    generating_node_path: str,
     ctx: Mapping[str, Any],
     adapter: Adapter,
     model: str,
@@ -2034,7 +2047,7 @@ def _execute_split_plan(
         "_use_call_stack": [*parent_stack, identity],
         _DEPTH_KEY: depth + 1,
         **_plan_tool_ceiling_overlay(
-            runtime_config, generating_effect_path=f"split of '{node_path}'"
+            runtime_config, generating_effect_path=f"split of '{generating_node_path}'"
         ),
     }
 

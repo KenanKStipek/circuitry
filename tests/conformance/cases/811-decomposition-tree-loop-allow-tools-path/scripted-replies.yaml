@@ -1,0 +1,4 @@
+prime.fan.iter_0.over_ceiling.plan:
+- text: '{"say": "two chunks plus a merge that reaches for awk", "chunks": [{"name": "a", "job": "do a"}, {"name": "merge", "job": "merge with awk"}], "yaml": "effects:\n  - type: tool\n    name: a\n    provider: json\n    params: {mode: parse, input: \"\\\"chunk-a\\\"\"}\n  - type: tool\n    name: merge\n    provider: awk\n    params: {program: \"{print}\", args: []}\n"}'
+prime.fan.iter_0.over_ceiling:
+- text: over_ceiling routed up

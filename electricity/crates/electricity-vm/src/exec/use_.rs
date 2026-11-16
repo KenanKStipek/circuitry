@@ -1268,10 +1268,12 @@ async fn attempt_once<R: ParamsCtx>(
         if !generated {
             fresh_ceiling(&loaded.document, run_ctx.runtime_config)
         } else {
+            // Run-absolute (#811), not local to this document -- see
+            // `Frame::effect_path`'s own doc comment.
             let generating_effect_path = use_op
                 .generating_effect_path_override
                 .clone()
-                .unwrap_or_else(|| frame.local_effect_path(&op.path).to_string());
+                .unwrap_or_else(|| frame.effect_path(&op.path).to_string());
             let mut errors = Vec::new();
             let overreach: std::collections::BTreeSet<String> = use_op
                 .allow_tools
