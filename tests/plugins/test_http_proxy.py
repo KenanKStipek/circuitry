@@ -44,6 +44,11 @@ class _RecordingProxy:
         self.requests: list[dict[str, str]] = []
         self.connect_targets: list[str] = []
         self.connect_proxy_auth: list[str | None] = []
+        #: When set, the next plain (non-``CONNECT``) request gets a 302
+        #: to this URL instead of the canned ``{"via": "proxy"}`` body --
+        #: for a redirect-through-the-proxy test (#778 step 7, H-review
+        #: P1-8) that needs the proxy itself to answer the first hop.
+        self.redirect_to: str | None = None
         self._stop = False
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -95,6 +100,16 @@ class _RecordingProxy:
             self._splice(conn, upstream)
             return
         self.requests.append({"request_line": request_line, **headers})
+        if self.redirect_to is not None:
+            response = (
+                b"HTTP/1.1 302 Found\r\n"
+                b"Location: " + self.redirect_to.encode() + b"\r\n"
+                b"Content-Length: 0\r\n\r\n"
+            )
+            with contextlib.suppress(OSError):
+                conn.sendall(response)
+            conn.close()
+            return
         body = b'{"via": "proxy"}'
         response = (
             b"HTTP/1.1 200 OK\r\n"
@@ -265,6 +280,29 @@ def test_https_request_is_tunneled_through_the_proxy_with_basic_auth(
     assert proxy.connect_targets[0] == f"localhost:{servers.https_port}"
     expected = "Basic " + base64.b64encode(b"alice:s3cr3t").decode("ascii")
     assert proxy.connect_proxy_auth[0] == expected
+
+
+def test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied(
+    monkeypatch: pytest.MonkeyPatch, proxy: _RecordingProxy, servers: ServerPair
+) -> None:
+    """Issue #778 step 7, H-review P1-8: only ``http_proxy`` is set, so a
+    redirect from a proxied ``http://`` URL to an ``https://`` one (no
+    ``https_proxy``/``all_proxy``) must not carry the first hop's
+    ``Proxy-authorization`` -- the second hop is unproxied entirely, so the
+    proxy never even sees a ``CONNECT`` for it, let alone the credential.
+    """
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", f"http://alice:s3cr3t@127.0.0.1:{proxy.port}")
+    servers.routes["/"] = Route(status=200, body="ok")
+    proxy.redirect_to = servers.https_localhost + "/"
+
+    result = HttpPlugin().execute(params={"url": "http://example.invalid/redirect"})
+
+    assert result.raw["status"] == 200
+    assert servers.arrived("/")
+    assert len(proxy.requests) == 1
+    assert proxy.connect_targets == []
+    assert proxy.connect_proxy_auth == []
 
 
 # ---------------------------------------------------------------------------

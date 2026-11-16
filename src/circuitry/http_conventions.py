@@ -19,24 +19,36 @@ curl's own environment reading decide it independently per surface:
   proxying, the only kind either engine implements) — anything else is
   refused the same way an unsupported request scheme is.
 
-Every function here takes its environment as an explicit mapping, never
-reading ``os.environ`` itself, so callers (and tests) control it fully.
+Every proxy-*deciding* function here (:func:`resolve_proxy`,
+:func:`check_proxy_url`, ...) takes its environment as an explicit
+mapping, never reading ``os.environ`` itself, so callers (and tests)
+control it fully. The two convenience wrappers that actually *issue* a
+request (:func:`apply_request_proxy`, :func:`open_with_proxy_rule`) read
+the real process environment, since every caller they have wants that.
 """
 
 from __future__ import annotations
 
 import base64
+import os
 import re
 import urllib.parse
+import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Any
 
 #: The only two schemes a request URL (or an adapter's `base_url`) may use.
 ALLOWED_SCHEMES = ("http", "https")
 
 _PORT_RE = re.compile(r"^[0-9]+$")
 
-_USERINFO_RE = re.compile(r"://[^\s/@]+(?::[^\s/@]*)?@")
+# Greedy up to the *last* `@` before whitespace or a `/` -- an authority's
+# userinfo can itself carry a literal `@` (in the password), so stopping
+# at the first one (as a non-greedy or `[^@]+` pattern would) can leave
+# part of a credential in the stripped text (issue #778 step 7, H-review
+# P1-9).
+_USERINFO_RE = re.compile(r"://[^\s/]*@")
 
 #: Query-string keys that commonly carry a credential (search APIs, some
 #: webhook/trigger URLs). Matched case-insensitively against the whole
@@ -47,7 +59,11 @@ _CREDENTIAL_QUERY_KEY_RE = re.compile(r"(key|token|secret|auth|password|pwd)", r
 
 def strip_url_userinfo(url: str) -> str:
     """*url* with any ``user[:pass]@`` userinfo removed, for an error
-    message — never the raw value, which can carry a credential."""
+    message — never the raw value, which can carry a credential. Strips up
+    to the *last* ``@`` inside the authority (before any ``/``, ``?``,
+    ``#`` or whitespace), matching how a host is actually parsed, so a
+    password containing ``@`` can never leave a fragment of itself behind.
+    """
     return _USERINFO_RE.sub("://", url)
 
 
@@ -207,3 +223,42 @@ def split_proxy_url(proxy_url: str) -> ProxyAuth:
         password = urllib.parse.unquote(parts.password or "")
         basic_auth = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
     return ProxyAuth(hostport=hostport, basic_auth=basic_auth)
+
+
+def apply_request_proxy(req: urllib.request.Request) -> None:
+    """Applies H1's proxy rule to *req* in place, the way ``urllib.request.
+    ProxyHandler.proxy_open`` would -- minus its own, differently-
+    conventioned environment read and ``no_proxy`` bypass, which
+    :func:`resolve_proxy` already decides. Shared by every surface that
+    issues a request through ``urllib.request`` directly (the ``http``
+    tool's own :class:`_RedirectPolicy`, which also needs this on every
+    redirect hop; cyberdiner and the ollama ``check()`` probe, which call
+    this once per request through :func:`open_with_proxy_rule`). Reads
+    the real process environment (``os.environ``) -- the one function in
+    this module that does, since it has no caller that needs a synthetic
+    one for a test; every proxy *decision* underneath it
+    (:func:`resolve_proxy`, :func:`check_proxy_url`) still takes an
+    explicit mapping.
+    """
+    host = urllib.parse.urlsplit(req.full_url).hostname or ""
+    proxy_url = resolve_proxy(req.type, host, os.environ)
+    if proxy_url is None:
+        return
+    proxy = split_proxy_url(proxy_url)
+    if proxy.basic_auth:
+        req.add_header("Proxy-authorization", f"Basic {proxy.basic_auth}")
+    req.set_proxy(proxy.hostport, "http")
+
+
+def open_with_proxy_rule(req: urllib.request.Request, *, timeout: float) -> Any:
+    """Issues *req* with :func:`apply_request_proxy` applied and urllib's
+    own default proxy-reading convention disabled -- the shared opener a
+    surface that doesn't need its own :class:`urllib.request.
+    HTTPRedirectHandler` (cyberdiner, the ollama ``check()`` probe) uses
+    instead of bare ``urlopen``, which would otherwise let urllib decide
+    the proxy under its own, different convention (issue #778 step 7,
+    H-review P1-3/P1-4).
+    """
+    apply_request_proxy(req)
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    return opener.open(req, timeout=timeout)

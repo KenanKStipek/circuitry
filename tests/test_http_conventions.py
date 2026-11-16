@@ -95,6 +95,18 @@ def test_strip_url_userinfo_leaves_a_plain_url_unchanged() -> None:
     assert strip_url_userinfo("http://host/x") == "http://host/x"
 
 
+def test_strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() -> None:
+    """Issue #778 step 7, H-review P1-9: a password containing ``@`` (and
+    ``:``) must be removed in full -- stopping at the *first* ``@`` would
+    leave a fragment of it (``ss@proxy:1080``) in the redacted text.
+    """
+    redacted = strip_url_userinfo("socks5://alice:p@ss@proxy:1080/x")
+    assert redacted == "socks5://proxy:1080/x"
+    assert "alice" not in redacted
+    assert "p@ss" not in redacted
+    assert "ss" not in redacted
+
+
 # ---------------------------------------------------------------------------
 # The proxy rule (H1)
 # ---------------------------------------------------------------------------

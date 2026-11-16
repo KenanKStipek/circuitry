@@ -70,6 +70,7 @@ import http.client
 import importlib.util
 import json as _json
 import os
+import string
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -115,24 +116,6 @@ def _origin(url: str) -> tuple[str, str, int | None] | None:
     return scheme, parts.hostname, port if port is not None else _DEFAULT_PORTS.get(scheme)
 
 
-def _apply_request_proxy(req: urllib.request.Request) -> None:
-    """Applies H1's proxy rule to *req* in place, the way ``urllib.request.
-    ProxyHandler.proxy_open`` would -- minus its own, differently-
-    conventioned environment read and ``no_proxy`` bypass, which
-    :func:`http_conventions.resolve_proxy` already decided. Called on the
-    initial request and, by :class:`_RedirectPolicy`, on every redirect
-    hop too, so a proxy decision never survives past the host it was made
-    for."""
-    host = urllib.parse.urlsplit(req.full_url).hostname or ""
-    proxy_url = http_conventions.resolve_proxy(req.type, host, os.environ)
-    if proxy_url is None:
-        return
-    proxy = http_conventions.split_proxy_url(proxy_url)
-    if proxy.basic_auth:
-        req.add_header("Proxy-authorization", f"Basic {proxy.basic_auth}")
-    req.set_proxy(proxy.hostport, "http")
-
-
 class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
     """urllib's redirect handling for every ``redirects`` mode -- replacing
     the opener's default ``HTTPRedirectHandler`` unconditionally (not just
@@ -143,12 +126,66 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
     ``strip_auth`` refuses one that isn't ``https`` and strips an auth
     header crossing origins. A refused redirect returns no request, so
     urllib raises the 3xx as an ``HTTPError``; :attr:`refused` records that
-    it was refused."""
+    it was refused.
+
+    :meth:`http_error_302` (aliased onto every redirect status this
+    handler answers for) reproduces ``HTTPRedirectHandler.http_error_302``
+    minus its own built-in ``scheme not in ('http', 'https', 'ftp', '')``
+    prefilter: that check runs *before* :meth:`redirect_request` is ever
+    reached, so a ``file:``/``data:``/other redirect target would
+    otherwise fail with urllib's own "Redirection to url ... is not
+    allowed" text under every ``redirects`` mode, including ``follow``,
+    rather than H4's shared refusal -- and under ``never``/``strip_auth``,
+    which refuse without raising at all, it would wrongly raise instead
+    of refusing. H4 is checked only once :meth:`redirect_request`'s own
+    mode decision below says the target will actually be followed.
+    """
 
     def __init__(self, mode: str, auth_headers: frozenset[str]) -> None:
         self.mode = mode
         self.auth_headers = auth_headers
         self.refused = False
+
+    def http_error_302(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any
+    ) -> Any:
+        if "location" in headers:
+            newurl = headers["location"]
+        elif "uri" in headers:
+            newurl = headers["uri"]
+        else:
+            return None
+
+        urlparts: Any = urllib.parse.urlparse(newurl)
+        if not urlparts.path and urlparts.netloc:
+            urlparts = list(urlparts)
+            urlparts[2] = "/"
+        newurl = urllib.parse.urlunparse(urlparts)
+
+        newurl = urllib.parse.quote(newurl, encoding="iso-8859-1", safe=string.punctuation)
+        newurl = urllib.parse.urljoin(req.full_url, newurl)
+
+        new = self.redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+
+        if hasattr(req, "redirect_dict"):
+            visited = new.redirect_dict = req.redirect_dict  # type: ignore[attr-defined]
+            if (
+                visited.get(newurl, 0) >= self.max_repeats
+                or len(visited) >= self.max_redirections
+            ):
+                raise urllib.error.HTTPError(req.full_url, code, self.inf_msg + msg, headers, fp)
+        else:
+            visited = new.redirect_dict = req.redirect_dict = {}  # type: ignore[attr-defined]
+        visited[newurl] = visited.get(newurl, 0) + 1
+
+        fp.read()
+        fp.close()
+
+        return self.parent.open(new, timeout=req.timeout)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
     def redirect_request(
         self,
@@ -159,13 +196,13 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
         headers: Any,
         newurl: str,
     ) -> urllib.request.Request | None:
-        http_conventions.check_url(newurl)
         if self.mode == "never" or (
             self.mode == "strip_auth"
             and urllib.parse.urlsplit(newurl).scheme.lower() != "https"
         ):
             self.refused = True
             return None
+        http_conventions.check_url(newurl)
         new = super().redirect_request(req, fp, code, msg, headers, newurl)
         if new is None:
             return None
@@ -175,7 +212,15 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
                 for header in list(new.headers):
                     if header.lower() in self.auth_headers:
                         del new.headers[header]
-        _apply_request_proxy(new)
+        # Issue #778 step 7, H-review P1-8: a `Proxy-authorization` this
+        # hop's own proxy carried must never survive onto the next one --
+        # `apply_request_proxy` below only ever *adds* the header for the
+        # hop it decides to proxy, so a stale one from the previous hop
+        # (e.g. a `no_proxy` match, or an http-to-https hop with only
+        # `http_proxy` set) would otherwise leak a proxy credential to an
+        # origin that was never meant to see it.
+        new.remove_header("Proxy-authorization")
+        http_conventions.apply_request_proxy(new)
         return new
 
 
@@ -512,7 +557,7 @@ class HttpPlugin:
         req = urllib.request.Request(url, data=body_bytes, method=method)
         for k, v in headers.items():
             req.add_header(str(k), str(v))
-        _apply_request_proxy(req)
+        http_conventions.apply_request_proxy(req)
 
         status: int = 0
         resp_headers: dict[str, str] = {}
@@ -523,9 +568,10 @@ class HttpPlugin:
         # H1: Circuitry decides the proxy itself, so urllib's own default
         # `ProxyHandler()` (which would read the real environment under its
         # own, different convention) never runs -- an explicit, empty one
-        # replaces it; `_apply_request_proxy` above and `_RedirectPolicy`'s
-        # own per-hop call are the only proxy decisions this opener ever
-        # makes. `_RedirectPolicy` replaces the default `HTTPRedirectHandler`
+        # replaces it; `http_conventions.apply_request_proxy` above and
+        # `_RedirectPolicy`'s own per-hop call are the only proxy decisions
+        # this opener ever makes. `_RedirectPolicy` replaces the default
+        # `HTTPRedirectHandler`
         # for every mode, not just `never`/`strip_auth`, so H4's scheme
         # refusal and H1's proxy rule both apply to a redirect hop too.
         policy = _RedirectPolicy(redirects, frozenset({"authorization", *secret_headers}))
