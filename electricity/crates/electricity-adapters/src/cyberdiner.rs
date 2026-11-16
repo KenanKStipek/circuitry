@@ -371,14 +371,17 @@ fn transport_failure_error(failure: TransportFailure) -> AdapterError {
     // The shared `Validation`/`InvalidUtf8` text, verbatim and already
     // redacted by its own producer (`http_conventions::check_scheme`/
     // `strict_port`) -- never a generic "unsupported URL" wrapper that
-    // discards it (issue #778).
+    // discards it (issue #778). `ValueError`, matching cof's own
+    // `check_url`/`resolve_proxy`, both of which raise that -- never
+    // the `RuntimeError` every I/O-time failure elsewhere in this
+    // module raises instead.
     let message = match failure {
         TransportFailure::Validation(message) | TransportFailure::InvalidUtf8(message) => message,
     };
     AdapterError {
         message,
         retry: RetryInfo::not_retryable(),
-        py_class: PyExc::RuntimeError,
+        py_class: PyExc::ValueError,
     }
 }
 
@@ -1301,6 +1304,31 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.message.contains("token not configured"));
+    }
+
+    #[tokio::test]
+    async fn generate_refuses_an_unsupported_expo_url_scheme_as_a_value_error() {
+        // Issue #778: a refused scheme/port is `ValueError` on both
+        // engines, matching cof's own `check_url` -- never the
+        // `RuntimeError` this module's own I/O-time failures raise.
+        let a = adapter("ftp://expo.example.test");
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = a
+            .generate(
+                "cheap",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.message,
+            "unsupported URL scheme 'ftp' in 'ftp://expo.example.test/beta/jobs': only http or \
+             https is supported"
+        );
+        assert_eq!(err.py_class, PyExc::ValueError);
     }
 
     #[tokio::test]

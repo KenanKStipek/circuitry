@@ -624,6 +624,16 @@ def test_missing_expo_url_raises_at_generate(monkeypatch: pytest.MonkeyPatch) ->
         adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
+def test_an_unsupported_expo_url_scheme_is_a_value_error_not_a_runtime_error() -> None:
+    """issue #778: a refused scheme/port is ``ValueError`` on both
+    engines, matching ``http_conventions.check_url`` -- never the
+    ``RuntimeError`` this adapter's own I/O-time failures raise.
+    """
+    adapter = _adapter(expo_url="ftp://expo.example.test")
+    with pytest.raises(ValueError, match="unsupported URL scheme 'ftp'"):
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
+
+
 def test_http_error_wrapped_in_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(req: Any, timeout: float = 0) -> Any:
         raise HTTPError(
