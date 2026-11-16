@@ -42,7 +42,7 @@ from ..curl_support import extract_retry_after
 #: RFC 9110 section 10.2.3's `delay-seconds` grammar: one or more ASCII
 #: digits, nothing else -- never a sign, a fraction, `inf`/`nan`, or
 #: whitespace inside.
-_RETRY_AFTER_SECONDS_RE = re.compile(r"^[0-9]+$")
+_RETRY_AFTER_SECONDS_RE = re.compile(r"^[0-9]+$", re.ASCII)
 
 #: RFC 9110 section 5.6.7's three accepted `HTTP-date` forms, matched
 #: strictly -- unlike :func:`email.utils.parsedate_to_datetime`, which
@@ -76,13 +76,17 @@ _MONTH_NAMES = (
 )
 _MONTH_INDEX = {name: index + 1 for index, name in enumerate(_MONTH_NAMES)}
 
-#: `Sun, 06 Nov 1994 08:49:37 GMT`.
+#: `Sun, 06 Nov 1994 08:49:37 GMT`. `re.ASCII` throughout this module's
+#: date grammars: without it, `\d` matches any Unicode decimal digit
+#: (Arabic-Indic digits included), not only the ASCII ones RFC 9110's
+#: own grammar means (issue #778).
 _IMF_FIXDATE_RE = re.compile(
     r"^(?:"
     + "|".join(_WEEKDAY_SHORT)
     + r"), (\d{2}) ("
     + "|".join(_MONTH_NAMES)
-    + r") (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$"
+    + r") (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$",
+    re.ASCII,
 )
 #: The obsolete RFC 850 date: `Sunday, 06-Nov-94 08:49:37 GMT`.
 _RFC850_DATE_RE = re.compile(
@@ -90,7 +94,8 @@ _RFC850_DATE_RE = re.compile(
     + "|".join(_WEEKDAY_LONG)
     + r"), (\d{2})-("
     + "|".join(_MONTH_NAMES)
-    + r")-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$"
+    + r")-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$",
+    re.ASCII,
 )
 #: The asctime format: `Sun Nov  6 08:49:37 1994` (a one-digit day of
 #: month keeps the leading space, never zero-padded).
@@ -99,7 +104,8 @@ _ASCTIME_RE = re.compile(
     + "|".join(_WEEKDAY_SHORT)
     + r") ("
     + "|".join(_MONTH_NAMES)
-    + r") ([ 0-9]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$"
+    + r") ([ 0-9]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$",
+    re.ASCII,
 )
 
 #: Exponential-backoff ceiling for a retryable failure's wait, including one

@@ -271,6 +271,17 @@ def _retry_after_cases() -> list[dict[str, Any]]:
         "Sunday, 06-Nov-94 08:49:37 UTC",
         "Sun Nov  6 08:49:37 1994",
         "Mon, 01 Jan 2024 00:00:00 GMT",
+        # Lenient forms `email.utils.parsedate_to_datetime` (and, before
+        # this fix, `chrono::DateTime::parse_from_rfc2822` on the Rust
+        # side) would accept, but RFC 9110's own exact grammar does not
+        # (issue #778).
+        "Sun, 06 Nov 1994 08:49:37 +0000",
+        "06 Nov 1994 08:49:37 GMT",
+        "Sun, 6 Nov 1994 08:49:37 GMT",
+        "Sun, 06 Nov 94 08:49:37 GMT",
+        "Sun, 06 Nov 1994 08:49:37 EST",
+        "Sun Nov 6 08:49:37 1994",
+        "Mon, 06-Nov-94 08:49:37 GMT",
     ]
     cases = []
     for value in values:

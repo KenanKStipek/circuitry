@@ -120,13 +120,16 @@ fn is_delay_seconds(s: &str) -> bool {
 /// `circuitry.http_conventions.parse_retry_after_seconds`, ported (issue
 /// #778 step 7, H2) -- a `Retry-After` header value as seconds from
 /// *now*, per RFC 9110 section 10.2.3: all-ASCII-digits means that many
-/// seconds; otherwise the value is parsed as an HTTP-date (IMF-fixdate
-/// via [`chrono::DateTime::parse_from_rfc2822`], plus the obsolete RFC
-/// 850 and asctime forms a recipient must still accept,
-/// [`parse_rfc850_date`]/[`parse_asctime_date`]), and the delay is that
-/// date minus *now*, floored at 0. `None` for anything else -- a sign, a
-/// fraction, `inf`/`nan`, whitespace inside, or an unparseable date --
-/// never "wait forever" or a crash.
+/// seconds; otherwise the value is parsed as an HTTP-date, matched
+/// strictly against exactly one of the three accepted forms
+/// ([`parse_imf_fixdate`], [`parse_rfc850_date`], [`parse_asctime_date`]
+/// -- never [`chrono::DateTime::parse_from_rfc2822`]'s own looser
+/// grammar, which accepts a numeric zone, a missing weekday, a one-
+/// digit day, a two-digit year and more that `_retry.py`'s own regexes
+/// reject outright), and the delay is that date minus *now*, floored at
+/// 0. `None` for anything else -- a sign, a fraction, `inf`/`nan`,
+/// whitespace inside, or an unparseable date -- never "wait forever" or
+/// a crash.
 pub fn parse_retry_after_seconds_at(
     value: &str,
     now: chrono::DateTime<chrono::Utc>,
@@ -138,9 +141,7 @@ pub fn parse_retry_after_seconds_at(
     if is_delay_seconds(trimmed) {
         return trimmed.parse::<f64>().ok().map(|seconds| seconds.max(0.0));
     }
-    let when = chrono::DateTime::parse_from_rfc2822(trimmed)
-        .ok()
-        .map(|dt| dt.with_timezone(&chrono::Utc))
+    let when = parse_imf_fixdate(trimmed)
         .or_else(|| parse_rfc850_date(trimmed))
         .or_else(|| parse_asctime_date(trimmed))?;
     let seconds = (when - now).num_milliseconds() as f64 / 1000.0;
@@ -177,64 +178,132 @@ fn four_digit_year(two_digit: u32) -> i32 {
     }
 }
 
-/// The obsolete RFC 850 HTTP-date grammar recipients must still accept:
-/// `Sunday, 06-Nov-94 08:49:37 GMT` -- a long weekday name (ignored, never
-/// cross-checked against the date), `DD-Mon-YY`, `HH:MM:SS`, and a
-/// literal `GMT` (`split_whitespace` collapses the comma's own trailing
-/// space the same way it collapses asctime's double space before a
-/// single-digit day).
-fn parse_rfc850_date(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    let mut tokens = trimmed.split_whitespace();
-    let weekday = tokens.next()?;
-    if !weekday.ends_with(',') {
+/// `_retry.py::_WEEKDAY_SHORT`/`_WEEKDAY_LONG` -- the exact weekday
+/// spellings `parse_imf_fixdate`/`parse_asctime_date` (short) and
+/// `parse_rfc850_date` (long) accept; neither engine cross-checks a
+/// weekday against the date it names, only against this fixed list.
+const WEEKDAY_SHORT: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const WEEKDAY_LONG: [&str; 7] = [
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+];
+
+/// *s* as a value with exactly *len* ASCII digits -- never fewer, never
+/// more, and never a non-ASCII decimal digit `str::parse` would
+/// otherwise accept (issue #778).
+fn exact_digits(s: &str, len: usize) -> Option<u32> {
+    if s.len() != len || !s.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
-    let date = tokens.next()?;
-    let time = tokens.next()?;
-    let zone = tokens.next()?;
-    if tokens.next().is_some() || zone != "GMT" {
-        return None;
-    }
-    let mut date_parts = date.split('-');
-    let day: u32 = date_parts.next()?.parse().ok()?;
-    let month = month_number(date_parts.next()?)?;
-    let two_digit_year: u32 = date_parts.next()?.parse().ok()?;
-    if date_parts.next().is_some() {
-        return None;
-    }
-    let year = four_digit_year(two_digit_year);
-    let (hour, minute, second) = parse_hms(time)?;
-    build_utc(year, month, day, hour, minute, second)
+    s.parse().ok()
 }
 
-/// The obsolete asctime HTTP-date grammar recipients must still accept:
-/// `Sun Nov  6 08:49:37 1994` -- no weekday-comma, no explicit zone (HTTP's
-/// own asctime form is always implicitly GMT), and a day field that may be
-/// space-padded for a single digit (`split_whitespace` collapses that
-/// extra space, so this never needs to check for it specially).
-fn parse_asctime_date(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
-    let mut tokens = trimmed.split_whitespace();
-    let _weekday = tokens.next()?;
-    let month = month_number(tokens.next()?)?;
-    let day: u32 = tokens.next()?.parse().ok()?;
-    let time = tokens.next()?;
-    let year: i32 = tokens.next()?.parse().ok()?;
-    if tokens.next().is_some() {
-        return None;
-    }
-    let (hour, minute, second) = parse_hms(time)?;
-    build_utc(year, month, day, hour, minute, second)
-}
-
-fn parse_hms(time: &str) -> Option<(u32, u32, u32)> {
+/// `HH:MM:SS`, each field exactly two ASCII digits.
+fn parse_hms_strict(time: &str) -> Option<(u32, u32, u32)> {
     let mut parts = time.split(':');
-    let hour: u32 = parts.next()?.parse().ok()?;
-    let minute: u32 = parts.next()?.parse().ok()?;
-    let second: u32 = parts.next()?.parse().ok()?;
+    let hour = exact_digits(parts.next()?, 2)?;
+    let minute = exact_digits(parts.next()?, 2)?;
+    let second = exact_digits(parts.next()?, 2)?;
     if parts.next().is_some() {
         return None;
     }
     Some((hour, minute, second))
+}
+
+/// `_retry.py::_IMF_FIXDATE_RE` -- `Sun, 06 Nov 1994 08:49:37 GMT`,
+/// matched strictly: a short weekday, `, `, a 2-digit day, ` `, a
+/// 3-letter month, ` `, a 4-digit year, ` `, `HH:MM:SS`, ` `, `GMT`,
+/// and nothing else -- never `chrono::DateTime::parse_from_rfc2822`'s
+/// own looser grammar (issue #778).
+fn parse_imf_fixdate(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !trimmed.is_ascii() {
+        return None;
+    }
+    let (weekday, rest) = trimmed.split_once(", ")?;
+    if !WEEKDAY_SHORT.contains(&weekday) {
+        return None;
+    }
+    let mut parts = rest.split(' ');
+    let day = exact_digits(parts.next()?, 2)?;
+    let month = month_number(parts.next()?)?;
+    let year = exact_digits(parts.next()?, 4)?;
+    let (hour, minute, second) = parse_hms_strict(parts.next()?)?;
+    let zone = parts.next()?;
+    if parts.next().is_some() || zone != "GMT" {
+        return None;
+    }
+    build_utc(year as i32, month, day, hour, minute, second)
+}
+
+/// `_retry.py::_RFC850_DATE_RE` -- the obsolete RFC 850 HTTP-date
+/// grammar recipients must still accept: `Sunday, 06-Nov-94 08:49:37
+/// GMT`, matched strictly: a long weekday, `, `, `DD-Mon-YY`, ` `,
+/// `HH:MM:SS`, ` `, `GMT`, and nothing else.
+fn parse_rfc850_date(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !trimmed.is_ascii() {
+        return None;
+    }
+    let (weekday, rest) = trimmed.split_once(", ")?;
+    if !WEEKDAY_LONG.contains(&weekday) {
+        return None;
+    }
+    let mut parts = rest.split(' ');
+    let date_text = parts.next()?;
+    let time_text = parts.next()?;
+    let zone = parts.next()?;
+    if parts.next().is_some() || zone != "GMT" {
+        return None;
+    }
+    let mut date_parts = date_text.split('-');
+    let day = exact_digits(date_parts.next()?, 2)?;
+    let month = month_number(date_parts.next()?)?;
+    let two_digit_year = exact_digits(date_parts.next()?, 2)?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+    let year = four_digit_year(two_digit_year);
+    let (hour, minute, second) = parse_hms_strict(time_text)?;
+    build_utc(year, month, day, hour, minute, second)
+}
+
+/// `_retry.py::_ASCTIME_RE` -- the obsolete asctime HTTP-date grammar
+/// recipients must still accept: `Sun Nov  6 08:49:37 1994` (a one-
+/// digit day of month keeps the leading space, never zero-padded) --
+/// no weekday-comma, no explicit zone (HTTP's own asctime form is
+/// always implicitly GMT). The day field is always exactly two
+/// characters (` 6` or `16`), so this is matched by fixed byte
+/// position rather than `split(' ')`: a naive space-split would see
+/// an *extra*, empty token where the day's own leading space sits --
+/// exactly the bug this strictness is for, since a genuinely
+/// malformed value (three spaces, say) must still be refused, which
+/// collapsing (`str::split_whitespace`, the previous implementation)
+/// would have silently accepted.
+fn parse_asctime_date(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if !trimmed.is_ascii() || trimmed.len() != 24 {
+        return None;
+    }
+    let bytes = trimmed.as_bytes();
+    if bytes[3] != b' ' || bytes[7] != b' ' || bytes[10] != b' ' || bytes[19] != b' ' {
+        return None;
+    }
+    let weekday = &trimmed[0..3];
+    if !WEEKDAY_SHORT.contains(&weekday) {
+        return None;
+    }
+    let month = month_number(&trimmed[4..7])?;
+    let day_field = &trimmed.as_bytes()[8..10];
+    if !(day_field[0] == b' ' || day_field[0].is_ascii_digit()) || !day_field[1].is_ascii_digit() {
+        return None;
+    }
+    let day: u32 = trimmed[8..10].trim_start().parse().ok()?;
+    let (hour, minute, second) = parse_hms_strict(&trimmed[11..19])?;
+    let year = exact_digits(&trimmed[20..24], 4)?;
+    build_utc(year as i32, month, day, hour, minute, second)
 }
 
 fn build_utc(

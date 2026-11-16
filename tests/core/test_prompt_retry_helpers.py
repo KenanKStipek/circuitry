@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import pytest
+
 from circuitry.adapters._retry import (
     RETRY_BACKOFF_CAP_MS,
     RetryInfo,
@@ -83,6 +85,20 @@ def test_parse_retry_after_seconds_rejects_internal_whitespace() -> None:
     assert parse_retry_after_seconds("1\t2") is None
 
 
+def test_parse_retry_after_seconds_rejects_a_non_ascii_digit() -> None:
+    """``re.ASCII`` on every regex in this module (issue #778): without
+    it, ``\\d`` matches any Unicode decimal digit, Arabic-Indic ones
+    included, not only the ASCII ones RFC 9110's own grammar means.
+    """
+    assert parse_retry_after_seconds("١٢٠") is None
+    assert (
+        parse_retry_after_seconds(
+            "Sun, ٠٦ Nov 1994 08:49:37 GMT", now=_FIXED_NOW
+        )
+        is None
+    )
+
+
 def test_parse_retry_after_seconds_rejects_an_imf_fixdate_with_no_gmt() -> None:
     """Issue #778 step 7, H-review P1-10: unlike ``email.utils.
     parsedate_to_datetime``, a missing (or different) time zone is
@@ -94,6 +110,29 @@ def test_parse_retry_after_seconds_rejects_an_imf_fixdate_with_no_gmt() -> None:
 
 def test_parse_retry_after_seconds_rejects_an_rfc_850_date_with_utc_instead_of_gmt() -> None:
     http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%A, %d-%b-%y %H:%M:%S UTC")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
+
+
+@pytest.mark.parametrize(
+    "http_date",
+    [
+        "Sun, 06 Nov 1994 08:49:37 +0000",
+        "06 Nov 1994 08:49:37 GMT",
+        "Sun, 6 Nov 1994 08:49:37 GMT",
+        "Sun, 06 Nov 94 08:49:37 GMT",
+        "Sun, 06 Nov 1994 08:49:37 EST",
+        "Sun Nov 6 08:49:37 1994",
+        "Mon, 06-Nov-94 08:49:37 GMT",
+    ],
+)
+def test_parse_retry_after_seconds_rejects_lenient_date_forms(http_date: str) -> None:
+    """Forms a looser parser (``email.utils.parsedate_to_datetime``, or
+    ``chrono::DateTime::parse_from_rfc2822`` on the Rust side) would
+    accept: a numeric zone, a missing weekday, a one-digit day with no
+    leading space, a two-digit year on an IMF-fixdate, ``EST`` instead
+    of ``GMT``, a single space before an asctime single-digit day, and
+    an IMF-fixdate's short weekday on an RFC 850 date (issue #778).
+    """
     assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
 
 
