@@ -305,7 +305,10 @@ pub(crate) fn resolve_curl_proxy(
 /// through [`resolve_curl_proxy`]'s own real-environment read (issue
 /// #778 step 7: this crate reproduces what curl observably puts on
 /// the wire, not merely what Circuitry's own adapter code configured).
-fn proxy_wire_headers(proxy: &Option<ProxyTarget>, scheme: Scheme) -> Vec<(String, String)> {
+pub(crate) fn proxy_wire_headers(
+    proxy: &Option<ProxyTarget>,
+    scheme: Scheme,
+) -> Vec<(String, String)> {
     if scheme != Scheme::Http {
         return Vec::new();
     }

@@ -41,7 +41,7 @@
 //!   per-call `CancellationToken` doesn't reproduce.
 
 use crate::config::{cfg_int_or, cfg_value_or, rstrip_base_url, value_is_truthy};
-use crate::transport::{ParsedUrl, TransportFailure, default_port, parse_url};
+use crate::transport::{ParsedUrl, TransportFailure, default_port, parse_url, proxy_wire_headers};
 use electricity_json::WriteMode;
 use electricity_tools::http::http_url::urljoin;
 use electricity_tools::http_client::{
@@ -532,11 +532,26 @@ async fn request_json(
         if current_body.is_some() {
             extra_headers.push(("Content-type".to_string(), "application/json".to_string()));
         }
+        // A plain `http://` request through a proxy has no `CONNECT`
+        // tunnel at all -- the absolute-form target below *is* the
+        // request line the proxy itself reads, and `Proxy-
+        // Authorization` belongs in the regular header set, exactly
+        // as the `http` tool's own request loop (issue #778).
+        extra_headers.extend(proxy_wire_headers(
+            &connect_target.proxy,
+            connect_target.scheme,
+        ));
         let headers = urllib_headers(&host_header, current_body.as_deref(), &extra_headers);
+        let wire_target = match (&connect_target.proxy, connect_target.scheme) {
+            (Some(_), Scheme::Http) => {
+                format!("{}://{host_header}{}", parsed.scheme, parsed.target)
+            }
+            _ => parsed.target.clone(),
+        };
 
         let raw_request = RawRequest {
             method: current_method.clone(),
-            target: parsed.target.clone(),
+            target: wire_target,
             headers,
             body: current_body.as_ref().map(|b| b.as_bytes().to_vec()),
         };
@@ -941,14 +956,19 @@ async fn probe(url: &str, token: &str, timeout: Duration) -> bool {
         return false;
     };
     let host_header = urllib_host_header(&parsed);
-    let headers = urllib_headers(
-        &host_header,
-        None,
-        &[("Authorization".to_string(), format!("Bearer {token}"))],
-    );
+    let mut extra_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
+    extra_headers.extend(proxy_wire_headers(
+        &connect_target.proxy,
+        connect_target.scheme,
+    ));
+    let headers = urllib_headers(&host_header, None, &extra_headers);
+    let wire_target = match (&connect_target.proxy, connect_target.scheme) {
+        (Some(_), Scheme::Http) => format!("{}://{host_header}{}", parsed.scheme, parsed.target),
+        _ => parsed.target.clone(),
+    };
     let raw_request = RawRequest {
         method: "GET".to_string(),
-        target: parsed.target.clone(),
+        target: wire_target,
         headers,
         body: None,
     };
