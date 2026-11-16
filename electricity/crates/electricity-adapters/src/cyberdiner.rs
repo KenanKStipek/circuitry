@@ -294,10 +294,10 @@ fn connect_target_for(parsed: &ParsedUrl, port: u16) -> Result<ConnectTarget, Tr
     } else {
         Scheme::Http
     };
-    // Issue #778 step 7, H-review P0-1/P1-3: a proxy value this adapter
-    // can't use (an unsupported scheme, an invalid port) is refused
-    // outright, the same `Validation` text every other surface gives,
-    // never silently treated as "no proxy" and sent direct.
+    // A proxy value this adapter can't use (an unsupported scheme, an
+    // invalid port) is refused outright, the same `Validation` text
+    // every other surface gives, never silently treated as "no proxy"
+    // and sent direct (issue #778).
     let proxy =
         electricity_tools::http::resolve_proxy_target(&parsed.scheme, &netloc_for_proxy(parsed))
             .map_err(TransportFailure::Validation)?;
@@ -368,10 +368,10 @@ fn send_error(url: &str, err: SendError) -> AdapterError {
 }
 
 fn transport_failure_error(failure: TransportFailure) -> AdapterError {
-    // Issue #778 step 7, H-review P1-3: the shared `Validation`/
-    // `InvalidUtf8` text, verbatim and already redacted by its own
-    // producer (`http_conventions::check_scheme`/`strict_port`) --
-    // never a generic "unsupported URL" wrapper that discards it.
+    // The shared `Validation`/`InvalidUtf8` text, verbatim and already
+    // redacted by its own producer (`http_conventions::check_scheme`/
+    // `strict_port`) -- never a generic "unsupported URL" wrapper that
+    // discards it (issue #778).
     let message = match failure {
         TransportFailure::Validation(message) | TransportFailure::InvalidUtf8(message) => message,
     };

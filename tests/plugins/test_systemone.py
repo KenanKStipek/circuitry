@@ -923,11 +923,11 @@ def test_allow_remote_accepts_a_remote_base_url() -> None:
     assert plugin.check().ok is True
 
 
-def test_a_loopback_server_never_applies_h1s_proxy_rule(
+def test_a_loopback_server_never_applies_the_shared_proxy_rule(
     server: FakeServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #778 step 7, H-review P1-5: systemone's own rule, loopback
-    never proxied, is never overridden by H1."""
+    """systemone's own rule, loopback never proxied, is never
+    overridden by the shared proxy rule (issue #778)."""
     calls: list[str] = []
     monkeypatch.setattr(
         systemone_module.http_conventions, "apply_request_proxy", lambda req: calls.append(req.full_url)
@@ -940,12 +940,12 @@ def test_a_loopback_server_never_applies_h1s_proxy_rule(
     assert calls == []
 
 
-def test_a_remote_server_applies_h1s_proxy_rule(
+def test_a_remote_server_applies_the_shared_proxy_rule(
     server: FakeServer, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Issue #778 step 7, H-review P1-5: a server that isn't loopback
-    (``allow_remote: true``) follows H1 like every other surface, instead
-    of urllib's own default proxy-reading convention."""
+    """A server that isn't loopback (``allow_remote: true``) follows
+    the shared proxy rule like every other surface, instead of
+    urllib's own default proxy-reading convention (issue #778)."""
     monkeypatch.setattr(systemone_module, "is_loopback_host", lambda host: False)
     calls: list[str] = []
     real_apply = systemone_module.http_conventions.apply_request_proxy

@@ -67,7 +67,8 @@ pub enum Scheme {
 }
 
 /// Where a request actually connects -- the origin, or a proxy in
-/// front of it (H1's own convention, issue #778 step 7: [`proxy::resolve_proxy`]).
+/// front of it (Circuitry's own proxy convention, issue #778:
+/// [`proxy::resolve_proxy`]).
 #[derive(Debug, Clone)]
 pub struct ConnectTarget {
     pub scheme: Scheme,

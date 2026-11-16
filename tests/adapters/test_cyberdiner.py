@@ -1,8 +1,9 @@
 """Tests for the CyberDiner adapter (submit/poll job broker).
 
 Fakes every opener's own ``open`` (the adapter now always builds an
-explicit opener, H1, rather than calling the bare ``urllib.request.
-urlopen`` convenience function -- see ``_patch_opener_open``, the same
+explicit opener, the shared proxy rule, rather than calling the bare
+``urllib.request.urlopen`` convenience function -- see
+``_patch_opener_open``, the same
 idiom ``tests/plugins/test_http.py`` uses), and fakes ``time.monotonic``/
 ``time.sleep`` so poll-cadence and timeout behavior is deterministic
 without real delays.
@@ -87,8 +88,8 @@ def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
     """Replaces every opener's own ``open`` -- a single choke point both
     the bare ``urllib.request.urlopen`` convenience function and an
     explicit ``build_opener(...).open(...)`` call (what
-    ``http_conventions.open_with_proxy_rule`` now uses, issue #778 step 7
-    H-review P1-3) go through, so either call shape lands on *fake*.
+    ``http_conventions.open_with_proxy_rule`` now uses, issue #778) go
+    through, so either call shape lands on *fake*.
     """
 
     def bound(self: Any, req: Any, data: Any = None, timeout: Any = None) -> Any:

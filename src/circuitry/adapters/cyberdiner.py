@@ -219,10 +219,10 @@ class CyberdinerAdapter:
         payload: dict[str, Any] | None,
         timeout: float,
     ) -> dict[str, Any]:
-        # Issue #778 step 7, H-review P1-3: checked and proxied the same
-        # way the `http` tool is -- never urllib's own default opener,
-        # which would decide the proxy under its own, different
-        # convention and let a `file://` `expo_url` read a local file.
+        # Checked and proxied the same way the `http` tool is -- never
+        # urllib's own default opener, which would decide the proxy
+        # under its own, different convention and let a `file://`
+        # `expo_url` read a local file (issue #778).
         http_conventions.check_url(url)
         display_url = http_conventions.redact_url(url)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
@@ -396,10 +396,10 @@ class CyberdinerAdapter:
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", f"Bearer {self.token}")
         try:
-            # Issue #778 step 7, H-review P1-3: checked and proxied like
-            # every other request this adapter makes -- a bad `expo_url`
-            # (wrong scheme/port) or an unusable proxy counts as
-            # unreachable here too, the same as a connection failure.
+            # Checked and proxied like every other request this
+            # adapter makes -- a bad `expo_url` (wrong scheme/port) or
+            # an unusable proxy counts as unreachable here too, the
+            # same as a connection failure (issue #778).
             http_conventions.check_url(url)
             with http_conventions.open_with_proxy_rule(req, timeout=2):
                 pass

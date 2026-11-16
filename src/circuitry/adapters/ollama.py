@@ -360,8 +360,8 @@ class OllamaAdapter:
         an unreachable daemon is an empty list, not an error. stdlib
         urllib and a short timeout — nothing here is worth blocking a UI
         or requiring ``curl`` for. Checked and proxied the same way every
-        other request this adapter makes is (issue #778 step 7,
-        H-review P2-15) -- never urllib's own default opener.
+        other request this adapter makes is (issue #778) -- never
+        urllib's own default opener.
         """
         url = self.base_url.rstrip("/") + "/api/tags"
         try:

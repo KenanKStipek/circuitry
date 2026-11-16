@@ -322,9 +322,9 @@ async fn redirects_strip_auth_never_follows_to_http() {
 }
 
 #[tokio::test]
-async fn redirects_follow_to_a_file_scheme_is_refused_with_h4s_shared_text() {
-    // Issue #778 step 7, H-review P1-2/P2-16: a followed redirect to any
-    // scheme other than http/https is refused with H4's shared text --
+async fn redirects_follow_to_a_file_scheme_is_refused_with_the_shared_scheme_text() {
+    // Issue #778: a followed redirect to any scheme other than
+    // http/https is refused with the shared scheme-refusal text --
     // not only `ftp`, and not urllib's own "Redirection to url ... is
     // not allowed" (which `plugins/http.py::_RedirectPolicy.
     // http_error_302` no longer inherits).
@@ -346,11 +346,11 @@ async fn redirects_follow_to_a_file_scheme_is_refused_with_h4s_shared_text() {
 }
 
 #[tokio::test]
-async fn redirects_never_to_a_file_scheme_is_refused_on_its_own_terms_not_h4s() {
+async fn redirects_never_to_a_file_scheme_is_refused_on_its_own_terms() {
     // The mirror case: under `redirects: never`, a disallowed-scheme
     // target is refused by the mode itself (a `ToolResult`, never
-    // raised) -- H4's check never even runs, since the target was never
-    // going to be followed either way.
+    // raised) -- the shared scheme check never even runs, since the
+    // target was never going to be followed either way.
     let addr = respond_once(
         b"HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
     );

@@ -1,4 +1,4 @@
-"""The ``http`` tool's own proxy rule (issue #778 step 7, H1): one
+"""The ``http`` tool's own proxy rule (issue #778): one
 convention, decided by Circuitry itself -- never urllib's or curl's own
 environment reading. Every case sets or unsets every proxy variable
 explicitly; nothing here depends on the real process environment.
@@ -46,8 +46,8 @@ class _RecordingProxy:
         self.connect_proxy_auth: list[str | None] = []
         #: When set, the next plain (non-``CONNECT``) request gets a 302
         #: to this URL instead of the canned ``{"via": "proxy"}`` body --
-        #: for a redirect-through-the-proxy test (#778 step 7, H-review
-        #: P1-8) that needs the proxy itself to answer the first hop.
+        #: for a redirect-through-the-proxy test (#778) that needs the
+        #: proxy itself to answer the first hop.
         self.redirect_to: str | None = None
         self._stop = False
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -310,7 +310,7 @@ def test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied(
 
 
 # ---------------------------------------------------------------------------
-# Closed ports: strict port / scheme refusals (H3/H4), before any I/O.
+# Closed ports: strict port / scheme refusals, before any I/O.
 # ---------------------------------------------------------------------------
 
 

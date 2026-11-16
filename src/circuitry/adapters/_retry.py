@@ -48,8 +48,7 @@ _RETRY_AFTER_SECONDS_RE = re.compile(r"^[0-9]+$", re.ASCII)
 #: strictly -- unlike :func:`email.utils.parsedate_to_datetime`, which
 #: this module used to delegate to, each of these rejects anything that
 #: deviates from the exact grammar at all (a missing or different time
-#: zone text, a one-digit year, ...), rather than guessing (issue #778
-#: step 7, H-review P1-10).
+#: zone text, a one-digit year, ...), rather than guessing (issue #778).
 _WEEKDAY_SHORT = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 _WEEKDAY_LONG = (
     "Monday",
@@ -368,7 +367,7 @@ def next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms:
     if retry_info.retry_after:
         retry_after_seconds = parse_retry_after_seconds(retry_info.retry_after)
         if retry_after_seconds is not None:
-            # H-review P1-10: capped in float space *before* the `int()`
+            # Capped in float space *before* the `int()`
             # conversion -- a huge `Retry-After` (309+ digits) makes
             # `retry_after_seconds` an `inf` float; `int(inf * 1000)`
             # raises `OverflowError`, which this cap must never let

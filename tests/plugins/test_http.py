@@ -38,8 +38,9 @@ class _FakeResponse:
 
 def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
     """Replaces every opener's own ``open`` (the ``http`` plugin now always
-    builds an explicit opener, H1, rather than calling the bare
-    ``urllib.request.urlopen`` convenience function) -- a single choke
+    builds an explicit opener, the shared proxy rule (issue #778),
+    rather than calling the bare ``urllib.request.urlopen`` convenience
+    function) -- a single choke
     point ``urlopen()`` itself also goes through, so either call shape
     lands on *fake*."""
 

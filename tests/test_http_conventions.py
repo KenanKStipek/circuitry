@@ -18,7 +18,7 @@ from circuitry.http_conventions import (
 )
 
 # ---------------------------------------------------------------------------
-# Strict ports (H3)
+# Strict ports
 # ---------------------------------------------------------------------------
 
 
@@ -64,7 +64,7 @@ def test_check_strict_port_message_strips_userinfo() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Scheme refusal (H4)
+# Scheme refusal
 # ---------------------------------------------------------------------------
 
 
@@ -79,7 +79,7 @@ def test_check_strict_port_message_strips_userinfo() -> None:
     ],
 )
 def test_check_url_rejects_a_control_character_or_whitespace(url: str) -> None:
-    """Issue #778 step 7, H-review P2-14."""
+    """Issue #778."""
     with pytest.raises(ValueError, match="control character or whitespace"):
         check_url(url)
 
@@ -114,9 +114,9 @@ def test_strip_url_userinfo_leaves_a_plain_url_unchanged() -> None:
 
 
 def test_strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() -> None:
-    """Issue #778 step 7, H-review P1-9: a password containing ``@`` (and
-    ``:``) must be removed in full -- stopping at the *first* ``@`` would
-    leave a fragment of it (``ss@proxy:1080``) in the redacted text.
+    """Issue #778: a password containing ``@`` (and ``:``) must be
+    removed in full -- stopping at the *first* ``@`` would leave a
+    fragment of it (``ss@proxy:1080``) in the redacted text.
     """
     redacted = strip_url_userinfo("socks5://alice:p@ss@proxy:1080/x")
     assert redacted == "socks5://proxy:1080/x"
@@ -204,7 +204,7 @@ def test_check_proxy_url_never_leaks_a_schemeless_value_with_trailing_whitespace
 
 
 # ---------------------------------------------------------------------------
-# The proxy rule (H1)
+# The proxy rule
 # ---------------------------------------------------------------------------
 
 
@@ -256,7 +256,7 @@ def test_no_proxy_uppercase_fallback() -> None:
 
 
 def test_no_proxy_ip_entry_matches_only_that_exact_ip() -> None:
-    """Issue #778 step 7, H-review P2-13: an IP entry is never a domain
+    """Issue #778: an IP entry is never a domain
     suffix -- ``0.0.1`` must not bypass ``127.0.0.1``.
     """
     env = {"http_proxy": "http://p:1", "no_proxy": "0.0.1"}
@@ -265,7 +265,7 @@ def test_no_proxy_ip_entry_matches_only_that_exact_ip() -> None:
 
 
 def test_no_proxy_host_port_entry_matches_only_that_host_on_that_port() -> None:
-    """Issue #778 step 7, H-review P2-13."""
+    """Issue #778."""
     env = {"http_proxy": "http://p:1", "no_proxy": "example.com:8080"}
     assert resolve_proxy("http", "example.com", env, port=8080) is None
     assert resolve_proxy("http", "example.com", env, port=80) == "http://p:1"
@@ -304,10 +304,10 @@ def test_check_proxy_url_rejects_an_invalid_port() -> None:
     ],
 )
 def test_check_proxy_url_writes_the_default_port_80_explicitly(value: str, expected: str) -> None:
-    """Issue #778 step 7, H-review P1-6: curl's own default for a
+    """Issue #778: curl's own default for a
     schemeless/portless proxy is 1080 (its historic SOCKS convention),
-    never H1's own 80 -- the default is written into the normalized
-    proxy URL explicitly so curl's own guess never applies.
+    never the proxy rule's own 80 -- the default is written into the
+    normalized proxy URL explicitly so curl's own guess never applies.
     """
     assert check_proxy_url(value) == expected
 

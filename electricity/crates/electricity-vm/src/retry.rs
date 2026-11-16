@@ -118,7 +118,7 @@ fn is_delay_seconds(s: &str) -> bool {
 }
 
 /// `circuitry.http_conventions.parse_retry_after_seconds`, ported (issue
-/// #778 step 7, H2) -- a `Retry-After` header value as seconds from
+/// #778) -- a `Retry-After` header value as seconds from
 /// *now*, per RFC 9110 section 10.2.3: all-ASCII-digits means that many
 /// seconds; otherwise the value is parsed as an HTTP-date, matched
 /// strictly against exactly one of the three accepted forms

@@ -1,7 +1,7 @@
 //! `plugins/http.py::HttpPlugin`, ported -- a single HTTP request/
 //! response over the shared client ([`crate::http_client`]), with
 //! urllib's own redirect rule and error shapes (issue #485, lane E).
-//! The proxy convention is H1's own now (issue #778 step 7), not
+//! The proxy convention is Circuitry's own now (issue #778), not
 //! urllib's (`http_client::resolve_proxy`/`resolve_proxy_target`
 //! below). See [`http_url`] for the small `urllib.parse` subset
 //! (`urlsplit`/`urljoin`/`quote`) this file's own redirect handling
@@ -78,7 +78,7 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
     }
 }
 
-/// H4 (issue #778 step 7): a scheme other than `http`/`https` -- the
+/// A scheme other than `http`/`https` (issue #778) -- the
 /// initial URL or a redirect target alike -- is refused before any I/O,
 /// with Circuitry's own text ([`crate::http_conventions::check_scheme`]),
 /// never retried (`ErrorCause::None`): `cof run` itself now refuses the
@@ -94,8 +94,7 @@ fn scheme_refused(scheme: &str, original_url: &str) -> ToolError {
     }
 }
 
-/// `http_conventions.check_url` (H3/H4, issue #778 step 7, H-review
-/// P1-2) -- *url*'s scheme (RFC 3986's own grammar via
+/// `http_conventions.check_url` (issue #778) -- *url*'s scheme (RFC 3986's own grammar via
 /// [`http_url::urlsplit`], never [`splittype`]'s looser, urllib-parse-
 /// time-only one) must be `http`/`https`, and its port must pass
 /// [`crate::http_conventions::strict_port`]. Called on *url* before
@@ -601,9 +600,9 @@ const ERROR_EXCERPT_MAX_CHARS: usize = 500;
 /// port` with no scheme at all); `execute`'s own scheme check uses
 /// [`check_url`]/[`http_url::urlsplit`] instead, now that it runs on
 /// the raw URL before this file ever calls `Request`'s own
-/// urllib-parse-time regex (issue #778 step 7, H-review P1-2:
-/// `plugins/http.py` never raises `Request`'s "unknown url type" text
-/// either, only `http_conventions.check_url`'s own).
+/// urllib-parse-time regex (issue #778: `plugins/http.py` never
+/// raises `Request`'s "unknown url type" text either, only
+/// `http_conventions.check_url`'s own).
 fn splittype_with_rest(url: &str) -> (Option<String>, &str) {
     if let Some(colon) = url.find(':') {
         let candidate = &url[..colon];
@@ -679,7 +678,7 @@ fn split_hostport(netloc: &str) -> (&str, PortText<'_>) {
     (host, port)
 }
 
-/// The request's `(host, port)`, H3's strict rule
+/// The request's `(host, port)`, the strict port rule
 /// ([`crate::http_conventions::strict_port`]) -- refused before any I/O
 /// with Circuitry's own text, naming *original_url* with any userinfo
 /// removed, for anything but an absent/empty port or a 1-65535
@@ -914,10 +913,10 @@ fn coerce_headers_param(value: Option<&Value>) -> Result<Vec<(Value, Value)>, To
 }
 
 /// `params['url']`, stripped and checked non-empty -- the only piece of
-/// `parse_params` extracted before `execute`'s own H3/H4 check
+/// `parse_params` extracted before `execute`'s own scheme/port check
 /// ([`check_url`]), which must run before `parse_params`'s own
 /// `save_target` call touches the filesystem, or `params['params']` is
-/// appended to the URL (issue #778 step 7, H-review P1-2).
+/// appended to the URL (issue #778).
 fn extract_url(params: &Value) -> Result<String, ToolError> {
     match get(params, "url") {
         Some(Value::Str(s)) if !py_strip(s).is_empty() => Ok(py_strip(s).to_string()),
@@ -964,10 +963,10 @@ fn parse_params(
         ));
     }
 
-    // `plugins/http.py`'s own order (issue #778 step 7, H-review P1-2):
-    // `save_target`'s filesystem checks run only after `execute`'s own
-    // H3/H4 check on the raw URL, and before `params['params']` is
-    // appended below.
+    // `plugins/http.py`'s own order (issue #778): `save_target`'s
+    // filesystem checks run only after `execute`'s own scheme/port
+    // check on the raw URL, and before `params['params']` is appended
+    // below.
     let save = save_target(params)?;
 
     let mut url = url;
@@ -1965,9 +1964,9 @@ fn to_string_pairs(pairs: &[(Value, Value)]) -> Vec<(String, String)> {
 /// `req.host`, exactly as the current hop's own URL writes it --
 /// userinfo stripped (same as [`split_netloc`] already strips), but
 /// the port kept or omitted exactly as written, never filled in with
-/// the scheme's own default -- the `Host` header's own shape. H1's own
-/// `no_proxy` matching (issue #778 step 7) uses [`split_netloc`]'s
-/// hostname alone instead, never this function: a synthetic default
+/// the scheme's own default -- the `Host` header's own shape. The
+/// proxy rule's own `no_proxy` matching (issue #778) uses
+/// [`split_netloc`]'s hostname alone instead, never this function: a synthetic default
 /// port always appended would make a `no_proxy` entry with no port of
 /// its own -- the common case -- never match a request whose URL also
 /// never wrote one.
@@ -2030,17 +2029,17 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
     }
 }
 
-/// [`http_client::ProxyTarget`] for the current hop, H1's rule end to
-/// end (issue #778 step 7): [`http_client::resolve_proxy_checked`]'s own
+/// [`http_client::ProxyTarget`] for the current hop, the proxy rule
+/// end to end (issue #778): [`http_client::resolve_proxy_checked`]'s own
 /// environment lookup/`no_proxy` bypass -- by hostname alone, port
 /// stripped, matching [`split_netloc`]'s own target-host comparison --
 /// then [`parse_proxy`] for the proxy value itself, unquoting both the
 /// hostport and, whenever a user is present (an empty password
-/// included), the `Basic` credentials. `Err` (H1/H3) when the proxy
+/// included), the `Basic` credentials. `Err` when the proxy
 /// value itself names an unsupported scheme or a strictly invalid port
 /// -- refused before any I/O, the same as the request URL's own port
 /// ([`request_host_port`]), *never* silently falling through to a
-/// direct connection (issue #778 step 7, H-review P0-1): every caller
+/// direct connection (issue #778): every caller
 /// of this function, on every surface (the `http` tool itself,
 /// `electricity-adapters::cyberdiner`, `systemone`'s own webhook
 /// probe), propagates this `Err` outright. `pub` (not `pub(crate)`):
@@ -2076,17 +2075,17 @@ fn resolve_proxy_target_from(
     let parsed = parse_proxy(&proxy_value);
     let hostport = http_url::unquote(&parsed.hostport);
     let (proxy_host, proxy_port) = split_netloc(&hostport);
-    // H-review P1-6: `http_client::resolve_proxy_checked` already
-    // writes `:80` into a portless proxy value explicitly, so this
-    // never actually triggers in practice -- kept as a defensive
-    // fallback with H1's own default (the *proxy*'s scheme, always
-    // `http`), never `default_port(scheme)`'s own target-scheme-
-    // dependent guess (443 for an https target), which is urllib's own
-    // quirk, not H1's.
+    // `http_client::resolve_proxy_checked` already writes `:80` into a
+    // portless proxy value explicitly, so this never actually
+    // triggers in practice -- kept as a defensive fallback with the
+    // proxy rule's own default (the *proxy*'s scheme, always `http`),
+    // never `default_port(scheme)`'s own target-scheme-dependent guess
+    // (443 for an https target), which is urllib's own quirk, not the
+    // proxy rule's (issue #778).
     let proxy_port = proxy_port.unwrap_or(80);
-    // H-review P1-7: `Basic` auth applies whenever a user is present,
-    // even with no password at all (`user@proxy`) -- not only when both
-    // pieces are non-empty.
+    // `Basic` auth applies whenever a user is present, even with no
+    // password at all (`user@proxy`) -- not only when both pieces are
+    // non-empty (issue #778).
     let basic_auth = parsed.user.as_ref().map(|user| {
         let user = http_url::unquote(user);
         let password = http_url::unquote(parsed.password.as_deref().unwrap_or(""));
@@ -2119,10 +2118,10 @@ impl ToolPlugin for HttpPlugin {
     }
 
     async fn execute(&self, params: Value, call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
-        // H3/H4, before any I/O and before touching any local file
-        // (`save_to`'s own filesystem checks included): issue #778 step
-        // 7, H-review P1-2 -- checked on the raw URL, before
-        // `params['params']` is appended.
+        // The scheme/port check, before any I/O and before touching
+        // any local file (`save_to`'s own filesystem checks included):
+        // checked on the raw URL, before `params['params']` is
+        // appended (issue #778).
         let raw_url = extract_url(&params)?;
         check_url(&raw_url)?;
         let parsed = parse_params(raw_url, &params, call.secret_headers)?;
@@ -2140,7 +2139,7 @@ impl ToolPlugin for HttpPlugin {
 
         loop {
             let split = http_url::urlsplit(&current_url, "");
-            // H4: the only schemes [`http_client`] ever speaks -- checked
+            // The only schemes [`http_client`] ever speaks -- checked
             // on every hop, not just the first, so a redirect to a scheme
             // other than http/https is refused the same way the initial
             // URL is (`cof run` now refuses it too, before ever following
@@ -2345,10 +2344,10 @@ impl ToolPlugin for HttpPlugin {
                     let quoted = http_url::quote(&resolved, http_url::STRING_PUNCTUATION);
                     let target_scheme = http_url::urlsplit(&quoted, "").scheme;
                     // `plugins/http.py::_RedirectPolicy.redirect_request`
-                    // (issue #778 step 7, H-review P1-2/P2-16): the
-                    // never/strip_auth decision runs first, on its own
-                    // terms -- a target this mode would refuse anyway is
-                    // refused that way, whatever its scheme, never H4's.
+                    // (issue #778): the never/strip_auth decision runs
+                    // first, on its own terms -- a target this mode
+                    // would refuse anyway is refused that way, whatever
+                    // its scheme, never the shared scheme refusal's.
                     if parsed.redirects == RedirectMode::Never
                         || (parsed.redirects == RedirectMode::StripAuth
                             && target_scheme.to_lowercase() != "https")
@@ -2377,8 +2376,8 @@ impl ToolPlugin for HttpPlugin {
                                 call.scrub,
                             );
                         }
-                        // H4: checked only once this hop is actually
-                        // about to be followed -- any scheme other than
+                        // Checked only once this hop is actually about
+                        // to be followed -- any scheme other than
                         // http/https gets the shared refusal text,
                         // whatever it is (`file:`, `data:`, ... -- not
                         // only `ftp`).
@@ -2644,7 +2643,7 @@ mod port_tests {
     }
 
     #[test]
-    fn request_host_port_follows_h3s_strict_rule() {
+    fn request_host_port_follows_the_strict_port_rule() {
         let url = "http://x/";
         assert_eq!(
             request_host_port("h", "http", url).unwrap(),
@@ -2708,8 +2707,8 @@ mod port_tests {
 
     #[test]
     fn resolve_proxy_target_sends_basic_auth_for_a_bare_user_with_no_password() {
-        // Issue #778 step 7, H-review P1-7: `Basic` auth applies whenever
-        // a user is present, even with an empty password.
+        // `Basic` auth applies whenever a user is present, even with
+        // an empty password (issue #778).
         let env = vec![(
             "http_proxy".to_string(),
             "http://user@proxy.corp:3128".to_string(),

@@ -1,5 +1,5 @@
-//! `circuitry.http_conventions`'s proxy rule, ported (issue #778 step 7,
-//! H1) -- one convention, shared by the `http` tool
+//! `circuitry.http_conventions`'s proxy rule, ported (issue #778) --
+//! one convention, shared by the `http` tool
 //! ([`resolve_proxy_checked`] below) and every adapter
 //! (`electricity-adapters::transport`, which calls this same function
 //! rather than keeping its own, separate copy). Circuitry decides the
@@ -7,8 +7,7 @@
 //! convention applies on either engine any more. Every caller gets the
 //! checked `Result` form -- a proxy value that can't be used (an
 //! unsupported scheme, an invalid port) is refused outright, never
-//! silently treated as "no proxy" and sent direct (issue #778 step 7,
-//! H-review P0-1).
+//! silently treated as "no proxy" and sent direct.
 //!
 //! Pure functions over an explicit environment snapshot, never
 //! `std::env` directly, so a test (and the generator's own differential
@@ -33,7 +32,7 @@ fn is_ip_address(text: &str) -> bool {
 
 /// *host_lower* matches a bare (no-port) `no_proxy` *entry*: once
 /// *host_lower* is itself an IP address, only an exact match counts --
-/// never a domain suffix (issue #778 step 7, H-review P2-13 -- `0.0.1`
+/// never a domain suffix (issue #778 -- `0.0.1`
 /// must never bypass `127.0.0.1` just because the text happens to end
 /// the same way a real domain suffix would); a named host matches
 /// *host_lower* exactly or as a domain suffix (a leading dot optional).
@@ -44,13 +43,13 @@ fn host_matches_entry(host_lower: &str, entry: &str) -> bool {
     host_lower == entry || host_lower.ends_with(&format!(".{entry}"))
 }
 
-/// H1's `no_proxy`/`NO_PROXY`: a comma-separated list; `*` bypasses
-/// everything, and a named entry matches *host* exactly or as a domain
-/// suffix (a leading dot is optional). An IP entry matches only that
-/// exact IP (no suffix, no CIDR). A `host:port` entry (the host part
-/// not itself an IP) bypasses only that host on that exact *port* --
-/// `None` (no port to compare against) means such an entry can never
-/// match (issue #778 step 7, H-review P2-13).
+/// The proxy rule's `no_proxy`/`NO_PROXY`: a comma-separated list; `*`
+/// bypasses everything, and a named entry matches *host* exactly or as
+/// a domain suffix (a leading dot is optional). An IP entry matches
+/// only that exact IP (no suffix, no CIDR). A `host:port` entry (the
+/// host part not itself an IP) bypasses only that host on that exact
+/// *port* -- `None` (no port to compare against) means such an entry
+/// can never match (issue #778).
 fn no_proxy_bypasses(no_proxy: &str, host: &str, port: Option<u16>) -> bool {
     if no_proxy.trim() == "*" {
         return true;
@@ -89,8 +88,8 @@ fn no_proxy_bypasses(no_proxy: &str, host: &str, port: Option<u16>) -> bool {
     false
 }
 
-/// H1's scheme-specific lookup, before the `all_proxy`/`ALL_PROXY`
-/// fallback: an `http` URL uses `http_proxy`, lowercase only -- uppercase
+/// The proxy rule's scheme-specific lookup, before the
+/// `all_proxy`/`ALL_PROXY` fallback: an `http` URL uses `http_proxy`, lowercase only -- uppercase
 /// `HTTP_PROXY` is never read; an `https` URL uses `https_proxy`, then
 /// `HTTPS_PROXY`.
 fn proxy_value(
@@ -123,16 +122,15 @@ pub fn resolve_proxy_checked(
     resolve_proxy_checked_with_port(scheme, host, None, env)
 }
 
-/// H1's rule for *scheme*/*host*(:*port*), normalized and checked --
-/// *env* an explicit snapshot, never read from the real process
+/// The proxy rule for *scheme*/*host*(:*port*), normalized and checked
+/// -- *env* an explicit snapshot, never read from the real process
 /// environment by this function. `Ok(None)` when no proxy applies
 /// (unset, or `no_proxy` bypasses *host*); `Ok(Some(url))` with a
 /// `http://`-scheme URL (a value with no `scheme://` prefix defaults to
 /// that); `Err` with Circuitry's own refusal text when the value names
-/// an unsupported proxy scheme, or its port is strictly invalid (H3).
+/// an unsupported proxy scheme, or its port is strictly invalid.
 /// *port* only ever matters for a `host:port` `no_proxy` entry (issue
-/// #778 step 7, H-review P2-13); `None` means such an entry can never
-/// match.
+/// #778); `None` means such an entry can never match.
 pub fn resolve_proxy_checked_with_port(
     scheme: &str,
     host: &str,
@@ -280,8 +278,7 @@ mod tests {
 
     #[test]
     fn no_proxy_ip_entry_matches_only_that_exact_ip() {
-        // Issue #778 step 7, H-review P2-13: `0.0.1` must not bypass
-        // `127.0.0.1` by suffix.
+        // Issue #778: `0.0.1` must not bypass `127.0.0.1` by suffix.
         let e = env(&[("http_proxy", "http://p:1"), ("no_proxy", "0.0.1")]);
         assert_eq!(
             resolve_proxy_checked("http", "127.0.0.1", &e).unwrap(),
@@ -292,7 +289,6 @@ mod tests {
 
     #[test]
     fn no_proxy_host_port_entry_matches_only_that_host_on_that_port() {
-        // Issue #778 step 7, H-review P2-13.
         let e = env(&[
             ("http_proxy", "http://p:1"),
             ("no_proxy", "example.com:8080"),
@@ -339,9 +335,8 @@ mod tests {
 
     #[test]
     fn resolve_proxy_checked_writes_the_default_port_80_explicitly() {
-        // Issue #778 step 7, H-review P1-6: never left for curl's own
-        // 1080 default, or for `http.rs`'s own target-scheme-dependent
-        // fallback, to decide.
+        // Issue #778: never left for curl's own 1080 default, or for
+        // `http.rs`'s own target-scheme-dependent fallback, to decide.
         for (value, expected) in [
             ("proxy.corp", "http://proxy.corp:80"),
             ("http://proxy.corp", "http://proxy.corp:80"),

@@ -4,7 +4,7 @@
 //! `curl` binary: this module sends the request itself, through
 //! [`electricity_tools::http_client::send`], and reproduces what
 //! Circuitry observably does with curl's own result -- the header
-//! set on the wire, H1's own proxy convention (issue #778 step 7,
+//! set on the wire, Circuitry's own proxy convention (issue #778,
 //! shared with the `http` tool via `electricity_tools::http_client::
 //! resolve_proxy_checked`, never curl's own environment reading), its
 //! `--max-time` as one total deadline, its exit-code mapping, and
@@ -192,13 +192,13 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         .split_once("://")
         .expect("normalized always contains \"://\"");
     let scheme = scheme.to_ascii_lowercase();
-    // H4: refused before any I/O, the same way the `http` tool refuses a
+    // Refused before any I/O, the same way the `http` tool refuses a
     // non-http(s) `base_url` -- one shared check, one shared text.
     electricity_tools::http_conventions::check_scheme(&scheme, &normalized, &["http", "https"])
         .map_err(TransportFailure::Validation)?;
-    // The authority ends at `/`, `?` or `#` (issue #778 step 7,
-    // H-review P2-14) -- a bare fragment with no path/query of its own
-    // (`http://h:80#x`) must not be read as part of the port.
+    // The authority ends at `/`, `?` or `#` (issue #778) -- a bare
+    // fragment with no path/query of its own (`http://h:80#x`) must
+    // not be read as part of the port.
     let split_at = rest.find(['/', '?', '#']);
     let (authority, path_and_query) = match split_at {
         Some(idx) => (&rest[..idx], &rest[idx..]),
@@ -215,9 +215,9 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         Some(idx) => (Some(&authority[..idx]), &authority[idx + 1..]),
         None => (None, authority),
     };
-    // Issue #778 step 7, H-review P1-7: curl (and the `http` tool's own
-    // `split_proxy_url`) percent-decodes userinfo before using it --
-    // whether it names the request's own credentials or a proxy's.
+    // curl (and the `http` tool's own `split_proxy_url`) percent-
+    // decodes userinfo before using it -- whether it names the
+    // request's own credentials or a proxy's (issue #778).
     let userinfo = userinfo_raw.map(|raw| match raw.split_once(':') {
         Some((user, pass)) => (
             electricity_tools::http::http_url::unquote(user),
@@ -228,7 +228,7 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
             String::new(),
         ),
     });
-    // H3: the port is parsed strictly -- a value `u16::parse` would
+    // The port is parsed strictly -- a value `u16::parse` would
     // reject outright (`99999`) used to silently fall back to the
     // scheme's own default port instead of being refused.
     let port = electricity_tools::http_conventions::strict_port(hostport, &normalized)
@@ -260,7 +260,7 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
 }
 
 // ---------------------------------------------------------------------
-// H1's proxy rule (issue #778 step 7) -- one resolver,
+// Circuitry's own proxy rule (issue #778) -- one resolver,
 // `electricity_tools::http_client::resolve_proxy_checked`, shared with
 // the `http` tool rather than a second, separate copy of the
 // convention kept here.
@@ -507,10 +507,10 @@ fn prepare_request(
     headers: &[(String, String)],
     body: Option<&str>,
 ) -> Result<(ConnectTarget, RawRequest), TransportFailure> {
-    // Issue #778 step 7, H-review P2-12: scheme and port checked
-    // first, matching `curl_support.py::_build_config_and_cmd`'s own
-    // order (`http_conventions.check_url` before the config, including
-    // its own control-character/size checks, is ever built).
+    // Scheme and port checked first, matching
+    // `curl_support.py::_build_config_and_cmd`'s own order
+    // (`http_conventions.check_url` before the config, including its
+    // own control-character/size checks, is ever built) (issue #778).
     let parsed = parse_url(url)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
     let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port)?;
@@ -1125,10 +1125,10 @@ mod tests {
 
     #[test]
     fn the_authority_ends_at_a_fragment_too() {
-        // Issue #778 step 7, H-review P2-14: a bare fragment right after
-        // the port (`http://h:80#x`) must not be read as part of the
-        // port text -- `cof` (`urllib.parse.urlsplit`) already stops the
-        // authority there.
+        // A bare fragment right after the port (`http://h:80#x`) must
+        // not be read as part of the port text -- `cof`
+        // (`urllib.parse.urlsplit`) already stops the authority there
+        // (issue #778).
         let parsed = parse_url("http://h:80#x").unwrap();
         assert_eq!(parsed.host, "h");
         assert_eq!(parsed.port, Some(80));
@@ -1256,8 +1256,8 @@ mod tests {
 
     #[test]
     fn percent_encoded_proxy_userinfo_is_decoded_before_basic_auth() {
-        // Issue #778 step 7, H-review P1-7: curl percent-decodes a proxy
-        // URL's userinfo before building `Proxy-Authorization`.
+        // curl percent-decodes a proxy URL's userinfo before building
+        // `Proxy-Authorization` (issue #778).
         let env = vec![(
             "http_proxy".to_string(),
             "http://us%40er:pa%3Ass@proxy:3128".to_string(),

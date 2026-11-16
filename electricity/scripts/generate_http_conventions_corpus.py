@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""A differential corpus for `circuitry.http_conventions` (issue #778
-step 7): H1's proxy rule (including `no_proxy`'s exact-IP and
-`host:port` matching), H3's strict port parsing, H4's http(s)-only
+"""A differential corpus for `circuitry.http_conventions` (issue #778):
+the proxy rule (including `no_proxy`'s exact-IP and
+`host:port` matching), strict port parsing, the http(s)-only
 scheme check, userinfo/credential redaction, and RFC 9110 `Retry-After`
 parsing -- Circuitry's own conventions now, never urllib's or curl's,
 so this corpus runs cof's own functions directly and lets electricity
@@ -40,7 +40,7 @@ OUTPUT = (
 
 
 # ---------------------------------------------------------------------
-# 1. H4 (and H3): `check_url` -- scheme detection, then strict ports.
+# 1. `check_url` -- scheme detection, then strict ports.
 # ---------------------------------------------------------------------
 
 
@@ -75,7 +75,7 @@ def _scheme_detection_cases() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
-# 2. H3: `check_strict_port`.
+# 2. `check_strict_port`.
 # ---------------------------------------------------------------------
 
 
@@ -161,8 +161,8 @@ def _proxy_redaction_cases() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
-# 4. H1: `resolve_proxy`, including `no_proxy`'s exact-IP and
-#    `host:port` matching (issue #778 step 7, H-review P2-13).
+# 4. `resolve_proxy`, including `no_proxy`'s exact-IP and
+#    `host:port` matching (issue #778).
 # ---------------------------------------------------------------------
 
 

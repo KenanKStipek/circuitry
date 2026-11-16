@@ -202,8 +202,9 @@ def _curl_config_file(
     userinfo in a proxy URL is otherwise visible in ``ps`` just like a
     header would be).
 
-    *proxy_url* is H1's own decision (:func:`http_conventions.
-    resolve_proxy`), never curl's: a value means ``proxy = "<value>"`` plus
+    *proxy_url* is the shared proxy rule's own decision
+    (:func:`http_conventions.resolve_proxy`), never curl's: a value
+    means ``proxy = "<value>"`` plus
     ``noproxy = ""`` (so curl's own ``no_proxy``/``NO_PROXY`` read can't
     override the decision that already accounted for it); ``None`` means
     ``noproxy = "*"`` (so curl never reads ``*_proxy``/``*_PROXY`` either,
@@ -357,13 +358,13 @@ def _build_config_and_cmd(
     ``--data-binary @-`` decision. ``extra_args`` (``--no-buffer`` for the
     streaming caller) is appended last, after the write-out flag.
 
-    H3/H4: refused before any I/O when ``url``'s scheme isn't http/https or
+    Refused before any I/O when ``url``'s scheme isn't http/https or
     its port is strictly invalid -- a schemeless ``url`` (a configured
     ``base_url`` of ``localhost:11434``, say) is checked as curl itself
-    would read it, defaulting to ``http://``, never refused for that alone.
-    H1: the proxy decision is Circuitry's own (:func:`http_conventions.
-    resolve_proxy`), written into the config file so curl's own environment
-    reading never applies either way.
+    would read it, defaulting to ``http://``, never refused for that
+    alone. The proxy decision is Circuitry's own
+    (:func:`http_conventions.resolve_proxy`), written into the config
+    file so curl's own environment reading never applies either way.
     """
     normalized_url = url if "://" in url else f"http://{url}"
     http_conventions.check_url(normalized_url)

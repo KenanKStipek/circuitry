@@ -39,8 +39,8 @@ class FakeResponse:
 
 def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
     """Replaces every opener's own ``open`` -- ``OllamaAdapter.list_models``
-    now always builds an explicit opener, H1 (issue #778 step 7, H-review
-    P2-15), rather than calling the bare ``urllib.request.urlopen``
+    now always builds an explicit opener, the shared proxy rule (issue
+    #778), rather than calling the bare ``urllib.request.urlopen``
     convenience function; this is the one choke point either call shape
     goes through (the same idiom ``tests/plugins/test_http.py`` uses).
     """

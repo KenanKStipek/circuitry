@@ -119,9 +119,10 @@ def _origin(url: str) -> tuple[str, str, int | None] | None:
 class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
     """urllib's redirect handling for every ``redirects`` mode -- replacing
     the opener's default ``HTTPRedirectHandler`` unconditionally (not just
-    under ``never``/``strip_auth``) so H1's proxy rule is reapplied on every
-    hop, not just the first request, and so a redirect to an unsupported
-    scheme (H4) is refused the same way the initial URL is. ``follow`` never
+    under ``never``/``strip_auth``) so the proxy rule is reapplied on
+    every hop, not just the first request, and so a redirect to an
+    unsupported scheme is refused the same way the initial URL is.
+    ``follow`` never
     refuses a redirect on its own account; ``never`` refuses every one;
     ``strip_auth`` refuses one that isn't ``https`` and strips an auth
     header crossing origins. A refused redirect returns no request, so
@@ -135,7 +136,8 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
     reached, so a ``file:``/``data:``/other redirect target would
     otherwise fail with urllib's own "Redirection to url ... is not
     allowed" text under every ``redirects`` mode, including ``follow``,
-    rather than H4's shared refusal -- and under ``never``/``strip_auth``,
+    rather than the shared scheme refusal -- and under
+    ``never``/``strip_auth``,
     which refuse without raising at all, it would wrongly raise instead
     of refusing. The scheme/port check is run only once the mode, method
     and loop decisions below have all already committed to following
@@ -518,7 +520,7 @@ class HttpPlugin:
             raise ValueError("HttpPlugin requires params['url'] as a non-empty string.")
         url = url.strip()
         # Before any I/O and before touching any local file (save_to's own
-        # filesystem checks included): H3/H4 -- a scheme other than
+        # filesystem checks included): a scheme other than
         # http/https, or a strictly invalid port, is refused right here.
         http_conventions.check_url(url)
 
@@ -573,15 +575,15 @@ class HttpPlugin:
         stderr: str | None = None
         saved: tuple[int, str] | None = None
 
-        # H1: Circuitry decides the proxy itself, so urllib's own default
+        # Circuitry decides the proxy itself, so urllib's own default
         # `ProxyHandler()` (which would read the real environment under its
         # own, different convention) never runs -- an explicit, empty one
         # replaces it; `http_conventions.apply_request_proxy` above and
         # `_RedirectPolicy`'s own per-hop call are the only proxy decisions
         # this opener ever makes. `_RedirectPolicy` replaces the default
-        # `HTTPRedirectHandler`
-        # for every mode, not just `never`/`strip_auth`, so H4's scheme
-        # refusal and H1's proxy rule both apply to a redirect hop too.
+        # `HTTPRedirectHandler` for every mode, not just
+        # `never`/`strip_auth`, so the scheme refusal and the proxy rule
+        # both apply to a redirect hop too.
         policy = _RedirectPolicy(redirects, frozenset({"authorization", *secret_headers}))
         open_request: Any = urllib.request.build_opener(
             urllib.request.ProxyHandler({}), policy

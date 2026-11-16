@@ -100,9 +100,9 @@ def test_parse_retry_after_seconds_rejects_a_non_ascii_digit() -> None:
 
 
 def test_parse_retry_after_seconds_rejects_an_imf_fixdate_with_no_gmt() -> None:
-    """Issue #778 step 7, H-review P1-10: unlike ``email.utils.
-    parsedate_to_datetime``, a missing (or different) time zone is
-    rejected outright, not guessed at.
+    """Issue #778: unlike ``email.utils.parsedate_to_datetime``, a
+    missing (or different) time zone is rejected outright, not
+    guessed at.
     """
     http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%a, %d %b %Y %H:%M:%S")
     assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
@@ -137,7 +137,7 @@ def test_parse_retry_after_seconds_rejects_lenient_date_forms(http_date: str) ->
 
 
 def test_parse_retry_after_seconds_of_an_absurdly_long_digit_string_is_inf_not_a_crash() -> None:
-    """Issue #778 step 7, H-review P1-10: ``float()`` on 309+ ASCII
+    """Issue #778: ``float()`` on 309+ ASCII
     digits returns ``inf`` rather than raising -- this module must
     never let that reach an ``int()`` conversion uncapped.
     """
@@ -155,7 +155,7 @@ def test_next_backoff_delay_caps_a_very_long_retry_after() -> None:
 
 
 def test_next_backoff_delay_caps_an_inf_retry_after_without_an_overflowerror() -> None:
-    """Issue #778 step 7, H-review P1-10: a 309+ digit ``Retry-After``
+    """Issue #778: a 309+ digit ``Retry-After``
     makes ``parse_retry_after_seconds`` return ``inf`` -- capping must
     happen before the ``int()`` conversion, or this raises
     ``OverflowError`` instead of returning the cap.

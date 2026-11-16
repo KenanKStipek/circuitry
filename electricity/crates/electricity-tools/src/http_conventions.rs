@@ -23,7 +23,7 @@ pub fn strip_url_userinfo(text: &str) -> String {
         // The authority ends at the first `/` or whitespace; a password
         // inside it can itself contain `@`, so the userinfo is everything
         // up to the *last* `@` in that span, not the first one (issue
-        // #778 step 7, H-review P1-9) -- stopping at the first would
+        // #778) -- stopping at the first would
         // leave a fragment of the password (e.g. `ss@proxy` out of
         // `alice:p@ss@proxy`) in the stripped text.
         let boundary = after_scheme
@@ -217,14 +217,14 @@ pub(crate) fn host_port_text(host_port: &str) -> Option<&str> {
         return None;
     }
     // After an IPv6 literal's `]` comes `:` and a port, or nothing at all
-    // (H3) -- anything else (`[::1]x`) is *not* "no port", it is a port
+    // -- anything else (`[::1]x`) is *not* "no port", it is a port
     // text that will never pass the digit check below, so it still ends
     // up refused, just with the usual "invalid port" text rather than a
-    // distinct message of its own (issue #778 step 7, H-review P2-14).
+    // distinct message of its own (issue #778).
     Some(rest.strip_prefix(':').unwrap_or(rest))
 }
 
-/// H3: the strict port in *netloc* (an authority string, userinfo
+/// The strict port in *netloc* (an authority string, userinfo
 /// included) -- `Ok(None)` for an absent or empty port (the scheme's own
 /// default applies); `Err` with Circuitry's own refusal text (naming
 /// *original_url* with any userinfo removed) for anything else: after the
@@ -284,7 +284,7 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
 /// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
 /// (space is 0x20, already inside that first range) -- a URL or proxy
 /// value containing one is refused before any I/O, on both engines,
-/// with one shared message (issue #778 step 7, H-review P2-14).
+/// with one shared message (issue #778).
 pub(crate) fn check_no_control_or_whitespace(
     original_url: &str,
     redact: fn(&str) -> String,
@@ -301,10 +301,9 @@ pub(crate) fn check_no_control_or_whitespace(
     Ok(())
 }
 
-/// H4 (and, for a proxy URL, H1): *scheme* must be one of *allowed*
-/// (case-insensitively), or *original_url* is refused with Circuitry's own
-/// text, userinfo removed. Checked first (issue #778 step 7, H-review
-/// P2-14, [`check_no_control_or_whitespace`]): every caller of this
+/// *scheme* must be one of *allowed* (case-insensitively), or
+/// *original_url* is refused with Circuitry's own text, userinfo
+/// removed. Checked first (issue #778, [`check_no_control_or_whitespace`]): every caller of this
 /// function reaches it before [`strict_port`], so this is the one place
 /// that check needs to live to cover every URL/proxy value either engine
 /// checks at all.

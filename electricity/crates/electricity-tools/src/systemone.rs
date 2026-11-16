@@ -1196,11 +1196,12 @@ impl SystemOnePlugin {
             Scheme::Http
         };
         let loopback = is_loopback_host(&server.host.to_lowercase());
-        // Issue #778 step 7, H-review P0-1/P1-5: a loopback host is
-        // never proxied at all (systemone's own rule, since it talks to
-        // a local service); otherwise H1 applies, and a proxy value this
-        // crate can't use (an unsupported scheme, an invalid port) is
-        // refused outright, never silently treated as "no proxy".
+        // A loopback host is never proxied at all (systemone's own
+        // rule, since it talks to a local service); otherwise the
+        // shared proxy rule applies, and a proxy value this crate
+        // can't use (an unsupported scheme, an invalid port) is
+        // refused outright, never silently treated as "no proxy"
+        // (issue #778).
         let proxy = if loopback {
             None
         } else {

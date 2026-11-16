@@ -49,14 +49,13 @@ _PORT_RE = re.compile(r"^[0-9]+$")
 #: Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
 #: (space is 0x20, already inside that first range) -- a URL or proxy
 #: value containing one is refused before any I/O, on both engines, with
-#: one shared message (issue #778 step 7, H-review P2-14).
+#: one shared message (issue #778).
 _CONTROL_OR_WHITESPACE_RE = re.compile(r"[\x00-\x20\x7f]")
 
 # Greedy up to the *last* `@` before whitespace or a `/` -- an authority's
 # userinfo can itself carry a literal `@` (in the password), so stopping
 # at the first one (as a non-greedy or `[^@]+` pattern would) can leave
-# part of a credential in the stripped text (issue #778 step 7, H-review
-# P1-9).
+# part of a credential in the stripped text (issue #778).
 _USERINFO_RE = re.compile(r"://[^\s/]*@")
 
 #: Query-string keys that commonly carry a credential (search APIs, some
@@ -157,8 +156,8 @@ def _port_in_range(port_text: str) -> bool:
 
 
 def check_strict_port(url: str) -> None:
-    """Refuses *url* before any I/O when its port isn't strictly valid
-    (H3): after the host (or after ``]`` for IPv6) comes ``:`` and one or
+    """Refuses *url* before any I/O when its port isn't strictly valid:
+    after the host (or after ``]`` for IPv6) comes ``:`` and one or
     more ASCII digits, 1-65535. An empty port, or none at all, means the
     scheme's default and is never refused.
     """
@@ -186,7 +185,7 @@ def _check_no_control_or_whitespace(value: str, *, redact: Callable[[str], str])
 
 
 def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -> None:
-    """Refuses *url* before any I/O (H3, H4): its scheme must be one of
+    """Refuses *url* before any I/O: its scheme must be one of
     *allowed_schemes*, and its port must pass :func:`check_strict_port`.
     """
     _check_no_control_or_whitespace(url, redact=redact_url)
@@ -202,7 +201,8 @@ def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -
 
 def _normalize_proxy_url(value: str) -> str:
     """*value* with a scheme prefixed (``http://``) when it has none at
-    all — H1's "a proxy URL with no scheme means http://"."""
+    all — the proxy rule's "a proxy URL with no scheme means http://"
+    (issue #778)."""
     return value if "://" in value else f"http://{value}"
 
 
@@ -254,7 +254,7 @@ def _with_default_port(url: str, default_port: int) -> str:
 
 
 def check_proxy_url(value: str) -> str:
-    """*value*, normalized (H1), with its scheme and port checked before
+    """*value*, normalized, with its scheme and port checked before
     any I/O: only an ``http`` proxy scheme is supported, and its port
     follows :func:`_check_strict_port_for_proxy`. The returned URL always
     names a port explicitly (:func:`_with_default_port`). Normalized
@@ -294,7 +294,7 @@ def _is_ip_address(text: str) -> bool:
 def _host_matches_entry(host_lower: str, entry: str) -> bool:
     """*host_lower* matches a bare (no-port) ``no_proxy`` *entry*: once
     *host_lower* is itself an IP address, only an exact match counts --
-    never a domain suffix (H-review P2-13 — ``0.0.1`` must never bypass
+    never a domain suffix (issue #778 — ``0.0.1`` must never bypass
     ``127.0.0.1`` just because the text happens to end the same way a
     real domain suffix would); a named host matches *host_lower*
     exactly or as a domain suffix (a leading dot optional).
@@ -322,9 +322,9 @@ def _no_proxy_bypasses(no_proxy: str, host: str, port: int | None) -> bool:
             if host_lower == entry:
                 return True
             continue
-        # H-review P2-13: a `host:port` entry bypasses only that host on
-        # that exact port -- never any other port the same host is
-        # reached on.
+        # A `host:port` entry bypasses only that host on that exact
+        # port -- never any other port the same host is reached on
+        # (issue #778).
         entry_host, colon, entry_port_text = entry.rpartition(":")
         if colon and entry_host and entry_port_text.isdigit():
             if (
@@ -342,11 +342,11 @@ def _no_proxy_bypasses(no_proxy: str, host: str, port: int | None) -> bool:
 def resolve_proxy(
     scheme: str, host: str, env: Mapping[str, str], *, port: int | None = None
 ) -> str | None:
-    """The proxy URL for *scheme*/*host*(:*port*) under H1's rule,
+    """The proxy URL for *scheme*/*host*(:*port*) under the proxy rule,
     normalized and checked (:func:`check_proxy_url`), or ``None`` when no
     proxy applies — no proxy is configured for *scheme*, or
     ``no_proxy``/``NO_PROXY`` bypasses *host*. *port* only ever matters
-    for a ``host:port`` ``no_proxy`` entry (H-review P2-13); omit it (or
+    for a ``host:port`` ``no_proxy`` entry (issue #778); omit it (or
     pass ``None``) where the caller has no port to give, which simply
     means no such entry can ever match. *env* is an explicit snapshot,
     never read from the real process environment by this function.
@@ -393,7 +393,7 @@ def split_proxy_url(proxy_url: str) -> ProxyAuth:
 
 
 def apply_request_proxy(req: urllib.request.Request) -> None:
-    """Applies H1's proxy rule to *req* in place, the way ``urllib.request.
+    """Applies the proxy rule to *req* in place, the way ``urllib.request.
     ProxyHandler.proxy_open`` would -- minus its own, differently-
     conventioned environment read and ``no_proxy`` bypass, which
     :func:`resolve_proxy` already decides. Shared by every surface that

@@ -852,7 +852,7 @@ remote-disconnect failure is unconditionally retryable, matching `urllib.error.U
 `TimeoutError`/`ConnectionError`), and the `max_in_flight` semaphore, all match; built over
 `electricity_tools::http_client` directly (urllib's own request shape -- Host/Accept-encoding/
 Connection headers, a `Location` redirect joined via the same `http` tool's own `urljoin`,
-H1's own proxy convention and per-operation timeout model (issue #778 step 7 -- Circuitry's own
+Circuitry's own proxy convention and per-operation timeout model (issue #778 -- Circuitry's own
 rule now, never urllib's own environment-reading, on either engine), never
 `crate::transport::run_curl`'s curl convention, since the reference adapter is the one model
 adapter that never shells out to curl. The semaphore is a per-instance `tokio::sync::Semaphore`:

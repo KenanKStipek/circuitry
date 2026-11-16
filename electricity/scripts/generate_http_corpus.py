@@ -280,8 +280,8 @@ def _request_header_cases() -> list[dict[str, Any]]:
 
 
 def _unknown_url_type_cases() -> list[dict[str, Any]]:
-    """``http_conventions.check_url``'s own refusal (issue #778 step 7,
-    H-review P1-2) -- never ``Request``'s own "unknown url type" text,
+    """``http_conventions.check_url``'s own refusal (issue #778) --
+    never ``Request``'s own "unknown url type" text,
     which ``plugins/http.py::HttpPlugin.execute`` no longer raises at
     all (its own ``check_url(url)`` call runs first, before ``Request``
     is ever built).
@@ -348,13 +348,13 @@ def _redirect_reason_cases() -> list[dict[str, Any]]:
     it against CPython rather than trusting the issue's own prose.
 
     A disallowed-scheme redirect isn't part of this section any more
-    (issue #778 step 7, H-review P1-2/P2-16): `plugins/http.py::
+    (issue #778): `plugins/http.py::
     _RedirectPolicy.http_error_302` no longer inherits
     `HTTPRedirectHandler`'s own scheme prefilter (which this exact
-    scenario, `javascript:alert(1)`, used to exercise) -- H4's shared
-    refusal applies to every scheme once a redirect is actually going
-    to be followed, so there is no more urllib-specific "disallowed
-    scheme" text for either engine to pin.
+    scenario, `javascript:alert(1)`, used to exercise) -- the shared
+    scheme refusal applies to every scheme once a redirect is actually
+    going to be followed, so there is no more urllib-specific
+    "disallowed scheme" text for either engine to pin.
     """
     handler = urllib.request.HTTPRedirectHandler()
     cases = []
