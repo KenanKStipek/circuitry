@@ -410,6 +410,42 @@ def test_another_provider_keeps_a_prompt_mapping_as_a_plain_param(tmp_path: Path
     assert tool.params["prompt"] == _prompt_from()
 
 
+def test_check_rejects_a_malformed_result_schema_at_compile_time(
+    tmp_path: Path, work: Path
+) -> None:
+    effect = _effect(
+        work,
+        tmp_path,
+        params={
+            "prompt": _prompt_from(),
+            "cwd": str(work),
+            "result_file": "result.json",
+            "result_schema": {"type": 5},
+        },
+    )
+    with pytest.raises(ValueError) as excinfo:
+        _compile([effect], tmp_path)
+    assert "Tool effect 'implement' (agent)" in str(excinfo.value)
+    assert "params.result_schema is not a valid JSON Schema" in str(excinfo.value)
+
+
+def test_check_rejects_a_result_schema_without_result_file_at_compile_time(
+    tmp_path: Path, work: Path
+) -> None:
+    effect = _effect(
+        work,
+        tmp_path,
+        params={
+            "prompt": _prompt_from(),
+            "cwd": str(work),
+            "result_schema": {"type": "object"},
+        },
+    )
+    with pytest.raises(ValueError) as excinfo:
+        _compile([effect], tmp_path)
+    assert "params.result_schema needs params.result_file" in str(excinfo.value)
+
+
 # ---------- params_json never supplies the file form ----------
 
 _FILE_FORM_JSON = json.dumps(

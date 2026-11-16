@@ -1639,6 +1639,13 @@ def _compile_tool(
         )
         if prompt_file is not None:
             params = {key: value for key, value in params.items() if key != "prompt"}
+        from ..plugins.agent import static_param_errors as agent_param_errors
+
+        problems = agent_param_errors(params)
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (agent) at '{effect_path}': " + "; ".join(problems)
+            )
     _check_param_secrets(
         params, name=str(name), provider=provider.strip().lower(), effect_path=effect_path
     )

@@ -32,6 +32,7 @@ from circuitry.plugins.agent import (
     AgentTurn,
     make_plugin,
     run_agent_session,
+    static_param_errors,
 )
 from circuitry.plugins.base import ToolResult
 from circuitry.plugins.capabilities import FS_WRITE, NETWORK, SHELL, capabilities_of
@@ -1259,6 +1260,34 @@ def test_run_exit_status_is_unaffected_by_a_turn_failure_with_context(
 
 
 # ---------- params, config, preflight, capabilities ----------
+
+
+@pytest.mark.parametrize(
+    ("params", "errors"),
+    [
+        ({}, []),
+        ({"result_schema": None}, []),
+        ({"result_schema": {"type": "object"}}, ["params.result_schema needs params.result_file"]),
+        (
+            {"result_file": "r.json", "result_schema": "nope"},
+            ["params.result_schema must be a JSON Schema object"],
+        ),
+        (
+            {"result_file": "r.json", "result_schema": {"type": 5}},
+            ["params.result_schema is not a valid JSON Schema"],
+        ),
+        ({"result_file": "r.json", "result_schema": {"type": "object"}}, []),
+    ],
+)
+def test_static_param_errors_checks_result_schema(
+    params: dict[str, Any], errors: list[str]
+) -> None:
+    found = static_param_errors(params)
+    if not errors:
+        assert found == []
+    else:
+        assert len(found) == 1
+        assert errors[0] in found[0]
 
 
 @pytest.mark.parametrize(

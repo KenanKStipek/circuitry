@@ -800,6 +800,26 @@ def reject_overlay_prompt(overlay: Mapping[str, Any], *, prompt_from_file: bool)
         )
 
 
+def static_param_errors(params: Mapping[str, Any]) -> list[str]:
+    """What ``cof check`` can see in an ``agent`` effect's ``result_schema``
+    without rendering anything (#778 step 5): paired with ``result_file``,
+    and a well-formed JSON Schema. A ``result_schema``/``result_file``
+    reached only through ``params_json`` or a template isn't visible here;
+    :meth:`AgentPlugin.execute` repeats this check on the fully rendered
+    params."""
+    result_schema = params.get("result_schema")
+    if result_schema is None:
+        return []
+    if not params.get("result_file"):
+        return ["params.result_schema needs params.result_file"]
+    if not isinstance(result_schema, dict):
+        return ["params.result_schema must be a JSON Schema object"]
+    malformed = schema_corners.schema_well_formedness_error(result_schema)
+    if malformed is not None:
+        return [f"params.result_schema is not a valid JSON Schema: {malformed}"]
+    return []
+
+
 @dataclass(frozen=True)
 class AgentPlugin:
     name: str = "agent"
