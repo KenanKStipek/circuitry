@@ -116,8 +116,11 @@ fn escape_config_value(value: &str) -> String {
 }
 
 /// `_curl_config_file`'s own byte count, for the size check only --
-/// electricity never actually writes this text anywhere.
-fn curl_config_bytes(url: &str, headers: &[(String, String)]) -> usize {
+/// electricity never actually writes this text anywhere. *proxy_url*
+/// is the raw text `_curl_config_file`'s own `proxy =`/`noproxy =`
+/// line(s) would carry -- cof writes one or the other on *every*
+/// call, proxy configured or not, so this must too (issue #778).
+fn curl_config_bytes(url: &str, headers: &[(String, String)], proxy_url: Option<&str>) -> usize {
     let mut text = format!("url = \"{}\"\n", escape_config_value(url));
     for (name, value) in headers {
         text.push_str(&format!(
@@ -125,16 +128,27 @@ fn curl_config_bytes(url: &str, headers: &[(String, String)]) -> usize {
             escape_config_value(value)
         ));
     }
+    match proxy_url {
+        Some(value) => {
+            text.push_str(&format!("proxy = \"{}\"\n", escape_config_value(value)));
+            text.push_str("noproxy = \"\"\n");
+        }
+        None => text.push_str("noproxy = \"*\"\n"),
+    }
     text.len()
 }
 
-fn validate_request(url: &str, headers: &[(String, String)]) -> Result<(), TransportFailure> {
+fn validate_request(
+    url: &str,
+    headers: &[(String, String)],
+    proxy_url: Option<&str>,
+) -> Result<(), TransportFailure> {
     validate_no_control_chars(url, "url")?;
     for (name, value) in headers {
         validate_no_control_chars(name, "header name")?;
         validate_no_control_chars(value, "header value")?;
     }
-    let config_bytes = curl_config_bytes(url, headers);
+    let config_bytes = curl_config_bytes(url, headers, proxy_url);
     if config_bytes > MAX_CONFIG_BYTES {
         return Err(TransportFailure::Validation(format!(
             "url + headers are {config_bytes} bytes, over the {MAX_CONFIG_BYTES}-byte limit \
@@ -307,6 +321,24 @@ fn proxy_wire_headers(proxy: &Option<ProxyTarget>, scheme: Scheme) -> Vec<(Strin
     }
     headers.push(("Proxy-Connection".to_string(), "Keep-Alive".to_string()));
     headers
+}
+
+/// The raw proxy URL text [`electricity_tools::http_client::
+/// resolve_proxy_checked_with_port`] itself resolves for
+/// *scheme*/*host*(:*port*) -- never [`ProxyTarget`]'s own parsed
+/// form, which [`resolve_curl_proxy`] already decodes userinfo out of
+/// for `basic_auth`. Used only for the `--config` byte count check
+/// ([`curl_config_bytes`]), which (like cof's own `_curl_config_file`)
+/// counts the `proxy =`/`noproxy =` line(s) it would write, not the
+/// request's own parsed proxy target (issue #778).
+fn resolve_curl_proxy_url_text(
+    scheme: &str,
+    host: &str,
+    port: Option<u16>,
+) -> Result<Option<String>, TransportFailure> {
+    let env: Vec<(String, String)> = std::env::vars().collect();
+    electricity_tools::http_client::resolve_proxy_checked_with_port(scheme, host, port, &env)
+        .map_err(TransportFailure::Validation)
 }
 
 fn resolve_curl_proxy_from(
@@ -514,7 +546,8 @@ fn prepare_request(
     let parsed = parse_url(url)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
     let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port)?;
-    validate_request(url, headers)?;
+    let proxy_url_text = resolve_curl_proxy_url_text(&parsed.scheme, &parsed.host, parsed.port)?;
+    validate_request(url, headers, proxy_url_text.as_deref())?;
     let scheme_enum = if parsed.scheme == "https" {
         Scheme::Https
     } else {
@@ -1089,6 +1122,7 @@ mod tests {
         let err = validate_request(
             "http://example.com/",
             &[("X".to_string(), "a\nb".to_string())],
+            None,
         )
         .unwrap_err();
         assert_eq!(
@@ -1102,12 +1136,53 @@ mod tests {
     #[test]
     fn an_oversized_config_is_refused_before_any_io() {
         let huge = "x".repeat(70_000);
-        let err = validate_request("http://example.com/", &[("X".to_string(), huge)]).unwrap_err();
+        let err =
+            validate_request("http://example.com/", &[("X".to_string(), huge)], None).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
                 assert!(text.contains("over the 60000-byte limit"));
             }
             other => panic!("expected Validation, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn config_size_cases_match_cof() {
+        // Replays `generate_adapter_corpus.py`'s own `config_size_cases`
+        // (issue #778): `curl_config_bytes` must count the `proxy =`/
+        // `noproxy =` line(s) `_curl_config_file` itself writes, on
+        // every case -- including the ones with no proxy configured,
+        // where cof still writes a `noproxy = "*"` line.
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/golden/adapter_corpus.json"
+        );
+        let text = std::fs::read_to_string(path).expect("adapter_corpus.json must exist");
+        let corpus: serde_json::Value =
+            serde_json::from_str(&text).expect("adapter_corpus.json must be valid JSON");
+        for case in corpus["config_size_cases"].as_array().unwrap() {
+            let headers: Vec<(String, String)> = case["headers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|pair| {
+                    let pair = pair.as_array().unwrap();
+                    (
+                        pair[0].as_str().unwrap().to_string(),
+                        pair[1].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect();
+            let proxy_url = case["proxy_url"].as_str();
+            let expected_bytes = case["config_bytes"].as_u64().unwrap() as usize;
+            let expected_over = case["over_limit"].as_bool().unwrap();
+            let actual_bytes = curl_config_bytes("http://example.com/x", &headers, proxy_url);
+            assert_eq!(actual_bytes, expected_bytes, "case: {case:?}");
+            assert_eq!(
+                actual_bytes > MAX_CONFIG_BYTES,
+                expected_over,
+                "case: {case:?}"
+            );
         }
     }
 

@@ -363,15 +363,19 @@ def _config_size_cases() -> list[dict[str, Any]]:
     huge = [("X-Big", "x" * 70_000)]
     cases = []
     for headers in (small, huge):
-        config_bytes = _curl_config_file("http://example.com/x", headers, proxy_url=None).encode()
-        over = len(config_bytes) > _MAX_CONFIG_BYTES
-        cases.append(
-            {
-                "headers": [list(h) for h in headers],
-                "config_bytes": len(config_bytes),
-                "over_limit": over,
-            }
-        )
+        for proxy_url in (None, "http://proxy.corp:3128"):
+            config_bytes = _curl_config_file(
+                "http://example.com/x", headers, proxy_url=proxy_url
+            ).encode()
+            over = len(config_bytes) > _MAX_CONFIG_BYTES
+            cases.append(
+                {
+                    "headers": [list(h) for h in headers],
+                    "proxy_url": proxy_url,
+                    "config_bytes": len(config_bytes),
+                    "over_limit": over,
+                }
+            )
     return cases
 
 
