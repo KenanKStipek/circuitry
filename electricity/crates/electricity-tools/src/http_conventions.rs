@@ -362,9 +362,9 @@ pub(crate) fn check_no_control_or_whitespace(
 /// removed. Checked first (issue #778, [`check_no_control_or_whitespace`]): every caller of this
 /// function reaches it before [`strict_port`], so this is the one place
 /// that check needs to live to cover every URL/proxy value either engine
-/// checks at all. *scheme* itself is named through [`redact_request_url`]
-/// too, not just *original_url*: every other caller's *scheme* comes
-/// from a real [`crate::http::http_url::urlsplit`], but
+/// checks at all. *scheme* is named through [`scheme_name`], never as
+/// given: every other caller's *scheme* comes from a real
+/// [`crate::http::http_url::urlsplit`], but
 /// `electricity-adapters::transport`'s own caller finds its scheme by
 /// cutting at the first literal `://` -- for a malformed value like
 /// `alice:pw@host/x?next=http://y`, that is almost the whole value,
@@ -379,10 +379,31 @@ pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Resul
     }
     Err(format!(
         "unsupported URL scheme '{}' in '{}': only {} is supported",
-        redact_request_url(&scheme.to_ascii_lowercase()),
+        scheme_name(&scheme.to_ascii_lowercase()),
         redact_request_url(original_url),
         allowed.join(" or ")
     ))
+}
+
+/// The leading part of *scheme* that RFC 3986 allows in a scheme
+/// (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`), cut at the first
+/// character it doesn't -- the scheme cof's `check_url` names for the
+/// same URL. A value cut at the first literal `://` can run into the
+/// userinfo (`alice:p` for `alice:p://w@host/x`); only `alice` is named
+/// (issue #778).
+fn scheme_name(scheme: &str) -> &str {
+    let end = scheme
+        .char_indices()
+        .find(|&(i, c)| {
+            let allowed = if i == 0 {
+                c.is_ascii_alphabetic()
+            } else {
+                c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')
+            };
+            !allowed
+        })
+        .map_or(scheme.len(), |(i, _)| i);
+    &scheme[..end]
 }
 
 #[cfg(test)]
@@ -527,6 +548,37 @@ mod tests {
             assert!(!err.contains("qq"));
             assert!(!err.contains("rr"));
         }
+    }
+
+    #[test]
+    fn check_scheme_names_only_the_rfc3986_part_of_a_scheme_cut_at_the_first_double_slash() {
+        // `electricity-adapters::transport` cuts its scheme at the first
+        // literal `://`; for these values that text runs into the
+        // userinfo. cof's `check_url` names `alice` for both, and the
+        // same whole message (issue #778).
+        for (cut, url, named_url) in [
+            ("alice:p", "alice:p://w@host/x", "host/x"),
+            (
+                "alice:pw@host/x?next=http",
+                "alice:pw@host/x?next=http://y",
+                "host/x?next=http%3A%2F%2Fy",
+            ),
+        ] {
+            let err = check_scheme(cut, url, &["http", "https"]).unwrap_err();
+            assert_eq!(
+                err,
+                format!(
+                    "unsupported URL scheme 'alice' in '{named_url}': only http or https is supported"
+                )
+            );
+        }
+        let err = check_scheme("1abc", "1abc://host/x", &["http", "https"]).unwrap_err();
+        assert_eq!(
+            err,
+            "unsupported URL scheme '' in '1abc://host/x': only http or https is supported"
+        );
+        assert_eq!(scheme_name("gopher"), "gopher");
+        assert_eq!(scheme_name("svn+ssh"), "svn+ssh");
     }
 
     #[test]
