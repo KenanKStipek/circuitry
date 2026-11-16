@@ -285,11 +285,14 @@ def test_https_request_is_tunneled_through_the_proxy_with_basic_auth(
 def test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied(
     monkeypatch: pytest.MonkeyPatch, proxy: _RecordingProxy, servers: ServerPair
 ) -> None:
-    """Issue #778 step 7, H-review P1-8: only ``http_proxy`` is set, so a
-    redirect from a proxied ``http://`` URL to an ``https://`` one (no
-    ``https_proxy``/``all_proxy``) must not carry the first hop's
-    ``Proxy-authorization`` -- the second hop is unproxied entirely, so the
-    proxy never even sees a ``CONNECT`` for it, let alone the credential.
+    """Only ``http_proxy`` is set, so a redirect from a proxied
+    ``http://`` URL to an ``https://`` one (no ``https_proxy``/
+    ``all_proxy``) must not carry the first hop's ``Proxy-authorization``
+    -- the second hop is unproxied entirely, so the proxy never even sees
+    a ``CONNECT`` for it, let alone the credential, and -- the actual
+    leak this guards against -- the target itself never receives a
+    ``Proxy-authorization`` header on a now-direct connection either
+    (issue #778).
     """
     _clear_proxy_env(monkeypatch)
     monkeypatch.setenv("http_proxy", f"http://alice:s3cr3t@127.0.0.1:{proxy.port}")
@@ -300,6 +303,7 @@ def test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied(
 
     assert result.raw["status"] == 200
     assert servers.arrived("/")
+    assert "proxy-authorization" not in servers.arrived("/").headers
     assert len(proxy.requests) == 1
     assert proxy.connect_targets == []
     assert proxy.connect_proxy_auth == []

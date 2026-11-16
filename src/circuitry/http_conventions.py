@@ -33,6 +33,8 @@ import base64
 import ipaddress
 import os
 import re
+import string
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Mapping
@@ -337,15 +339,80 @@ def apply_request_proxy(req: urllib.request.Request) -> None:
     req.set_proxy(proxy.hostport, "http")
 
 
+class _OpenWithProxyRuleRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """The redirect handling :func:`open_with_proxy_rule`'s own opener
+    needs instead of urllib's bare default: that default copies a
+    request's ``Proxy-authorization`` header onto the next hop
+    unchanged, resolves no proxy of its own for it (the opener's empty
+    ``ProxyHandler({})`` never reconsiders), and lets an ``ftp:``
+    redirect target through its own narrower prefilter -- so every
+    redirect hop would otherwise go direct, carrying the previous hop's
+    proxy credential to a target that was never meant to see it (issue
+    #778). :func:`check_url` runs only once the method and loop
+    decisions below have already committed to following this hop,
+    inside :meth:`http_error_302` itself, after its own loop-detection
+    block -- matching ``plugins/http.py``'s own ``_RedirectPolicy``.
+    """
+
+    def http_error_302(
+        self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any
+    ) -> Any:
+        if "location" in headers:
+            newurl = headers["location"]
+        elif "uri" in headers:
+            newurl = headers["uri"]
+        else:
+            return None
+
+        urlparts: Any = urllib.parse.urlparse(newurl)
+        if not urlparts.path and urlparts.netloc:
+            urlparts = list(urlparts)
+            urlparts[2] = "/"
+        newurl = urllib.parse.urlunparse(urlparts)
+
+        newurl = urllib.parse.quote(newurl, encoding="iso-8859-1", safe=string.punctuation)
+        newurl = urllib.parse.urljoin(req.full_url, newurl)
+
+        new = self.redirect_request(req, fp, code, msg, headers, newurl)
+        if new is None:
+            return None
+
+        if hasattr(req, "redirect_dict"):
+            visited = new.redirect_dict = req.redirect_dict  # type: ignore[attr-defined]
+            if (
+                visited.get(newurl, 0) >= self.max_repeats
+                or len(visited) >= self.max_redirections
+            ):
+                raise urllib.error.HTTPError(req.full_url, code, self.inf_msg + msg, headers, fp)
+        else:
+            visited = new.redirect_dict = req.redirect_dict = {}  # type: ignore[attr-defined]
+        visited[newurl] = visited.get(newurl, 0) + 1
+
+        check_url(newurl)
+        new.remove_header("Proxy-authorization")
+        apply_request_proxy(new)
+
+        fp.read()
+        fp.close()
+        return self.parent.open(new, timeout=req.timeout)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
+
+
 def open_with_proxy_rule(req: urllib.request.Request, *, timeout: float) -> Any:
-    """Issues *req* with :func:`apply_request_proxy` applied and urllib's
-    own default proxy-reading convention disabled -- the shared opener a
-    surface that doesn't need its own :class:`urllib.request.
-    HTTPRedirectHandler` (cyberdiner, the ollama ``check()`` probe) uses
-    instead of bare ``urlopen``, which would otherwise let urllib decide
-    the proxy under its own, different convention (issue #778 step 7,
-    H-review P1-3/P1-4).
+    """Issues *req* with :func:`apply_request_proxy` applied, urllib's own
+    default proxy-reading convention disabled, and
+    :class:`_OpenWithProxyRuleRedirectHandler` reapplying the proxy rule
+    on every redirect hop -- the shared opener a surface that doesn't
+    need its own :class:`urllib.request.HTTPRedirectHandler` (cyberdiner,
+    the ollama ``list_models`` probe) uses instead of bare ``urlopen``,
+    which would otherwise let urllib decide the proxy under its own,
+    different convention on the first hop, and carry a proxy credential
+    straight to a redirect target with no proxy of its own on every hop
+    after that (issue #778).
     """
     apply_request_proxy(req)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), _OpenWithProxyRuleRedirectHandler()
+    )
     return opener.open(req, timeout=timeout)

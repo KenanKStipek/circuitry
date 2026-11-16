@@ -137,8 +137,11 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
     allowed" text under every ``redirects`` mode, including ``follow``,
     rather than H4's shared refusal -- and under ``never``/``strip_auth``,
     which refuse without raising at all, it would wrongly raise instead
-    of refusing. H4 is checked only once :meth:`redirect_request`'s own
-    mode decision below says the target will actually be followed.
+    of refusing. The scheme/port check is run only once the mode, method
+    and loop decisions below have all already committed to following
+    the hop -- inside :meth:`http_error_302` itself, after its own
+    loop-detection block, not inside :meth:`redirect_request` (which
+    only the mode/method decisions live in).
     """
 
     def __init__(self, mode: str, auth_headers: frozenset[str]) -> None:
@@ -180,6 +183,29 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
             visited = new.redirect_dict = req.redirect_dict = {}  # type: ignore[attr-defined]
         visited[newurl] = visited.get(newurl, 0) + 1
 
+        # Checked only once the mode, method and loop decisions above
+        # have all already committed to following this hop -- matching
+        # electricity's own order, so a redirect that would exceed the
+        # loop limit raises that message on both engines even when its
+        # target's scheme would otherwise be refused outright.
+        http_conventions.check_url(newurl)
+
+        if self.mode == "strip_auth":
+            origin = _origin(req.full_url)
+            if origin is None or origin != _origin(newurl):
+                for header in list(new.headers):
+                    if header.lower() in self.auth_headers:
+                        del new.headers[header]
+        # A `Proxy-authorization` this hop's own proxy carried must never
+        # survive onto the next one -- `apply_request_proxy` below only
+        # ever *adds* the header for the hop it decides to proxy, so a
+        # stale one from the previous hop (e.g. a `no_proxy` match, or an
+        # http-to-https hop with only `http_proxy` set) would otherwise
+        # leak a proxy credential to an origin that was never meant to
+        # see it.
+        new.remove_header("Proxy-authorization")
+        http_conventions.apply_request_proxy(new)
+
         fp.read()
         fp.close()
 
@@ -202,26 +228,7 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
         ):
             self.refused = True
             return None
-        http_conventions.check_url(newurl)
-        new = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if new is None:
-            return None
-        if self.mode == "strip_auth":
-            origin = _origin(req.full_url)
-            if origin is None or origin != _origin(newurl):
-                for header in list(new.headers):
-                    if header.lower() in self.auth_headers:
-                        del new.headers[header]
-        # Issue #778 step 7, H-review P1-8: a `Proxy-authorization` this
-        # hop's own proxy carried must never survive onto the next one --
-        # `apply_request_proxy` below only ever *adds* the header for the
-        # hop it decides to proxy, so a stale one from the previous hop
-        # (e.g. a `no_proxy` match, or an http-to-https hop with only
-        # `http_proxy` set) would otherwise leak a proxy credential to an
-        # origin that was never meant to see it.
-        new.remove_header("Proxy-authorization")
-        http_conventions.apply_request_proxy(new)
-        return new
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
 #: Why a limited document may not name ``save_to``: it would write files
