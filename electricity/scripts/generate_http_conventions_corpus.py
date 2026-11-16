@@ -57,6 +57,11 @@ def _scheme_detection_cases() -> list[dict[str, Any]]:
         "FTP://example.com/x",
         "HTTP://EXAMPLE.COM/x",
         "http://user:pass@example.com/x",
+        "http://host\0/x",
+        "http://ho st/x",
+        "http://host\t/x",
+        "http://host\n/x",
+        "http://host/\x7fx",
     ]
     cases = []
     for url in urls:

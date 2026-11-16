@@ -10,7 +10,7 @@
     },
     {
       "url": "not a url",
-      "error": "unsupported URL scheme '' in 'not a url': only http or https is supported"
+      "error": "URL contains a control character or whitespace: 'not a url'"
     },
     {
       "url": ":::",
@@ -43,6 +43,26 @@
     {
       "url": "http://user:pass@example.com/x",
       "error": null
+    },
+    {
+      "url": "http://host\u0000/x",
+      "error": "URL contains a control character or whitespace: 'http://host\u0000/x'"
+    },
+    {
+      "url": "http://ho st/x",
+      "error": "URL contains a control character or whitespace: 'http://ho st/x'"
+    },
+    {
+      "url": "http://host\t/x",
+      "error": "URL contains a control character or whitespace: 'http://host\t/x'"
+    },
+    {
+      "url": "http://host\n/x",
+      "error": "URL contains a control character or whitespace: 'http://host\n/x'"
+    },
+    {
+      "url": "http://host/x",
+      "error": "URL contains a control character or whitespace: 'http://host/x'"
     }
   ],
   "strict_port_cases": [

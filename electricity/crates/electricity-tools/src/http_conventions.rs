@@ -200,10 +200,32 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
     ))
 }
 
+/// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
+/// (space is 0x20, already inside that first range) -- a URL or proxy
+/// value containing one is refused before any I/O, on both engines,
+/// with one shared message (issue #778 step 7, H-review P2-14).
+fn check_no_control_or_whitespace(original_url: &str) -> Result<(), String> {
+    if original_url
+        .chars()
+        .any(|c| matches!(c, '\u{0}'..='\u{20}' | '\u{7f}'))
+    {
+        return Err(format!(
+            "URL contains a control character or whitespace: '{}'",
+            redact_url(original_url)
+        ));
+    }
+    Ok(())
+}
+
 /// H4 (and, for a proxy URL, H1): *scheme* must be one of *allowed*
 /// (case-insensitively), or *original_url* is refused with Circuitry's own
-/// text, userinfo removed.
+/// text, userinfo removed. Checked first (issue #778 step 7, H-review
+/// P2-14, [`check_no_control_or_whitespace`]): every caller of this
+/// function reaches it before [`strict_port`], so this is the one place
+/// that check needs to live to cover every URL/proxy value either engine
+/// checks at all.
 pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Result<(), String> {
+    check_no_control_or_whitespace(original_url)?;
     if allowed
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(scheme))
@@ -303,6 +325,23 @@ mod tests {
     fn check_scheme_accepts_an_allowed_scheme() {
         check_scheme("http", "http://host/x", &["http", "https"]).unwrap();
         check_scheme("https", "https://host/x", &["http", "https"]).unwrap();
+    }
+
+    #[test]
+    fn check_scheme_rejects_a_control_character_or_whitespace() {
+        for url in [
+            "http://host\0/x",
+            "http://ho st/x",
+            "http://host\t/x",
+            "http://host\n/x",
+            "http://host/\u{7f}x",
+        ] {
+            let err = check_scheme("http", url, &["http", "https"]).unwrap_err();
+            assert!(
+                err.starts_with("URL contains a control character or whitespace: "),
+                "url: {url:?}, err: {err:?}"
+            );
+        }
     }
 
     #[test]

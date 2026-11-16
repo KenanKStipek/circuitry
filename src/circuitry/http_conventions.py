@@ -44,6 +44,12 @@ ALLOWED_SCHEMES = ("http", "https")
 
 _PORT_RE = re.compile(r"^[0-9]+$")
 
+#: Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
+#: (space is 0x20, already inside that first range) -- a URL or proxy
+#: value containing one is refused before any I/O, on both engines, with
+#: one shared message (issue #778 step 7, H-review P2-14).
+_CONTROL_OR_WHITESPACE_RE = re.compile(r"[\x00-\x20\x7f]")
+
 # Greedy up to the *last* `@` before whitespace or a `/` -- an authority's
 # userinfo can itself carry a literal `@` (in the password), so stopping
 # at the first one (as a non-greedy or `[^@]+` pattern would) can leave
@@ -121,10 +127,22 @@ def check_strict_port(url: str) -> None:
     raise ValueError(f"invalid port in URL '{redact_url(url)}': '{port_text}'")
 
 
+def _check_no_control_or_whitespace(url: str) -> None:
+    """Refuses *url* before any I/O when it contains any ASCII control
+    character or whitespace (H-review P2-14) -- one shared message on
+    both engines, never a surface-specific one.
+    """
+    if _CONTROL_OR_WHITESPACE_RE.search(url):
+        raise ValueError(
+            f"URL contains a control character or whitespace: '{redact_url(url)}'"
+        )
+
+
 def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -> None:
     """Refuses *url* before any I/O (H3, H4): its scheme must be one of
     *allowed_schemes*, and its port must pass :func:`check_strict_port`.
     """
+    _check_no_control_or_whitespace(url)
     scheme = urllib.parse.urlsplit(url).scheme.lower()
     if scheme not in allowed_schemes:
         allowed = " or ".join(allowed_schemes)
@@ -165,6 +183,7 @@ def check_proxy_url(value: str) -> str:
     follows :func:`check_strict_port`. The returned URL always names a
     port explicitly (:func:`_with_default_port`, H-review P1-6).
     """
+    _check_no_control_or_whitespace(value)
     normalized = _normalize_proxy_url(value)
     scheme = urllib.parse.urlsplit(normalized).scheme.lower()
     if scheme != "http":

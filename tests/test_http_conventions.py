@@ -66,6 +66,22 @@ def test_check_strict_port_message_strips_userinfo() -> None:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://host\0/x",
+        "http://ho st/x",
+        "http://host\t/x",
+        "http://host\n/x",
+        "http://host/\x7fx",
+    ],
+)
+def test_check_url_rejects_a_control_character_or_whitespace(url: str) -> None:
+    """Issue #778 step 7, H-review P2-14."""
+    with pytest.raises(ValueError, match="control character or whitespace"):
+        check_url(url)
+
+
 def test_check_url_accepts_http_and_https() -> None:
     check_url("http://host/x")
     check_url("https://host/x")

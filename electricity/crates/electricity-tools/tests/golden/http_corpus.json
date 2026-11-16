@@ -964,7 +964,7 @@
   "unknown_url_type_cases": [
     {
       "url": "not a url",
-      "error": "unsupported URL scheme '' in 'not a url': only http or https is supported"
+      "error": "URL contains a control character or whitespace: 'not a url'"
     },
     {
       "url": "http://example.com/x",
