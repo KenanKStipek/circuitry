@@ -63,6 +63,16 @@ def test_check_strict_port_message_strips_userinfo() -> None:
     assert "user" not in str(exc_info.value)
 
 
+def test_check_strict_port_rejects_junk_after_an_ipv6_literal_with_the_shared_text() -> None:
+    """``urllib.parse.urlsplit`` itself raises its own bare "Invalid
+    IPv6 URL" for this on CPython -- refused here with the same text
+    electricity gives, instead (issue #778).
+    """
+    with pytest.raises(ValueError) as exc_info:
+        check_strict_port("http://[::1]x/x")
+    assert str(exc_info.value) == "invalid port in URL 'http://[::1]x/x': 'x'"
+
+
 # ---------------------------------------------------------------------------
 # Scheme refusal
 # ---------------------------------------------------------------------------

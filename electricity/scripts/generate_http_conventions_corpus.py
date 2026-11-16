@@ -88,14 +88,7 @@ def _strict_port_cases() -> list[dict[str, Any]]:
         "http://host:/x",
         "http://[::1]/x",
         "http://[::1]:8080/x",
-        # `http://[::1]x/x` is deliberately not in this table: cof's own
-        # `urllib.parse.urlsplit` raises its own bare "Invalid IPv6
-        # URL" there (CPython's own `_check_bracketed_netloc`, not any
-        # text this module builds), which this corpus compares exactly
-        # -- `strict_port`'s own ported text ("invalid port in URL
-        # ...") is pinned directly in each engine's own unit tests
-        # instead, since the two engines' texts for this one input are
-        # not meant to match.
+        "http://[::1]x/x",
         "http://host:0/x",
         "http://host:65536/x",
         "http://host:+9/x",

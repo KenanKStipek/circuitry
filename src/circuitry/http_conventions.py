@@ -64,6 +64,62 @@ _USERINFO_RE = re.compile(r"://[^\s/]*@")
 #: all match.
 _CREDENTIAL_QUERY_KEY_RE = re.compile(r"(key|token|secret|auth|password|pwd)", re.IGNORECASE)
 
+#: `urllib.parse`'s own scheme-character set (RFC 3986's `ALPHA *(
+#: ALPHA / DIGIT / "+" / "-" / "." )`), used only by
+#: :func:`_urlsplit_lenient`'s own scheme detection.
+_SCHEME_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+-."
+)
+
+
+def _urlsplit_lenient(url: str) -> urllib.parse.SplitResult:
+    """*url* split the same way :func:`urllib.parse.urlsplit` does, but
+    without its own IPv6-bracket validation -- CPython's own
+    ``_check_bracketed_netloc`` raises ``ValueError`` ("Invalid IPv6
+    URL") for something like ``[::1]x``, where the strict-port check
+    means to refuse with the shared "invalid port" text instead (issue
+    #778). Used only as :func:`_urlsplit`'s fallback when the real
+    ``urlsplit`` itself raises; every other input still goes through
+    CPython's own, stricter parser directly.
+    """
+    scheme = ""
+    rest = url
+    colon = rest.find(":")
+    if (
+        colon > 0
+        and rest[:1].isascii()
+        and rest[:1].isalpha()
+        and all(c in _SCHEME_CHARS for c in rest[:colon])
+    ):
+        scheme, rest = rest[:colon].lower(), rest[colon + 1 :]
+    netloc = ""
+    if rest[:2] == "//":
+        delim = len(rest)
+        for sep in "/?#":
+            idx = rest.find(sep, 2)
+            if idx != -1:
+                delim = min(delim, idx)
+        netloc, rest = rest[2:delim], rest[delim:]
+    fragment = ""
+    if "#" in rest:
+        rest, _, fragment = rest.partition("#")
+    query = ""
+    if "?" in rest:
+        rest, _, query = rest.partition("?")
+    return urllib.parse.SplitResult(scheme, netloc, rest, query, fragment)
+
+
+def _urlsplit(url: str) -> urllib.parse.SplitResult:
+    """:func:`urllib.parse.urlsplit`, falling back to
+    :func:`_urlsplit_lenient` when CPython's own IPv6-bracket check
+    raises (issue #778) -- every refusal in this module names *url*
+    with the shared text, never CPython's own bare exception.
+    """
+    try:
+        return urllib.parse.urlsplit(url)
+    except ValueError:
+        return _urlsplit_lenient(url)
+
 
 def strip_url_userinfo(url: str) -> str:
     """*url* with any ``user[:pass]@`` userinfo removed, for an error
@@ -79,7 +135,7 @@ def mask_credential_query_params(url: str) -> str:
     """*url* with the value of any query-string parameter whose key looks
     like a credential masked, e.g. ``https://api.example.com/search?key=
     secret`` becomes ``...?key=%2A%2A%2A``."""
-    parsed = urllib.parse.urlsplit(url)
+    parsed = _urlsplit(url)
     if not parsed.query:
         return url
     pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
@@ -99,7 +155,7 @@ def _strip_request_url_userinfo(url: str) -> str:
     (none of which end ``urlsplit``'s own ``netloc`` the way ``/`` does)
     still comes out fully removed (issue #778).
     """
-    parsed = urllib.parse.urlsplit(url)
+    parsed = _urlsplit(url)
     if "@" not in parsed.netloc:
         return url
     netloc = parsed.netloc.rpartition("@")[2]
@@ -136,9 +192,14 @@ def redact_proxy_value(value: str) -> str:
 
 def _host_port_text(netloc: str) -> str | None:
     """The raw port text in *netloc* (userinfo already stripped by the
-    caller): ``None`` with no ``:`` separator at all; otherwise the
-    (possibly empty) text after it. A bracketed IPv6 host's own colons are
-    never split."""
+    caller): ``None`` with no ``:`` separator at all (or none after an
+    IPv6 literal's own ``]``); otherwise the (possibly empty) text
+    after it. A bracketed IPv6 host's own colons are never split -- and
+    anything after its ``]`` that doesn't even start with ``:``
+    (``[::1]x``) is not "no port" either: it's returned as-is, so the
+    strict-port digit check below refuses it with the shared text
+    rather than silently accepting it (issue #778).
+    """
     if netloc.startswith("["):
         end = netloc.find("]")
         rest = netloc[end + 1 :] if end != -1 else ""
@@ -146,9 +207,9 @@ def _host_port_text(netloc: str) -> str | None:
         rest = ":" + netloc.partition(":")[2]
     else:
         return None
-    if not rest.startswith(":"):
+    if not rest:
         return None
-    return rest[1:]
+    return rest.removeprefix(":")
 
 
 def _port_in_range(port_text: str) -> bool:
@@ -161,7 +222,7 @@ def check_strict_port(url: str) -> None:
     more ASCII digits, 1-65535. An empty port, or none at all, means the
     scheme's default and is never refused.
     """
-    netloc = urllib.parse.urlsplit(url).netloc
+    netloc = _urlsplit(url).netloc
     host_port = netloc.rpartition("@")[2]
     port_text = _host_port_text(host_port)
     if not port_text:
@@ -189,7 +250,7 @@ def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -
     *allowed_schemes*, and its port must pass :func:`check_strict_port`.
     """
     _check_no_control_or_whitespace(url, redact=redact_url)
-    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    scheme = _urlsplit(url).scheme.lower()
     if scheme not in allowed_schemes:
         allowed = " or ".join(allowed_schemes)
         raise ValueError(
@@ -265,7 +326,7 @@ def check_proxy_url(value: str) -> str:
     """
     normalized = _normalize_proxy_url(value)
     _check_no_control_or_whitespace(normalized, redact=redact_proxy_value)
-    scheme = urllib.parse.urlsplit(normalized).scheme.lower()
+    scheme = _urlsplit(normalized).scheme.lower()
     if scheme != "http":
         raise ValueError(
             f"unsupported proxy scheme '{scheme}' in '{redact_proxy_value(normalized)}': "

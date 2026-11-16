@@ -95,6 +95,10 @@
       "error": null
     },
     {
+      "url": "http://[::1]x/x",
+      "error": "invalid port in URL 'http://[::1]x/x': 'x'"
+    },
+    {
       "url": "http://host:0/x",
       "error": "invalid port in URL 'http://host:0/x': '0'"
     },
