@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any, ClassVar
 
+from .. import http_conventions
 from ..core.cancellation import run_tracked
 from ..curl_support import (
     curl_error_code,
@@ -358,11 +361,15 @@ class OllamaAdapter:
         :mod:`circuitry.adapters.models`): it exists to fill a picker, so
         an unreachable daemon is an empty list, not an error. stdlib
         urllib and a short timeout — nothing here is worth blocking a UI
-        or requiring ``curl`` for.
+        or requiring ``curl`` for. Checked and proxied the same way every
+        other request this adapter makes is (issue #778 step 7,
+        H-review P2-15) -- never urllib's own default opener.
         """
         url = self.base_url.rstrip("/") + "/api/tags"
         try:
-            with urllib.request.urlopen(url, timeout=timeout_seconds) as resp:
+            http_conventions.check_url(url)
+            req = urllib.request.Request(url)
+            with http_conventions.open_with_proxy_rule(req, timeout=timeout_seconds) as resp:
                 payload = json.loads(resp.read().decode("utf-8", errors="replace"))
         except Exception:
             return []
@@ -423,6 +430,21 @@ class OllamaAdapter:
             # Probe the Ollama daemon. Failure here is non-fatal at validate
             # time; doctor surfaces it as actionable.
             try:
+                url = self.base_url.rstrip("/") + "/api/tags"
+                # Issue #778 step 7, H-review P1-4: checked and routed
+                # through curl's own `--proxy`/`--noproxy` flags -- H1's
+                # decision, never curl's own environment reading -- the
+                # same as every other curl call this adapter makes
+                # (`run_curl`), rather than this one bare probe deciding
+                # on its own.
+                http_conventions.check_url(url)
+                parts = urllib.parse.urlsplit(url)
+                proxy_url = http_conventions.resolve_proxy(
+                    parts.scheme, parts.hostname or "", os.environ
+                )
+                proxy_args = (
+                    ["--proxy", proxy_url] if proxy_url is not None else ["--noproxy", "*"]
+                )
                 proc = run_tracked(
                     [
                         "curl",
@@ -430,8 +452,9 @@ class OllamaAdapter:
                         "--silent",
                         "--max-time",
                         "2",
+                        *proxy_args,
                         "--head",
-                        self.base_url.rstrip("/") + "/api/tags",
+                        url,
                     ],
                 )
                 if proc.returncode != 0:
