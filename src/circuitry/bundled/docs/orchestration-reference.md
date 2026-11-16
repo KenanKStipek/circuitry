@@ -1340,6 +1340,18 @@ to 65535; an empty port means the scheme's own default. Anything else
 (`+9`, `0_9`, ` 9`, `0`, `65536`, non-digits) is refused before any
 request, naming the URL with any userinfo removed.
 
+Any error, warning, event, state, hint or preflight `host:` text that
+names a request URL applies one more rule first: when the URL's path,
+query or fragment itself contains an `@` (``http://host/path@evil``,
+say — a password hidden behind the parsed authority's own boundary, or
+just an ordinary path like Mastodon's `/@user`), the text names only the
+part *after* the last `@` in the whole URL, never the parsed host —
+even though that part was never actually contacted. A bare userinfo
+`@` (`http://user:pass@host/`) is unaffected: only the credential is
+removed, and the real host is still named. Either way, a credential-
+like query parameter (a key containing `key`, `token`, `secret`,
+`auth`, `password` or `pwd`) is masked to `***` in what's left.
+
 The `http` tool refuses any scheme other than `http`/`https` — before any
 I/O and before touching any local file (so a `file://` URL is never read
 as one, and a `data:`/`ftp://` URL is never decoded/fetched either) — and
