@@ -20,7 +20,14 @@ fn params(url: &str) -> Value {
 #[tokio::test]
 async fn a_bad_proxy_is_refused_before_any_request_reaches_the_server() {
     // SAFETY: the only `#[test]` in this process -- see the module doc.
+    // `no_proxy`/`all_proxy` (either case) are cleared first, so a
+    // developer's own shell can't bypass the proxy this test sets or
+    // substitute a different one out from under it.
     unsafe {
+        std::env::remove_var("no_proxy");
+        std::env::remove_var("NO_PROXY");
+        std::env::remove_var("all_proxy");
+        std::env::remove_var("ALL_PROXY");
         std::env::set_var("http_proxy", "socks5://proxy:1080");
     }
     let token = CancellationToken::new();
