@@ -168,6 +168,27 @@ def test_query_params_are_appended(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_userinfo_with_no_port_never_reaches_urllib_unstripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778, N5: a URL with userinfo and no port
+    (``http://user:pass@host/``) builds a plain
+    ``urllib.request.Request`` whose ``host`` keeps the userinfo
+    verbatim, which then makes CPython's own ``http.client`` raise a
+    bare, credential-bearing ``InvalidURL("nonnumeric port: ...")`` --
+    the ``Request`` is now built from the already-stripped URL, so
+    urllib never sees the userinfo at all (never mind what it would
+    have done with it).
+    """
+    capture: dict[str, Any] = {}
+    _install_fake_urlopen(monkeypatch, status=200, body="ok", capture=capture)
+
+    result = HttpPlugin().execute(params={"url": "http://user:pass@example.test/page"})
+
+    assert result.ok is True
+    assert capture["url"] == "http://example.test/page"
+
+
 def test_explicit_parse_json_overrides_content_type(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

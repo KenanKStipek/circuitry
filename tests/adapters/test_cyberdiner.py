@@ -236,6 +236,28 @@ def test_generate_happy_path_submit_poll_complete(
         assert call["url"] == "https://expo.example.test/beta/jobs/job-1"
 
 
+def test_userinfo_with_no_port_never_reaches_urllib_unstripped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778, N5: an ``expo_url`` with userinfo and no port
+    (``https://user:pass@host/``) builds a plain
+    ``urllib.request.Request`` whose ``host`` keeps the userinfo
+    verbatim, which then makes CPython's own ``http.client`` raise a
+    bare, credential-bearing ``InvalidURL("nonnumeric port: ...")`` --
+    the ``Request`` is now built from the already-stripped URL, so
+    urllib never sees the userinfo at all.
+    """
+    _install_clock(monkeypatch)
+    scripted = _ScriptedUrlopen([_job(jobId="job-c", status="complete", result="ok")])
+    _patch_opener_open(monkeypatch, scripted)
+
+    adapter = _adapter(expo_url="https://user:pass@expo.example.test")
+    result = adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
+
+    assert result.text == "ok"
+    assert scripted.calls[0]["url"] == "https://expo.example.test/beta/jobs"
+
+
 def test_submit_request_body_is_exactly_prompt_and_tier_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

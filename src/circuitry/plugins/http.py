@@ -169,6 +169,12 @@ class _RedirectPolicy(urllib.request.HTTPRedirectHandler):
 
         newurl = urllib.parse.quote(newurl, encoding="iso-8859-1", safe=string.punctuation)
         newurl = urllib.parse.urljoin(req.full_url, newurl)
+        # Stripped before urllib's own `redirect_request` ever builds a
+        # `Request` from it (issue #778): otherwise a userinfo with no
+        # port (`http://user:pass@host/`) reaches `http.client`'s
+        # host/port split unstripped and raises its own credential-
+        # bearing `InvalidURL("nonnumeric port: ...")` instead.
+        newurl = http_conventions.strip_request_url_userinfo(newurl)
 
         new = self.redirect_request(req, fp, code, msg, headers, newurl)
         if new is None:
@@ -564,7 +570,14 @@ class HttpPlugin:
                 raw_body.encode("utf-8") if isinstance(raw_body, str) else bytes(raw_body)
             )
 
-        req = urllib.request.Request(url, data=body_bytes, method=method)
+        # Userinfo stripped before urllib ever sees it (issue #778):
+        # `Request.host` keeps it verbatim otherwise, so a userinfo
+        # with no port (`http://user:pass@host/`) reaches `http.client`
+        # unstripped and raises its own credential-bearing
+        # `InvalidURL("nonnumeric port: ...")`.
+        req = urllib.request.Request(
+            http_conventions.strip_request_url_userinfo(url), data=body_bytes, method=method
+        )
         for k, v in headers.items():
             req.add_header(str(k), str(v))
         http_conventions.apply_request_proxy(req)

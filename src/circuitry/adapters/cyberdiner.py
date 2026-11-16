@@ -226,7 +226,14 @@ class CyberdinerAdapter:
         http_conventions.check_url(url)
         display_url = http_conventions.redact_url(url)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
-        req = urllib.request.Request(url, data=body, method=method)
+        # Userinfo stripped before urllib ever sees it (issue #778):
+        # `Request.host` keeps it verbatim otherwise, so a userinfo
+        # with no port (`http://user:pass@host/`) reaches `http.client`
+        # unstripped and raises its own credential-bearing
+        # `InvalidURL("nonnumeric port: ...")`.
+        req = urllib.request.Request(
+            http_conventions.strip_request_url_userinfo(url), data=body, method=method
+        )
         req.add_header("Authorization", f"Bearer {self.token}")
         if body is not None:
             req.add_header("Content-Type", "application/json")
@@ -393,7 +400,9 @@ class CyberdinerAdapter:
             return CheckResult(ok=False, missing=missing)
 
         url = self.expo_url.rstrip("/") + "/beta/jobs"
-        req = urllib.request.Request(url, method="GET")
+        req = urllib.request.Request(
+            http_conventions.strip_request_url_userinfo(url), method="GET"
+        )
         req.add_header("Authorization", f"Bearer {self.token}")
         try:
             # Checked and proxied like every other request this
