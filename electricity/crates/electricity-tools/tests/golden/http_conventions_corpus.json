@@ -1,0 +1,606 @@
+{
+  "scheme_detection_cases": [
+    {
+      "url": "http://example.com/x",
+      "error": null
+    },
+    {
+      "url": "https://example.com/x",
+      "error": null
+    },
+    {
+      "url": "not a url",
+      "error": "unsupported URL scheme '' in 'not a url': only http or https is supported"
+    },
+    {
+      "url": ":::",
+      "error": "unsupported URL scheme '' in ':::': only http or https is supported"
+    },
+    {
+      "url": "javascript:alert(1)",
+      "error": "unsupported URL scheme 'javascript' in 'javascript:alert(1)': only http or https is supported"
+    },
+    {
+      "url": "//example.com/x",
+      "error": "unsupported URL scheme '' in '//example.com/x': only http or https is supported"
+    },
+    {
+      "url": "127.0.0.1:8080/x",
+      "error": "unsupported URL scheme '' in '127.0.0.1:8080/x': only http or https is supported"
+    },
+    {
+      "url": "ftp://example.com/x",
+      "error": "unsupported URL scheme 'ftp' in 'ftp://example.com/x': only http or https is supported"
+    },
+    {
+      "url": "FTP://example.com/x",
+      "error": "unsupported URL scheme 'ftp' in 'FTP://example.com/x': only http or https is supported"
+    },
+    {
+      "url": "HTTP://EXAMPLE.COM/x",
+      "error": null
+    },
+    {
+      "url": "http://user:pass@example.com/x",
+      "error": null
+    }
+  ],
+  "strict_port_cases": [
+    {
+      "url": "http://host/x",
+      "error": null
+    },
+    {
+      "url": "http://host:80/x",
+      "error": null
+    },
+    {
+      "url": "http://host:1/x",
+      "error": null
+    },
+    {
+      "url": "http://host:65535/x",
+      "error": null
+    },
+    {
+      "url": "http://host:/x",
+      "error": null
+    },
+    {
+      "url": "http://[::1]/x",
+      "error": null
+    },
+    {
+      "url": "http://[::1]:8080/x",
+      "error": null
+    },
+    {
+      "url": "http://host:0/x",
+      "error": "invalid port in URL 'http://host:0/x': '0'"
+    },
+    {
+      "url": "http://host:65536/x",
+      "error": "invalid port in URL 'http://host:65536/x': '65536'"
+    },
+    {
+      "url": "http://host:+9/x",
+      "error": "invalid port in URL 'http://host:+9/x': '+9'"
+    },
+    {
+      "url": "http://host:0_9/x",
+      "error": "invalid port in URL 'http://host:0_9/x': '0_9'"
+    },
+    {
+      "url": "http://host: 9/x",
+      "error": "invalid port in URL 'http://host: 9/x': ' 9'"
+    },
+    {
+      "url": "http://user:p@ss@host:99999/x",
+      "error": "invalid port in URL 'http://host:99999/x': '99999'"
+    },
+    {
+      "url": "http://host:80#x",
+      "error": null
+    }
+  ],
+  "redaction_cases": [
+    {
+      "url": "http://user:pass@host/x",
+      "redacted": "http://host/x"
+    },
+    {
+      "url": "http://host/x",
+      "redacted": "http://host/x"
+    },
+    {
+      "url": "socks5://alice:p@ss@proxy:1080/x",
+      "redacted": "socks5://proxy:1080/x"
+    },
+    {
+      "url": "https://user:s3cr3t@host/x?api_key=sk-test",
+      "redacted": "https://host/x?api_key=%2A%2A%2A"
+    },
+    {
+      "url": "https://host/x?api_key=sk-test&q=widgets",
+      "redacted": "https://host/x?api_key=%2A%2A%2A&q=widgets"
+    },
+    {
+      "url": "https://host/x",
+      "redacted": "https://host/x"
+    }
+  ],
+  "proxy_cases": [
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTP_PROXY",
+          "http://p:1"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTP_PROXY",
+          "http://upper:1"
+        ],
+        [
+          "http_proxy",
+          "http://lower:2"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://lower:2"
+      }
+    },
+    {
+      "env": [
+        [
+          "https_proxy",
+          "http://p:1"
+        ]
+      ],
+      "scheme": "https",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "HTTPS_PROXY",
+          "http://p:1"
+        ]
+      ],
+      "scheme": "https",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "all_proxy",
+          "http://p:1"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "ALL_PROXY",
+          "http://p:1"
+        ]
+      ],
+      "scheme": "https",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "proxy.corp:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://proxy.corp:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "proxy.corp"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://proxy.corp:80"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://user:pass@proxy.corp:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://user:pass@proxy.corp:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://user@proxy.corp:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://user@proxy.corp:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "*"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com"
+        ]
+      ],
+      "scheme": "http",
+      "host": "api.example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          ".example.com"
+        ]
+      ],
+      "scheme": "http",
+      "host": "api.example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com"
+        ]
+      ],
+      "scheme": "http",
+      "host": "notexample.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "0.0.1"
+        ]
+      ],
+      "scheme": "http",
+      "host": "127.0.0.1",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "0.0.1"
+        ]
+      ],
+      "scheme": "http",
+      "host": "0.0.1",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com:8080"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": 8080,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com:8080"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": 80,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com:8080"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "socks5://host:1080"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "error": "unsupported proxy scheme 'socks5' in 'socks5://host:1080': only http:// proxies are supported"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://host:99999"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "error": "invalid port in URL 'http://host:99999': '99999'"
+      }
+    },
+    {
+      "env": [],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    }
+  ],
+  "retry_after_cases": [
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "120",
+      "seconds": 120.0
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "0",
+      "seconds": 0.0
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "-30",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "+30",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "1.5",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "inf",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Infinity",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "nan",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "1_000",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "1 2",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "not a date or a number",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "1111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111111",
+      "seconds": "inf"
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Sun, 06 Nov 1994 08:49:37 GMT",
+      "seconds": 0.0
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Sun, 06 Nov 1994 08:49:37",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Sunday, 06-Nov-94 08:49:37 GMT",
+      "seconds": 0.0
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Sunday, 06-Nov-94 08:49:37 UTC",
+      "seconds": null
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Sun Nov  6 08:49:37 1994",
+      "seconds": 0.0
+    },
+    {
+      "now": "2026-01-01T00:00:00+00:00",
+      "value": "Mon, 01 Jan 2024 00:00:00 GMT",
+      "seconds": 0.0
+    }
+  ]
+}
