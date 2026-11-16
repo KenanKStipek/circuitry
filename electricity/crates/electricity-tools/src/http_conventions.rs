@@ -20,16 +20,20 @@ pub fn strip_url_userinfo(text: &str) -> String {
             break;
         };
         let after_scheme = &rest[scheme_idx + 3..];
-        let stop = after_scheme
-            .find(|c: char| c.is_whitespace() || c == '/' || c == '@')
+        // The authority ends at the first `/` or whitespace; a password
+        // inside it can itself contain `@`, so the userinfo is everything
+        // up to the *last* `@` in that span, not the first one (issue
+        // #778 step 7, H-review P1-9) -- stopping at the first would
+        // leave a fragment of the password (e.g. `ss@proxy` out of
+        // `alice:p@ss@proxy`) in the stripped text.
+        let boundary = after_scheme
+            .find(|c: char| c.is_whitespace() || c == '/')
             .unwrap_or(after_scheme.len());
-        let candidate = &after_scheme[..stop];
-        if after_scheme.as_bytes().get(stop) == Some(&b'@') && !candidate.is_empty() {
-            out.push_str(&rest[..scheme_idx + 3]);
-            rest = &after_scheme[stop + 1..];
-        } else {
-            out.push_str(&rest[..scheme_idx + 3]);
-            rest = after_scheme;
+        let authority = &after_scheme[..boundary];
+        out.push_str(&rest[..scheme_idx + 3]);
+        match authority.rfind('@') {
+            Some(last_at) => rest = &after_scheme[last_at + 1..],
+            None => rest = after_scheme,
         }
     }
     out
@@ -154,7 +158,15 @@ fn host_port_text(host_port: &str) -> Option<&str> {
         let colon = host_port.find(':')?;
         &host_port[colon..]
     };
-    rest.strip_prefix(':')
+    if rest.is_empty() {
+        return None;
+    }
+    // After an IPv6 literal's `]` comes `:` and a port, or nothing at all
+    // (H3) -- anything else (`[::1]x`) is *not* "no port", it is a port
+    // text that will never pass the digit check below, so it still ends
+    // up refused, just with the usual "invalid port" text rather than a
+    // distinct message of its own (issue #778 step 7, H-review P2-14).
+    Some(rest.strip_prefix(':').unwrap_or(rest))
 }
 
 /// H3: the strict port in *netloc* (an authority string, userinfo
@@ -224,6 +236,14 @@ mod tests {
     }
 
     #[test]
+    fn strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() {
+        let redacted = strip_url_userinfo("socks5://alice:p@ss@proxy:1080/x");
+        assert_eq!(redacted, "socks5://proxy:1080/x");
+        assert!(!redacted.contains("alice"));
+        assert!(!redacted.contains("p@ss"));
+    }
+
+    #[test]
     fn strict_port_accepts_an_absent_or_empty_port() {
         assert_eq!(strict_port("host", "http://host/x").unwrap(), None);
         assert_eq!(strict_port("host:", "http://host:/x").unwrap(), None);
@@ -245,6 +265,13 @@ mod tests {
             Some(8080)
         );
         assert_eq!(strict_port("[::1]", "http://[::1]/x").unwrap(), None);
+    }
+
+    #[test]
+    fn strict_port_rejects_text_after_an_ipv6_literal_thats_not_a_port_separator() {
+        let url = "http://[::1]x/foo";
+        let err = strict_port("[::1]x", url).unwrap_err();
+        assert_eq!(err, format!("invalid port in URL '{url}': 'x'"));
     }
 
     #[test]

@@ -1,10 +1,14 @@
 //! `circuitry.http_conventions`'s proxy rule, ported (issue #778 step 7,
-//! H1) -- one convention, shared by the `http` tool ([`resolve_proxy`]
-//! below) and every adapter (`electricity-adapters::transport`, which
-//! calls this same function through [`crate::http_client::resolve_proxy`]
+//! H1) -- one convention, shared by the `http` tool
+//! ([`resolve_proxy_checked`] below) and every adapter
+//! (`electricity-adapters::transport`, which calls this same function
 //! rather than keeping its own, separate copy). Circuitry decides the
 //! proxy itself: neither urllib's nor curl's own environment-reading
-//! convention applies on either engine any more.
+//! convention applies on either engine any more. Every caller gets the
+//! checked `Result` form -- a proxy value that can't be used (an
+//! unsupported scheme, an invalid port) is refused outright, never
+//! silently treated as "no proxy" and sent direct (issue #778 step 7,
+//! H-review P0-1).
 //!
 //! Pure functions over an explicit environment snapshot, never
 //! `std::env` directly, so a test (and the generator's own differential
@@ -98,21 +102,6 @@ pub fn resolve_proxy_checked(
         .unwrap_or(after_scheme.len());
     crate::http_conventions::strict_port(&after_scheme[..netloc_len], &normalized)?;
     Ok(Some(normalized))
-}
-
-/// [`resolve_proxy_checked`], reading the real process environment --
-/// used by [`crate::http::HttpPlugin`]/`electricity-adapters::transport`
-/// alike. A proxy value this crate can't use (an unsupported scheme or
-/// an invalid port) is reported as `None` rather than aborting the
-/// request outright: [`resolve_proxy`]'s own callers have no error path
-/// of their own today, and a misconfigured proxy is rare enough that a
-/// direct connection (which then either succeeds or fails on its own
-/// terms) is preferable to a hard refusal from this narrow seam alone --
-/// `electricity-adapters::transport` calls [`resolve_proxy_checked`]
-/// directly instead, where failing the request outright is correct.
-pub fn resolve_proxy(scheme: &str, host: &str) -> Option<String> {
-    let env: Vec<(String, String)> = std::env::vars().collect();
-    resolve_proxy_checked(scheme, host, &env).unwrap_or(None)
 }
 
 #[cfg(test)]

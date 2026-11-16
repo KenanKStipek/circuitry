@@ -41,9 +41,7 @@
 //!   per-call `CancellationToken` doesn't reproduce.
 
 use crate::config::{cfg_int_or, cfg_value_or, rstrip_base_url, value_is_truthy};
-use crate::transport::{
-    ParsedUrl, TransportFailure, default_port, parse_url, redact_url_for_error,
-};
+use crate::transport::{ParsedUrl, TransportFailure, default_port, parse_url};
 use electricity_json::WriteMode;
 use electricity_tools::http::http_url::urljoin;
 use electricity_tools::http_client::{
@@ -290,27 +288,25 @@ fn netloc_for_proxy(parsed: &ParsedUrl) -> String {
 /// curl-flavored rules (`HTTP_PROXY` ignored for `http://`, `ALL_PROXY`
 /// honoured, ...), which belong to every other adapter in this crate
 /// alone.
-fn connect_target_for(parsed: &ParsedUrl, port: u16) -> ConnectTarget {
+fn connect_target_for(parsed: &ParsedUrl, port: u16) -> Result<ConnectTarget, TransportFailure> {
     let scheme = if parsed.scheme == "https" {
         Scheme::Https
     } else {
         Scheme::Http
     };
-    // `resolve_proxy_target` now refuses a proxy value with an invalid
-    // scheme/port outright (H1/H3) -- this adapter keeps its own prior,
-    // more permissive contract (unlike the `http` tool, cyberdiner.py
-    // never adopted `http_conventions`'s own proxy rule): a proxy value
-    // it can't use falls through to a direct connection, never a hard
-    // refusal, so `unwrap_or(None)` is deliberate, not a shortcut.
+    // Issue #778 step 7, H-review P0-1/P1-3: a proxy value this adapter
+    // can't use (an unsupported scheme, an invalid port) is refused
+    // outright, the same `Validation` text every other surface gives,
+    // never silently treated as "no proxy" and sent direct.
     let proxy =
         electricity_tools::http::resolve_proxy_target(&parsed.scheme, &netloc_for_proxy(parsed))
-            .unwrap_or(None);
-    ConnectTarget {
+            .map_err(TransportFailure::Validation)?;
+    Ok(ConnectTarget {
         scheme,
         host: parsed.host.clone(),
         port,
         proxy,
-    }
+    })
 }
 
 /// A [`SendError`] this crate's own `http`
@@ -371,15 +367,13 @@ fn send_error(url: &str, err: SendError) -> AdapterError {
     }
 }
 
-fn transport_failure_error(url: &str, failure: TransportFailure) -> AdapterError {
+fn transport_failure_error(failure: TransportFailure) -> AdapterError {
+    // Issue #778 step 7, H-review P1-3: the shared `Validation`/
+    // `InvalidUtf8` text, verbatim and already redacted by its own
+    // producer (`http_conventions::check_scheme`/`strict_port`) --
+    // never a generic "unsupported URL" wrapper that discards it.
     let message = match failure {
-        TransportFailure::Validation(_) => {
-            format!(
-                "cyberdiner: request to {} failed: unsupported URL",
-                redact_url_for_error(url)
-            )
-        }
-        TransportFailure::InvalidUtf8(message) => message,
+        TransportFailure::Validation(message) | TransportFailure::InvalidUtf8(message) => message,
     };
     AdapterError {
         message,
@@ -514,10 +508,9 @@ async fn request_json(
     let mut visited: HashMap<String, u32> = HashMap::new();
 
     loop {
-        let parsed =
-            parse_url(&current_url).map_err(|e| transport_failure_error(&current_url, e))?;
+        let parsed = parse_url(&current_url).map_err(transport_failure_error)?;
         let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
-        let connect_target = connect_target_for(&parsed, port);
+        let connect_target = connect_target_for(&parsed, port).map_err(transport_failure_error)?;
         let host_header = urllib_host_header(&parsed);
 
         let mut extra_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
@@ -922,7 +915,13 @@ async fn probe(url: &str, token: &str, timeout: Duration) -> bool {
         return false;
     };
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
-    let connect_target = connect_target_for(&parsed, port);
+    // `adapters/cyberdiner.py::check`'s own bare `except Exception:` --
+    // a proxy value this probe can't use counts as unreachable too, the
+    // same as any other connection-level failure, never a crash out of
+    // `check()`.
+    let Ok(connect_target) = connect_target_for(&parsed, port) else {
+        return false;
+    };
     let Ok(client) = http_client::build_client() else {
         return false;
     };

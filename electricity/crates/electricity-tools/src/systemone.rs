@@ -1196,13 +1196,16 @@ impl SystemOnePlugin {
             Scheme::Http
         };
         let loopback = is_loopback_host(&server.host.to_lowercase());
-        // Same prior, more permissive contract as `cyberdiner.rs`'s own
-        // call site: a proxy value this crate can't use falls through to
-        // a direct connection here too, never a hard refusal.
+        // Issue #778 step 7, H-review P0-1/P1-5: a loopback host is
+        // never proxied at all (systemone's own rule, since it talks to
+        // a local service); otherwise H1 applies, and a proxy value this
+        // crate can't use (an unsupported scheme, an invalid port) is
+        // refused outright, never silently treated as "no proxy".
         let proxy = if loopback {
             None
         } else {
-            crate::http::resolve_proxy_target(&server.scheme, &server.netloc).unwrap_or(None)
+            crate::http::resolve_proxy_target(&server.scheme, &server.netloc)
+                .map_err(value_error)?
         };
 
         let mut headers: Vec<(String, String)> = vec![

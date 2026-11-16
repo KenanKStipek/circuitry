@@ -2023,19 +2023,18 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
 /// environment lookup/`no_proxy` bypass -- by hostname alone, port
 /// stripped, matching [`split_netloc`]'s own target-host comparison --
 /// then [`parse_proxy`] for the proxy value itself, unquoting both the
-/// hostport and (when both a user and a password are present) the
-/// `Basic` credentials. `Err` (H1/H3) when the proxy value itself names
-/// an unsupported scheme or a strictly invalid port -- refused before
-/// any I/O, the same as the request URL's own port
-/// ([`request_host_port`]), rather than silently falling through to a
-/// direct connection ([`http_client::resolve_proxy`]'s own, more
-/// permissive contract, kept for a caller -- `electricity-adapters::
-/// cyberdiner`, `systemone`'s own webhook probe -- that still wants
-/// "couldn't be used" treated as "no proxy" rather than a hard
-/// refusal). `pub` (not `pub(crate)`): `electricity-adapters::
-/// cyberdiner` reuses this directly for its own proxy resolution
-/// (issue #515), rather than re-deriving the proxy-URL/auth parsing a
-/// second time.
+/// hostport and, whenever a user is present (an empty password
+/// included), the `Basic` credentials. `Err` (H1/H3) when the proxy
+/// value itself names an unsupported scheme or a strictly invalid port
+/// -- refused before any I/O, the same as the request URL's own port
+/// ([`request_host_port`]), *never* silently falling through to a
+/// direct connection (issue #778 step 7, H-review P0-1): every caller
+/// of this function, on every surface (the `http` tool itself,
+/// `electricity-adapters::cyberdiner`, `systemone`'s own webhook
+/// probe), propagates this `Err` outright. `pub` (not `pub(crate)`):
+/// `electricity-adapters::cyberdiner` reuses this directly for its own
+/// proxy resolution (issue #515), rather than re-deriving the
+/// proxy-URL/auth parsing a second time.
 pub fn resolve_proxy_target(
     scheme: &str,
     netloc: &str,
@@ -2046,7 +2045,7 @@ pub fn resolve_proxy_target(
 
 /// [`resolve_proxy_target`], over an explicit environment snapshot --
 /// the pure, test-driven form (same split as [`http_client::
-/// resolve_proxy_checked`]/[`http_client::resolve_proxy`]'s own).
+/// resolve_proxy_checked`]'s own).
 fn resolve_proxy_target_from(
     scheme: &str,
     netloc: &str,
@@ -2061,15 +2060,15 @@ fn resolve_proxy_target_from(
     let hostport = http_url::unquote(&parsed.hostport);
     let (proxy_host, proxy_port) = split_netloc(&hostport);
     let proxy_port = proxy_port.unwrap_or_else(|| default_port(scheme));
-    let basic_auth = match (&parsed.user, &parsed.password) {
-        (Some(user), Some(password)) if !user.is_empty() && !password.is_empty() => {
-            let user = http_url::unquote(user);
-            let password = http_url::unquote(password);
-            use base64::Engine;
-            Some(base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}")))
-        }
-        _ => None,
-    };
+    // H-review P1-7: `Basic` auth applies whenever a user is present,
+    // even with no password at all (`user@proxy`) -- not only when both
+    // pieces are non-empty.
+    let basic_auth = parsed.user.as_ref().map(|user| {
+        let user = http_url::unquote(user);
+        let password = http_url::unquote(parsed.password.as_deref().unwrap_or(""));
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(format!("{user}:{password}"))
+    });
     Ok(Some(http_client::ProxyTarget {
         host: proxy_host,
         port: proxy_port,
@@ -2546,7 +2545,7 @@ mod proxy_parse_tests {
     }
 
     #[test]
-    fn a_bare_user_with_no_password_builds_no_basic_auth() {
+    fn a_bare_user_with_no_password_splits_to_no_password() {
         let parsed = parse_proxy("user@proxy.corp:3128");
         assert_eq!(parsed.user.as_deref(), Some("user"));
         assert!(parsed.password.is_none());
@@ -2686,6 +2685,22 @@ mod port_tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn resolve_proxy_target_sends_basic_auth_for_a_bare_user_with_no_password() {
+        // Issue #778 step 7, H-review P1-7: `Basic` auth applies whenever
+        // a user is present, even with an empty password.
+        let env = vec![(
+            "http_proxy".to_string(),
+            "http://user@proxy.corp:3128".to_string(),
+        )];
+        let target = resolve_proxy_target_from("http", "example.invalid", &env)
+            .unwrap()
+            .unwrap();
+        use base64::Engine;
+        let expected = base64::engine::general_purpose::STANDARD.encode("user:");
+        assert_eq!(target.basic_auth, Some(expected));
     }
 }
 

@@ -1135,18 +1135,6 @@ pub fn redirect_policy(method: &str, status: u16) -> Option<RedirectRequest> {
     })
 }
 
-/// H1's rule (issue #778 step 7) -- `None` when there's no proxy
-/// configured for *scheme*, `no_proxy` bypasses *host*, or the proxy
-/// value this crate read couldn't be used (an unsupported scheme or an
-/// invalid port; [`resolve_proxy_checked`] is the checked form adapters
-/// use instead). Reads the real process environment (`std::env::
-/// vars()`); every test that calls this (directly, or through
-/// [`crate::http::HttpPlugin`]) sets or clears every `*_proxy`/
-/// `*_PROXY`/`no_proxy`/`NO_PROXY` variable explicitly first.
-pub fn resolve_proxy(scheme: &str, host: &str) -> Option<String> {
-    proxy::resolve_proxy(scheme, host)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
