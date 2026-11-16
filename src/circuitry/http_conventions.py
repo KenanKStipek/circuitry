@@ -52,12 +52,6 @@ _PORT_RE = re.compile(r"^[0-9]+$")
 #: one shared message (issue #778).
 _CONTROL_OR_WHITESPACE_RE = re.compile(r"[\x00-\x20\x7f]")
 
-# Greedy up to the *last* `@` before whitespace or a `/` -- an authority's
-# userinfo can itself carry a literal `@` (in the password), so stopping
-# at the first one (as a non-greedy or `[^@]+` pattern would) can leave
-# part of a credential in the stripped text (issue #778).
-_USERINFO_RE = re.compile(r"://[^\s/]*@")
-
 #: Query-string keys that commonly carry a credential (search APIs, some
 #: webhook/trigger URLs). Matched case-insensitively against the whole
 #: key, so ``api_key``, ``apiKey``, ``access_token`` and ``X-Auth-Token``
@@ -121,16 +115,6 @@ def _urlsplit(url: str) -> urllib.parse.SplitResult:
         return _urlsplit_lenient(url)
 
 
-def strip_url_userinfo(url: str) -> str:
-    """*url* with any ``user[:pass]@`` userinfo removed, for an error
-    message — never the raw value, which can carry a credential. Strips up
-    to the *last* ``@`` inside the authority (before any ``/``, ``?``,
-    ``#`` or whitespace), matching how a host is actually parsed, so a
-    password containing ``@`` can never leave a fragment of itself behind.
-    """
-    return _USERINFO_RE.sub("://", url)
-
-
 def mask_credential_query_params(url: str) -> str:
     """*url* with the value of any query-string parameter whose key looks
     like a credential masked, e.g. ``https://api.example.com/search?key=
@@ -147,13 +131,12 @@ def mask_credential_query_params(url: str) -> str:
 def strip_request_url_userinfo(url: str) -> str:
     """*url*'s userinfo removed from its authority -- the LAST ``@``
     inside :func:`urllib.parse.urlsplit`'s own ``netloc``, not a ``/``,
-    ``?``, ``#`` or whitespace boundary the way a free-text scrub
-    (:func:`strip_url_userinfo`) needs to stay inside: this always
-    receives one whole URL, never prose with one embedded somewhere, so
-    building the redaction from the parsed authority directly -- instead
-    of a regex heuristic -- means a password containing any of those
-    (none of which end ``urlsplit``'s own ``netloc`` the way ``/`` does)
-    still comes out fully removed (issue #778).
+    ``?``, ``#`` or whitespace boundary: this always receives one whole
+    URL, never prose with one embedded somewhere, so building the
+    redaction from the parsed authority directly -- instead of a regex
+    heuristic -- means a password containing any of those (none of
+    which end ``urlsplit``'s own ``netloc`` the way ``/`` does) still
+    comes out fully removed (issue #778).
 
     Also used, directly (not only through :func:`redact_url`), by every
     surface that builds a plain :class:`urllib.request.Request` (the
@@ -216,20 +199,29 @@ def _at_follows_netloc(url: str, netloc: str) -> bool:
 
 
 def redact_request_url(url: str) -> str:
-    """*url*, redacted for any refusal or ``host:`` text that names a
-    request URL: :func:`redact_proxy_value` when :func:`_at_follows_netloc`
+    """*url*, redacted for any refusal, warning, event, state, hint or
+    ``host:`` text that names a request URL -- the one function every
+    such caller uses, never :func:`redact_url` or :func:`redact_proxy_value`
+    directly: :func:`redact_proxy_value` when :func:`_at_follows_netloc`
     is true (a password hidden behind a ``/``, ``?`` or ``#`` can still
     smuggle a second, real host past the parsed authority, so the whole
     value -- never just the authority's own userinfo -- is cut away at
-    the LAST ``@``); :func:`redact_url` otherwise (issue #778). Shared
-    by every surface that names a request URL after parsing it:
-    :func:`check_url`, :func:`curl_support.redact_host_url`, and every
-    adapter error that names a request URL after I/O.
+    the LAST ``@``); :func:`strip_request_url_userinfo` otherwise. Either
+    way, the cut runs *before* any credential-like query parameter is
+    masked: masking first re-encodes a query string's own ``@`` as
+    ``%40``, so a cut that ran afterward would no longer find it (issue
+    #778). Shared by every surface that names a request URL after
+    parsing it: :func:`check_url`, :func:`check_strict_port`,
+    :func:`curl_support.redact_host_url`, :func:`curl_support.
+    curl_failure_message`, and every adapter error that names a request
+    URL after I/O.
     """
     netloc = _urlsplit(url).netloc
     if _at_follows_netloc(url, netloc):
-        return redact_proxy_value(url)
-    return redact_url(url)
+        cut = redact_proxy_value(url)
+    else:
+        cut = strip_request_url_userinfo(url)
+    return mask_credential_query_params(cut)
 
 
 def _host_port_text(netloc: str) -> str | None:
@@ -272,10 +264,11 @@ def check_strict_port(url: str) -> None:
     userinfo is itself an email address, ``me@corp.com``, and ``pa`` is
     still a port attempt, not half of a password) -- the "port" text is
     really a credential fragment: the refusal never echoes it, and names
-    *url* with everything up to the LAST ``@`` in the whole value cut
-    away instead of the usual userinfo-stripped form, whether or not the
-    authority's own userinfo already has an ``@`` of its own (issue
-    #778).
+    *url* through :func:`redact_request_url` -- everything up to the
+    LAST ``@`` in the whole value cut away instead of the usual
+    userinfo-stripped form, whether or not the authority's own userinfo
+    already has an ``@`` of its own -- rather than the ordinary
+    userinfo-stripped-and-port-named text (issue #778).
     """
     netloc = _urlsplit(url).netloc
     host_port = netloc.rpartition("@")[2]
@@ -284,9 +277,10 @@ def check_strict_port(url: str) -> None:
         return
     if _port_in_range(port_text):
         return
+    redacted = redact_request_url(url)
     if _at_follows_netloc(url, netloc):
-        raise ValueError(f"invalid port in URL '{redact_proxy_value(url)}'")
-    raise ValueError(f"invalid port in URL '{redact_url(url)}': '{port_text}'")
+        raise ValueError(f"invalid port in URL '{redacted}'")
+    raise ValueError(f"invalid port in URL '{redacted}': '{port_text}'")
 
 
 def _check_no_control_or_whitespace(value: str, *, redact: Callable[[str], str]) -> None:

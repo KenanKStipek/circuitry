@@ -180,7 +180,7 @@ class OllamaAdapter:
         hint = ""
         if proc.returncode == 7:
             hint = (
-                f"Ollama at {self.base_url} is not reachable. "
+                f"Ollama at {redact_host_url(self.base_url)} is not reachable. "
                 "Start it (`ollama serve`), or set "
                 f"`runtime.adapters.{self.name}.base_url` in your config. "
                 "Run `cof doctor` to verify connectivity."

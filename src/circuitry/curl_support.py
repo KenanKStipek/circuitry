@@ -36,16 +36,6 @@ from typing import Any
 from . import http_conventions
 from .core.cancellation import run_tracked
 
-# Strips userinfo (`user[:pass]@`) out of any `scheme://user:pass@host`
-# substring in the final message, not just a `url=` field on its own: a
-# configured base_url can also show up unmasked in adapter-built hint text
-# (e.g. ollama's "not reachable" hint), and `re.sub` catches it wherever it
-# lands. `cli/redaction.py`'s `_redact_url` can't be reused here because it
-# requires the *entire* string to be a URL, which a prose error message never is.
-_strip_url_userinfo = http_conventions.strip_url_userinfo
-_mask_credential_query_params = http_conventions.mask_credential_query_params
-
-
 def redact_host_url(url: str) -> str:
     """Mask a URL for a preflight ``host:{url}`` requirement text.
 
@@ -149,10 +139,13 @@ def curl_failure_message(
     credential values sent on this request (API key, bearer token, ...);
     they are masked out of ``stdout``/``stderr`` before the body is parsed
     and truncated, so a secret split by truncation can't survive as a
-    partial match. Any URL embedded in ``url`` or ``hint`` that carries
-    userinfo (``user:pass@host``) or a credential-like query parameter
-    (``?key=...``, ``?api_token=...``) is masked too, even though callers
-    should not be passing one on purpose.
+    partial match. ``url`` is named through :func:`http_conventions.
+    redact_request_url` -- the one function that redacts a request URL
+    for error text on either engine -- so a password hidden anywhere in
+    it, including behind a ``/``, ``?`` or ``#``, never reaches the
+    message. ``hint`` is never redacted here: a caller that builds one
+    naming a URL (e.g. ollama's "not reachable" hint) must redact it
+    itself before passing it in, through the same function.
     """
     secrets = [s for s in secrets if s]
     stderr = _strip_retry_after_marker(stderr)
@@ -162,12 +155,11 @@ def curl_failure_message(
     model_part = f" model={model!r}" if model else ""
     message = (
         f"{source} request failed (curl exit {returncode}){model_part} "
-        f"url={_mask_credential_query_params(url)}: {detail}"
+        f"url={http_conventions.redact_request_url(url)}: {detail}"
     )
     if hint:
         message += f" {hint}"
-    message = _mask_secrets(message, secrets)
-    return _strip_url_userinfo(message)
+    return _mask_secrets(message, secrets)
 
 
 # Curl's config-file format is line-oriented: a bare CR or LF inside a

@@ -767,7 +767,7 @@ class SystemOnePlugin:
         questions: dict[str, Any],
         timeout_seconds: int,
     ) -> ToolResult:
-        display_server = http_conventions.redact_url(server)
+        display_server = http_conventions.redact_request_url(server)
         request = urllib.request.Request(server + ENDPOINT_PATH, data=payload, method="POST")
         request.add_header("Content-Type", "application/json")
         request.add_header("Accept", "application/json")
