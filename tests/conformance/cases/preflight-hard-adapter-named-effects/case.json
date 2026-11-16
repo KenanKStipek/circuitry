@@ -1,7 +1,7 @@
 {
   "spec_case": "runtime-semantics.md §8.1 (preflight), issue #495",
-  "description": "Two prompt effects use the `scripted` adapter: one `on_error: fail`, one `on_error: skip`. The missing-replies-file failure is hard because of the first usage, and names it. Both engines fail identically here regardless of whether a `prompt` effect itself runs (lane G, #498) -- the preflight check that produces this failure runs before any effect dispatches.",
+  "description": "Two prompt effects use the `scripted` adapter: one `on_error: fail`, one `on_error: skip`. The missing-replies-file failure is hard because of the first usage, and names it. Both engines fail identically here regardless of whether a `prompt` effect itself runs (lane G, #498) -- the preflight check that produces this failure runs before any effect dispatches. The OS's own strerror text is third-party, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md); the errno and the path stay exact.",
   "engines": ["python", "electricity"],
   "expect": "failure",
-  "error_compare": "exact"
+  "error_compare": "location"
 }

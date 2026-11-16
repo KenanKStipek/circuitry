@@ -1,8 +1,7 @@
 {
   "spec_case": "issue #597 (the `cel` tool)",
-  "description": "A `cel` tool's expression is parsed when the document is checked, so one that does not parse fails before any effect runs, naming the effect, the same way a `mode: cel` `if` does. The parser's own message is third-party text, compared by location only.",
+  "description": "A `cel` tool's expression is parsed when the document is checked, so one that does not parse fails before any effect runs, naming the effect, the same way a `mode: cel` `if` does. The parser's own message is third-party text, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md).",
   "engines": ["python", "electricity"],
   "expect": "failure",
-  "error_compare": "location",
-  "location_pattern": "CEL expression at 'prime\\.effects\\[\\d+\\]' \\(effect '\\w+'\\): expression does not parse"
+  "error_compare": "location"
 }

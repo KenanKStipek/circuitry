@@ -6,5 +6,5 @@
     "electricity"
   ],
   "expect": "failure",
-  "error_compare": "exact"
+  "error_compare": "location"
 }

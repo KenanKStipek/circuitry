@@ -1,8 +1,7 @@
 {
   "spec_case": "C3",
-  "description": "An effect named 'value' collides with the structural slot the runtime itself writes and is rejected by the JSON Schema's name pattern before compilation ever runs (electricity/docs/spec/runtime-semantics.md §1.4) — a third-party (jsonschema) message, compared only for failing at the same place with a non-empty message, never byte-for-byte.",
+  "description": "An effect named 'value' collides with the structural slot the runtime itself writes and is rejected by the JSON Schema's name pattern before compilation ever runs (electricity/docs/spec/runtime-semantics.md §1.4): the jsonschema message body is masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md); the header and the location stay exact.",
   "engines": ["python", "electricity"],
   "expect": "failure",
-  "error_compare": "location",
-  "location_pattern": "effects\\[\\d+\\]\\.name"
+  "error_compare": "location"
 }

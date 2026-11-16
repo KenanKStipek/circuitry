@@ -35,7 +35,7 @@ from .mock_http import MockHttpServer, RecordedRequest
 from .normalize import (
     assert_states_equal,
     canonicalize_http_requests,
-    normalize_for_comparison,
+    normalize_recorded_http_requests,
 )
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
@@ -951,10 +951,12 @@ def assert_recorded_http_requests(
     sort_requests = bool(metadata.get("sort_http_requests"))
     assert_states_equal(
         canonicalize_http_requests(
-            normalize_for_comparison(actual_requests, replacements), sort_requests=sort_requests
+            normalize_recorded_http_requests(actual_requests, replacements),
+            sort_requests=sort_requests,
         ),
         canonicalize_http_requests(
-            normalize_for_comparison(expected_requests, replacements), sort_requests=sort_requests
+            normalize_recorded_http_requests(expected_requests, replacements),
+            sort_requests=sort_requests,
         ),
     )
 

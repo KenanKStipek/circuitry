@@ -1,7 +1,8 @@
 {
   "spec_case": "issue #520 (electricity: claude_code/pi adapters), case 7",
-  "description": "`config.json`'s `default_adapter: claude_code` with `binary: circuitry-test-missing-claude` (deliberately missing, never a real CLI): preflight never walks the config's own default adapter, so the run only discovers the missing binary once it actually dispatches, with the A3 start-failure text.",
+  "description": "`config.json`'s `default_adapter: claude_code` with `binary: circuitry-test-missing-claude` (deliberately missing, never a real CLI): preflight never walks the config's own default adapter, so the run only discovers the missing binary once it actually dispatches, with the A3 start-failure text. The embedded `OSError`'s own strerror text is third-party, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md); the errno and the path stay exact.",
   "engines": ["python", "electricity"],
   "config": "config.json",
-  "expect": "failure"
+  "expect": "failure",
+  "error_compare": "location"
 }
