@@ -38,6 +38,7 @@ __all__ = [
     "interface_unknown_type_errors",
     "label_syntax_error",
     "orchestration_schema",
+    "schema_error_sort_key",
     "schema_errors",
     "structural_errors",
     "unknown_key_errors",
@@ -113,7 +114,13 @@ def _error_where(err: Any) -> str:
             escaped = elem.replace("\\", "\\\\").replace("'", r"\'")
             path += f"['{escaped}']"
         else:
-            path += f"[{elem!r}]"
+            # `str()`, not `repr()`: for a `float`/`bool`/`None` key the
+            # two happen to agree, but a YAML timestamp key (PyYAML's own
+            # implicit resolver reads `2024-01-01:` as a `datetime.date`)
+            # renders `2024-01-01` this way, not `repr()`'s own
+            # `datetime.date(2024, 1, 1)` -- matching electricity's own
+            # `Value::py_str` exactly.
+            path += f"[{elem}]"
     return path.removeprefix("$").removeprefix(".") or "top level"
 
 
@@ -146,6 +153,28 @@ def _describe_schema_error(err: Any) -> str:
     return f"{_error_where(err)}: {_error_message(err)}"
 
 
+def _path_segment_sort_key(elem: Any) -> tuple[int, Any]:
+    """*elem*'s own sort key: an int (an array index, or an int/bool
+    mapping key) sorts first, by value; everything else sorts after, by
+    its own text — comparing the *rendered* path as one string instead
+    would put ``effects[10]`` before ``effects[2]``."""
+    if isinstance(elem, int):
+        return (0, elem)
+    return (1, str(elem))
+
+
+def schema_error_sort_key(err: Any) -> tuple[list[tuple[int, Any]], str]:
+    """``(path, message)`` — every place a list of schema errors is shown
+    (``cof check``, a run's own refusal text, the TUI's validate view)
+    sorts by this, not ``jsonschema``'s own ``str(err)`` (issue #778's own
+    step 5). The path sorts element by element (:func:`_path_segment_
+    sort_key`), not as one rendered string: a shorter path that is a
+    genuine prefix of a longer one still sorts first, the same way
+    Python's own list/tuple comparison already works."""
+    path = [_path_segment_sort_key(elem) for elem in err.absolute_path]
+    return (path, _error_message(err))
+
+
 def schema_errors(orch: Any) -> list[str]:
     """Every schema violation in *orch*, sorted by (path, message) rather
     than ``jsonschema``'s own ``str(err)`` — empty when it conforms. A
@@ -156,7 +185,7 @@ def schema_errors(orch: Any) -> list[str]:
     validator = jsonschema.Draft7Validator(orchestration_schema())
     errors = sorted(
         validator.iter_errors(orch),
-        key=lambda err: (_error_where(err), _error_message(err)),
+        key=schema_error_sort_key,
     )
     return [_describe_schema_error(err) for err in errors]
 

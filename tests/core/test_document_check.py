@@ -225,3 +225,18 @@ def test_closed_nested_blocks_reject_unknown_keys(effect: dict, unexpected: str)
 def test_schema_errors_name_the_offending_node() -> None:
     errors = schema_errors({"effects": [{"type": "loop", "each": {"in": "x"}, "body": []}]})
     assert errors == ["effects[0].body: value should be non-empty"]
+
+
+def test_schema_errors_sort_array_indices_numerically_not_as_text() -> None:
+    """``effects[2]`` before ``effects[10]`` — comparing the rendered
+    path as one string instead would put ``effects[10]`` first."""
+    good = _TOOL
+    bad = {"type": "loop", "each": {"in": "x"}, "body": []}
+    effects = [good] * 11
+    effects[2] = bad
+    effects[10] = bad
+    errors = schema_errors({"effects": effects})
+    assert errors == [
+        "effects[2].body: value should be non-empty",
+        "effects[10].body: value should be non-empty",
+    ]
