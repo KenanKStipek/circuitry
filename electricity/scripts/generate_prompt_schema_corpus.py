@@ -576,7 +576,7 @@ def cases() -> list[dict]:
             {"Y": 1},
         ),
         _case(
-            "unique_items_a_duplicate_bool_int_pair_is_not_the_same_value",
+            "unique_items_a_duplicate_separated_by_an_unordered_bool_pair",
             {"uniqueItems": True},
             [[1], [True], [1]],
         ),
@@ -674,17 +674,18 @@ def cases() -> list[dict]:
             {"a": 1, "b": 2},
         ),
         _case(
-            # Issue #507's own item 3: `multipleOf`'s own metaschema
-            # entry (`{"type": "number", "exclusiveMinimum": 0}`) never
-            # rejects `NaN`/positive `Infinity` (neither compares `<=
-            # 0`), and `multipleOf` never applies to a string instance
-            # regardless.
-            "multiple_of_nan_against_a_string_is_well_formed_and_valid",
+            # Issue #507's own item 3: `multipleOf` never applies to a
+            # string instance at all, whatever its own divisor -- this
+            # corpus pins `_validate_schema`'s own instance check in
+            # isolation, never `schema_well_formedness_error` (issue
+            # #778's own step 5), which is what actually rejects a
+            # `NaN`/`Infinity` divisor, and only at compile time.
+            "multiple_of_nan_never_applies_to_a_string_instance",
             {"multipleOf": float("nan")},
             "a string",
         ),
         _case(
-            "multiple_of_positive_infinity_against_a_string_is_well_formed_and_valid",
+            "multiple_of_positive_infinity_never_applies_to_a_string_instance",
             {"multipleOf": float("inf")},
             "a string",
         ),
