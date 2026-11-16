@@ -13,9 +13,12 @@ import threading
 from collections.abc import Iterator
 from pathlib import Path
 
+import urllib.request
+
 import pytest
 from http_server_support import PROXY_ENV_VARS, Route, ServerPair, serve_pair
 
+from circuitry import http_conventions
 from circuitry.plugins.http import HttpPlugin
 
 
@@ -307,6 +310,56 @@ def test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied(
     assert len(proxy.requests) == 1
     assert proxy.connect_targets == []
     assert proxy.connect_proxy_auth == []
+
+
+# ---------------------------------------------------------------------------
+# `open_with_proxy_rule`'s own redirect handler (cyberdiner, ollama's
+# `list_models`) -- the shared :class:`_OpenWithProxyRuleRedirectHandler`
+# in ``http_conventions``, never exercised until now (issue #778, N3).
+# ---------------------------------------------------------------------------
+
+
+def test_open_with_proxy_rule_strips_proxy_authorization_on_a_redirect_to_a_non_proxied_host(
+    monkeypatch: pytest.MonkeyPatch, proxy: _RecordingProxy, servers: ServerPair
+) -> None:
+    """Only ``http_proxy`` is set, so a redirect from a proxied
+    ``http://`` URL to an ``https://`` one (no ``https_proxy``/
+    ``all_proxy``) must not carry the first hop's ``Proxy-authorization``
+    to the now-direct connection (issue #778, N3) -- the same guarantee
+    ``test_proxy_credentials_do_not_leak_to_a_redirect_target_that_is_not_proxied``
+    pins for the ``http`` tool's own redirect handler, here for
+    ``open_with_proxy_rule``'s instead.
+    """
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", f"http://alice:s3cr3t@127.0.0.1:{proxy.port}")
+    servers.routes["/"] = Route(status=200, body="ok")
+    proxy.redirect_to = servers.https_localhost + "/"
+
+    req = urllib.request.Request("http://example.invalid/redirect")
+    with http_conventions.open_with_proxy_rule(req, timeout=5) as resp:
+        body = resp.read()
+
+    assert body == b"ok"
+    assert servers.arrived("/")
+    assert "proxy-authorization" not in servers.arrived("/").headers
+    assert len(proxy.requests) == 1
+    assert proxy.connect_targets == []
+
+
+def test_open_with_proxy_rule_refuses_a_redirect_to_a_non_http_scheme(
+    monkeypatch: pytest.MonkeyPatch, proxy: _RecordingProxy
+) -> None:
+    """A redirect target's scheme is checked once the hop is actually
+    followed -- ``file:``/``ftp:``/anything but http(s) is refused with
+    the shared text, never silently followed (issue #778, N3).
+    """
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", f"http://127.0.0.1:{proxy.port}")
+    proxy.redirect_to = "file:///etc/passwd"
+
+    req = urllib.request.Request("http://example.invalid/redirect")
+    with pytest.raises(ValueError, match="unsupported URL scheme"):
+        http_conventions.open_with_proxy_rule(req, timeout=5)
 
 
 # ---------------------------------------------------------------------------
