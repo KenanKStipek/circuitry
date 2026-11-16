@@ -485,7 +485,9 @@ def validate_report(
         validator = jsonschema.Draft7Validator(schema)
         issues += [
             ValidationIssue("schema", error.message, _schema_location(error))
-            for error in sorted(validator.iter_errors(orch), key=schema_error_sort_key)
+            for error in sorted(
+                validator.iter_errors(orch), key=lambda err: schema_error_sort_key(orch, err)
+            )
         ]
 
     if config is None:

@@ -377,13 +377,93 @@ def _unique_items_validator(validator: Any, uI: Any, instance: Any, schema: Any)
         yield jsonschema.exceptions.ValidationError(f"{instance!r} has non-unique elements")
 
 
+#: A placeholder passed to ``validator.descend``'s own ``path=`` in place
+#: of a literal ``None`` property name: `jsonschema`'s own ``descend``
+#: (`jsonschema/validators.py`) treats ``path=None`` as its own sentinel
+#: for “no path segment to add” (`if path is not None: error.path.
+#: appendleft(path)`), which collides with a real document key that IS
+#: ``None`` (a YAML ``null`` mapping key) — silently dropping that
+#: segment rather than recording it. Every caller below swaps this in
+#: for a ``None`` property name, then rewrites it back to the real
+#: ``None`` on each error ``descend`` actually yields.
+_NULL_PATH_MARKER = object()
+
+
+def _properties_validator(validator: Any, properties: Any, instance: Any, schema: Any) -> Any:
+    """`jsonschema`'s own ``properties`` keyword (`_keywords.properties`),
+    with a literal ``None`` property name kept in each error's own path
+    instead of silently dropped."""
+    if not validator.is_type(instance, "object"):
+        return
+    for property_name, subschema in properties.items():
+        if property_name in instance:
+            path = _NULL_PATH_MARKER if property_name is None else property_name
+            for error in validator.descend(
+                instance[property_name],
+                subschema,
+                path=path,
+                schema_path=property_name,
+            ):
+                if property_name is None:
+                    error.path[0] = None
+                yield error
+
+
+def _additional_properties_validator(validator: Any, aP: Any, instance: Any, schema: Any) -> Any:
+    """`jsonschema`'s own ``additionalProperties`` keyword
+    (`_keywords.additionalProperties`), with a literal ``None`` property
+    name kept in each error's own path instead of silently dropped. The
+    ``aP`` boolean/no-match-found branches never consult an instance key
+    as a path segment at all, so only the subschema branch needs this."""
+    from jsonschema._utils import (  # type: ignore[import-untyped]
+        extras_msg,
+        find_additional_properties,
+    )
+
+    if not validator.is_type(instance, "object"):
+        return
+    extra = set(find_additional_properties(instance, schema))
+    if validator.is_type(aP, "object"):
+        for extra_name in extra:
+            path = _NULL_PATH_MARKER if extra_name is None else extra_name
+            for error in validator.descend(instance[extra_name], aP, path=path):
+                if extra_name is None:
+                    error.path[0] = None
+                yield error
+    elif not aP and extra:
+        import jsonschema  # type: ignore[import-untyped]
+
+        if "patternProperties" in schema:
+            verb = "does" if len(extra) == 1 else "do"
+            joined = ", ".join(repr(each) for each in sorted(extra, key=str))
+            patterns = ", ".join(repr(each) for each in sorted(schema["patternProperties"]))
+            yield jsonschema.exceptions.ValidationError(
+                f"{joined} {verb} not match any of the regexes: {patterns}"
+            )
+        else:
+            joined, verb = extras_msg(sorted(extra, key=str))
+            yield jsonschema.exceptions.ValidationError(
+                f"Additional properties are not allowed ({joined} {verb} unexpected)"
+            )
+
+
 def extended_validator_class(schema: Mapping[str, Any]) -> Any:
     """The validator class `jsonschema` would pick for *schema*, with its
-    own ``uniqueItems`` keyword replaced by one comparing every pair."""
+    own ``uniqueItems`` keyword replaced by one comparing every pair, and
+    its own ``properties``/``additionalProperties`` keywords replaced by
+    ones that keep a literal ``None`` property name in an error's own
+    path (see :data:`_NULL_PATH_MARKER`)."""
     import jsonschema  # type: ignore[import-untyped]
 
     base = jsonschema.validators.validator_for(schema)
-    return jsonschema.validators.extend(base, {"uniqueItems": _unique_items_validator})
+    return jsonschema.validators.extend(
+        base,
+        {
+            "uniqueItems": _unique_items_validator,
+            "properties": _properties_validator,
+            "additionalProperties": _additional_properties_validator,
+        },
+    )
 
 
 def extended_validator(schema: Mapping[str, Any]) -> Any:

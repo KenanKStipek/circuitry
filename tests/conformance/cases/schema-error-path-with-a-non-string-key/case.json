@@ -1,6 +1,6 @@
 {
   "spec_case": "core/document_check.py::_error_where, issue #778's own step 5",
-  "description": "interface.inputs holds a non-string key (3.14, a float YAML read as a mapping key): jsonschema's own json_path property assumes every path element is a string or an int and raises TypeError building it, collapsing the whole check to that one exception's text instead of listing every violation. The error now renders the key's own text (interface.inputs[3.14].type) and the document's other violation (the bad NamePattern) is still listed too.",
+  "description": "interface.inputs holds several non-string keys (3.14 a float, null, true a bool, 2024-01-01 a date, all read that way by YAML's own implicit resolver): jsonschema's own json_path property assumes every path element is a string or an int and raises TypeError building it, collapsing the whole check to that one exception's text instead of listing every violation; a null key hits a second jsonschema accident, its own descend() treating a None path segment as 'no segment at all' rather than a real one. Each error now renders the key's own text (interface.inputs[3.14].type, interface.inputs[None].type, interface.inputs[True].type, interface.inputs[2024-01-01].type) and the document's other violation (the bad NamePattern) is still listed too.",
   "engines": [
     "python",
     "electricity"

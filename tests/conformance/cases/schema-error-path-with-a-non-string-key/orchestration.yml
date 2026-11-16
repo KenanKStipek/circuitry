@@ -8,3 +8,9 @@ interface:
   inputs:
     3.14:
       type: 5
+    null:
+      type: 5
+    true:
+      type: 5
+    2024-01-01:
+      type: 5
