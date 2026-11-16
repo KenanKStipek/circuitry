@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """Generate electricity-schema's `validate_prompt_schema` golden corpus from
-``core/prompt.py::PromptRuntime._validate_schema``'s own behavior (issue
-#498 ruling 6, tightened by PR #502's review, ruling 2; issue #778's own
-step 5).
+``core/prompt.py::PromptRuntime._validate_schema``'s own behavior (issues
+#498 and #778).
 
 ``_validate_schema`` builds a validator through
 ``core.schema_corners.extended_validator`` (its own ``uniqueItems``
@@ -15,10 +14,10 @@ validates). The Rust side (``electricity-schema``'s own
 ``validate_prompt_schema``) replays every pair and asserts its own message
 is identical.
 
-Must be run with the lane's own ``circuitry`` and ``jsonschema`` installed
-in the active interpreter (the lane venv locally; CI pins the ``jsonschema``
-version in ``generator-constraints.txt``, so a fresh install there is this
-same version). Usage: ``python3 generate_prompt_schema_corpus.py [--check]``
+Must be run with this repository's ``circuitry`` and ``jsonschema``
+installed in the active interpreter (CI pins the ``jsonschema`` version in
+``generator-constraints.txt``, so a fresh install there is this same
+version). Usage: ``python3 generate_prompt_schema_corpus.py [--check]``
 """
 
 from __future__ import annotations
