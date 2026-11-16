@@ -365,9 +365,17 @@ def _host_matches_entry(host_lower: str, entry: str) -> bool:
     return host_lower == entry or host_lower.endswith(f".{entry}")
 
 
-def _no_proxy_bypasses(no_proxy: str, host: str, port: int | None) -> bool:
+#: The scheme's own default port -- used only to decide whether a
+#: `host:port` no_proxy entry matches a URL that named no port of its
+#: own: `example.com:443` still matches `https://example.com/`, whose
+#: implicit port is 443 (issue #778).
+_SCHEME_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _no_proxy_bypasses(no_proxy: str, scheme: str, host: str, port: int | None) -> bool:
     if no_proxy.strip() == "*":
         return True
+    effective_port = port if port is not None else _SCHEME_DEFAULT_PORTS.get(scheme)
     host_lower = host.lower()
     for raw_entry in no_proxy.split(","):
         entry = raw_entry.strip().lower()
@@ -385,12 +393,15 @@ def _no_proxy_bypasses(no_proxy: str, host: str, port: int | None) -> bool:
             continue
         # A `host:port` entry bypasses only that host on that exact
         # port -- never any other port the same host is reached on
-        # (issue #778).
+        # (issue #778). The port text is ASCII-only (`isdigit()` alone
+        # accepts any Unicode decimal digit, which `int()` then
+        # rejects anyway -- never a match either way, just a plain one
+        # instead of a crash).
         entry_host, colon, entry_port_text = entry.rpartition(":")
-        if colon and entry_host and entry_port_text.isdigit():
+        if colon and entry_host and entry_port_text.isascii() and entry_port_text.isdigit():
             if (
-                port is not None
-                and int(entry_port_text) == port
+                effective_port is not None
+                and int(entry_port_text) == effective_port
                 and _host_matches_entry(host_lower, entry_host.lstrip("."))
             ):
                 return True
@@ -408,12 +419,15 @@ def resolve_proxy(
     proxy applies — no proxy is configured for *scheme*, or
     ``no_proxy``/``NO_PROXY`` bypasses *host*. *port* only ever matters
     for a ``host:port`` ``no_proxy`` entry (issue #778); omit it (or
-    pass ``None``) where the caller has no port to give, which simply
-    means no such entry can ever match. *env* is an explicit snapshot,
-    never read from the real process environment by this function.
+    pass ``None``) where the caller's own URL named no port of its own
+    -- a ``host:port`` entry still matches *scheme*'s own implicit
+    default port then (``example.com:443`` matches a portless
+    ``https://example.com/``), never "no such entry can ever match".
+    *env* is an explicit snapshot, never read from the real process
+    environment by this function.
     """
     no_proxy = _env_first(env, ("no_proxy", "NO_PROXY")) or ""
-    if _no_proxy_bypasses(no_proxy, host, port):
+    if _no_proxy_bypasses(no_proxy, scheme, host, port):
         return None
     if scheme == "http":
         names: tuple[str, ...] = ("http_proxy",)

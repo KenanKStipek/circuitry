@@ -549,6 +549,60 @@
     {
       "env": [
         [
+          "https_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com:443"
+        ]
+      ],
+      "scheme": "https",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "https_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com:443"
+        ]
+      ],
+      "scheme": "https",
+      "host": "example.com",
+      "port": 8443,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://p:1"
+        ],
+        [
+          "no_proxy",
+          "example.com:²"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://p:1"
+      }
+    },
+    {
+      "env": [
+        [
           "http_proxy",
           "socks5://host:1080"
         ]

@@ -220,6 +220,24 @@ def _proxy_cases() -> list[dict[str, Any]]:
         "example.com",
         None,
     )
+    # A `host:port` entry matches a URL's implicit default port too
+    # (issue #778): `example.com:443` matches a portless
+    # `https://example.com/`.
+    add(
+        {"https_proxy": "http://p:1", "no_proxy": "example.com:443"},
+        "https",
+        "example.com",
+        None,
+    )
+    add(
+        {"https_proxy": "http://p:1", "no_proxy": "example.com:443"},
+        "https",
+        "example.com",
+        8443,
+    )
+    # A non-ASCII decimal digit in the entry's port text is never a
+    # match (issue #778).
+    add({"http_proxy": "http://p:1", "no_proxy": "example.com:²"}, "http", "example.com")
     add({"http_proxy": "socks5://host:1080"}, "http", "example.com")
     add({"http_proxy": "http://host:99999"}, "http", "example.com")
     add({}, "http", "example.com")

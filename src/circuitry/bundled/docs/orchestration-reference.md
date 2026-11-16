@@ -1315,8 +1315,12 @@ environment reading:
 - `no_proxy` (then `NO_PROXY`) is a comma-separated list: `*` bypasses
   everything; a named entry matches a host exactly or as a domain suffix
   (a leading dot is optional); an IP entry matches only that exact IP
-  (never by suffix, and CIDR is not supported); a `host:port` entry (the
-  host part not itself an IP) matches only that host on that exact port.
+  (never by suffix, and CIDR is not supported; a bracketed IPv6 entry,
+  `[::1]:8080`, is not supported either way); a `host:port` entry (the
+  host part not itself an IP) matches only that host on that exact
+  port — a URL naming no port of its own still has one implicitly (80
+  for `http://`, 443 for `https://`), so `example.com:443` matches a
+  portless `https://example.com/`.
 - A proxy value with no `scheme://` prefix means `http://`; a proxy value
   naming no port (or an empty one) uses port 80 explicitly — never curl's
   own default of 1080. Userinfo in it becomes `Basic` proxy

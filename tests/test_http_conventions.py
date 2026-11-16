@@ -282,6 +282,25 @@ def test_no_proxy_host_port_entry_matches_only_that_host_on_that_port() -> None:
     assert resolve_proxy("http", "example.com", env) == "http://p:1"
 
 
+def test_no_proxy_host_port_entry_matches_a_urls_implicit_default_port() -> None:
+    """Issue #778: ``example.com:443`` still matches a portless
+    ``https://example.com/`` -- the URL's own implicit port is 443,
+    the https default, not "no port to compare against".
+    """
+    env = {"https_proxy": "http://p:1", "no_proxy": "example.com:443"}
+    assert resolve_proxy("https", "example.com", env) is None
+    assert resolve_proxy("https", "example.com", env, port=8443) == "http://p:1"
+
+
+def test_no_proxy_host_port_entry_rejects_a_non_ascii_digit_port() -> None:
+    """``isdigit()`` alone matches any Unicode decimal digit, which
+    ``int()`` then rejects -- never a match either way, just a plain
+    one instead of a crash (issue #778).
+    """
+    env = {"http_proxy": "http://p:1", "no_proxy": "example.com:²"}
+    assert resolve_proxy("http", "example.com", env) == "http://p:1"
+
+
 def test_no_proxy_entries_are_comma_separated() -> None:
     env = {"http_proxy": "http://p:1", "no_proxy": "a.com, example.com ,b.com"}
     assert resolve_proxy("http", "example.com", env) is None

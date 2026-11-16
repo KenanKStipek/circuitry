@@ -43,17 +43,30 @@ fn host_matches_entry(host_lower: &str, entry: &str) -> bool {
     host_lower == entry || host_lower.ends_with(&format!(".{entry}"))
 }
 
+/// The scheme's own default port -- used only to decide whether a
+/// `host:port` `no_proxy` entry matches a URL that named no port of
+/// its own: `example.com:443` still matches a portless
+/// `https://example.com/` (issue #778).
+fn scheme_default_port(scheme: &str) -> Option<u16> {
+    match scheme {
+        "http" => Some(80),
+        "https" => Some(443),
+        _ => None,
+    }
+}
+
 /// The proxy rule's `no_proxy`/`NO_PROXY`: a comma-separated list; `*`
 /// bypasses everything, and a named entry matches *host* exactly or as
 /// a domain suffix (a leading dot is optional). An IP entry matches
 /// only that exact IP (no suffix, no CIDR). A `host:port` entry (the
 /// host part not itself an IP) bypasses only that host on that exact
-/// *port* -- `None` (no port to compare against) means such an entry
-/// can never match (issue #778).
-fn no_proxy_bypasses(no_proxy: &str, host: &str, port: Option<u16>) -> bool {
+/// *port* -- *port* `None` (the URL named none of its own) falls back
+/// to *scheme*'s own default rather than never matching (issue #778).
+fn no_proxy_bypasses(no_proxy: &str, scheme: &str, host: &str, port: Option<u16>) -> bool {
     if no_proxy.trim() == "*" {
         return true;
     }
+    let effective_port = port.or_else(|| scheme_default_port(scheme));
     let host_lower = host.to_ascii_lowercase();
     for raw_entry in no_proxy.split(',') {
         let entry = raw_entry.trim().to_ascii_lowercase();
@@ -71,7 +84,9 @@ fn no_proxy_bypasses(no_proxy: &str, host: &str, port: Option<u16>) -> bool {
                 && !entry_port_text.is_empty()
                 && entry_port_text.chars().all(|c| c.is_ascii_digit())
             {
-                if let (Some(port), Ok(entry_port)) = (port, entry_port_text.parse::<u16>()) {
+                if let (Some(port), Ok(entry_port)) =
+                    (effective_port, entry_port_text.parse::<u16>())
+                {
                     if entry_port == port
                         && host_matches_entry(&host_lower, entry_host.trim_start_matches('.'))
                     {
@@ -99,7 +114,7 @@ fn proxy_value(
     env: &[(String, String)],
 ) -> Option<String> {
     let no_proxy = env_first(env, &["no_proxy", "NO_PROXY"]).unwrap_or_default();
-    if no_proxy_bypasses(&no_proxy, host, port) {
+    if no_proxy_bypasses(&no_proxy, scheme, host, port) {
         return None;
     }
     let scheme_specific = match scheme {
@@ -303,6 +318,27 @@ mod tests {
         );
         assert_eq!(
             resolve_proxy_checked("http", "example.com", &e).unwrap(),
+            Some("http://p:1".to_string())
+        );
+    }
+
+    #[test]
+    fn no_proxy_host_port_entry_matches_a_urls_implicit_default_port() {
+        // Issue #778: `example.com:443` still matches a portless
+        // `https://example.com/` -- the URL's own implicit port is
+        // 443, the https default, not "no port to compare against".
+        let e = env(&[
+            ("https_proxy", "http://p:1"),
+            ("no_proxy", "example.com:443"),
+        ]);
+        assert_eq!(
+            resolve_proxy_checked("https", "example.com", &e).unwrap(),
+            None
+        );
+        // An explicit, non-default port on the same host still
+        // doesn't match the entry.
+        assert_eq!(
+            resolve_proxy_checked_with_port("https", "example.com", Some(8443), &e).unwrap(),
             Some("http://p:1".to_string())
         );
     }
