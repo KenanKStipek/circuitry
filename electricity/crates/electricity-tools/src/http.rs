@@ -2004,7 +2004,13 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
     let authority = if !r_scheme.starts_with('/') {
         proxy.to_string()
     } else if let Some(rest) = r_scheme.strip_prefix("//") {
-        match rest.find('/') {
+        // The authority ends at the first `/`, `?` or `#` -- the same
+        // boundary `urlsplit` (and `http_conventions::proxy_authority`,
+        // which already normalized *proxy* before this ever runs) use,
+        // so a value like `http://proxy.corp:3128?x` (its own query
+        // string, no userinfo) still reads the hostport as
+        // `proxy.corp:3128`, never the whole remainder (issue #778).
+        match rest.find(['/', '?', '#']) {
             Some(end) => rest[..end].to_string(),
             None => rest.to_string(),
         }
@@ -2547,6 +2553,21 @@ mod proxy_parse_tests {
     fn url_form_strips_the_scheme_and_trailing_path() {
         let parsed = parse_proxy("http://proxy.corp:3128/");
         assert_eq!(parsed.hostport, "proxy.corp:3128");
+    }
+
+    #[test]
+    fn url_form_strips_the_scheme_and_a_trailing_query_or_fragment() {
+        // The authority ends at the first `/`, `?` or `#`, not only
+        // `/` -- matching cof's own `urlsplit`-backed `split_proxy_url`,
+        // which already reads this the same way (issue #778).
+        assert_eq!(
+            parse_proxy("http://proxy.corp:3128?x").hostport,
+            "proxy.corp:3128"
+        );
+        assert_eq!(
+            parse_proxy("http://proxy.corp:3128#x").hostport,
+            "proxy.corp:3128"
+        );
     }
 
     #[test]

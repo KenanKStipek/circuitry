@@ -475,3 +475,13 @@ def test_split_proxy_url_with_userinfo_builds_basic_auth() -> None:
     result = split_proxy_url("http://alice:s3cr3t@proxy.corp:3128")
     assert result.hostport == "proxy.corp:3128"
     assert result.basic_auth == base64.b64encode(b"alice:s3cr3t").decode("ascii")
+
+
+def test_split_proxy_url_stops_the_authority_at_a_query_string_or_fragment() -> None:
+    """The authority ends at the first ``/``, ``?`` or ``#``, not only
+    ``/`` -- ``urlsplit``'s own netloc already reads it this way, the
+    same boundary electricity's ``http.rs::parse_proxy`` now uses too
+    (issue #778).
+    """
+    assert split_proxy_url("http://proxy.corp:3128?x").hostport == "proxy.corp:3128"
+    assert split_proxy_url("http://proxy.corp:3128#x").hostport == "proxy.corp:3128"
