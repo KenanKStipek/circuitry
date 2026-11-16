@@ -10,10 +10,9 @@ import base64
 import contextlib
 import socket
 import threading
+import urllib.request
 from collections.abc import Iterator
 from pathlib import Path
-
-import urllib.request
 
 import pytest
 from http_server_support import PROXY_ENV_VARS, Route, ServerPair, serve_pair
