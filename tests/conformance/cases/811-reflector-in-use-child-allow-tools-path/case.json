@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #811",
+  "description": "A reflector nested inside a use child (loaded from a path) generates a plan that uses the json tool, which this document doesn't use anywhere itself. The refusal names the reflector by the run's absolute path (prime.outer_use.plan_it), not the path relative to the child's own fresh store.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

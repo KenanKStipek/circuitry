@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #811",
+  "description": "A decomposition planner nested inside a flow: tree loop pass proposes a plan whose merge step reaches for awk, which this document never uses itself. The embedded refusal (routed up rather than decomposed) names the decomposing prompt by the run's absolute path (prime.fan.iter_0.over_ceiling), the same rule the reflector and use-child shapes follow.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

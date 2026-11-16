@@ -19,6 +19,7 @@ import yaml as _yaml  # type: ignore[import-untyped]
 
 from ..adapters import Adapter
 from ..cli.redaction import redact
+from .effect_identity import call_path
 from .primes import REFLECTOR_PRIME_V1
 from .store import Store
 from .templates import render_template
@@ -306,8 +307,10 @@ class ReflectorRuntime:
                 # compare against -- it is unconditionally generated (#772).
                 force_generated=True,
                 # Named in a refusal as the effect to add allow_tools to --
-                # the reflector's own path, not the synthetic use's.
-                generating_effect_path_override=store.effect_path(self.defn.name),
+                # the reflector's own absolute path, not the synthetic
+                # use's, and not merely relative to a `flow: tree` pass's
+                # own isolated store (#811).
+                generating_effect_path_override=call_path(store, self.defn.name),
             )
 
             gen_parent = reflector_store.child(self.defn.generated_key)

@@ -130,7 +130,8 @@ pub struct Frame {
     document_is_generated: bool,
     /// `circuitry.generated_doc.GENERATED_DOCUMENT_GENERATING_PATH_KEY`
     /// (#772): the dotted path of the `use`/`reflector` effect that
-    /// generated the document currently executing, or "" for a
+    /// generated the document currently executing, or
+    /// `"decomposition of '<path>'"`/`"split of '<path>'"` for a
     /// decomposition plan (which has no single generating effect of its
     /// own) -- named in a dispatch-time refusal
     /// ([`crate::generated_doc::dispatch_errors`]) the same way the
@@ -304,15 +305,13 @@ impl Frame {
 
     /// *path*'s own pass placeholders resolved and [`Frame::rebase`]
     /// applied, but *without* this frame's own [`Frame::prefix`] composed
-    /// on top -- [`Frame::effect_path`]'s own first half, broken out for
-    /// a caller that specifically wants the path *this* document's own
-    /// text would show it (`core/store/store.py::Store.effect_path`'s own
-    /// semantics on a `use`/decomposition child's fresh, unprefixed
-    /// store): naming the effect that generated a document (#772) in a
-    /// refusal, which Python names from the *local* document regardless
-    /// of how deep a `use` chain put it in the overall run, never the
-    /// globally-namespaced path [`Frame::effect_path`] gives `--events`.
-    pub fn local_effect_path(&self, path: &EffectPath) -> EffectPath {
+    /// on top -- [`Frame::effect_path`]'s own first half, giving the path
+    /// *this* document's own text would show it
+    /// (`core/store/store.py::Store.effect_path`'s own semantics on a
+    /// `use`/decomposition child's fresh, unprefixed store), before
+    /// [`Frame::effect_path`] composes the globally-namespaced prefix on
+    /// top.
+    fn local_effect_path(&self, path: &EffectPath) -> EffectPath {
         let resolved = path
             .resolve_passes(&self.pass_indices)
             .unwrap_or_else(|loop_id| {
