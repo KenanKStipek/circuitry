@@ -94,19 +94,30 @@ fn scheme_refused(scheme: &str, original_url: &str) -> ToolError {
     }
 }
 
-/// `HTTPRedirectHandler.http_error_302`'s own `"%s - Redirection to
-/// url '%s' is not allowed" % (msg, newurl)` -- pinned against real
-/// CPython in `generate_http_corpus.py`'s own `redirect_reason_cases`
-/// (issue #485), since this file never actually
-/// raises through a real `HTTPRedirectHandler` to get the text from
-/// CPython itself.
-pub fn disallowed_redirect_scheme_reason(msg: &str, newurl: &str) -> String {
-    format!("{msg} - Redirection to url '{newurl}' is not allowed")
+/// `http_conventions.check_url` (H3/H4, issue #778 step 7, H-review
+/// P1-2) -- *url*'s scheme (RFC 3986's own grammar via
+/// [`http_url::urlsplit`], never [`splittype`]'s looser, urllib-parse-
+/// time-only one) must be `http`/`https`, and its port must pass
+/// [`crate::http_conventions::strict_port`]. Called on *url* before
+/// [`parse_params`] -- before `save_to`'s own filesystem checks, and
+/// before `params['params']` is appended -- the same order and the
+/// same shared text `plugins/http.py::HttpPlugin.execute`'s own
+/// `http_conventions.check_url(url)` call uses, never `Request`'s own
+/// "unknown url type" text.
+fn check_url(url: &str) -> Result<(), ToolError> {
+    let split = http_url::urlsplit(url, "");
+    crate::http_conventions::check_scheme(&split.scheme, url, &["http", "https"])
+        .map_err(value_error)?;
+    crate::http_conventions::strict_port(&split.netloc, url).map_err(value_error)?;
+    Ok(())
 }
 
 /// `HTTPRedirectHandler.http_error_302`'s own `inf_msg + msg` (the two
-/// loop limits, `max_repeats`/`max_redirections`) -- same provenance
-/// note as [`disallowed_redirect_scheme_reason`] above.
+/// loop limits, `max_repeats`/`max_redirections`) -- pinned against
+/// real CPython in `generate_http_corpus.py`'s own
+/// `redirect_reason_cases` (issue #485), since this file never
+/// actually raises through a real `HTTPRedirectHandler` to get the
+/// text from CPython itself.
 pub fn redirect_loop_reason(msg: &str) -> String {
     format!(
         "The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\n{msg}"
@@ -582,29 +593,17 @@ const ERROR_EXCERPT_MAX_CHARS: usize = 500;
 // turns it into an `Authorization` header).
 // ---------------------------------------------------------------------
 
-/// `urllib.request._splittype` -- `re.compile('([^/:]+):(.*)',
-/// re.DOTALL)`'s own `match` (anchored at position 0, so a leading `/`
-/// or no `:` at all never matches): `None` when the regex doesn't
-/// match -- `Request.__init__`'s own `ValueError: unknown url type:
-/// %r`, raised unwrapped at parse time, before `urlopen` ever runs
-/// (`unknown_scheme_or_not_http` below is the separate, *wrapped*
-/// check for a scheme this regex *does* recognize but `urlopen` has no
-/// handler for, e.g. `ftp-nope:` or a bare `127.0.0.1:8080/x`, the
-/// scheme it finds here being an IPv4 address up to its own first
-/// `:`). Deliberately looser than [`http_url::urlsplit`]'s own RFC
-/// 3986 scheme grammar (which requires an alphabetic first character)
-/// -- the two disagree on exactly this kind of input, and this is the
-/// one urllib itself actually runs at parse time.
-fn splittype(url: &str) -> Option<String> {
-    splittype_with_rest(url).0
-}
-
 /// `urllib.request._splittype`'s own full result (scheme lowercased,
-/// plus everything after the first matched `:`) -- [`splittype`]
-/// above only ever needs the scheme; [`resolve_proxy_target`]'s own
-/// `_parse_proxy` port needs the rest too, to tell a URL-form proxy
-/// value (`http://user:pass@host:port`) apart from an authority-form
-/// one (`host:port`, or `user:pass@host:port` with no scheme at all).
+/// plus everything after the first matched `:`) -- only
+/// [`resolve_proxy_target`]'s own `_parse_proxy` port still needs this
+/// (to tell a URL-form proxy value, `http://user:pass@host:port`,
+/// apart from an authority-form one, `host:port` or `user:pass@host:
+/// port` with no scheme at all); `execute`'s own scheme check uses
+/// [`check_url`]/[`http_url::urlsplit`] instead, now that it runs on
+/// the raw URL before this file ever calls `Request`'s own
+/// urllib-parse-time regex (issue #778 step 7, H-review P1-2:
+/// `plugins/http.py` never raises `Request`'s "unknown url type" text
+/// either, only `http_conventions.check_url`'s own).
 fn splittype_with_rest(url: &str) -> (Option<String>, &str) {
     if let Some(colon) = url.find(':') {
         let candidate = &url[..colon];
@@ -914,18 +913,25 @@ fn coerce_headers_param(value: Option<&Value>) -> Result<Vec<(Value, Value)>, To
     }
 }
 
-fn parse_params(params: &Value, secret_headers: &[String]) -> Result<ParsedRequest, ToolError> {
-    let save = save_target(params)?;
-    let url_value = get(params, "url");
-    let url = match url_value {
-        Some(Value::Str(s)) if !py_strip(s).is_empty() => py_strip(s).to_string(),
-        _ => {
-            return Err(value_error(
-                "HttpPlugin requires params['url'] as a non-empty string.",
-            ));
-        }
-    };
+/// `params['url']`, stripped and checked non-empty -- the only piece of
+/// `parse_params` extracted before `execute`'s own H3/H4 check
+/// ([`check_url`]), which must run before `parse_params`'s own
+/// `save_target` call touches the filesystem, or `params['params']` is
+/// appended to the URL (issue #778 step 7, H-review P1-2).
+fn extract_url(params: &Value) -> Result<String, ToolError> {
+    match get(params, "url") {
+        Some(Value::Str(s)) if !py_strip(s).is_empty() => Ok(py_strip(s).to_string()),
+        _ => Err(value_error(
+            "HttpPlugin requires params['url'] as a non-empty string.",
+        )),
+    }
+}
 
+fn parse_params(
+    url: String,
+    params: &Value,
+    secret_headers: &[String],
+) -> Result<ParsedRequest, ToolError> {
     let method = get(params, "method")
         .cloned()
         .unwrap_or_else(|| Value::Str("GET".to_string()))
@@ -957,6 +963,12 @@ fn parse_params(params: &Value, secret_headers: &[String]) -> Result<ParsedReque
             "HttpPlugin: pass either params['json'] or params['body'], not both.",
         ));
     }
+
+    // `plugins/http.py`'s own order (issue #778 step 7, H-review P1-2):
+    // `save_target`'s filesystem checks run only after `execute`'s own
+    // H3/H4 check on the raw URL, and before `params['params']` is
+    // appended below.
+    let save = save_target(params)?;
 
     let mut url = url;
     if let Some(Value::Dict(query)) = get(params, "params") {
@@ -2095,21 +2107,14 @@ impl ToolPlugin for HttpPlugin {
     }
 
     async fn execute(&self, params: Value, call: &ToolCall<'_>) -> Result<ToolResult, ToolError> {
-        let parsed = parse_params(&params, call.secret_headers)?;
+        // H3/H4, before any I/O and before touching any local file
+        // (`save_to`'s own filesystem checks included): issue #778 step
+        // 7, H-review P1-2 -- checked on the raw URL, before
+        // `params['params']` is appended.
+        let raw_url = extract_url(&params)?;
+        check_url(&raw_url)?;
+        let parsed = parse_params(raw_url, &params, call.secret_headers)?;
         let original_url = parsed.url.clone();
-
-        let initial_scheme = match splittype(&parsed.url) {
-            None => {
-                return Err(value_error(format!(
-                    "unknown url type: {}",
-                    Value::Str(parsed.url.clone()).py_repr()
-                )));
-            }
-            Some(scheme) => scheme,
-        };
-        if !matches!(initial_scheme.as_str(), "http" | "https") {
-            return Err(scheme_refused(&initial_scheme, &original_url));
-        }
 
         let client = http_client::build_client().map_err(runtime_error)?;
         let timeout =
@@ -2327,20 +2332,11 @@ impl ToolPlugin for HttpPlugin {
                     let resolved = http_url::urljoin(&current_url, &location);
                     let quoted = http_url::quote(&resolved, http_url::STRING_PUNCTUATION);
                     let target_scheme = http_url::urlsplit(&quoted, "").scheme;
-                    if !matches!(target_scheme.as_str(), "" | "http" | "https" | "ftp") {
-                        let reason = disallowed_redirect_scheme_reason(&response.reason, &quoted);
-                        return build_result(
-                            &parsed,
-                            &original_url,
-                            response,
-                            Some(reason),
-                            false,
-                            call.scrub,
-                        );
-                    }
-                    // `plugins/http.py::_RedirectPolicy.redirect_request`:
-                    // reached after urllib's own scheme check, before its
-                    // method/status rule.
+                    // `plugins/http.py::_RedirectPolicy.redirect_request`
+                    // (issue #778 step 7, H-review P1-2/P2-16): the
+                    // never/strip_auth decision runs first, on its own
+                    // terms -- a target this mode would refuse anyway is
+                    // refused that way, whatever its scheme, never H4's.
                     if parsed.redirects == RedirectMode::Never
                         || (parsed.redirects == RedirectMode::StripAuth
                             && target_scheme.to_lowercase() != "https")
@@ -2369,6 +2365,17 @@ impl ToolPlugin for HttpPlugin {
                                 call.scrub,
                             );
                         }
+                        // H4: checked only once this hop is actually
+                        // about to be followed -- any scheme other than
+                        // http/https gets the shared refusal text,
+                        // whatever it is (`file:`, `data:`, ... -- not
+                        // only `ftp`).
+                        crate::http_conventions::check_scheme(
+                            &target_scheme,
+                            &quoted,
+                            &["http", "https"],
+                        )
+                        .map_err(value_error)?;
                         *visited.entry(quoted.clone()).or_insert(0) += 1;
                         if parsed.redirects == RedirectMode::StripAuth {
                             let origin = redirect_origin(&current_url);

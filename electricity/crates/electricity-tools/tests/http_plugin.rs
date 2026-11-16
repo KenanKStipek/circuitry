@@ -322,6 +322,47 @@ async fn redirects_strip_auth_never_follows_to_http() {
 }
 
 #[tokio::test]
+async fn redirects_follow_to_a_file_scheme_is_refused_with_h4s_shared_text() {
+    // Issue #778 step 7, H-review P1-2/P2-16: a followed redirect to any
+    // scheme other than http/https is refused with H4's shared text --
+    // not only `ftp`, and not urllib's own "Redirection to url ... is
+    // not allowed" (which `plugins/http.py::_RedirectPolicy.
+    // http_error_302` no longer inherits).
+    let addr = respond_once(
+        b"HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(format!("http://{addr}/start")))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(
+        err.message,
+        "unsupported URL scheme 'file' in 'file:///etc/passwd': only http or https is supported"
+    );
+}
+
+#[tokio::test]
+async fn redirects_never_to_a_file_scheme_is_refused_on_its_own_terms_not_h4s() {
+    // The mirror case: under `redirects: never`, a disallowed-scheme
+    // target is refused by the mode itself (a `ToolResult`, never
+    // raised) -- H4's check never even runs, since the target was never
+    // going to be followed either way.
+    let addr = respond_once(
+        b"HTTP/1.1 302 Found\r\nLocation: file:///etc/passwd\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+    );
+    let result = execute_redirect(addr, vec![("redirects", Value::Str("never".to_string()))]).await;
+    assert!(!result.ok);
+    assert_eq!(
+        result.stderr.as_deref(),
+        Some("HTTP 302: Found: redirect not followed (redirects: never)")
+    );
+}
+
+#[tokio::test]
 async fn a_secret_header_defaults_redirects_to_strip_auth_not_follow() {
     // Issue #725: `ToolCall::secret_headers` makes the default `strip_auth`
     // (never `follow`) when `params.redirects` is absent -- proven here by

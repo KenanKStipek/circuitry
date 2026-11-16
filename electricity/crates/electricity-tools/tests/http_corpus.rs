@@ -199,10 +199,6 @@ fn redirect_reason_cases_match_urllibs_own_text() {
     for case in corpus["redirect_reason_cases"].as_array().unwrap() {
         let expected = case["reason"].as_str().unwrap();
         let actual = match case["case"].as_str().unwrap() {
-            "disallowed_scheme" => electricity_tools::http::disallowed_redirect_scheme_reason(
-                "Found",
-                "javascript:alert(1)",
-            ),
             "max_repeats" | "max_redirections" => {
                 electricity_tools::http::redirect_loop_reason("Found")
             }

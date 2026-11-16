@@ -42,6 +42,7 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 
+from circuitry import http_conventions  # noqa: E402
 from circuitry.plugins.base import http_error_excerpt  # noqa: E402
 from circuitry.plugins.http import HttpPlugin  # noqa: E402
 
@@ -279,6 +280,12 @@ def _request_header_cases() -> list[dict[str, Any]]:
 
 
 def _unknown_url_type_cases() -> list[dict[str, Any]]:
+    """``http_conventions.check_url``'s own refusal (issue #778 step 7,
+    H-review P1-2) -- never ``Request``'s own "unknown url type" text,
+    which ``plugins/http.py::HttpPlugin.execute`` no longer raises at
+    all (its own ``check_url(url)`` call runs first, before ``Request``
+    is ever built).
+    """
     urls = [
         "not a url",
         "http://example.com/x",
@@ -287,12 +294,12 @@ def _unknown_url_type_cases() -> list[dict[str, Any]]:
         ":::",
         "javascript:alert(1)",
         "//example.com/x",
+        "127.0.0.1:8080/x",
     ]
     cases = []
     for url in urls:
         try:
-            req = urllib.request.Request(url)
-            req._parse()  # type: ignore[attr-defined]
+            http_conventions.check_url(url)
             error = None
         except ValueError as exc:
             error = str(exc)
@@ -334,24 +341,23 @@ def _redirect_decision_cases() -> list[dict[str, Any]]:
 
 
 def _redirect_reason_cases() -> list[dict[str, Any]]:
-    """The exact `HTTPError.reason` text for a disallowed-scheme
-    redirect and for each of the two loop limits
-    (`HTTPRedirectHandler.http_error_302`'s own `inf_msg`/
-    `"%s - Redirection to url '%s' is not allowed"`) -- `src/http.rs`
-    builds the same two format strings directly (it never raises
-    through a real `HTTPRedirectHandler`), so this section pins them
-    against CPython rather than trusting the issue's own prose.
+    """The exact `HTTPError.reason` text for each of the two loop
+    limits (`HTTPRedirectHandler.http_error_302`'s own `inf_msg`) --
+    `src/http.rs` builds the same format string directly (it never
+    raises through a real `HTTPRedirectHandler`), so this section pins
+    it against CPython rather than trusting the issue's own prose.
+
+    A disallowed-scheme redirect isn't part of this section any more
+    (issue #778 step 7, H-review P1-2/P2-16): `plugins/http.py::
+    _RedirectPolicy.http_error_302` no longer inherits
+    `HTTPRedirectHandler`'s own scheme prefilter (which this exact
+    scenario, `javascript:alert(1)`, used to exercise) -- H4's shared
+    refusal applies to every scheme once a redirect is actually going
+    to be followed, so there is no more urllib-specific "disallowed
+    scheme" text for either engine to pin.
     """
     handler = urllib.request.HTTPRedirectHandler()
     cases = []
-
-    req = urllib.request.Request("http://example.com/start", method="GET")
-    try:
-        handler.http_error_302(req, None, 302, "Found", {"location": "javascript:alert(1)"})
-        reason = None
-    except urllib.error.HTTPError as exc:
-        reason = exc.reason
-    cases.append({"case": "disallowed_scheme", "reason": reason})
 
     req = urllib.request.Request("http://example.com/start", method="GET")
     req.redirect_dict = {"http://example.com/next": handler.max_repeats}  # type: ignore[attr-defined]

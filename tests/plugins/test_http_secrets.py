@@ -398,6 +398,24 @@ effects:
     assert [request.path for request in servers.received] == ["/start", "/start"]
 
 
+def test_a_followed_redirect_to_a_file_scheme_is_refused_with_h4s_shared_text(
+    tmp_path: Path, fake_bin: Path, servers: ServerPair
+) -> None:
+    """Issue #778 step 7, H-review P1-2/P2-16: a redirect that *would* be
+    followed (the default ``follow`` mode, no secret header involved) is
+    refused with H4's shared scheme text for any disallowed scheme, not
+    only ``ftp`` -- never urllib's own "Redirection to url ... is not
+    allowed", which ``_RedirectPolicy.http_error_302`` no longer inherits.
+    """
+    servers.routes["/start"] = Route(302, {"Location": "file:///etc/passwd"}, body="")
+    result = _run(_http_doc(tmp_path, f"{servers.http}/start", extra_params="      redirects: follow"))
+    assert not result.ok
+    assert (
+        "unsupported URL scheme 'file' in 'file:///etc/passwd': only http or https is supported"
+        in (result.error or "")
+    )
+
+
 def test_follow_resends_the_headers_when_the_document_asks_for_it(
     tmp_path: Path, fake_bin: Path, servers: ServerPair
 ) -> None:
