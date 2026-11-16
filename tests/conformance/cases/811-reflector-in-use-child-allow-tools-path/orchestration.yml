@@ -1,0 +1,7 @@
+name: 811-reflector-in-use-child-allow-tools-path
+adapter: scripted
+model: test
+effects:
+  - type: use
+    name: outer_use
+    path: child.yml

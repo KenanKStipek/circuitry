@@ -1,0 +1,7 @@
+name: 811-decomposition-use-child-allow-tools-path
+adapter: scripted
+model: m
+effects:
+  - type: use
+    name: outer
+    path: child.yml

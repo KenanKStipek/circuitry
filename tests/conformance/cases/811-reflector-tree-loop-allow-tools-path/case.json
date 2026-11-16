@@ -1,0 +1,8 @@
+{
+  "spec_case": "issue #811",
+  "description": "A reflector inside a flow: tree loop pass generates a plan that uses the json tool, which this document doesn't use anywhere itself. The refusal names the reflector by the run's absolute path (prime.fan.iter_0.plan_it), the same path the error's own prefix already uses.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "failure",
+  "error_compare": "exact"
+}

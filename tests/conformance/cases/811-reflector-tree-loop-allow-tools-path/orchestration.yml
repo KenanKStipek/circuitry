@@ -1,0 +1,19 @@
+name: 811-reflector-tree-loop-allow-tools-path
+adapter: scripted
+model: test
+interface:
+  inputs:
+    items: {type: array, default: [1]}
+effects:
+  - type: loop
+    name: fan
+    flow: tree
+    each: {in: "input.items", as: "item"}
+    body:
+      - type: reflector
+        name: plan_it
+        prime_template: "Plan it. Item: {{item}}"
+        effects:
+          - type: prompt
+            name: propose_steps
+            template: "propose steps"

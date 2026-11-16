@@ -1,0 +1,15 @@
+name: 811-reflector-dynamic-tree-allow-tools-path
+adapter: scripted
+model: test
+effects:
+  - type: dynamic
+    name: fan
+    flow: tree
+    effects:
+      - type: reflector
+        name: plan_it
+        prime_template: "Plan it."
+        effects:
+          - type: prompt
+            name: propose_steps
+            template: "propose steps"

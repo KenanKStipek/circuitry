@@ -379,10 +379,9 @@ async fn run_iteration(
         // compare against -- it is unconditionally generated (#772).
         force_generated: true,
         // Named in a refusal as the effect to add allow_tools to -- the
-        // reflector's own path, not the synthetic use's, and local to
-        // this document the same way Python's own `store.effect_path`
-        // is (#772; see `Frame::local_effect_path`'s own doc comment).
-        generating_effect_path_override: Some(frame.local_effect_path(&op.path).to_string()),
+        // reflector's own run-absolute path, not the synthetic use's
+        // (#811; see `Frame::effect_path`'s own doc comment).
+        generating_effect_path_override: Some(frame.effect_path(&op.path).to_string()),
     };
     let use_path = op
         .path
