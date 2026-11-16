@@ -327,6 +327,28 @@ def test_url_error_raises_actionable_runtime_error(
         HttpPlugin().execute(params={"url": "https://nonsuch.test/"})
 
 
+def test_url_error_never_names_a_password_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778, B3: the connection-failure message names the URL
+    through ``redact_url``, so a password in it never reaches the
+    message -- the same guarantee electricity's ``http`` tool now
+    gives too.
+    """
+
+    def fake_urlopen(req: Any, timeout: int = 0) -> Any:
+        raise URLError("Name or service not known")
+
+    _patch_opener_open(monkeypatch, fake_urlopen)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        HttpPlugin().execute(params={"url": "https://alice:s3cr3t@nonsuch.test/"})
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert "s3cr3t" not in message
+    assert message.startswith("HTTP request to https://nonsuch.test/ failed:")
+
+
 def test_missing_url_raises() -> None:
     with pytest.raises(ValueError, match="params\\['url'\\]"):
         HttpPlugin().execute(params={})

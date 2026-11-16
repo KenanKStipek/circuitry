@@ -64,4 +64,8 @@ async fn check_over_a_plain_http_proxy_sends_absolute_form_with_proxy_authorizat
             .to_lowercase()
             .contains("proxy-authorization: basic")
     );
+    // Issue #778, N6: cof's cyberdiner uses urllib, which never adds
+    // `Proxy-Connection` on its own -- unlike curl, which this crate's
+    // other adapters replay faithfully (`transport::proxy_wire_headers`).
+    assert!(!request.to_lowercase().contains("proxy-connection"));
 }

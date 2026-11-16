@@ -125,10 +125,12 @@ fn proxy_value(
     scheme_specific.or_else(|| env_first(env, &["all_proxy", "ALL_PROXY"]))
 }
 
-/// [`resolve_proxy_checked_with_port`] with no port to compare a
-/// `host:port` `no_proxy` entry against -- the plain form every
-/// existing test (and `electricity-adapters::transport`'s own two real
-/// call sites' *predecessor*) uses.
+/// [`resolve_proxy_checked_with_port`] with no port of its own to
+/// name -- a `host:port` `no_proxy` entry still matches against
+/// *scheme*'s own default port then, never "no such entry can ever
+/// match" (issue #778) -- the plain form every existing test (and
+/// `electricity-adapters::transport`'s own two real call sites'
+/// *predecessor*) uses.
 pub fn resolve_proxy_checked(
     scheme: &str,
     host: &str,
@@ -145,7 +147,10 @@ pub fn resolve_proxy_checked(
 /// that); `Err` with Circuitry's own refusal text when the value names
 /// an unsupported proxy scheme, or its port is strictly invalid.
 /// *port* only ever matters for a `host:port` `no_proxy` entry (issue
-/// #778); `None` means such an entry can never match.
+/// #778); `None` (the caller's own URL named no port of its own)
+/// still matches such an entry against *scheme*'s own default port,
+/// never "can never match" -- see [`no_proxy_bypasses`]'s own
+/// `effective_port`.
 pub fn resolve_proxy_checked_with_port(
     scheme: &str,
     host: &str,

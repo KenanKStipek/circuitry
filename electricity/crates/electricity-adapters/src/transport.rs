@@ -330,6 +330,21 @@ pub(crate) fn proxy_wire_headers(
     headers
 }
 
+/// [`proxy_wire_headers`], minus `Proxy-Connection: Keep-Alive` --
+/// cyberdiner's own wire headers must match cof's exactly (issue #778,
+/// N6): cof's cyberdiner sends a plain (non-CONNECT) proxied request
+/// through urllib, which (unlike curl) never adds that header on its
+/// own.
+pub(crate) fn cyberdiner_proxy_headers(
+    proxy: &Option<ProxyTarget>,
+    scheme: Scheme,
+) -> Vec<(String, String)> {
+    proxy_wire_headers(proxy, scheme)
+        .into_iter()
+        .filter(|(name, _)| !name.eq_ignore_ascii_case("Proxy-Connection"))
+        .collect()
+}
+
 /// The raw proxy URL text [`electricity_tools::http_client::
 /// resolve_proxy_checked_with_port`] itself resolves for
 /// *scheme*/*host*(:*port*) -- never [`ProxyTarget`]'s own parsed

@@ -606,6 +606,27 @@ async fn a_connection_refused_raises_the_wrapped_runtime_error() {
     assert_eq!(err.cause, electricity_tools::ErrorCause::NoReply);
 }
 
+#[tokio::test]
+async fn a_connection_refused_never_names_a_password_in_the_url() {
+    // Issue #778, B3: `send_error_to_tool_error`'s own `original_url`
+    // (what becomes `HTTP request to {url} failed: ...`) is redacted
+    // the same way cof's `plugins/http.py` already redacts its own
+    // `redact_url(url)`.
+    let addr = closed_port();
+    let token = CancellationToken::new();
+    let url = format!("http://alice:s3cr3t@{addr}/");
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str(url))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.message.contains("alice"), "{}", err.message);
+    assert!(!err.message.contains("s3cr3t"), "{}", err.message);
+    assert!(err.message.starts_with(&format!("HTTP request to http://{addr}/ failed:")));
+}
+
 /// A `save_to_temp_dir`'s own directory, removed on `Drop` -- unlike a
 /// bare `PathBuf`, nothing this file's own tests do with the returned
 /// value leaves it behind afterward (issue #661's own fixed-cap

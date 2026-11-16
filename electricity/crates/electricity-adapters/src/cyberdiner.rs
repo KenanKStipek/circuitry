@@ -41,7 +41,9 @@
 //!   per-call `CancellationToken` doesn't reproduce.
 
 use crate::config::{cfg_int_or, cfg_value_or, rstrip_base_url, value_is_truthy};
-use crate::transport::{ParsedUrl, TransportFailure, default_port, parse_url, proxy_wire_headers};
+use crate::transport::{
+    ParsedUrl, TransportFailure, cyberdiner_proxy_headers, default_port, parse_url,
+};
 use electricity_json::WriteMode;
 use electricity_tools::http::http_url::urljoin;
 use electricity_tools::http_client::{
@@ -188,6 +190,7 @@ fn resolve_tier(
 /// a job response; a response without a top-level `data` *object*
 /// means this isn't talking to the API it thinks it is.
 fn unwrap_envelope(body: &Value, url: &str) -> Result<Dict, AdapterError> {
+    let url = electricity_tools::http_conventions::redact_url(url);
     match body
         .as_dict()
         .and_then(|d| d.get(&Value::Str("data".to_string())))
@@ -338,6 +341,7 @@ fn connect_target_for(parsed: &ParsedUrl, port: u16) -> Result<ConnectTarget, Tr
 /// unconditionally retryable; `IncompleteRead` (an `http.client.
 /// HTTPException`, none of the three) is not.
 fn send_error(url: &str, err: SendError) -> AdapterError {
+    let url = electricity_tools::http_conventions::redact_url(url);
     match err {
         SendError::Connect { text, .. } => AdapterError {
             message: format!("cyberdiner: request to {url} failed: {text}"),
@@ -417,6 +421,7 @@ fn http_error(
     detail: &str,
     retry_after: Option<&str>,
 ) -> AdapterError {
+    let url = electricity_tools::http_conventions::redact_url(url);
     let message = if detail.is_empty() {
         format!("cyberdiner: HTTP {status} from {url}: {reason}")
     } else {
@@ -435,6 +440,7 @@ fn http_error(
 }
 
 fn non_json_error(url: &str, text: &str) -> AdapterError {
+    let url = electricity_tools::http_conventions::redact_url(url);
     AdapterError {
         message: format!(
             "cyberdiner: non-JSON response from {url}: {}",
@@ -537,7 +543,7 @@ async fn request_json(
         // request line the proxy itself reads, and `Proxy-
         // Authorization` belongs in the regular header set, exactly
         // as the `http` tool's own request loop (issue #778).
-        extra_headers.extend(proxy_wire_headers(
+        extra_headers.extend(cyberdiner_proxy_headers(
             &connect_target.proxy,
             connect_target.scheme,
         ));
@@ -957,7 +963,7 @@ async fn probe(url: &str, token: &str, timeout: Duration) -> bool {
     };
     let host_header = urllib_host_header(&parsed);
     let mut extra_headers = vec![("Authorization".to_string(), format!("Bearer {token}"))];
-    extra_headers.extend(proxy_wire_headers(
+    extra_headers.extend(cyberdiner_proxy_headers(
         &connect_target.proxy,
         connect_target.scheme,
     ));
@@ -1314,6 +1320,30 @@ mod tests {
             .unwrap_err();
         assert!(err.retry.retryable, "{:?}", err.retry);
         assert!(err.message.contains("cyberdiner: request to"));
+    }
+
+    #[tokio::test]
+    async fn generate_never_names_a_password_in_a_url_on_a_connection_failure() {
+        // Issue #778, B3: `send_error`'s own `url` (what becomes
+        // `cyberdiner: request to {url} failed: ...`) is redacted the
+        // same way cof's `cyberdiner.py::_request` already redacts
+        // its own `display_url`.
+        let addr = crate::test_support::closed_port();
+        let a = adapter(&format!("http://alice:s3cr3t@{addr}"));
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = a
+            .generate(
+                "cheap",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("alice"), "{}", err.message);
+        assert!(!err.message.contains("s3cr3t"), "{}", err.message);
+        assert!(err.message.contains("cyberdiner: request to"), "{}", err.message);
     }
 
     #[tokio::test]

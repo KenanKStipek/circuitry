@@ -46,7 +46,10 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
     match err {
         SendError::Connect { text, .. } => ToolError {
             py_class: PyExc::RuntimeError,
-            message: format!("HTTP request to {original_url} failed: {text}"),
+            message: format!(
+                "HTTP request to {} failed: {text}",
+                crate::http_conventions::redact_url(original_url)
+            ),
             cause: ErrorCause::NoReply,
         },
         SendError::Timeout => ToolError {

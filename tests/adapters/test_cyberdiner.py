@@ -704,6 +704,29 @@ def test_connection_error_wrapped_in_runtime_error(
     assert exc.value.__cause__ is not None
 
 
+def test_connection_error_never_names_a_password_in_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Issue #778, B3: the connection-failure message names the URL
+    through ``redact_url`` (``display_url``), so a password in
+    ``expo_url`` never reaches it -- the same guarantee electricity's
+    cyberdiner now gives too.
+    """
+
+    def fake_urlopen(req: Any, timeout: float = 0) -> Any:
+        raise URLError("Name or service not known")
+
+    _patch_opener_open(monkeypatch, fake_urlopen)
+
+    adapter = _adapter(expo_url="https://alice:s3cr3t@expo.example.test")
+    with pytest.raises(RuntimeError) as exc_info:
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert "s3cr3t" not in message
+    assert message.startswith("cyberdiner: request to https://expo.example.test/beta/jobs failed:")
+
+
 def test_a_500_from_cyberdiner_retries_through_the_prompt_retry_loop(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
