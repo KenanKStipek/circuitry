@@ -507,10 +507,14 @@ fn prepare_request(
     headers: &[(String, String)],
     body: Option<&str>,
 ) -> Result<(ConnectTarget, RawRequest), TransportFailure> {
-    validate_request(url, headers)?;
+    // Issue #778 step 7, H-review P2-12: scheme and port checked
+    // first, matching `curl_support.py::_build_config_and_cmd`'s own
+    // order (`http_conventions.check_url` before the config, including
+    // its own control-character/size checks, is ever built).
     let parsed = parse_url(url)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
     let proxy = resolve_curl_proxy(&parsed.scheme, &parsed.host, parsed.port)?;
+    validate_request(url, headers)?;
     let scheme_enum = if parsed.scheme == "https" {
         Scheme::Https
     } else {
