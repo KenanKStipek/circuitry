@@ -147,6 +147,60 @@
     {
       "url": "https://host/x",
       "redacted": "https://host/x"
+    },
+    {
+      "url": "http://alice:pa ss@host:1234/x",
+      "redacted": "http://host:1234/x"
+    },
+    {
+      "url": "http://alice:pa\rss@host:1234/x",
+      "redacted": "http://host:1234/x"
+    },
+    {
+      "url": "http://alice:pa:ss@host:1234/x",
+      "redacted": "http://host:1234/x"
+    }
+  ],
+  "proxy_redaction_cases": [
+    {
+      "value": "http://alice:pass@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "proxy.corp:3128",
+      "redacted": "proxy.corp:3128"
+    },
+    {
+      "value": "http://alice:pa/ss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://alice:pa?ss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://alice:pa#ss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://alice:pa ss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://alice:pa\rss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://alice:pa@ss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "http://alice:pa:ss@proxy:3128",
+      "redacted": "http://proxy:3128"
+    },
+    {
+      "value": "alice:s3cret@proxy:3128 ",
+      "redacted": "proxy:3128 "
     }
   ],
   "proxy_cases": [
@@ -523,6 +577,104 @@
       "port": null,
       "result": {
         "ok": null
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://alice:pa/ss@proxy:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://alice:pa/ss@proxy:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://alice:pa?ss@proxy:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://alice:pa?ss@proxy:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://alice:pa#ss@proxy:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://alice:pa#ss@proxy:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://alice:pa:ss@proxy:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://alice:pa:ss@proxy:3128"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://alice:pa ss@proxy:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "error": "URL contains a control character or whitespace: 'http://proxy:3128'"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://alice:pa\rss@proxy:3128"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "error": "URL contains a control character or whitespace: 'http://proxy:3128'"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "alice:s3cret@proxy:3128 "
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "error": "URL contains a control character or whitespace: 'http://proxy:3128 '"
       }
     }
   ],

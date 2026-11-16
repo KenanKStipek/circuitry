@@ -16,8 +16,6 @@
 //! the process's real one -- every test that resolves a proxy sets or
 //! clears every `*_proxy`/`*_PROXY` variable explicitly.
 
-use crate::http_conventions::check_scheme;
-
 fn env_first(env: &[(String, String)], names: &[&str]) -> Option<String> {
     for name in names {
         if let Some((_, value)) = env.iter().find(|(k, _)| k == name) {
@@ -153,57 +151,41 @@ pub fn resolve_proxy_checked_with_port(
         .split_once("://")
         .map(|(s, _)| s.to_ascii_lowercase())
         .unwrap_or_default();
-    check_scheme(&proxy_scheme, &normalized, &["http"]).map_err(|_| {
-        format!(
+    // A proxy value has no meaningful path, so its own control-
+    // character/scheme/port checks never use `check_scheme`/
+    // `strict_port`'s own `urlsplit`-bounded authority -- a password
+    // containing `/`, `?`, `#` or whitespace must still be removed in
+    // full from any refusal this raises (issue #778).
+    crate::http_conventions::check_no_control_or_whitespace(
+        &normalized,
+        crate::http_conventions::redact_proxy_value,
+    )?;
+    if !proxy_scheme.eq_ignore_ascii_case("http") {
+        return Err(format!(
             "unsupported proxy scheme '{proxy_scheme}' in '{}': only http:// proxies are \
              supported",
-            crate::http_conventions::redact_url(&normalized)
-        )
-    })?;
-    let authority_start = normalized.find("://").unwrap() + 3;
-    let after_scheme = &normalized[authority_start..];
-    let netloc_len = after_scheme
-        .find(['/', '?', '#'])
-        .unwrap_or(after_scheme.len());
-    let netloc = &after_scheme[..netloc_len];
-    crate::http_conventions::strict_port(netloc, &normalized)?;
-    Ok(Some(with_default_port(
-        &normalized,
-        authority_start,
-        netloc_len,
-        80,
-    )))
+            crate::http_conventions::redact_proxy_value(&normalized)
+        ));
+    }
+    crate::http_conventions::strict_port_for_proxy(&normalized)?;
+    Ok(Some(with_default_port(&normalized, 80)))
 }
 
-/// *url* with `:<default_port>` written into its authority (the
-/// `authority_start..authority_start + netloc_len` span) when it names
-/// no port of its own, not even an empty one -- curl's own default for
-/// a schemeless/portless proxy is 1080, its historic SOCKS convention,
-/// never H1's own 80, so the default is written in explicitly rather
-/// than left for curl (or `http.rs`'s own port-defaulting, which would
-/// otherwise use the *target* URL's scheme) to guess (issue #778 step
-/// 7, H-review P1-6).
-fn with_default_port(
-    url: &str,
-    authority_start: usize,
-    netloc_len: usize,
-    default_port: u16,
-) -> String {
-    let netloc = &url[authority_start..authority_start + netloc_len];
-    let host_port = match netloc.rfind('@') {
-        Some(at) => &netloc[at + 1..],
-        None => netloc,
-    };
+/// *url* with `:<default_port>` written after its host[:port] text
+/// (`http_conventions::proxy_host_port`, never `urlsplit`'s own
+/// `/`/`?`/`#`-bounded netloc) when it names no port of its own, not
+/// even an empty one -- curl's own default for a schemeless/portless
+/// proxy is 1080, its historic SOCKS convention, never this module's
+/// own 80, so the default is written in explicitly rather than left for curl (or
+/// `http.rs`'s own port-defaulting, which would otherwise use the
+/// *target* URL's scheme) to guess (issue #778).
+fn with_default_port(url: &str, default_port: u16) -> String {
+    let host_port = crate::http_conventions::proxy_host_port(url);
     if crate::http_conventions::host_port_text(host_port).is_some_and(|text| !text.is_empty()) {
         return url.to_string();
     }
-    let insert_at = authority_start + netloc_len;
     let separator = if host_port.ends_with(':') { "" } else { ":" };
-    format!(
-        "{}{separator}{default_port}{}",
-        &url[..insert_at],
-        &url[insert_at..]
-    )
+    format!("{url}{separator}{default_port}")
 }
 
 #[cfg(test)]

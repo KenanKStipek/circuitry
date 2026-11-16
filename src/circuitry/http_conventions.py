@@ -37,7 +37,7 @@ import string
 import urllib.error
 import urllib.parse
 import urllib.request
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -89,11 +89,50 @@ def mask_credential_query_params(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(query=new_query))
 
 
+def _strip_request_url_userinfo(url: str) -> str:
+    """*url*'s userinfo removed from its authority -- the LAST ``@``
+    inside :func:`urllib.parse.urlsplit`'s own ``netloc``, not a ``/``,
+    ``?``, ``#`` or whitespace boundary the way a free-text scrub
+    (:func:`strip_url_userinfo`) needs to stay inside: this always
+    receives one whole URL, never prose with one embedded somewhere, so
+    building the redaction from the parsed authority directly -- instead
+    of a regex heuristic -- means a password containing any of those
+    (none of which end ``urlsplit``'s own ``netloc`` the way ``/`` does)
+    still comes out fully removed (issue #778).
+    """
+    parsed = urllib.parse.urlsplit(url)
+    if "@" not in parsed.netloc:
+        return url
+    netloc = parsed.netloc.rpartition("@")[2]
+    return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
+
+
 def redact_url(url: str) -> str:
     """*url* with userinfo stripped, then any credential-like query
-    parameter masked — the two masks every refusal message in this module
-    applies before naming the URL."""
-    return strip_url_userinfo(mask_credential_query_params(url))
+    parameter masked — the two masks every refusal message that names a
+    request URL (never a proxy value, see :func:`redact_proxy_value`)
+    applies before naming it."""
+    return _strip_request_url_userinfo(mask_credential_query_params(url))
+
+
+def redact_proxy_value(value: str) -> str:
+    """*value* (a proxy URL or value, normalized or not) with its
+    userinfo removed, for a refusal message. A proxy value has no
+    meaningful path, so -- unlike :func:`redact_url` -- this never stops
+    at a ``/``, ``?``, ``#`` or whitespace: only the LAST ``@`` in the
+    *whole* value (after its ``scheme://``, when it has one) counts, so
+    a password containing any of those still comes out fully removed
+    (issue #778).
+    """
+    scheme_end = value.find("://")
+    prefix, tail = (
+        (value[: scheme_end + 3], value[scheme_end + 3 :])
+        if scheme_end != -1
+        else ("", value)
+    )
+    if "@" not in tail:
+        return value
+    return prefix + tail.rpartition("@")[2]
 
 
 def _host_port_text(netloc: str) -> str | None:
@@ -113,6 +152,10 @@ def _host_port_text(netloc: str) -> str | None:
     return rest[1:]
 
 
+def _port_in_range(port_text: str) -> bool:
+    return bool(_PORT_RE.fullmatch(port_text)) and 1 <= int(port_text) <= 65535
+
+
 def check_strict_port(url: str) -> None:
     """Refuses *url* before any I/O when its port isn't strictly valid
     (H3): after the host (or after ``]`` for IPv6) comes ``:`` and one or
@@ -124,19 +167,21 @@ def check_strict_port(url: str) -> None:
     port_text = _host_port_text(host_port)
     if not port_text:
         return
-    if _PORT_RE.fullmatch(port_text) and 1 <= int(port_text) <= 65535:
+    if _port_in_range(port_text):
         return
     raise ValueError(f"invalid port in URL '{redact_url(url)}': '{port_text}'")
 
 
-def _check_no_control_or_whitespace(url: str) -> None:
-    """Refuses *url* before any I/O when it contains any ASCII control
-    character or whitespace (H-review P2-14) -- one shared message on
-    both engines, never a surface-specific one.
+def _check_no_control_or_whitespace(value: str, *, redact: Callable[[str], str]) -> None:
+    """Refuses *value* before any I/O when it contains any ASCII control
+    character or whitespace (issue #778) -- one shared message on both
+    engines, never a surface-specific one. *redact* is whichever of
+    :func:`redact_url`/:func:`redact_proxy_value` fits *value*'s own
+    shape.
     """
-    if _CONTROL_OR_WHITESPACE_RE.search(url):
+    if _CONTROL_OR_WHITESPACE_RE.search(value):
         raise ValueError(
-            f"URL contains a control character or whitespace: '{redact_url(url)}'"
+            f"URL contains a control character or whitespace: '{redact(value)}'"
         )
 
 
@@ -144,7 +189,7 @@ def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -
     """Refuses *url* before any I/O (H3, H4): its scheme must be one of
     *allowed_schemes*, and its port must pass :func:`check_strict_port`.
     """
-    _check_no_control_or_whitespace(url)
+    _check_no_control_or_whitespace(url, redact=redact_url)
     scheme = urllib.parse.urlsplit(url).scheme.lower()
     if scheme not in allowed_schemes:
         allowed = " or ".join(allowed_schemes)
@@ -161,39 +206,72 @@ def _normalize_proxy_url(value: str) -> str:
     return value if "://" in value else f"http://{value}"
 
 
-def _with_default_port(url: str, default_port: int) -> str:
-    """*url* with ``:<default_port>`` written into its authority when it
-    names no port of its own, not even an empty one (H3: an absent port
-    means the scheme's own default). Every surface that reads this
-    normalized proxy URL back out (curl's ``--config``, the ``http``
-    tool's ``Request.set_proxy``) must see the real default explicitly,
-    since curl's *own* default for a schemeless/portless proxy is 1080,
-    its historic SOCKS-proxy convention — never H1's own 80 (issue #778
-    step 7, H-review P1-6).
+def _proxy_host_port(normalized: str) -> str:
+    """The host[:port] text of *normalized* (a proxy value that already
+    has a ``scheme://``): the whole remainder after it, split at the
+    LAST ``@`` -- never bounded by a ``/``, ``?`` or ``#`` the way
+    :func:`check_strict_port`'s own ``urlsplit``-based netloc is, since
+    a proxy value has no meaningful path and its password may itself
+    contain any of those (issue #778). The returned text is always a
+    suffix of *normalized* itself, so a caller may safely compute where
+    it starts as ``len(normalized) - len(host_port)``.
     """
-    parts = urllib.parse.urlsplit(url)
-    host_port = parts.netloc.rpartition("@")[2]
+    after_scheme = normalized.split("://", 1)[1]
+    return after_scheme.rpartition("@")[2]
+
+
+def _check_strict_port_for_proxy(normalized: str) -> None:
+    """Like :func:`check_strict_port`, but for a proxy value: its
+    host[:port] text comes from :func:`_proxy_host_port`, not
+    ``urlsplit``'s own netloc, and any refusal names *normalized* through
+    :func:`redact_proxy_value`.
+    """
+    port_text = _host_port_text(_proxy_host_port(normalized))
+    if not port_text:
+        return
+    if _port_in_range(port_text):
+        return
+    raise ValueError(f"invalid port in URL '{redact_proxy_value(normalized)}': '{port_text}'")
+
+
+def _with_default_port(url: str, default_port: int) -> str:
+    """*url* (a proxy value already checked by
+    :func:`_check_strict_port_for_proxy`) with ``:<default_port>``
+    written into its host[:port] text when it names no port of its own,
+    not even an empty one (an absent port means the scheme's own
+    default). Every surface that reads this normalized proxy URL back
+    out (curl's ``--config``, the ``http`` tool's ``Request.set_proxy``)
+    must see the real default explicitly, since curl's *own* default for
+    a schemeless/portless proxy is 1080, its historic SOCKS-proxy
+    convention — never this module's own 80 (issue #778).
+    """
+    host_port = _proxy_host_port(url)
     if _host_port_text(host_port):
         return url
-    netloc = parts.netloc if host_port.endswith(":") else f"{parts.netloc}:"
-    return urllib.parse.urlunsplit(parts._replace(netloc=f"{netloc}{default_port}"))
+    prefix = url[: len(url) - len(host_port)]
+    separator = "" if host_port.endswith(":") else ":"
+    return f"{prefix}{host_port}{separator}{default_port}"
 
 
 def check_proxy_url(value: str) -> str:
     """*value*, normalized (H1), with its scheme and port checked before
     any I/O: only an ``http`` proxy scheme is supported, and its port
-    follows :func:`check_strict_port`. The returned URL always names a
-    port explicitly (:func:`_with_default_port`, H-review P1-6).
+    follows :func:`_check_strict_port_for_proxy`. The returned URL always
+    names a port explicitly (:func:`_with_default_port`). Normalized
+    *before* any check runs, including the control-character one, so a
+    schemeless value (which has no ``://`` of its own for
+    :func:`redact_proxy_value` to find) is still named safely in every
+    refusal this raises (issue #778).
     """
-    _check_no_control_or_whitespace(value)
     normalized = _normalize_proxy_url(value)
+    _check_no_control_or_whitespace(normalized, redact=redact_proxy_value)
     scheme = urllib.parse.urlsplit(normalized).scheme.lower()
     if scheme != "http":
         raise ValueError(
-            f"unsupported proxy scheme '{scheme}' in '{redact_url(normalized)}': "
+            f"unsupported proxy scheme '{scheme}' in '{redact_proxy_value(normalized)}': "
             "only http:// proxies are supported"
         )
-    check_strict_port(normalized)
+    _check_strict_port_for_proxy(normalized)
     return _with_default_port(normalized, 80)
 
 

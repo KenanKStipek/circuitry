@@ -767,6 +767,7 @@ class SystemOnePlugin:
         questions: dict[str, Any],
         timeout_seconds: int,
     ) -> ToolResult:
+        display_server = http_conventions.redact_url(server)
         request = urllib.request.Request(server + ENDPOINT_PATH, data=payload, method="POST")
         request.add_header("Content-Type", "application/json")
         request.add_header("Accept", "application/json")
@@ -816,15 +817,20 @@ class SystemOnePlugin:
         except urllib.error.URLError as exc:
             if isinstance(exc.reason, TimeoutError):
                 raise RuntimeError(
-                    f"systemone request to {server} timed out after {int(timeout_seconds)}s"
+                    f"systemone request to {display_server} timed out after "
+                    f"{int(timeout_seconds)}s"
                 ) from exc
-            raise RuntimeError(f"systemone server not reachable at {server}") from exc
+            raise RuntimeError(
+                f"systemone server not reachable at {display_server}"
+            ) from exc
         except TimeoutError as exc:
             raise RuntimeError(
-                f"systemone request to {server} timed out after {int(timeout_seconds)}s"
+                f"systemone request to {display_server} timed out after {int(timeout_seconds)}s"
             ) from exc
         except (ConnectionError, http.client.HTTPException) as exc:
-            raise RuntimeError(f"systemone server at {server} dropped the connection") from exc
+            raise RuntimeError(
+                f"systemone server at {display_server} dropped the connection"
+            ) from exc
 
         raw["status"] = status
         retry_after = headers.get("retry-after")
@@ -836,7 +842,7 @@ class SystemOnePlugin:
             raw["error_kind"] = _error_kind(status, text)
             if 300 <= status < 400:
                 message = (
-                    f"systemone server at {server} answered HTTP {status}; "
+                    f"systemone server at {display_server} answered HTTP {status}; "
                     "a redirect is never followed"
                 )
             else:

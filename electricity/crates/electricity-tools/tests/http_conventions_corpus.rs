@@ -23,7 +23,9 @@
 
 use electricity_tools::http::http_url::urlsplit;
 use electricity_tools::http_client::resolve_proxy_checked_with_port;
-use electricity_tools::http_conventions::{check_scheme, redact_url, strict_port};
+use electricity_tools::http_conventions::{
+    check_scheme, redact_proxy_value, redact_url, strict_port,
+};
 
 fn load_corpus() -> serde_json::Value {
     let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -69,6 +71,16 @@ fn redaction_cases_match_cof() {
         let url = case["url"].as_str().unwrap();
         let expected = case["redacted"].as_str().unwrap();
         assert_eq!(redact_url(url), expected, "case: {case:?}");
+    }
+}
+
+#[test]
+fn proxy_redaction_cases_match_cof() {
+    let corpus = load_corpus();
+    for case in corpus["proxy_redaction_cases"].as_array().unwrap() {
+        let value = case["value"].as_str().unwrap();
+        let expected = case["redacted"].as_str().unwrap();
+        assert_eq!(redact_proxy_value(value), expected, "case: {case:?}");
     }
 }
 

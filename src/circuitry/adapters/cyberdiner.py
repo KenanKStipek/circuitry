@@ -145,9 +145,9 @@ def _unwrap(body: dict[str, Any], url: str) -> dict[str, Any]:
     data = body.get("data")
     if not isinstance(data, dict):
         raise RuntimeError(
-            f"cyberdiner: response from {url} is not a CyberDiner job envelope — "
-            "expected a top-level `data` object (expo wraps every job in "
-            f"ApiEnvelope). Got: {json.dumps(body)[:200]}"
+            f"cyberdiner: response from {http_conventions.redact_url(url)} is not a "
+            "CyberDiner job envelope — expected a top-level `data` object (expo wraps "
+            f"every job in ApiEnvelope). Got: {json.dumps(body)[:200]}"
         )
     return data
 
@@ -224,6 +224,7 @@ class CyberdinerAdapter:
         # which would decide the proxy under its own, different
         # convention and let a `file://` `expo_url` read a local file.
         http_conventions.check_url(url)
+        display_url = http_conventions.redact_url(url)
         body = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(url, data=body, method=method)
         req.add_header("Authorization", f"Bearer {self.token}")
@@ -240,19 +241,19 @@ class CyberdinerAdapter:
             except Exception:
                 detail = ""
             raise RuntimeError(
-                f"cyberdiner: HTTP {exc.code} from {url}: {exc.reason}"
+                f"cyberdiner: HTTP {exc.code} from {display_url}: {exc.reason}"
                 + (f" — {detail}" if detail else "")
             ) from exc
         except urllib.error.URLError as exc:
             raise RuntimeError(
-                f"cyberdiner: request to {url} failed: {exc.reason}"
+                f"cyberdiner: request to {display_url} failed: {exc.reason}"
             ) from exc
 
         try:
             return dict(json.loads(text)) if text else {}
         except json.JSONDecodeError as exc:
             raise RuntimeError(
-                f"cyberdiner: non-JSON response from {url}: {text[:200]}"
+                f"cyberdiner: non-JSON response from {display_url}: {text[:200]}"
             ) from exc
 
     def generate(

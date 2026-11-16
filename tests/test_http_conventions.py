@@ -10,6 +10,8 @@ from circuitry.http_conventions import (
     check_proxy_url,
     check_strict_port,
     check_url,
+    redact_proxy_value,
+    redact_url,
     resolve_proxy,
     split_proxy_url,
     strip_url_userinfo,
@@ -121,6 +123,84 @@ def test_strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() -> Non
     assert "alice" not in redacted
     assert "p@ss" not in redacted
     assert "ss" not in redacted
+
+
+# ---------------------------------------------------------------------------
+# Hostile passwords (issue #778): no piece of one may survive a refusal,
+# on either a request URL (``redact_url``) or a proxy value
+# (``redact_proxy_value``/``check_proxy_url``).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("char", (" ", "\r"))
+def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
+    char: str,
+) -> None:
+    password = f"pa{char}ss"
+    redacted = redact_url(f"http://alice:{password}@host:1234/x")
+    assert redacted == "http://host:1234/x"
+    assert "alice" not in redacted
+    assert password not in redacted
+
+
+@pytest.mark.parametrize("char", (" ", "\r"))
+def test_check_url_never_leaks_a_password_containing_whitespace_or_a_control_char(
+    char: str,
+) -> None:
+    password = f"pa{char}ss"
+    with pytest.raises(ValueError, match="control character or whitespace") as exc_info:
+        check_url(f"http://alice:{password}@host:1234/x")
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert password not in message
+
+
+@pytest.mark.parametrize("char", ("/", "?", "#", "@", ":"))
+def test_redact_proxy_value_removes_a_password_containing_any_hostile_char(char: str) -> None:
+    password = f"pa{char}ss"
+    redacted = redact_proxy_value(f"http://alice:{password}@proxy:3128")
+    assert redacted == "http://proxy:3128"
+    assert "alice" not in redacted
+    assert password not in redacted
+
+
+@pytest.mark.parametrize("char", ("/", "?", "#", "@", ":"))
+def test_check_proxy_url_accepts_a_password_containing_a_hostile_non_control_char(
+    char: str,
+) -> None:
+    """None of these end a proxy value's authority the way they would a
+    request URL's -- a proxy value has no meaningful path, so the port
+    check must still find the real port after the password, not treat
+    part of the password itself as an invalid port.
+    """
+    password = f"pa{char}ss"
+    assert check_proxy_url(f"http://alice:{password}@proxy:3128") == (
+        f"http://alice:{password}@proxy:3128"
+    )
+
+
+@pytest.mark.parametrize("char", (" ", "\r"))
+def test_check_proxy_url_never_leaks_a_password_containing_whitespace_or_a_control_char(
+    char: str,
+) -> None:
+    password = f"pa{char}ss"
+    with pytest.raises(ValueError, match="control character or whitespace") as exc_info:
+        check_proxy_url(f"http://alice:{password}@proxy:3128")
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert password not in message
+
+
+def test_check_proxy_url_never_leaks_a_schemeless_value_with_trailing_whitespace() -> None:
+    """A schemeless proxy value has no ``://`` of its own for the old
+    redactor to find -- normalizing before the control-character check
+    (rather than after) is what lets this one redact at all.
+    """
+    with pytest.raises(ValueError, match="control character or whitespace") as exc_info:
+        check_proxy_url("alice:s3cret@proxy:3128 ")
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert "s3cret" not in message
 
 
 # ---------------------------------------------------------------------------

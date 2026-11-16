@@ -137,12 +137,67 @@ pub fn mask_credential_query_params(url: &str) -> String {
     result
 }
 
+/// `http_conventions._strip_request_url_userinfo` -- the LAST `@`
+/// inside [`crate::http::http_url::urlsplit`]'s own `netloc`, not a
+/// `/`, `?`, `#` or whitespace boundary the way [`strip_url_userinfo`]
+/// (a free-text scrub) needs to stay inside: this always receives one
+/// whole URL, never prose with one embedded somewhere, so building the
+/// redaction from the parsed authority directly -- instead of a regex-
+/// style heuristic -- means a password containing any ASCII control
+/// character or whitespace (none of which end `urlsplit`'s own
+/// `netloc` the way `/` does) still comes out fully removed (issue
+/// #778).
+fn strip_request_url_userinfo(url: &str) -> String {
+    let parsed = crate::http::http_url::urlsplit(url, "");
+    let Some(at) = parsed.netloc.rfind('@') else {
+        return url.to_string();
+    };
+    let netloc = parsed.netloc[at + 1..].to_string();
+    crate::http::http_url::urlunsplit(&crate::http::http_url::Split { netloc, ..parsed })
+}
+
 /// `curl_support.py::redact_host_url`/`http_conventions.redact_url` --
-/// the two masks every refusal message in this module applies before
-/// naming a URL: userinfo stripped, then any credential-like query
+/// the two masks every refusal message that names a request URL
+/// (never a proxy value, see [`redact_proxy_value`]) applies before
+/// naming it: userinfo stripped, then any credential-like query
 /// parameter masked.
 pub fn redact_url(url: &str) -> String {
-    strip_url_userinfo(&mask_credential_query_params(url))
+    strip_request_url_userinfo(&mask_credential_query_params(url))
+}
+
+/// `http_conventions.redact_proxy_value` -- a proxy value has no
+/// meaningful path, so (unlike [`redact_url`]) this never stops at a
+/// `/`, `?`, `#` or whitespace boundary: only the LAST `@` in the
+/// *whole* value (after its `scheme://`, when it has one) counts, so a
+/// password containing any of those still comes out fully removed
+/// (issue #778).
+pub fn redact_proxy_value(value: &str) -> String {
+    let (prefix, tail) = match value.find("://") {
+        Some(idx) => (&value[..idx + 3], &value[idx + 3..]),
+        None => ("", value),
+    };
+    match tail.rfind('@') {
+        Some(at) => format!("{prefix}{}", &tail[at + 1..]),
+        None => value.to_string(),
+    }
+}
+
+/// `http_conventions._proxy_host_port` -- the host[:port] text of
+/// *normalized* (a proxy value that already has a `scheme://`): the
+/// whole remainder after it, split at the LAST `@` -- never bounded by
+/// a `/`, `?` or `#` the way [`strict_port`]'s own `urlsplit`-based
+/// netloc is, since a proxy value has no meaningful path and its
+/// password may itself contain any of those (issue #778). The
+/// returned text is always a suffix of *normalized* itself.
+pub(crate) fn proxy_host_port(normalized: &str) -> &str {
+    let after_scheme = normalized
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(normalized);
+    match after_scheme.rfind('@') {
+        Some(at) => &after_scheme[at + 1..],
+        None => after_scheme,
+    }
 }
 
 /// The raw port text in *host_port* (userinfo already stripped by the
@@ -175,6 +230,14 @@ pub(crate) fn host_port_text(host_port: &str) -> Option<&str> {
 /// *original_url* with any userinfo removed) for anything else: after the
 /// host (or after `]` for IPv6) comes `:` and one or more ASCII digits,
 /// 1-65535.
+fn port_in_range(port_text: &str) -> Option<u16> {
+    if !port_text.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let value: u32 = port_text.parse().ok()?;
+    (1..=65535).contains(&value).then_some(value as u16)
+}
+
 pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, String> {
     let host_port = match netloc.rfind('@') {
         Some(at) => &netloc[at + 1..],
@@ -186,12 +249,8 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
     if port_text.is_empty() {
         return Ok(None);
     }
-    if port_text.chars().all(|c| c.is_ascii_digit()) {
-        if let Ok(value) = port_text.parse::<u32>() {
-            if (1..=65535).contains(&value) {
-                return Ok(Some(value as u16));
-            }
-        }
+    if let Some(value) = port_in_range(port_text) {
+        return Ok(Some(value));
     }
     Err(format!(
         "invalid port in URL '{}': '{}'",
@@ -200,18 +259,43 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
     ))
 }
 
+/// Like [`strict_port`], but for a proxy value: its host[:port] text
+/// comes from [`proxy_host_port`], not `urlsplit`'s own netloc, and any
+/// refusal names *normalized* through [`redact_proxy_value`] (issue
+/// #778).
+pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, String> {
+    let host_port = proxy_host_port(normalized);
+    let Some(port_text) = host_port_text(host_port) else {
+        return Ok(None);
+    };
+    if port_text.is_empty() {
+        return Ok(None);
+    }
+    if let Some(value) = port_in_range(port_text) {
+        return Ok(Some(value));
+    }
+    Err(format!(
+        "invalid port in URL '{}': '{}'",
+        redact_proxy_value(normalized),
+        port_text
+    ))
+}
+
 /// Any ASCII control character (0x00-0x1F, 0x7F) or ASCII whitespace
 /// (space is 0x20, already inside that first range) -- a URL or proxy
 /// value containing one is refused before any I/O, on both engines,
 /// with one shared message (issue #778 step 7, H-review P2-14).
-fn check_no_control_or_whitespace(original_url: &str) -> Result<(), String> {
+pub(crate) fn check_no_control_or_whitespace(
+    original_url: &str,
+    redact: fn(&str) -> String,
+) -> Result<(), String> {
     if original_url
         .chars()
         .any(|c| matches!(c, '\u{0}'..='\u{20}' | '\u{7f}'))
     {
         return Err(format!(
             "URL contains a control character or whitespace: '{}'",
-            redact_url(original_url)
+            redact(original_url)
         ));
     }
     Ok(())
@@ -225,7 +309,7 @@ fn check_no_control_or_whitespace(original_url: &str) -> Result<(), String> {
 /// that check needs to live to cover every URL/proxy value either engine
 /// checks at all.
 pub fn check_scheme(scheme: &str, original_url: &str, allowed: &[&str]) -> Result<(), String> {
-    check_no_control_or_whitespace(original_url)?;
+    check_no_control_or_whitespace(original_url, redact_url)?;
     if allowed
         .iter()
         .any(|candidate| candidate.eq_ignore_ascii_case(scheme))

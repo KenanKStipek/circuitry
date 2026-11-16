@@ -128,8 +128,36 @@ def _redaction_cases() -> list[dict[str, Any]]:
         "https://user:s3cr3t@host/x?api_key=sk-test",
         "https://host/x?api_key=sk-test&q=widgets",
         "https://host/x",
+        # Hostile passwords (issue #778): a control character or
+        # whitespace inside one must still be redacted in full.
+        "http://alice:pa ss@host:1234/x",
+        "http://alice:pa\rss@host:1234/x",
+        "http://alice:pa:ss@host:1234/x",
     ]
     return [{"url": url, "redacted": http_conventions.redact_url(url)} for url in urls]
+
+
+def _proxy_redaction_cases() -> list[dict[str, Any]]:
+    values = [
+        "http://alice:pass@proxy:3128",
+        "proxy.corp:3128",
+        # Hostile passwords (issue #778): a proxy value has no
+        # meaningful path, so none of these end its authority early --
+        # the whole value, after its scheme (or from the start, with
+        # none), is searched for the LAST `@`.
+        "http://alice:pa/ss@proxy:3128",
+        "http://alice:pa?ss@proxy:3128",
+        "http://alice:pa#ss@proxy:3128",
+        "http://alice:pa ss@proxy:3128",
+        "http://alice:pa\rss@proxy:3128",
+        "http://alice:pa@ss@proxy:3128",
+        "http://alice:pa:ss@proxy:3128",
+        "alice:s3cret@proxy:3128 ",
+    ]
+    return [
+        {"value": value, "redacted": http_conventions.redact_proxy_value(value)}
+        for value in values
+    ]
 
 
 # ---------------------------------------------------------------------
@@ -202,6 +230,17 @@ def _proxy_cases() -> list[dict[str, Any]]:
     add({"http_proxy": "socks5://host:1080"}, "http", "example.com")
     add({"http_proxy": "http://host:99999"}, "http", "example.com")
     add({}, "http", "example.com")
+    # Hostile passwords (issue #778): a proxy value has no meaningful
+    # path, so none of these are a port-parsing failure any more.
+    add({"http_proxy": "http://alice:pa/ss@proxy:3128"}, "http", "example.com")
+    add({"http_proxy": "http://alice:pa?ss@proxy:3128"}, "http", "example.com")
+    add({"http_proxy": "http://alice:pa#ss@proxy:3128"}, "http", "example.com")
+    add({"http_proxy": "http://alice:pa:ss@proxy:3128"}, "http", "example.com")
+    # A proxy value with a control character or whitespace is refused
+    # with the shared text, same as a request URL (issue #778).
+    add({"http_proxy": "http://alice:pa ss@proxy:3128"}, "http", "example.com")
+    add({"http_proxy": "http://alice:pa\rss@proxy:3128"}, "http", "example.com")
+    add({"http_proxy": "alice:s3cret@proxy:3128 "}, "http", "example.com")
     return cases
 
 
@@ -250,6 +289,7 @@ def build_corpus() -> dict[str, Any]:
         "scheme_detection_cases": _scheme_detection_cases(),
         "strict_port_cases": _strict_port_cases(),
         "redaction_cases": _redaction_cases(),
+        "proxy_redaction_cases": _proxy_redaction_cases(),
         "proxy_cases": _proxy_cases(),
         "retry_after_cases": _retry_after_cases(),
     }
