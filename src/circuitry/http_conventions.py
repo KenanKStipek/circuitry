@@ -144,7 +144,7 @@ def mask_credential_query_params(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(query=new_query))
 
 
-def _strip_request_url_userinfo(url: str) -> str:
+def strip_request_url_userinfo(url: str) -> str:
     """*url*'s userinfo removed from its authority -- the LAST ``@``
     inside :func:`urllib.parse.urlsplit`'s own ``netloc``, not a ``/``,
     ``?``, ``#`` or whitespace boundary the way a free-text scrub
@@ -154,6 +154,16 @@ def _strip_request_url_userinfo(url: str) -> str:
     of a regex heuristic -- means a password containing any of those
     (none of which end ``urlsplit``'s own ``netloc`` the way ``/`` does)
     still comes out fully removed (issue #778).
+
+    Also used, directly (not only through :func:`redact_url`), by every
+    surface that builds a plain :class:`urllib.request.Request` (the
+    ``http`` tool, cyberdiner): urllib keeps a URL's userinfo verbatim
+    in ``Request.host`` and never turns it into an ``Authorization``
+    header the way electricity's own wire building does, so a userinfo
+    containing a colon but no port (``http://user:pass@host/``) reaches
+    ``http.client``'s own host/port split unstripped and raises its
+    confusing, credential-bearing ``InvalidURL("nonnumeric port: ...")``
+    -- stripped first, it never sees the userinfo at all (issue #778).
     """
     parsed = _urlsplit(url)
     if "@" not in parsed.netloc:
@@ -167,7 +177,7 @@ def redact_url(url: str) -> str:
     parameter masked — the two masks every refusal message that names a
     request URL (never a proxy value, see :func:`redact_proxy_value`)
     applies before naming it."""
-    return _strip_request_url_userinfo(mask_credential_query_params(url))
+    return strip_request_url_userinfo(mask_credential_query_params(url))
 
 
 def redact_proxy_value(value: str) -> str:
@@ -221,6 +231,15 @@ def check_strict_port(url: str) -> None:
     after the host (or after ``]`` for IPv6) comes ``:`` and one or
     more ASCII digits, 1-65535. An empty port, or none at all, means the
     scheme's default and is never refused.
+
+    When *url*'s parsed authority carries no userinfo of its own, yet an
+    ``@`` still appears somewhere after it (e.g.
+    ``https://user:pa/ss@api.example.com/v1`` -- the authority ends at
+    the first ``/``, so ``urlsplit`` reads ``pa`` as a port attempt, not
+    as half of a password), the "port" text is really a credential
+    fragment: the refusal never echoes it, and names *url* with
+    everything up to the LAST ``@`` cut away instead of the usual
+    userinfo-stripped form (issue #778).
     """
     netloc = _urlsplit(url).netloc
     host_port = netloc.rpartition("@")[2]
@@ -229,6 +248,10 @@ def check_strict_port(url: str) -> None:
         return
     if _port_in_range(port_text):
         return
+    scheme_sep = url.find("://")
+    rest = url[scheme_sep + 3 + len(netloc) :] if scheme_sep != -1 else ""
+    if "@" not in netloc and "@" in rest:
+        raise ValueError(f"invalid port in URL '{redact_proxy_value(url)}'")
     raise ValueError(f"invalid port in URL '{redact_url(url)}': '{port_text}'")
 
 
@@ -267,18 +290,37 @@ def _normalize_proxy_url(value: str) -> str:
     return value if "://" in value else f"http://{value}"
 
 
-def _proxy_host_port(normalized: str) -> str:
-    """The host[:port] text of *normalized* (a proxy value that already
-    has a ``scheme://``): the whole remainder after it, split at the
-    LAST ``@`` -- never bounded by a ``/``, ``?`` or ``#`` the way
-    :func:`check_strict_port`'s own ``urlsplit``-based netloc is, since
-    a proxy value has no meaningful path and its password may itself
-    contain any of those (issue #778). The returned text is always a
-    suffix of *normalized* itself, so a caller may safely compute where
-    it starts as ``len(normalized) - len(host_port)``.
+def _proxy_authority(normalized: str) -> str:
+    """The authority text of *normalized* (a proxy value that already
+    has a ``scheme://``): bounded at the first ``/``, ``?`` or ``#``
+    after it -- the same boundary curl, ``http.client`` and a raw
+    socket all use when they read the value back out, so
+    ``http://proxy.corp:3128/`` names the authority ``proxy.corp:3128``,
+    never the whole remainder (issue #778). Refuses *normalized* when an
+    ``@`` appears in the part *after* that boundary: a password hidden
+    behind a ``/``, ``?`` or ``#`` to smuggle a second, *real* host past
+    whichever of those functions stops at the first one would otherwise
+    reach them unchecked.
     """
     after_scheme = normalized.split("://", 1)[1]
-    return after_scheme.rpartition("@")[2]
+    boundary = len(after_scheme)
+    for sep in "/?#":
+        idx = after_scheme.find(sep)
+        if idx != -1 and idx < boundary:
+            boundary = idx
+    authority, tail = after_scheme[:boundary], after_scheme[boundary:]
+    if "@" in tail:
+        raise ValueError(f"invalid proxy URL '{redact_proxy_value(normalized)}'")
+    return authority
+
+
+def _proxy_host_port(normalized: str) -> str:
+    """The host[:port] text of *normalized* (a proxy value that already
+    has a ``scheme://``): :func:`_proxy_authority`, split at the LAST
+    ``@`` -- a proxy value's userinfo may itself contain one (issue
+    #778), but never past the authority's own boundary any more.
+    """
+    return _proxy_authority(normalized).rpartition("@")[2]
 
 
 def _check_strict_port_for_proxy(normalized: str) -> None:
@@ -304,14 +346,19 @@ def _with_default_port(url: str, default_port: int) -> str:
     out (curl's ``--config``, the ``http`` tool's ``Request.set_proxy``)
     must see the real default explicitly, since curl's *own* default for
     a schemeless/portless proxy is 1080, its historic SOCKS-proxy
-    convention — never this module's own 80 (issue #778).
+    convention — never this module's own 80 (issue #778). The authority
+    (issue #778) is no longer always a suffix of *url* -- a trailing
+    ``/``, ``?`` or ``#`` (and whatever follows it) can come after it --
+    so the default port is spliced in right after the authority ends,
+    never appended to the end of *url* itself.
     """
-    host_port = _proxy_host_port(url)
+    authority = _proxy_authority(url)
+    host_port = authority.rpartition("@")[2]
     if _host_port_text(host_port):
         return url
-    prefix = url[: len(url) - len(host_port)]
+    authority_end = url.find("://") + 3 + len(authority)
     separator = "" if host_port.endswith(":") else ":"
-    return f"{prefix}{host_port}{separator}{default_port}"
+    return f"{url[:authority_end]}{separator}{default_port}{url[authority_end:]}"
 
 
 def check_proxy_url(value: str) -> str:
@@ -525,6 +572,13 @@ class _OpenWithProxyRuleRedirectHandler(urllib.request.HTTPRedirectHandler):
 
         newurl = urllib.parse.quote(newurl, encoding="iso-8859-1", safe=string.punctuation)
         newurl = urllib.parse.urljoin(req.full_url, newurl)
+        # Stripped before urllib's own `redirect_request` ever builds a
+        # `Request` from it (issue #778, matching `plugins/http.py`'s
+        # own `_RedirectPolicy`): otherwise a userinfo with no port
+        # (`http://user:pass@host/`) reaches `http.client`'s host/port
+        # split unstripped and raises its own credential-bearing
+        # `InvalidURL("nonnumeric port: ...")` instead.
+        newurl = strip_request_url_userinfo(newurl)
 
         new = self.redirect_request(req, fp, code, msg, headers, newurl)
         if new is None:

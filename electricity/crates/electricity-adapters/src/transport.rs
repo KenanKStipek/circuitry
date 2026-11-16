@@ -244,8 +244,12 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     });
     // The port is parsed strictly -- a value `u16::parse` would
     // reject outright (`99999`) used to silently fall back to the
-    // scheme's own default port instead of being refused.
-    let port = electricity_tools::http_conventions::strict_port(hostport, &normalized)
+    // scheme's own default port instead of being refused. *authority*
+    // (userinfo still attached, when present), never *hostport* --
+    // `strict_port` needs the whole authority to tell a genuine
+    // userinfo apart from a password hidden behind the authority's
+    // own `/`/`?`/`#` boundary (issue #778, B2).
+    let port = electricity_tools::http_conventions::strict_port(authority, &normalized)
         .map_err(TransportFailure::Validation)?;
     let host = if let Some(rest) = hostport.strip_prefix('[') {
         match rest.split_once(']') {

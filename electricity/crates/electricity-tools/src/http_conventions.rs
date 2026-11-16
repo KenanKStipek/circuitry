@@ -182,22 +182,45 @@ pub fn redact_proxy_value(value: &str) -> String {
     }
 }
 
-/// `http_conventions._proxy_host_port` -- the host[:port] text of
-/// *normalized* (a proxy value that already has a `scheme://`): the
-/// whole remainder after it, split at the LAST `@` -- never bounded by
-/// a `/`, `?` or `#` the way [`strict_port`]'s own `urlsplit`-based
-/// netloc is, since a proxy value has no meaningful path and its
-/// password may itself contain any of those (issue #778). The
-/// returned text is always a suffix of *normalized* itself.
-pub(crate) fn proxy_host_port(normalized: &str) -> &str {
+/// `http_conventions._proxy_authority` -- the authority text of
+/// *normalized* (a proxy value that already has a `scheme://`):
+/// bounded at the first `/`, `?` or `#` after it -- the same boundary
+/// curl, `http.client` and a raw socket all use when they read the
+/// value back out, so `http://proxy.corp:3128/` names the authority
+/// `proxy.corp:3128`, never the whole remainder (issue #778). `Err`
+/// when an `@` appears in the part *after* that boundary: a password
+/// hidden behind a `/`, `?` or `#` to smuggle a second, *real* host
+/// past whichever caller stops at the first one would otherwise reach
+/// it unchecked.
+pub(crate) fn proxy_authority(normalized: &str) -> Result<&str, String> {
     let after_scheme = normalized
         .split_once("://")
         .map(|(_, rest)| rest)
         .unwrap_or(normalized);
-    match after_scheme.rfind('@') {
-        Some(at) => &after_scheme[at + 1..],
-        None => after_scheme,
+    let boundary = after_scheme
+        .find(['/', '?', '#'])
+        .unwrap_or(after_scheme.len());
+    let (authority, tail) = (&after_scheme[..boundary], &after_scheme[boundary..]);
+    if tail.contains('@') {
+        return Err(format!(
+            "invalid proxy URL '{}'",
+            redact_proxy_value(normalized)
+        ));
     }
+    Ok(authority)
+}
+
+/// `http_conventions._proxy_host_port` -- the host[:port] text of
+/// *normalized* (a proxy value that already has a `scheme://`):
+/// [`proxy_authority`], split at the LAST `@` -- a proxy value's
+/// userinfo may itself contain one (issue #778), but never past the
+/// authority's own boundary any more.
+pub(crate) fn proxy_host_port(normalized: &str) -> Result<&str, String> {
+    let authority = proxy_authority(normalized)?;
+    Ok(match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    })
 }
 
 /// The raw port text in *host_port* (userinfo already stripped by the
@@ -238,6 +261,15 @@ fn port_in_range(port_text: &str) -> Option<u16> {
     (1..=65535).contains(&value).then_some(value as u16)
 }
 
+/// *netloc*'s port, the strict port rule -- when *netloc* carries no
+/// userinfo of its own, yet *original_url* still has an `@` somewhere
+/// after it (e.g. `https://user:pa/ss@api.example.com/v1` -- the
+/// authority ends at the first `/`, so *netloc* reads `user:pa`, and
+/// `pa` looks like an ordinary invalid port, not half of a password),
+/// the "port" text is really a credential fragment: the refusal never
+/// echoes it, and names *original_url* with everything up to the LAST
+/// `@` cut away instead of the usual userinfo-stripped form (issue
+/// #778, B2).
 pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, String> {
     let host_port = match netloc.rfind('@') {
         Some(at) => &netloc[at + 1..],
@@ -252,6 +284,16 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
     if let Some(value) = port_in_range(port_text) {
         return Ok(Some(value));
     }
+    let scheme_end = original_url.find("://");
+    let rest = scheme_end
+        .and_then(|idx| original_url.get(idx + 3 + netloc.len()..))
+        .unwrap_or("");
+    if !netloc.contains('@') && rest.contains('@') {
+        return Err(format!(
+            "invalid port in URL '{}'",
+            redact_proxy_value(original_url)
+        ));
+    }
     Err(format!(
         "invalid port in URL '{}': '{}'",
         redact_url(original_url),
@@ -264,7 +306,7 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
 /// refusal names *normalized* through [`redact_proxy_value`] (issue
 /// #778).
 pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, String> {
-    let host_port = proxy_host_port(normalized);
+    let host_port = proxy_host_port(normalized)?;
     let Some(port_text) = host_port_text(host_port) else {
         return Ok(None);
     };

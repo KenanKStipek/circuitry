@@ -181,24 +181,37 @@ pub fn resolve_proxy_checked_with_port(
         ));
     }
     crate::http_conventions::strict_port_for_proxy(&normalized)?;
-    Ok(Some(with_default_port(&normalized, 80)))
+    Ok(Some(with_default_port(&normalized, 80)?))
 }
 
-/// *url* with `:<default_port>` written after its host[:port] text
-/// (`http_conventions::proxy_host_port`, never `urlsplit`'s own
+/// *url* with `:<default_port>` written right after its authority
+/// (`http_conventions::proxy_authority`, never `urlsplit`'s own
 /// `/`/`?`/`#`-bounded netloc) when it names no port of its own, not
 /// even an empty one -- curl's own default for a schemeless/portless
 /// proxy is 1080, its historic SOCKS convention, never this module's
 /// own 80, so the default is written in explicitly rather than left for curl (or
 /// `http.rs`'s own port-defaulting, which would otherwise use the
-/// *target* URL's scheme) to guess (issue #778).
-fn with_default_port(url: &str, default_port: u16) -> String {
-    let host_port = crate::http_conventions::proxy_host_port(url);
+/// *target* URL's scheme) to guess (issue #778). The authority is no
+/// longer always a suffix of *url* -- a trailing `/`, `?` or `#` (and
+/// whatever follows it) can come after it -- so the default port is
+/// spliced in right after the authority ends, never appended to the
+/// end of *url* itself.
+fn with_default_port(url: &str, default_port: u16) -> Result<String, String> {
+    let authority = crate::http_conventions::proxy_authority(url)?;
+    let host_port = match authority.rfind('@') {
+        Some(at) => &authority[at + 1..],
+        None => authority,
+    };
     if crate::http_conventions::host_port_text(host_port).is_some_and(|text| !text.is_empty()) {
-        return url.to_string();
+        return Ok(url.to_string());
     }
+    let authority_end = url.find("://").map(|i| i + 3).unwrap_or(0) + authority.len();
     let separator = if host_port.ends_with(':') { "" } else { ":" };
-    format!("{url}{separator}{default_port}")
+    Ok(format!(
+        "{}{separator}{default_port}{}",
+        &url[..authority_end],
+        &url[authority_end..]
+    ))
 }
 
 #[cfg(test)]

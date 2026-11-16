@@ -125,6 +125,18 @@
     {
       "url": "http://host:80#x",
       "error": null
+    },
+    {
+      "url": "https://user:pa/ss@api.example.com/v1",
+      "error": "invalid port in URL 'https://api.example.com/v1'"
+    },
+    {
+      "url": "https://user:pa?ss@api.example.com/v1",
+      "error": "invalid port in URL 'https://api.example.com/v1'"
+    },
+    {
+      "url": "https://user:pa#ss@api.example.com/v1",
+      "error": "invalid port in URL 'https://api.example.com/v1'"
     }
   ],
   "redaction_cases": [
@@ -648,7 +660,7 @@
       "host": "example.com",
       "port": null,
       "result": {
-        "ok": "http://alice:pa/ss@proxy:3128"
+        "error": "invalid proxy URL 'http://proxy:3128'"
       }
     },
     {
@@ -662,7 +674,7 @@
       "host": "example.com",
       "port": null,
       "result": {
-        "ok": "http://alice:pa?ss@proxy:3128"
+        "error": "invalid proxy URL 'http://proxy:3128'"
       }
     },
     {
@@ -676,7 +688,35 @@
       "host": "example.com",
       "port": null,
       "result": {
-        "ok": "http://alice:pa#ss@proxy:3128"
+        "error": "invalid proxy URL 'http://proxy:3128'"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy.corp:3128/"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://proxy.corp:3128/"
+      }
+    },
+    {
+      "env": [
+        [
+          "http_proxy",
+          "http://proxy.corp/"
+        ]
+      ],
+      "scheme": "http",
+      "host": "example.com",
+      "port": null,
+      "result": {
+        "ok": "http://proxy.corp:80/"
       }
     },
     {

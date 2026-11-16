@@ -14,6 +14,7 @@ from circuitry.http_conventions import (
     redact_url,
     resolve_proxy,
     split_proxy_url,
+    strip_request_url_userinfo,
     strip_url_userinfo,
 )
 
@@ -71,6 +72,28 @@ def test_check_strict_port_rejects_junk_after_an_ipv6_literal_with_the_shared_te
     with pytest.raises(ValueError) as exc_info:
         check_strict_port("http://[::1]x/x")
     assert str(exc_info.value) == "invalid port in URL 'http://[::1]x/x': 'x'"
+
+
+@pytest.mark.parametrize("char", ("/", "?", "#"))
+def test_check_strict_port_never_echoes_a_password_disguised_as_a_port(char: str) -> None:
+    """``https://user:pa/ss@api.example.com/v1``'s authority ends at the
+    `/`, so the parsed netloc is ``user:pa`` -- no userinfo of its own
+    to strip, as far as a plain :func:`redact_url` is concerned -- yet
+    the URL still carries an `@` further along, which means the real
+    host (``api.example.com``) and the rest of the password are hidden
+    past it. Refused with the shared text, cut to the last ``@`` and the
+    port text omitted entirely, never echoing the fragment (``pa``)
+    that would otherwise look like an ordinary invalid port (issue
+    #778, B2).
+    """
+    url = f"https://user:pa{char}ss@api.example.com/v1"
+    with pytest.raises(ValueError) as exc_info:
+        check_strict_port(url)
+    message = str(exc_info.value)
+    assert message == "invalid port in URL 'https://api.example.com/v1'"
+    assert "user" not in message
+    assert "pa" not in message
+    assert "ss" not in message
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +158,21 @@ def test_strip_url_userinfo_strips_to_the_last_at_sign_in_the_authority() -> Non
     assert "ss" not in redacted
 
 
+def test_strip_request_url_userinfo_strips_userinfo_with_no_port() -> None:
+    """Issue #778, N5: CPython's own ``http.client`` raises a bare,
+    credential-bearing ``InvalidURL("nonnumeric port: 'pass@host'")``
+    when a plain ``urllib.request.Request`` is built from a URL like
+    this -- the ``http`` tool and cyberdiner build their
+    ``Request`` from this function's own result instead, so the
+    userinfo is gone before urllib ever sees it.
+    """
+    assert strip_request_url_userinfo("http://user:pass@host/x") == "http://host/x"
+
+
+def test_strip_request_url_userinfo_leaves_a_plain_url_unchanged() -> None:
+    assert strip_request_url_userinfo("http://host/x") == "http://host/x"
+
+
 # ---------------------------------------------------------------------------
 # Hostile passwords (issue #778): no piece of one may survive a refusal,
 # on either a request URL (``redact_url``) or a proxy value
@@ -174,19 +212,38 @@ def test_redact_proxy_value_removes_a_password_containing_any_hostile_char(char:
     assert password not in redacted
 
 
-@pytest.mark.parametrize("char", ("/", "?", "#", "@", ":"))
+@pytest.mark.parametrize("char", ("@", ":"))
 def test_check_proxy_url_accepts_a_password_containing_a_hostile_non_control_char(
     char: str,
 ) -> None:
-    """None of these end a proxy value's authority the way they would a
-    request URL's -- a proxy value has no meaningful path, so the port
-    check must still find the real port after the password, not treat
-    part of the password itself as an invalid port.
+    """Neither of these ends a proxy value's authority -- a proxy value
+    has no meaningful path, so the port check must still find the real
+    port after the password, not treat part of the password itself as
+    an invalid port.
     """
     password = f"pa{char}ss"
     assert check_proxy_url(f"http://alice:{password}@proxy:3128") == (
         f"http://alice:{password}@proxy:3128"
     )
+
+
+@pytest.mark.parametrize("char", ("/", "?", "#"))
+def test_check_proxy_url_refuses_an_at_sign_after_the_authoritys_own_boundary(
+    char: str,
+) -> None:
+    """Unlike ``@``/``:``, each of these *does* end a proxy value's
+    authority (issue #778) -- a password containing one, followed later
+    by an ``@``, would otherwise hide a second, real host past it
+    (``http://alice:pa/ss@proxy:3128`` reads as authority ``alice:pa``,
+    tail ``/ss@proxy:3128``), so this is refused outright, named with
+    :func:`redact_proxy_value` and no port text.
+    """
+    password = f"pa{char}ss"
+    with pytest.raises(ValueError, match="invalid proxy URL") as exc_info:
+        check_proxy_url(f"http://alice:{password}@proxy:3128")
+    message = str(exc_info.value)
+    assert "alice" not in message
+    assert password not in message
 
 
 @pytest.mark.parametrize("char", (" ", "\r"))
@@ -330,6 +387,12 @@ def test_check_proxy_url_rejects_an_invalid_port() -> None:
         ("http://user:pass@proxy.corp", "http://user:pass@proxy.corp:80"),
         ("http://[::1]", "http://[::1]:80"),
         ("http://proxy.corp:3128", "http://proxy.corp:3128"),
+        # A common form (issue #778, N1): a trailing `/` after an
+        # explicit port still works like main, and a portless value
+        # with one still gets this module's own default, the `/`
+        # itself preserved rather than dropped.
+        ("http://proxy.corp:3128/", "http://proxy.corp:3128/"),
+        ("http://proxy.corp/", "http://proxy.corp:80/"),
     ],
 )
 def test_check_proxy_url_writes_the_default_port_80_explicitly(value: str, expected: str) -> None:

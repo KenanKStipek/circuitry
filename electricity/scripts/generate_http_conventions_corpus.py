@@ -96,6 +96,12 @@ def _strict_port_cases() -> list[dict[str, Any]]:
         "http://host: 9/x",
         "http://user:p@ss@host:99999/x",
         "http://host:80#x",
+        # A password hidden behind the authority's own boundary (issue
+        # #778): the "port" is really a credential fragment, never
+        # echoed in the refusal.
+        "https://user:pa/ss@api.example.com/v1",
+        "https://user:pa?ss@api.example.com/v1",
+        "https://user:pa#ss@api.example.com/v1",
     ]
     cases = []
     for url in urls:
@@ -241,11 +247,17 @@ def _proxy_cases() -> list[dict[str, Any]]:
     add({"http_proxy": "socks5://host:1080"}, "http", "example.com")
     add({"http_proxy": "http://host:99999"}, "http", "example.com")
     add({}, "http", "example.com")
-    # Hostile passwords (issue #778): a proxy value has no meaningful
-    # path, so none of these are a port-parsing failure any more.
+    # The authority ends at the first `/`, `?` or `#` (issue #778), so
+    # these are refused -- an `@` follows it -- never a port-parsing
+    # failure, and never a `/`-bounded value silently accepted either.
     add({"http_proxy": "http://alice:pa/ss@proxy:3128"}, "http", "example.com")
     add({"http_proxy": "http://alice:pa?ss@proxy:3128"}, "http", "example.com")
     add({"http_proxy": "http://alice:pa#ss@proxy:3128"}, "http", "example.com")
+    # A common form (issue #778, N1): a trailing `/` after an explicit
+    # port still works, and a portless value still gets this module's
+    # own default (80), never curl's historic SOCKS default (1080).
+    add({"http_proxy": "http://proxy.corp:3128/"}, "http", "example.com")
+    add({"http_proxy": "http://proxy.corp/"}, "http", "example.com")
     add({"http_proxy": "http://alice:pa:ss@proxy:3128"}, "http", "example.com")
     # A proxy value with a control character or whitespace is refused
     # with the shared text, same as a request URL (issue #778).
