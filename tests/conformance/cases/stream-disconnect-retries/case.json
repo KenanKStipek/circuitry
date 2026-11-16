@@ -8,11 +8,11 @@
   "third_party_text": [
     {
       "location": "prime.greeting.meta.attempts.0.error",
-      "pattern": "ollama request failed \\(curl exit 18\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(18\\) transfer closed with 95 bytes remaining to read.*"
+      "pattern": "ollama request failed \\(curl exit 18\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(18\\) (?:transfer closed with 95 bytes remaining to read|end of response with 95 bytes missing).*"
     },
     {
       "location": "prime.greeting.meta.attempts.0.fallback_attempts.0.error",
-      "pattern": "ollama request failed \\(curl exit 18\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(18\\) transfer closed with 95 bytes remaining to read.*"
+      "pattern": "ollama request failed \\(curl exit 18\\) model='test-model' url=http://127\\.0\\.0\\.1:<MOCK_PORT>/api/generate: curl: \\(18\\) (?:transfer closed with 95 bytes remaining to read|end of response with 95 bytes missing).*"
     }
   ]
 }
