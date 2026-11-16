@@ -78,7 +78,7 @@ def test_check_strict_port_rejects_junk_after_an_ipv6_literal_with_the_shared_te
 def test_check_strict_port_never_echoes_a_password_disguised_as_a_port(char: str) -> None:
     """``https://user:pa/ss@api.example.com/v1``'s authority ends at the
     `/`, so the parsed netloc is ``user:pa`` -- no userinfo of its own
-    to strip, as far as a plain :func:`redact_url` is concerned -- yet
+    to strip, as far as a plain :func:`_redact_url` is concerned -- yet
     the URL still carries an `@` further along, which means the real
     host (``api.example.com``) and the rest of the password are hidden
     past it. Refused with the shared text, cut to the last ``@`` and the
@@ -159,7 +159,7 @@ def test_check_url_scheme_refusal_never_echoes_a_password_hidden_past_the_author
 ) -> None:
     """Issue #778: the parsed netloc for this is ``user:pa`` (the
     authority ends at ``char``), with no ``@`` of its own -- a plain
-    :func:`redact_url` leaves the rest of the password (``ss``)
+    :func:`_redact_url` leaves the rest of the password (``ss``)
     untouched.
     """
     url = f"ftp://user:pa{char}ss@host/x"

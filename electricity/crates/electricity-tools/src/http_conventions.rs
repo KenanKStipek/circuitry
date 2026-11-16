@@ -67,7 +67,7 @@ fn percent_decode_plus(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// `curl_support.py::_mask_credential_query_params` -- masks the
+/// `http_conventions.py::_mask_credential_query_params` -- masks the
 /// value of any query-string key matching [`looks_like_credential_key`],
 /// then re-encodes the **whole** query with
 /// [`electricity_value::pycompat::urlencode`] even when nothing
@@ -104,7 +104,7 @@ fn mask_credential_query_params(url: &str) -> String {
     result
 }
 
-/// `http_conventions._strip_request_url_userinfo` -- the LAST `@`
+/// `http_conventions.strip_request_url_userinfo` -- the LAST `@`
 /// inside [`crate::http::http_url::urlsplit`]'s own `netloc`, not a
 /// `/`, `?`, `#` or whitespace boundary: this always receives one
 /// whole URL, never prose with one embedded somewhere, so building the
@@ -135,7 +135,7 @@ fn redact_url(url: &str) -> String {
 }
 
 /// `http_conventions.redact_proxy_value` -- a proxy value has no
-/// meaningful path, so (unlike [`redact_url`]) this never stops at a
+/// meaningful path, so (unlike [`redact_request_url`]) this never stops at a
 /// `/`, `?`, `#` or whitespace boundary: only the LAST `@` in the
 /// *whole* value (after its `scheme://`, when it has one) counts, so a
 /// password containing any of those still comes out fully removed

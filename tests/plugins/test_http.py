@@ -331,7 +331,7 @@ def test_url_error_never_names_a_password_in_the_url(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Issue #778: the connection-failure message names the URL
-    through ``redact_url``, so a password in it never reaches the
+    through ``redact_request_url``, so a password in it never reaches the
     message -- the same guarantee electricity's ``http`` tool now
     gives too.
     """
