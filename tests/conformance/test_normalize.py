@@ -9,6 +9,7 @@ import pytest
 from .normalize import (
     THIRD_PARTY_TEXT_PLACEHOLDER,
     NormalizationError,
+    _mask_profile_schema_validation_lines,
     apply_known_divergence,
     assert_errors_equal,
     assert_events_equal,
@@ -16,9 +17,11 @@ from .normalize import (
     assert_states_equal,
     assert_values_equal,
     mask_known_third_party_text,
+    mask_known_third_party_text_in,
     mask_known_third_party_text_to_end,
     normalize,
     normalize_for_comparison,
+    normalize_recorded_http_requests,
     redact_events_text_pair,
     redact_leaked_paths,
     redact_runtime_strings,
@@ -550,10 +553,14 @@ def test_mask_cel_parse_error_leaves_non_parse_failures_untouched() -> None:
 
 
 def test_mask_cel_eval_error_masks_each_occurrence_up_to_its_own_line_end() -> None:
+    # `overflow` is cel-python's own text (#400: a relational comparison
+    # whose operand doesn't fit CEL's 64-bit `int`) -- the one shape
+    # `_CEL_EVAL_OWN_TEXT_RE` doesn't cover, since this module never
+    # constructs it itself.
     text = (
         "3 effects failed in parallel:\n"
-        "  [1] CelEvaluationError: fan.cel_gate: CEL evaluation failed for '1 / 0': division by zero\n"
-        "  [2] CelEvaluationError: fan.cel_loop: CEL evaluation failed for '1 / 0': division by zero\n"
+        "  [1] CelEvaluationError: fan.cel_gate: CEL evaluation failed for '1 / 0': overflow\n"
+        "  [2] CelEvaluationError: fan.cel_loop: CEL evaluation failed for '1 / 0': overflow\n"
         "  [3] AnswerParseError: fan.model_gate: could not parse a yes/no answer from 'maybe'"
     )
     masked = mask_known_third_party_text(text)
@@ -565,6 +572,38 @@ def test_mask_cel_eval_error_masks_each_occurrence_up_to_its_own_line_end() -> N
     )
 
 
+def test_mask_cel_eval_error_leaves_circuitrys_own_text_exact() -> None:
+    # Every one of these is a fixed template `core/cel_eval.py` builds
+    # itself (`_StateEvaluator`/`_error_text`), never cel-python's own
+    # wording -- none are masked, on either side of the colon.
+    for text in (
+        "CEL evaluation failed for 'value.missing_key == 1': no such key: 'missing_key'",
+        "CEL evaluation failed for '[1, 2, 3][5]': list index out of range: 5",
+        "CEL evaluation failed for '5[0] == 1': cannot index an int with an int",
+        "CEL evaluation failed for '1 / 0 == 1': division by zero",
+        "CEL evaluation failed for '1 % 0 == 1': modulus by zero",
+        "CEL evaluation failed for 'nope(1) == 1': undeclared reference to 'nope'",
+        "CEL evaluation failed for '[1] + 1 == [1]': cannot apply '+' to a list and an int",
+    ):
+        assert mask_known_third_party_text(text) == text
+
+
+def test_mask_cel_eval_error_does_not_swallow_trailing_circuitry_text() -> None:
+    # A `Conditional`'s own warning line wraps the CEL phrase in parens and
+    # follows it with `; on_error=...` on the same line -- even for a
+    # third-party tail (never constructed by `_error_text` itself), that
+    # trailing Circuitry text must survive.
+    text = (
+        "Conditional 'gate': condition failed (CEL evaluation failed for "
+        "'state.prime.big.value > 0': overflow); on_error=continue, taking the else branch"
+    )
+    assert mask_known_third_party_text(text) == (
+        "Conditional 'gate': condition failed (CEL evaluation failed for "
+        f"'state.prime.big.value > 0': {THIRD_PARTY_TEXT_PLACEHOLDER}); on_error=continue, "
+        "taking the else branch"
+    )
+
+
 def test_mask_yaml_parse_error_covers_both_circuitry_prefixes() -> None:
     assert mask_known_third_party_text("YAML parse error: while parsing a flow sequence") == (
         f"YAML parse error: {THIRD_PARTY_TEXT_PLACEHOLDER}"
@@ -572,6 +611,17 @@ def test_mask_yaml_parse_error_covers_both_circuitry_prefixes() -> None:
     assert mask_known_third_party_text("prime.plan_it: parse_failed: day is out of range for month") == (
         f"prime.plan_it: parse_failed: {THIRD_PARTY_TEXT_PLACEHOLDER}"
     )
+
+
+def test_mask_yaml_parse_error_leaves_a_duplicate_key_message_exact() -> None:
+    # `core/yaml_load.py::DuplicateKeyError` is entirely Circuitry's own
+    # text, never PyYAML's -- `yaml.safe_load` itself says nothing about a
+    # repeated key at all.
+    text = (
+        "YAML parse error: duplicate key 'effects' at line 6, column 1 "
+        "(first defined at line 1, column 1); YAML would silently keep only the last one"
+    )
+    assert mask_known_third_party_text(text) == text
 
 
 def test_mask_curl_detail_keeps_a_trailing_circuitry_hint_exact() -> None:
@@ -587,6 +637,23 @@ def test_mask_curl_detail_keeps_a_trailing_circuitry_hint_exact() -> None:
         f"url=http://127.0.0.1:1/api/generate: curl: (7) {THIRD_PARTY_TEXT_PLACEHOLDER} Ollama at "
         "http://127.0.0.1:1 is not reachable. Start it (`ollama serve`), or set "
         "`runtime.adapters.ollama.base_url` in your config. Run `cof doctor` to verify connectivity."
+    )
+
+
+def test_mask_curl_detail_stops_at_the_closing_quote_of_an_embedded_repr() -> None:
+    # `core/prompt.py`'s own "All adapter attempts failed: [{...}]" wraps
+    # each attempt's error text in a Python dict/list repr -- the curl
+    # detail must not swallow the sibling keys after its own closing quote.
+    text = (
+        "All adapter attempts failed: [{'adapter': 'lmstudio', 'status': 'failed', "
+        '\'error\': "request failed (curl exit 7) url=http://x: curl: (7) Failed to connect '
+        "to 127.0.0.1 port 1 after 0 ms: Couldn't connect to server\", "
+        "'tokens_sent': None, 'tokens_received': None}]"
+    )
+    assert mask_known_third_party_text(text) == (
+        "All adapter attempts failed: [{'adapter': 'lmstudio', 'status': 'failed', "
+        f'\'error\': "request failed (curl exit 7) url=http://x: curl: (7) {THIRD_PARTY_TEXT_PLACEHOLDER}", '
+        "'tokens_sent': None, 'tokens_received': None}]"
     )
 
 
@@ -643,14 +710,41 @@ def test_mask_profile_schema_validation_lines_masks_each_message_after_the_heade
 
 
 def test_mask_profile_schema_validation_lines_never_touches_document_validation() -> None:
-    # "<X> validation failed:", never "failed schema validation:" -- electricity's
-    # own schema engine matches this word for word (issue #528), so it must
-    # stay untouched.
+    # "failed schema validation:" never matches "Orchestration ... validation
+    # failed:" -- the two headers are masked by two different catalogue
+    # entries (`_mask_profile_schema_validation_lines` only ever matches
+    # its own literal header), so neither interferes with the other.
+    text = (
+        "Profile 'p' at /x/profiles/p.yml failed schema validation:\n"
+        "  - adapter: 5 is not of type 'string'"
+    )
+    assert _mask_profile_schema_validation_lines(text) == (
+        "Profile 'p' at /x/profiles/p.yml failed schema validation:\n"
+        f"  - adapter: {THIRD_PARTY_TEXT_PLACEHOLDER}"
+    )
+
+
+def test_mask_document_validation_lines_masks_each_jsonschema_message_body() -> None:
     text = (
         "Orchestration validation failed:\n"
         "  - effects[0].name: 'value' should not be valid under {'pattern': '^(value)$'}"
     )
-    assert mask_known_third_party_text(text) == text
+    assert mask_known_third_party_text(text) == (
+        "Orchestration validation failed:\n"
+        f"  - effects[0].name: {THIRD_PARTY_TEXT_PLACEHOLDER}"
+    )
+
+
+def test_mask_document_validation_lines_covers_every_header_variant() -> None:
+    for header in (
+        "Inline orchestration validation failed:",
+        "Orchestration /x/child.yml validation failed:",
+        "Orchestration prime.use_child validation failed:",
+    ):
+        text = f"{header}\n  - effects[0].name: 'value' should not be valid under {{'pattern': '^(value)$'}}"
+        assert mask_known_third_party_text(text) == (
+            f"{header}\n  - effects[0].name: {THIRD_PARTY_TEXT_PLACEHOLDER}"
+        )
 
 
 def test_mask_os_strerror_masks_only_the_strerror_text() -> None:
@@ -663,6 +757,40 @@ def test_mask_os_strerror_masks_only_the_strerror_text() -> None:
 def test_mask_unrecognized_text_is_unchanged() -> None:
     text = "effects[0].name: 'value' is reserved per schema XYZ"
     assert mask_known_third_party_text(text) == text
+
+
+def test_mask_os_errno_keeps_errno_and_path_exact() -> None:
+    text = "prime.result: [Errno 20] Not a directory: 'orchestration.yml'"
+    assert mask_known_third_party_text(text) == (
+        f"prime.result: [Errno 20] {THIRD_PARTY_TEXT_PLACEHOLDER}: 'orchestration.yml'"
+    )
+
+
+def test_mask_os_errno_does_not_swallow_trailing_circuitry_text() -> None:
+    text = (
+        "Preflight failed: adapter:scripted: not ready — scripted adapter: cannot read "
+        "scripted-replies.yaml: [Errno 2] No such file or directory: 'scripted-replies.yaml'). "
+        "Re-run with --skip-preflight to bypass."
+    )
+    assert mask_known_third_party_text(text) == (
+        "Preflight failed: adapter:scripted: not ready — scripted adapter: cannot read "
+        f"scripted-replies.yaml: [Errno 2] {THIRD_PARTY_TEXT_PLACEHOLDER}: 'scripted-replies.yaml'). "
+        "Re-run with --skip-preflight to bypass."
+    )
+
+
+def test_mask_os_errno_inside_an_embedded_repr() -> None:
+    text = (
+        "All adapter attempts failed: [{'adapter': 'claude_code', 'status': 'failed', "
+        "'error': \"circuitry-test-missing-claude could not be started: [Errno 2] No such file "
+        "or directory: 'circuitry-test-missing-claude'\", 'tokens_sent': None}]"
+    )
+    assert mask_known_third_party_text(text) == (
+        "All adapter attempts failed: [{'adapter': 'claude_code', 'status': 'failed', "
+        "'error': \"circuitry-test-missing-claude could not be started: [Errno 2] "
+        f'{THIRD_PARTY_TEXT_PLACEHOLDER}: \'circuitry-test-missing-claude\'", '
+        "'tokens_sent': None}]"
+    )
 
 
 def test_mask_known_third_party_text_to_end_masks_from_the_earliest_tail() -> None:
@@ -764,3 +892,62 @@ def test_assert_errors_equal_still_catches_a_different_location_after_masking() 
     expected = "CEL expression at 'prime.effects[2]' (effect 'broken'): expression does not parse (bar\n ^). Expression: 'foo'"
     with pytest.raises(AssertionError, match="differs even after masking"):
         assert_errors_equal(actual, expected, byte_for_byte=False)
+
+
+def test_assert_errors_equal_ignores_a_location_pattern_once_a_shape_matched() -> None:
+    # A `location_pattern` is only the fallback for a shape the catalogue
+    # doesn't recognise at all -- once a shape *did* match on either side,
+    # a difference in Circuitry's own text must fail outright, never be
+    # excused by a pattern that happens to find the same location in both.
+    actual = "CEL expression at 'prime.effects[1]' (effect 'broken'): expression does not parse (foo\n^). Expression: 'foo'"
+    expected = "CEL expression at 'prime.effects[2]' (effect 'broken'): expression does not parse (bar\n ^). Expression: 'foo'"
+    with pytest.raises(AssertionError, match="differs even after masking"):
+        assert_errors_equal(
+            actual, expected, byte_for_byte=False, location_pattern=r"CEL expression at '[^']+'"
+        )
+
+
+def test_assert_errors_equal_location_pattern_fallback_only_when_no_shape_matched() -> None:
+    # Neither side matches any catalogue shape at all -- the older,
+    # weaker "failed in the same place" fallback still applies here.
+    actual = "effects[0].name: 'value' is reserved per schema XYZ"
+    expected = "effects[0].name: 'value' is reserved per schema ABC"
+    assert_errors_equal(actual, expected, byte_for_byte=False, location_pattern=r"effects\[0\]\.name")
+
+
+def test_mask_known_third_party_text_in_masks_only_error_carrying_keys() -> None:
+    state = {
+        "meta": {"error": "CEL evaluation failed for 'x': overflow"},
+        "value": {
+            "errors": ["YAML parse error: while parsing a flow sequence"],
+            "attempts": [{"error": "curl: (28) Operation timed out"}],
+            "prompt_sent": "CEL evaluation failed for 'x': overflow",
+        },
+        "raw": {"stderr": "YAML parse error: while parsing a flow sequence"},
+        "params_rendered": "curl: (28) Operation timed out",
+    }
+    masked = mask_known_third_party_text_in(state)
+    assert masked["meta"]["error"] == f"CEL evaluation failed for 'x': {THIRD_PARTY_TEXT_PLACEHOLDER}"
+    assert masked["value"]["errors"] == [f"YAML parse error: {THIRD_PARTY_TEXT_PLACEHOLDER}"]
+    assert masked["value"]["attempts"] == [{"error": f"curl: (28) {THIRD_PARTY_TEXT_PLACEHOLDER}"}]
+    # Content Circuitry sent or received, never its own error text --
+    # untouched even though it contains a catalogue marker's literal text.
+    assert masked["value"]["prompt_sent"] == "CEL evaluation failed for 'x': overflow"
+    assert masked["raw"]["stderr"] == f"YAML parse error: {THIRD_PARTY_TEXT_PLACEHOLDER}"
+    assert masked["params_rendered"] == "curl: (28) Operation timed out"
+
+
+def test_normalize_recorded_http_requests_never_masks_a_request_body() -> None:
+    # A recorded request's own body is content Circuitry sent onward, not
+    # Circuitry's own error text -- even if it happens to contain a
+    # catalogue marker's literal text, that text must survive untouched.
+    requests = [
+        {
+            "method": "POST",
+            "path": "/v1/chat",
+            "query": [],
+            "headers": {"host": "127.0.0.1:1"},
+            "body": "CEL evaluation failed for 'x': this is ordinary request content, not an error",
+        }
+    ]
+    assert normalize_recorded_http_requests(requests, []) == requests

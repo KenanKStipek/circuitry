@@ -312,6 +312,17 @@ def normalize_for_comparison(value: Any, replacements: Sequence[tuple[str, str]]
 # untouched and still has to compare exactly. A string that matches no
 # marker here is unaffected and still compares byte for byte.
 
+#: `case.json`'s own `third_party_text` key (issue #503's own harness
+#: addition) -- a fixed placeholder, distinct from every other one in
+#: this module, for a leaf whose exact text is curl's own (version-
+#: dependent) wording rather than Circuitry's: a connection-refused or a
+#: timeout failure's own `meta.error`, recorded only by *shape* (a regex
+#: `third_party_text` names), never by exact value. Defined before every
+#: catalogue pattern below, not after: several of them default a
+#: `placeholder` parameter to this constant, which Python evaluates when
+#: the `def` itself runs, not when the function is later called.
+THIRD_PARTY_TEXT_PLACEHOLDER = "<THIRD_PARTY_TEXT>"
+
 #: `core/cel_eval.py`'s own `f"{where}: expression does not parse ({exc}). "
 #: f"Expression: {expr!r}"` (only the `Parse` failure shape has this
 #: trailing `Expression: ` repeat of the document's own expression text --
@@ -330,23 +341,92 @@ _CEL_PARSE_ERROR_RE = re.compile(
     re.DOTALL,
 )
 
+#: `core/cel_eval.py`'s own `_error_text`'s own fixed templates -- every
+#: text that function constructs itself, rather than returning a wrapped
+#: library exception's message unchanged, so this is Circuitry's own
+#: wording, never cel-python's: `no such key`/`no such name`/`cannot
+#: select field`/`... index out of range`/`cannot index ... with ...`
+#: (`_StateEvaluator.member_dot`/`member_index`), `division by zero`/
+#: `modulus by zero`/`return error for overflow` (the multiplication
+#: node's own `ZeroDivisionError`/`ValueError`/`OverflowError` handling),
+#: `cannot use ... as a key`/`duplicate key` (`mapinits`), `undeclared
+#: reference to`/`cannot compare ... to ...`/`cannot apply ... to ...`
+#: (`_error_text`'s own undeclared-reference and overload branches),
+#: `no such overload` and the `min()`-of-empty-sequence text (the `all`/
+#: `exists`/`min` macro handling). Checked against the `tp` group's own
+#: text before it is ever masked -- a match here is left alone entirely,
+#: the same carve-out `_SCHEMA_WELL_FORMEDNESS_KNOWN_RE` gives Circuitry's
+#: own two schema well-formedness templates. Loose on the variable parts
+#: (`.+`/`\w+`, never the exact repr) since the point is only to
+#: recognise *which* fixed template produced the text, not to re-validate
+#: its content -- any text actually produced by one of these call sites
+#: can only ever have this shape.
+_CEL_EVAL_OWN_TEXT_RE = re.compile(
+    r"no such key: .+"
+    r"|no such name '[^']*' in \[.*\]"
+    r"|cannot select field '[^']*' on (?:a|an) \w+"
+    r"|\w+ index out of range: .+"
+    r"|cannot index (?:a|an) \w+ with (?:a|an) \w+"
+    r"|division by zero"
+    r"|modulus by zero"
+    r"|return error for overflow"
+    r"|cannot use (?:a|an) \w+ as a key"
+    r"|duplicate key: .+"
+    r"|undeclared reference to '[^']*'"
+    r"|cannot compare (?:a|an) \w+ to (?:a|an) \w+"
+    r"|cannot apply '[^']*' to .+"
+    r"|no such overload"
+    r"|Attempt to reduce an empty sequence or a sequence with a None value"
+)
+
 #: `core/cel_eval.py`'s own `f"CEL evaluation failed for {expr!r}: {exc}"` --
-#: everything after the colon is the evaluator's own exception text
-#: (`division by zero`, `no such key: 'zz'`, ...). Non-`DOTALL`, so `.`
-#: never crosses a newline: a combined-failure summary
+#: everything after the colon is the evaluator's own exception text, third
+#: party only when it isn't one of `_CEL_EVAL_OWN_TEXT_RE`'s own fixed
+#: templates (`division by zero`, `no such key: 'zz'`, the genuinely
+#: third-party leftover, cel-python's own bare `overflow` for a relational
+#: comparison whose operand doesn't fit CEL's 64-bit `int` -- #400 -- being
+#: the one shape this module doesn't construct itself). Non-`DOTALL`, so
+#: `.` never crosses a newline: a combined-failure summary
 #: (`tree-failure-class-names-3`) embeds several of these, one per line,
 #: and each must stop at its own line's end rather than swallowing the
-#: rest of the summary.
+#: rest of the summary. Lazy, stopping at the first `)`/`;` too -- a
+#: `Conditional`/`Loop`/`Dynamic` warning line wraps this whole phrase in
+#: parens and follows it with `; on_error=...` on the same line, and a
+#: leftover (non-skip-listed) third-party tail must not swallow that.
 _CEL_EVAL_ERROR_RE = re.compile(
-    r"CEL evaluation failed for (?:'[^']*'|\"[^\"]*\"): (?P<tp>.*)"
+    r"CEL evaluation failed for (?:'[^']*'|\"[^\"]*\"): (?P<tp>.*?)(?=\)|;|\n|$)"
+)
+
+#: `core/yaml_load.py::_UniqueKeyLoader.construct_mapping`'s own
+#: `DuplicateKeyError` -- entirely Circuitry's own text (`f"duplicate key
+#: {key!r} at {where} (first defined at {first_seen[key]}); YAML would
+#: silently keep only the last one"`), never PyYAML's: `yaml.safe_load`
+#: itself says nothing at all about a repeated key, which is exactly why
+#: this loader exists. Reaches `_YAML_PARSE_ERROR_RE` below the same way
+#: any other `yaml.YAMLError` does (`DuplicateKeyError` subclasses it), so
+#: without this carve-out the catalogue would mask the one YAML-parse
+#: shape that is never third-party at all -- its own location (`at line
+#: L, column C`) and its own clarifying sentence included.
+_YAML_DUPLICATE_KEY_KNOWN_RE = re.compile(
+    r"duplicate key .+ at line \d+, column \d+ \(first defined at line \d+, "
+    r"column \d+\); YAML would silently keep only the last one",
+    re.DOTALL,
 )
 
 #: `plugins/validate_yaml.py`/`core/decompose.py`/`core/use.py`'s own
 #: `f"YAML parse error: {exc}"`, and `core/reflector.py`'s own
 #: `f"parse_failed: {e}"` (a generated plan that isn't valid YAML at all,
 #: issue #778) -- both wrap PyYAML's own (multi-line, caret-pointing)
-#: `YAMLError` text verbatim. `DOTALL`: PyYAML's own message is always
-#: multi-line and there is at most one per string.
+#: `YAMLError` text verbatim, *except* `DuplicateKeyError`
+#: (`_YAML_DUPLICATE_KEY_KNOWN_RE`), which is Circuitry's own. `DOTALL`:
+#: PyYAML's own message is always multi-line and can legitimately embed a
+#: quoted token followed by a comma (`'<unicode string>', line 1`) or a
+#: semicolon, so this is never bounded short of the end of the string the
+#: way the curl/regex shapes below are -- every call site hands this
+#: shape the whole rest of the exception text with nothing of Circuitry's
+#: own after it (`validate_yaml.py`/`decompose.py`/`use.py` all return the
+#: wrapped message as the *only*, immediately-returned error; `reflector.py`
+#: assigns it to `rec["error"]` with nothing appended after).
 _YAML_PARSE_ERROR_RE = re.compile(r"(?:YAML parse error|parse_failed): (?P<tp>.*)", re.DOTALL)
 
 #: `curl_support.py::curl_failure_message`'s own `f"... url={url}: {detail}"`
@@ -364,8 +444,17 @@ _OLLAMA_HINT_RE = (
     r"in your config \(a prompt's `timeout_ms` can only shorten it\), or use a smaller/faster model\."
     r"| Try `ollama pull [^`]+` first\."
 )
+#: Also stops at the closing quote of an embedding Python `repr()`:
+#: `detail` can land inside `All adapter attempts failed: [{...}]`'s own
+#: dict/list repr (`prompt.py`'s own fallback-exhaustion message), where a
+#: bare `$` would otherwise run the capture past the closing quote of the
+#: attempt's own `'error'` entry and swallow every sibling key
+#: (`'tokens_sent'`, ...) after it. Every curl stderr string this runtime
+#: has ever captured is a single plain-English sentence with no internal
+#: quoting of its own, so this lookahead only ever fires at the repr's own
+#: boundary, never inside curl's own text.
 _CURL_DETAIL_RE = re.compile(
-    r"curl: \(\d+\) (?P<tp>.*?)(?=" + _OLLAMA_HINT_RE + r"|$)", re.DOTALL
+    r"curl: \(\d+\) (?P<tp>.*?)(?=" + _OLLAMA_HINT_RE + r'|["\x27][,}\]]|$)', re.DOTALL
 )
 
 #: `plugins/regex.py`'s own `f"regex: invalid pattern: {exc}"`, wrapping a
@@ -408,16 +497,43 @@ _SCHEMA_WELL_FORMEDNESS_RE = re.compile(r"(?m)is not a valid JSON Schema: (?P<tp
 #: are never reached by a run this suite drives).
 _OS_STRERROR_RE = re.compile(r"(?m)cannot be read: (?P<tp>.*)$")
 
+#: `core/prompt_files.py`/`core/prompt.py`'s own `f"... could not be read:
+#: {exc}"`/`f"... could not be started (...): {exc}"`-style wrapping of a
+#: whole `OSError`, never just its `strerror` (`_OS_STRERROR_RE`, above) --
+#: Python's own `str(OSError(...))` is `"[Errno N] <strerror>"`, or
+#: `"[Errno N] <strerror>: '<filename>'"` once a filename is set, which it
+#: is for every open/stat/read failure here. `errno` is kept exact (a
+#: numbered OS condition, not library wording -- the same reasoning
+#: `_REGEX_INVALID_PATTERN_RE` already gives `re.error`'s own position);
+#: so is the trailing `: '<filename>'`, the actual path involved, never
+#: masked -- only `strerror` itself (`electricity/DESIGN.md`'s own
+#: "`electricity-compiler`'s 'could not be read' OS error text" row:
+#: `std::io::Error`'s own `Display` for the same errno is never the same
+#: sentence as Python's). Bounded at `: '` (the filename's own opening
+#: quote) rather than `_THIRD_PARTY_TAIL_BOUNDARY`, since `strerror`
+#: itself never contains a colon on any platform this runtime supports.
+_OS_ERRNO_RE = re.compile(r"\[Errno \d+\] (?P<tp>[^:]+?)(?=: '|$)")
 
-def _mask_tp_group(text: str, pattern: re.Pattern[str], *, skip: re.Pattern[str] | None = None) -> str:
+
+def _mask_tp_group(
+    text: str,
+    pattern: re.Pattern[str],
+    *,
+    skip: re.Pattern[str] | None = None,
+    placeholder: str = THIRD_PARTY_TEXT_PLACEHOLDER,
+) -> str:
     """Every match of *pattern* (which must have a named group `tp`) in
-    *text*, with that group's own span replaced by
-    `THIRD_PARTY_TEXT_PLACEHOLDER` -- everything else in the match (and in
-    the rest of *text*) is untouched. *skip*, when given, is checked
-    against the matched `tp` text with `fullmatch`; a match is left alone
-    entirely (not even the surrounding marker is touched, since nothing
-    needs to change) when it matches -- `_SCHEMA_WELL_FORMEDNESS_RE`'s own
-    carve-out for Circuitry's two fixed well-formedness messages."""
+    *text*, with that group's own span replaced by *placeholder* --
+    everything else in the match (and in the rest of *text*) is untouched.
+    *skip*, when given, is checked against the matched `tp` text with
+    `fullmatch`; a match is left alone entirely (not even the surrounding
+    marker is touched, since nothing needs to change) when it matches --
+    `_SCHEMA_WELL_FORMEDNESS_RE`'s own carve-out for Circuitry's two fixed
+    well-formedness messages, among others. *placeholder* defaults to
+    `THIRD_PARTY_TEXT_PLACEHOLDER`; `scripts/generate-conformance-cases.py`
+    passes a distinct sentinel instead, to check whether a case's own
+    `third_party_text` pattern still matches once the masked span's real
+    content is swapped out for something else entirely."""
 
     def _replace(match: re.Match[str]) -> str:
         tail = match.group("tp")
@@ -426,42 +542,124 @@ def _mask_tp_group(text: str, pattern: re.Pattern[str], *, skip: re.Pattern[str]
         whole = match.group(0)
         start = match.start("tp") - match.start(0)
         end = match.end("tp") - match.start(0)
-        return whole[:start] + THIRD_PARTY_TEXT_PLACEHOLDER + whole[end:]
+        return whole[:start] + placeholder + whole[end:]
 
     return pattern.sub(_replace, text)
 
 
-def _mask_profile_schema_validation_lines(text: str) -> str:
+def _mask_bulleted_location_message_lines_after(
+    text: str,
+    head_end: int,
+    *,
+    placeholder: str,
+    own_line: re.Pattern[str] | None = None,
+) -> str:
+    """Every consecutive `  - <location>: <message>` line in *text*
+    starting at *head_end* (a header's own end position), with each
+    line's own `<message>` -- everything after its own first `: ` --
+    replaced by *placeholder*; stops at the first line with no `: ` in it
+    at all (a free-form sentence with no `<location>` prefix never
+    matches, and neither does anything after it). *own_line*, when
+    given, is checked against the *whole* line first: a line matching it
+    is left alone entirely (it has a colon somewhere, but isn't the
+    `<location>: <jsonschema message>` shape at all) *without* ending the
+    scan -- `structural_errors` can mix a genuine `schema_errors` line
+    with one of `core/document_check.py`'s own hand-written near-miss/
+    group/interface-type sentences in the same list, at any position.
+    Shared by `_mask_profile_schema_validation_lines` (`own_line=None`,
+    since every line under that header is a real `jsonschema.
+    ValidationError`) and `_mask_document_validation_lines` below.
+    """
+    lines = text[head_end:].split("\n")
+    changed = False
+    for i, line in enumerate(lines):
+        if own_line is not None and own_line.fullmatch(line):
+            continue
+        match = re.match(r"(  - [^\n:]+: )(.*)", line)
+        if match is None:
+            break
+        lines[i] = match.group(1) + placeholder
+        changed = True
+    if not changed:
+        return text
+    return text[:head_end] + "\n".join(lines)
+
+
+def _mask_profile_schema_validation_lines(
+    text: str, *, placeholder: str = THIRD_PARTY_TEXT_PLACEHOLDER
+) -> str:
     """`cli/profiles.py::_validate_profile_schema`'s own
     `f"Profile {name!r} at {path} failed schema validation:\\n"` followed
     by one `f"  - {location}: {e.message}"` line per violation -- a real
     `jsonschema` `ValidationError.message`, third-party here (unlike the
-    orchestration/inline-document schema-error lines `core/use.py`/
-    `cli/runtime_shim.py` build the same way, which electricity's own
-    schema engine now matches word for word, issue #528 -- that header
-    reads "<X> validation failed:", never "failed schema validation:", so
-    it is never touched here): profiles validate against a separate Rust
+    orchestration/inline-document schema-error lines `_mask_document_
+    validation_lines` masks below, which electricity's own schema engine
+    now matches word for word, issue #528 -- that header reads "<X>
+    validation failed:", never "failed schema validation:", so it is
+    never touched here): profiles validate against a separate Rust
     `jsonschema` crate instead (settled ruling 9), which words the same
-    violation differently. Masks every consecutive `  - <location>: `
-    line's own message after the header, stopping at the first line that
-    doesn't match that shape.
+    violation differently.
     """
     marker = "failed schema validation:\n"
     idx = text.find(marker)
     if idx == -1:
         return text
-    head_end = idx + len(marker)
-    lines = text[head_end:].split("\n")
-    changed = False
-    for i, line in enumerate(lines):
-        match = re.match(r"(  - [^\n:]+: )(.*)", line)
-        if match is None:
-            break
-        lines[i] = match.group(1) + THIRD_PARTY_TEXT_PLACEHOLDER
-        changed = True
-    if not changed:
+    return _mask_bulleted_location_message_lines_after(
+        text, idx + len(marker), placeholder=placeholder
+    )
+
+
+#: `core/use.py`'s own `"Inline orchestration validation failed:\n"` /
+#: `f"Orchestration {resolved_path} validation failed:\n"` /
+#: `f"Orchestration {label} validation failed:\n"`, and `cli/runtime_
+#: shim.py`'s own `"Orchestration validation failed:\n"` (both the
+#: structural/schema gate and the unknown-concurrency-group gate) --
+#: `structural_errors` (`core/document_check.py`) joins up to five kinds
+#: of line under this one header: a real `schema_errors` line (`f"
+#: {location}: {e.message}"`, wrapping a genuine `jsonschema.
+#: ValidationError.message` -- third-party), and four of the module's
+#: own hand-written sentences (`unknown_key_errors`'s near-miss text,
+#: `group_field_errors`'s `'group' is only allowed on ...` text,
+#: `interface_unknown_type_errors`'s `... is not a recognized type ...`
+#: text, `interface_default_type_errors`'s `declared type ... but ...`
+#: text) that merely happen to contain a colon too and are never
+#: `jsonschema`'s own wording -- `_DOCUMENT_VALIDATION_OWN_LINE_RE` names
+#: all four, plus `core/compiler.py::unknown_concurrency_group_errors`'s
+#: own `group '<name>' is not defined in runtime.concurrency_groups --
+#: known groups: ...` line (`cli/runtime_shim.py`'s second gate, same
+#: header, no `<location>: ` prefix at all). Reaches only `meta.error`/
+#: stderr/`cof check`'s own report (never anything this runtime sends
+#: onward to a model) -- electricity's own schema engine matches `core.
+#: document_check.schema_errors`'s wording and order exactly (issue
+#: #528), so the location and the order are Circuitry's own and stay
+#: exact; only a real `schema_errors` line's own jsonschema message body
+#: is third-party here.
+_DOCUMENT_VALIDATION_HEADER_RE = re.compile(
+    r"(?:Orchestration(?: [^\n:]+)? validation failed|Inline orchestration validation failed):\n"
+)
+
+_DOCUMENT_VALIDATION_OWN_LINE_RE = re.compile(
+    r"  - .+: unknown key .+ on .+ — did you mean '[^']*'\? As written it is ignored\."
+    r"|  - .+: 'group' is only allowed on tool/prompt effects \(it names a "
+    r"concurrency-group slot a leaf effect holds at dispatch\) — found on a '[^']*' effect\."
+    r"|  - interface\.inputs\.[^\n:]+\.type: .+ is not a recognized type — expected one of .+\."
+    r"|  - interface\.inputs\.[^\n:]+\.default: declared type '[^']*' but .+\."
+    r"|  - group '[^']*' is not defined in runtime\.concurrency_groups — known groups: .+"
+)
+
+
+def _mask_document_validation_lines(
+    text: str, *, placeholder: str = THIRD_PARTY_TEXT_PLACEHOLDER
+) -> str:
+    match = _DOCUMENT_VALIDATION_HEADER_RE.search(text)
+    if match is None:
         return text
-    return text[:head_end] + "\n".join(lines)
+    return _mask_bulleted_location_message_lines_after(
+        text,
+        match.end(),
+        placeholder=placeholder,
+        own_line=_DOCUMENT_VALIDATION_OWN_LINE_RE,
+    )
 
 
 #: Every `tp`-group-bearing catalogue pattern, with its own `skip`
@@ -469,32 +667,41 @@ def _mask_profile_schema_validation_lines(text: str) -> str:
 #: party_text` walks in sequence, and `mask_known_third_party_text_to_end`
 #: searches for the *earliest* match of any one of, for a field a fixed
 #: byte/character cap can truncate (see that function's own docstring).
-#: `_mask_profile_schema_validation_lines` isn't here: it masks whole
-#: lines by a literal header search, not one `tp`-bearing regex match, so
-#: it has no place in an "earliest match" scan and is applied to `text`
-#: separately in `mask_known_third_party_text` only -- no committed
-#: `--events` field is ever profile-schema-validation text.
+#: Neither `_mask_profile_schema_validation_lines` nor `_mask_document_
+#: validation_lines` is here: both mask whole lines by a header search,
+#: not one `tp`-bearing regex match, so neither has a place in an
+#: "earliest match" scan, and both are applied to `text` separately in
+#: `mask_known_third_party_text` only -- no committed `--events` field is
+#: ever profile- or document-validation text.
 _TP_GROUP_SHAPES: tuple[tuple[re.Pattern[str], re.Pattern[str] | None], ...] = (
     (_CEL_PARSE_ERROR_RE, None),
-    (_CEL_EVAL_ERROR_RE, None),
-    (_YAML_PARSE_ERROR_RE, None),
+    (_CEL_EVAL_ERROR_RE, _CEL_EVAL_OWN_TEXT_RE),
+    (_YAML_PARSE_ERROR_RE, _YAML_DUPLICATE_KEY_KNOWN_RE),
     (_CURL_DETAIL_RE, None),
     (_REGEX_INVALID_PATTERN_RE, None),
     (_SCHEMA_WELL_FORMEDNESS_RE, _SCHEMA_WELL_FORMEDNESS_KNOWN_RE),
     (_OS_STRERROR_RE, None),
+    (_OS_ERRNO_RE, None),
 )
 
 
-def mask_known_third_party_text(text: str) -> str:
+def mask_known_third_party_text(
+    text: str, *, placeholder: str = THIRD_PARTY_TEXT_PLACEHOLDER
+) -> str:
     """*text* with every message-shape catalogue entry's own third-party
-    tail replaced by `THIRD_PARTY_TEXT_PLACEHOLDER`, applied in sequence --
-    the entries match disjoint, fixed Circuitry-authored markers, so
-    applying them one after another (rather than needing one combined
-    pattern) never double-matches the same span. A string with none of
-    these markers is returned unchanged."""
+    tail replaced by *placeholder* (`THIRD_PARTY_TEXT_PLACEHOLDER` by
+    default), applied in sequence -- the entries match disjoint, fixed
+    Circuitry-authored markers, so applying them one after another (rather
+    than needing one combined pattern) never double-matches the same
+    span. A string with none of these markers is returned unchanged.
+    *placeholder* is a parameter, not always the module constant, so
+    `scripts/generate-conformance-cases.py` can mask with a distinct
+    sentinel to check a case's own `third_party_text` pattern isn't
+    secretly pinned to the real masked text."""
     for pattern, skip in _TP_GROUP_SHAPES:
-        text = _mask_tp_group(text, pattern, skip=skip)
-    return _mask_profile_schema_validation_lines(text)
+        text = _mask_tp_group(text, pattern, skip=skip, placeholder=placeholder)
+    text = _mask_profile_schema_validation_lines(text, placeholder=placeholder)
+    return _mask_document_validation_lines(text, placeholder=placeholder)
 
 
 #: `cli/events.py::_ERROR_MAX_CHARS` / electricity's own `events.rs::
@@ -534,26 +741,37 @@ def mask_known_third_party_text_to_end(text: str) -> str:
     return text[:earliest] + THIRD_PARTY_TEXT_PLACEHOLDER
 
 
-def mask_known_third_party_text_in(value: Any) -> Any:
-    """`mask_known_third_party_text` recursively over every string leaf of
-    *value* -- a state tree, an events line's own parsed object, or a bare
-    string alike, the same recursion shape `redact_runtime_strings` uses."""
+#: Key names `mask_known_third_party_text_in` ever masks a string leaf
+#: under -- an *error-carrying* field, by cof's own naming convention,
+#: regardless of nesting depth or which container it sits inside (a
+#: `child_errors`/`attempts`/`fallback_attempts` list entry's own
+#: `"error"` key matches here the same way a top-level `meta.error` does,
+#: with no special-casing for the container). `"errors"`/`"stderr"` cover
+#: a tool result's own plural error list and the text it's joined into
+#: (`plugins/validate_yaml.py`'s own `value.errors`/`meta.raw.errors`/
+#: `meta.stderr`). Everything else -- `prompt_sent`, `params_rendered`,
+#: `value` (except its own `errors`, above), `raw` (except its own
+#: `errors`), a recorded HTTP request's `body`, and every other key name
+#: -- is content Circuitry sent or received, never its own error text,
+#: and is never masked here even if it happens to contain a catalogue
+#: marker's literal text.
+_ERROR_CARRYING_KEYS = frozenset({"error", "errors", "stderr"})
+
+
+def mask_known_third_party_text_in(value: Any, *, key: str | None = None) -> Any:
+    """`mask_known_third_party_text` over every string leaf of *value*
+    whose own dict key is in `_ERROR_CARRYING_KEYS` -- a state tree, an
+    events line's own parsed object, or a bare string (`key=None`, so
+    never masked unless a caller names one) alike. Unlike `normalize()`'s
+    key-based rules, nesting depth and the parent container's own name
+    are irrelevant -- only the leaf's own key."""
     if isinstance(value, dict):
-        return {k: mask_known_third_party_text_in(v) for k, v in value.items()}
+        return {k: mask_known_third_party_text_in(v, key=k) for k, v in value.items()}
     if isinstance(value, list):
-        return [mask_known_third_party_text_in(v) for v in value]
-    if isinstance(value, str):
+        return [mask_known_third_party_text_in(v, key=key) for v in value]
+    if isinstance(value, str) and key in _ERROR_CARRYING_KEYS:
         return mask_known_third_party_text(value)
     return value
-
-
-#: `case.json`'s own `third_party_text` key (issue #503's own harness
-#: addition) -- a fixed placeholder, distinct from every other one in
-#: this module, for a leaf whose exact text is curl's own (version-
-#: dependent) wording rather than Circuitry's: a connection-refused or a
-#: timeout failure's own `meta.error`, recorded only by *shape* (a regex
-#: `third_party_text` names), never by exact value.
-THIRD_PARTY_TEXT_PLACEHOLDER = "<THIRD_PARTY_TEXT>"
 
 
 def _resolve_container(root: Any, segments: Sequence[str]) -> Any:
@@ -793,6 +1011,20 @@ def redact_events_text_pair(
     )
 
 
+def normalize_recorded_http_requests(value: Any, replacements: Sequence[tuple[str, str]]) -> Any:
+    """`redact_runtime_strings` then `normalize()` -- *never*
+    `mask_known_third_party_text_in`, unlike `normalize_for_comparison`: a
+    recorded HTTP request's own `body`/`headers`/`query` is content
+    Circuitry sent *onward* (a prompt's rendered text, a tool's rendered
+    params), not Circuitry's own error text, so none of it is third-party
+    wording the message-shape catalogue should ever replace (issue #778
+    step 6) -- a request body that happened to contain, say, the literal
+    substring "CEL evaluation failed for" as ordinary content would
+    otherwise have that content silently replaced with the placeholder
+    before `assert_recorded_http_requests` ever compares it."""
+    return normalize(redact_runtime_strings(value, replacements))
+
+
 def canonicalize_http_headers(headers: dict[str, Any] | list[list[str]]) -> list[list[str]]:
     """A recorded HTTP request's own ``headers`` -- either a mapping (a
     freshly recorded request, `mock_http.RecordedRequest.to_json`) or a list
@@ -909,10 +1141,15 @@ def assert_errors_equal(
     catalogue): if that alone makes the two sides equal, Circuitry's own
     part (prefix, location, effect name) matched exactly and the
     third-party tail is masked out, so there's nothing left to check.
-    Otherwise, when *location_pattern* is given, fall back to the older,
-    weaker check this replaces for a shape the catalogue doesn't
-    recognise yet: "failed in the same place, with a non-empty message"
-    -- never byte-for-byte."""
+    Otherwise, only when *location_pattern* is given **and** masking
+    recognised no shape in *either* side (neither text changed), fall
+    back to the older, weaker check this replaces for a shape the
+    catalogue doesn't recognise yet: "failed in the same place, with a
+    non-empty message" -- never byte-for-byte. A shape *was* recognised
+    somewhere but the two sides still disagree is never excused by a
+    `location_pattern` -- that's a real divergence in the one part of
+    the message (prefix, location, effect name) masking never touches,
+    and the fallback's own weaker rule would let it through unnoticed."""
     if byte_for_byte:
         if actual != expected:
             raise AssertionError(
@@ -927,7 +1164,8 @@ def assert_errors_equal(
     masked_expected = mask_known_third_party_text(expected)
     if masked_actual == masked_expected:
         return
-    if location_pattern is None:
+    shape_recognised = masked_actual != actual or masked_expected != expected
+    if location_pattern is None or shape_recognised:
         raise AssertionError(
             "error text differs even after masking every known third-party shape:\n"
             f"  actual:   {masked_actual!r}\n  expected: {masked_expected!r}"
