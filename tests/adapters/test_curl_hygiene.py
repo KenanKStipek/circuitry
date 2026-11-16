@@ -12,6 +12,7 @@ from __future__ import annotations
 import http.server
 import json
 import shutil
+import socket
 import subprocess
 from dataclasses import dataclass
 from typing import Any
@@ -230,6 +231,28 @@ def test_ollama_refused_port_never_echoes_a_password_hidden_past_the_authority(
     assert "443/" not in message
     assert "ss" not in message
     assert "localhost:11434" in message
+
+
+@pytest.mark.skipif(shutil.which("curl") is None, reason="curl not on PATH")
+def test_ollama_schemeless_base_url_with_a_closed_port_never_echoes_its_password() -> None:
+    """Real curl, a real closed port, no mock: a `base_url` with no
+    `scheme://` at all (`alice:s3cret@localhost:<port>`, the same shape
+    curl's own `--config` convention accepts) hides a password behind
+    an authority `_urlsplit` reads with no netloc of its own (issue
+    #778) -- the daemon-down hint and the failure's own `url=` field
+    must both still never echo `s3cret`.
+    """
+    with socket.socket() as sock:
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+
+    adapter = OllamaAdapter(base_url=f"alice:s3cret@localhost:{port}", streams=False)
+    with pytest.raises(RuntimeError) as exc:
+        adapter.generate(model="phi3", prompt="x")
+    message = str(exc.value)
+    assert "s3cret" not in message
+    assert "alice" not in message
+    assert "not reachable" in message
 
 
 # ---------------------------------------------------------------------------

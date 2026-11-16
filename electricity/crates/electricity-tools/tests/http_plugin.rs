@@ -346,6 +346,26 @@ async fn redirects_follow_to_a_file_scheme_is_refused_with_the_shared_scheme_tex
 }
 
 #[tokio::test]
+async fn a_url_with_no_scheme_never_names_a_password_in_the_scheme_refusal() {
+    // Issue #778: `alice:pw@host/x` has no `://` at all, so the
+    // scheme refusal must still redact it -- the same way a
+    // schemeless proxy value already is -- never echoing `pw`.
+    let token = CancellationToken::new();
+    let err = ToolPlugin::execute(
+        &electricity_tools::http::HttpPlugin,
+        params(vec![("url", Value::Str("alice:pw@host/x".to_string()))]),
+        &call(&token),
+    )
+    .await
+    .unwrap_err();
+    assert!(!err.message.contains("pw"), "{}", err.message);
+    assert_eq!(
+        err.message,
+        "unsupported URL scheme 'alice' in 'host/x': only http or https is supported"
+    );
+}
+
+#[tokio::test]
 async fn redirects_never_to_a_file_scheme_is_refused_on_its_own_terms() {
     // The mirror case: under `redirects: never`, a disallowed-scheme
     // target is refused by the mode itself (a `ToolResult`, never

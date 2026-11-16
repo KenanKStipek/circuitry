@@ -266,7 +266,7 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
     if host.is_empty() {
         return Err(TransportFailure::Validation(format!(
             "electricity: unsupported URL: {}",
-            redact_url_for_error(url)
+            redact_url_for_error(&normalized)
         )));
     }
     Ok(ParsedUrl {

@@ -156,6 +156,12 @@ def _redaction_cases() -> list[dict[str, Any]]:
         # *before* the query is masked, or the mask's own re-encoding of
         # a literal `@` as `%40` would hide it from the cut.
         "https://alice:443/x@api.example.com/v1?api_key=sk",
+        # A URL with no `scheme://` prefix at all (issue #778): the
+        # same shape as a schemeless proxy value, which
+        # `redact_proxy_value` already handles -- the whole value is
+        # searched for the LAST `@`, same as it would be.
+        "alice:pw@host/x",
+        "alice:pw@localhost:11434",
     ]
     return [{"url": url, "redacted": http_conventions.redact_request_url(url)} for url in urls]
 

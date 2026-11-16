@@ -302,21 +302,24 @@ pub(crate) fn strict_port_for_proxy(normalized: &str) -> Result<Option<u16>, Str
 /// *url*, redacted for any refusal, warning, event, state, hint or
 /// `host:` text that names a request URL -- the one function every
 /// such caller uses, never [`redact_url`] or [`redact_proxy_value`]
-/// directly: [`redact_proxy_value`] when [`at_follows_netloc`] is true
-/// (a password hidden behind a `/`, `?` or `#` can still smuggle a
-/// second, real host past the parsed authority, so the whole value --
-/// never just the authority's own userinfo -- is cut away at the LAST
-/// `@`); [`strip_request_url_userinfo`] otherwise. Either way, the cut
-/// runs *before* any credential-like query parameter is masked:
-/// masking first re-encodes a query string's own `@` as `%40`, so a
-/// cut that ran afterward would no longer find it (issue #778). Shared
-/// by every surface that names a request URL after parsing it:
-/// [`check_scheme`], [`strict_port`], `curl_text::redact_host_url`,
+/// directly: [`redact_proxy_value`] when *url* has no `://` at all (a
+/// userinfo-bearing value with no scheme, the same shape
+/// [`redact_proxy_value`] already handles for a proxy) or
+/// [`at_follows_netloc`] is true (a password hidden behind a `/`, `?`
+/// or `#` can still smuggle a second, real host past the parsed
+/// authority, so the whole value -- never just the authority's own
+/// userinfo -- is cut away at the LAST `@`); [`strip_request_url_
+/// userinfo`] otherwise. Either way, the cut runs *before* any
+/// credential-like query parameter is masked: masking first
+/// re-encodes a query string's own `@` as `%40`, so a cut that ran
+/// afterward would no longer find it (issue #778). Shared by every
+/// surface that names a request URL after parsing it: [`check_scheme`],
+/// [`strict_port`], `curl_text::redact_host_url`,
 /// `curl_text::curl_failure_message`, and every adapter error that
 /// names a request URL after I/O.
 pub fn redact_request_url(url: &str) -> String {
     let netloc = crate::http::http_url::urlsplit(url, "").netloc;
-    let cut = if at_follows_netloc(url, &netloc) {
+    let cut = if !url.contains("://") || at_follows_netloc(url, &netloc) {
         redact_proxy_value(url)
     } else {
         strip_request_url_userinfo(url)

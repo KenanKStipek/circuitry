@@ -370,6 +370,18 @@ def test_url_error_never_names_a_password_hidden_behind_a_slash_in_the_url(
     assert message.startswith("HTTP request to https://nonsuch.test/ failed:")
 
 
+def test_a_url_with_no_scheme_never_names_a_password_in_the_scheme_refusal() -> None:
+    """Issue #778: ``alice:pw@host/x`` has no ``://`` at all, so
+    ``check_url``'s scheme refusal must still redact it -- the same
+    way a schemeless proxy value already is -- never echoing ``pw``.
+    """
+    with pytest.raises(ValueError) as exc_info:
+        HttpPlugin().execute(params={"url": "alice:pw@host/x"})
+    message = str(exc_info.value)
+    assert "pw" not in message
+    assert message == "unsupported URL scheme 'alice' in 'host/x': only http or https is supported"
+
+
 def test_missing_url_raises() -> None:
     with pytest.raises(ValueError, match="params\\['url'\\]"):
         HttpPlugin().execute(params={})

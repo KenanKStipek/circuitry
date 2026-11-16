@@ -245,6 +245,17 @@ def test_redact_request_url_masks_a_credential_query_param_behind_a_hidden_at_si
     assert "sk" not in redacted
 
 
+def test_redact_request_url_cuts_at_the_last_at_sign_with_no_scheme_at_all() -> None:
+    """Issue #778: a URL with no ``://`` prefix at all (the same shape
+    as a schemeless proxy value) has no netloc for ``urlsplit`` to find
+    any userinfo in, so :func:`_at_follows_netloc` is never true for
+    it either -- it must still be cut the way
+    :func:`redact_proxy_value` already cuts a schemeless proxy value.
+    """
+    assert redact_request_url("alice:pw@host/x") == "host/x"
+    assert redact_request_url("alice:pw@localhost:11434") == "localhost:11434"
+
+
 @pytest.mark.parametrize("char", (" ", "\r"))
 def test_check_url_never_leaks_a_password_containing_whitespace_or_a_control_char(
     char: str,

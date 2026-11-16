@@ -932,6 +932,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn generate_schemeless_base_url_with_a_closed_port_never_echoes_its_password() {
+        // A `base_url` with no `scheme://` at all (`alice:s3cret@<addr>`,
+        // the same shape curl's own `--config` convention accepts) has
+        // no netloc of its own for `urlsplit` to find any userinfo in
+        // (issue #778) -- the daemon-down hint and the failure's own
+        // `url=` field must both still never echo `s3cret`.
+        let addr = crate::test_support::closed_port();
+        let adapter = OllamaAdapter {
+            name: "ollama".to_string(),
+            base_url: Value::Str(format!("alice:s3cret@{addr}")),
+            streams: false,
+        };
+        let token = CancellationToken::new();
+        let path = EffectPath::root();
+        let err = adapter
+            .generate(
+                "m",
+                "hi",
+                &GenerateOptions::default(),
+                &call_ctx(&path, &token),
+            )
+            .await
+            .unwrap_err();
+        assert!(!err.message.contains("s3cret"), "{}", err.message);
+        assert!(!err.message.contains("alice"), "{}", err.message);
+        assert!(err.message.contains("not reachable"), "{}", err.message);
+    }
+
+    #[tokio::test]
     async fn generate_fails_like_python_for_a_non_string_base_url() {
         // `runtime.adapters.ollama.base_url: 5` must
         // not silently fall back to the default URL -- Python keeps the
