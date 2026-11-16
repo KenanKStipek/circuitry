@@ -342,3 +342,20 @@ def test_a_closed_local_port_fails_as_a_connection_error_not_a_hang(
     # Port 1 is a reserved, almost always closed port on loopback.
     with pytest.raises(RuntimeError, match="HTTP request to"):
         HttpPlugin().execute(params={"url": "http://127.0.0.1:1/x"}, timeout_seconds=3)
+
+
+def test_a_bad_proxy_is_refused_before_any_request_reaches_the_server(
+    monkeypatch: pytest.MonkeyPatch, servers: ServerPair
+) -> None:
+    """A proxy value that can't be used (an unsupported scheme here) is
+    refused outright, never silently treated as "no proxy" and sent
+    direct (issue #778).
+    """
+    _clear_proxy_env(monkeypatch)
+    monkeypatch.setenv("http_proxy", "socks5://proxy:1080")
+    servers.routes["/"] = Route(status=200, body="ok")
+
+    with pytest.raises(ValueError, match="unsupported proxy scheme"):
+        HttpPlugin().execute(params={"url": servers.http + "/"})
+
+    assert servers.received == []

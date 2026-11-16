@@ -634,6 +634,22 @@ def test_an_unsupported_expo_url_scheme_is_a_value_error_not_a_runtime_error() -
         adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
 
 
+def test_a_bad_proxy_is_refused_before_any_request_reaches_the_server(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proxy value this adapter can't use (an unsupported scheme
+    here) is refused outright, never silently treated as "no proxy"
+    and sent direct (issue #778).
+    """
+    for name in ("http_proxy", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("https_proxy", "socks5://proxy:1080")
+    adapter = _adapter()
+
+    with pytest.raises(ValueError, match="unsupported proxy scheme"):
+        adapter.generate(model="cheap", prompt="hi", timeout_seconds=10)
+
+
 def test_http_error_wrapped_in_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(req: Any, timeout: float = 0) -> Any:
         raise HTTPError(

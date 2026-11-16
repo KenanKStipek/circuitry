@@ -963,6 +963,27 @@ def test_a_remote_server_applies_the_shared_proxy_rule(
     assert calls == [server.url + systemone_module.ENDPOINT_PATH]
 
 
+def test_a_bad_proxy_is_refused_before_any_request_reaches_the_server(
+    server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A proxy value systemone can't use (an unsupported scheme here)
+    is refused outright, never silently treated as "no proxy" and
+    sent direct (issue #778).
+    """
+    from http_server_support import PROXY_ENV_VARS
+
+    for name in (*PROXY_ENV_VARS, "no_proxy", "NO_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", "socks5://proxy:1080")
+    monkeypatch.setattr(systemone_module, "is_loopback_host", lambda host: False)
+    server.reply_answers()
+
+    with pytest.raises(ValueError, match="unsupported proxy scheme"):
+        _plugin(server, allow_remote=True).execute(params=_params(), timeout_seconds=10)
+
+    assert server.requests == []
+
+
 def test_allow_remote_is_false_unless_the_config_says_true() -> None:
     for value in (None, False, "false", "no", 0):
         plugin = build_plugin(

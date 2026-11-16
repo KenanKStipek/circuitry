@@ -20,6 +20,7 @@ import pytest
 from curl_test_support import RecordingJSONHandler, assert_not_in_argv, local_server
 
 from circuitry.curl_support import (
+    _curl_config_file,
     _curl_supports_retry_after_header,
     curl_error_code,
     curl_failure_message,
@@ -174,6 +175,46 @@ def test_run_curl_rejects_header_name_with_embedded_cr() -> None:
             headers={"X-Thing\r": "value"},
             timeout_seconds=5,
         )
+
+
+def test_curl_config_file_writes_a_proxy_line_plus_an_empty_noproxy() -> None:
+    """When a proxy is configured, curl's own ``no_proxy``/``NO_PROXY``
+    read must never override the proxy rule's own decision, which
+    already accounted for it (issue #778).
+    """
+    text = _curl_config_file(
+        "http://example.test/x", [("Accept", "application/json")], proxy_url="http://proxy:3128"
+    )
+    lines = text.splitlines()
+    assert 'url = "http://example.test/x"' in lines
+    assert 'header = "Accept: application/json"' in lines
+    assert 'proxy = "http://proxy:3128"' in lines
+    assert 'noproxy = ""' in lines
+
+
+def test_curl_config_file_writes_noproxy_star_with_no_proxy_configured() -> None:
+    """``noproxy = "*"`` stops curl reading ``*_proxy``/``*_PROXY``
+    itself for a request the proxy rule decided should go direct
+    (issue #778).
+    """
+    text = _curl_config_file("http://example.test/x", [], proxy_url=None)
+    lines = text.splitlines()
+    assert 'noproxy = "*"' in lines
+    assert not any(line.startswith("proxy =") for line in lines)
+
+
+def test_run_curl_refuses_a_bad_proxy_scheme_before_any_io(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A proxy value this adapter can't use (an unsupported scheme
+    here) is refused outright, never silently treated as "no proxy"
+    and sent direct (issue #778).
+    """
+    for name in ("http_proxy", "HTTP_PROXY", "all_proxy", "ALL_PROXY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("http_proxy", "socks5://proxy:1080")
+    with pytest.raises(ValueError, match="unsupported proxy scheme"):
+        run_curl(url="http://example.invalid/x", timeout_seconds=5)
 
 
 def test_run_curl_rejects_url_with_embedded_newline() -> None:
