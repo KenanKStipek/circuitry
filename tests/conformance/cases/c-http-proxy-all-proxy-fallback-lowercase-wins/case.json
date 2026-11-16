@@ -1,0 +1,9 @@
+{
+  "spec_case": "issue #778 step 7, H1 (all_proxy/ALL_PROXY is the fallback for an http URL, lowercase winning over uppercase)",
+  "description": "Neither `http_proxy` nor `https_proxy` is set; `ALL_PROXY` points at a closed port and `all_proxy` at the mock server. Success here is only possible if the fallback applies at all, and if the lowercase form wins over the uppercase one when both are set.",
+  "engines": ["python", "electricity"],
+  "expect": "success",
+  "mock_http_fixture": "mock-http.yaml",
+  "cli_args": ["-e", "base_url=http://example.invalid"],
+  "env": {"ALL_PROXY": "http://127.0.0.1:1", "all_proxy": "http://127.0.0.1:__MOCK_HTTP_PORT__", "no_proxy": ""}
+}
