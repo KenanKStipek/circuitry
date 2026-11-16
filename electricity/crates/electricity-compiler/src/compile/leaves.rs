@@ -202,6 +202,33 @@ fn optional_str(dict: &Dict, key: &str) -> Option<String> {
     }
 }
 
+/// `plugins/agent.py::static_param_errors` (#778 step 5): a literal
+/// `result_schema` must be paired with `result_file` and be a
+/// well-formed JSON Schema -- the same check `AgentPlugin::execute`
+/// repeats on the fully rendered params, since a `result_schema`/
+/// `result_file` reached only through `params_json` or a template isn't
+/// visible here.
+fn agent_result_schema_errors(params: &Dict) -> Vec<String> {
+    let result_schema = match params.get(&Value::Str("result_schema".to_string())) {
+        None | Some(Value::None) => return Vec::new(),
+        Some(value) => value,
+    };
+    if get_truthy(params, "result_file").is_none() {
+        return vec!["params.result_schema needs params.result_file".to_string()];
+    }
+    let Value::Dict(_) = result_schema else {
+        return vec!["params.result_schema must be a JSON Schema object".to_string()];
+    };
+    match electricity_schema::schema_well_formedness_error(result_schema) {
+        Some(message) => {
+            vec![format!(
+                "params.result_schema is not a valid JSON Schema: {message}"
+            )]
+        }
+        None => Vec::new(),
+    }
+}
+
 pub(crate) fn compile_prompt(
     effect: &Dict,
     path: &EffectPath,
@@ -350,6 +377,21 @@ pub(crate) fn compile_prompt(
         return Err(CompileError(format!(
             "Prompt '{name}': prompt_type '{prompt_type_raw}' requires a 'schema' field."
         )));
+    }
+
+    // `core/compiler.py::_compile_prompt`'s own well-formedness check
+    // (issue #778's own step 5): a `multipleOf` that isn't a number
+    // greater than zero, or a `$ref` chain past
+    // `electricity_schema::engine::MAX_REF_CHAIN_HOPS`, refuses the
+    // compile here too, with the same message, rather than reaching
+    // `validate_prompt_schema` at run time with a schema already known
+    // to be malformed.
+    if let Some(schema_value) = &schema {
+        if let Some(message) = electricity_schema::schema_well_formedness_error(schema_value) {
+            return Err(CompileError(format!(
+                "Prompt '{name}': schema is not a valid JSON Schema: {message}"
+            )));
+        }
     }
 
     // Known divergence from `core/compiler.py`'s own
@@ -578,6 +620,13 @@ pub(crate) fn compile_tool(
                 .map(|(key, value)| (key.clone(), value.clone()))
                 .collect();
             params = &params_without_prompt;
+        }
+        let problems = agent_result_schema_errors(params);
+        if !problems.is_empty() {
+            return Err(CompileError(format!(
+                "Tool effect '{name}' (agent) at '{effect_path}': {}",
+                problems.join("; ")
+            )));
         }
     }
 

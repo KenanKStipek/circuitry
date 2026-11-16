@@ -1,0 +1,16 @@
+name: schema-error-path-with-a-non-string-key
+effects:
+  - name: iter_0
+    type: tool
+    provider: json
+    params: {}
+interface:
+  inputs:
+    3.14:
+      type: 5
+    null:
+      type: 5
+    true:
+      type: 5
+    2024-01-01:
+      type: 5

@@ -2137,7 +2137,12 @@ def _validate_merged_against_schema(value: Any, schema: Mapping[str, Any]) -> No
     try:
         import jsonschema  # type: ignore[import-untyped]
 
-        jsonschema.validate(value, schema)
+        from .schema_corners import extended_validator
+
+        validator = extended_validator(schema)
+        error = jsonschema.exceptions.best_match(validator.iter_errors(value))
+        if error is not None:
+            raise error
     except ImportError:
         pass
     except jsonschema.ValidationError as exc:

@@ -45,7 +45,11 @@ from ..cli.orchestration_loader import load_orchestration_file
 from ..cli.redaction import redact
 from ..core.compiler import compile_orchestration
 from ..core.cycle_check import detect_cycles
-from ..core.document_check import unknown_key_errors, unknown_key_warnings
+from ..core.document_check import (
+    schema_error_sort_key,
+    unknown_key_errors,
+    unknown_key_warnings,
+)
 from ..core.lint import lint_orchestration
 from ..core.runtime_plugins import load_plugins
 from ..plugins.factory import PLUGIN_REGISTRY, build_plugin
@@ -481,7 +485,9 @@ def validate_report(
         validator = jsonschema.Draft7Validator(schema)
         issues += [
             ValidationIssue("schema", error.message, _schema_location(error))
-            for error in sorted(validator.iter_errors(orch), key=str)
+            for error in sorted(
+                validator.iter_errors(orch), key=lambda err: schema_error_sort_key(orch, err)
+            )
         ]
 
     if config is None:

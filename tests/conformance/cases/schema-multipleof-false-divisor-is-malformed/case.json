@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5 (closes issue #507's own item 5)",
+  "description": "`False` as a `multipleOf` divisor reached through a `$ref` into a key no schema-structure walk recognizes as housing a subschema (`myCustomDefs`) used to skip the metaschema check and reach Python's own runtime `%` arithmetic instead, raising `ZeroDivisionError` from a genuine zero divisor. The new well-formedness check walks every `multipleOf` in the schema unconditionally, so this is now a compile-time refusal before any instance is considered -- a `bool` is never a number under this rule, so `on_error: continue` no longer has anything to absorb.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

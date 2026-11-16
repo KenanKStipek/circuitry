@@ -6,13 +6,14 @@
 //! `recursion_exceeded_peek` reads `false`. The schema used to fall
 //! straight through to the `jsonschema` crate's own eager `$ref`
 //! resolution, which needs far more native stack per hop than this
-//! engine's own bounded walk ever had to -- fine up to about 10,000
-//! hops, an uncontrolled process abort (`rc -6`, no state written at
-//! all) somewhere past that, well before 30,000. `lib.rs`'s own
-//! crate-path guard (`engine::ref_chain_depth_exceeds_cap`) measures the
-//! chain itself, structurally, before the crate is ever built, and
-//! reports the same `RecursionError` text the engine path already does
-//! for an equally long chain.
+//! engine's own bounded walk ever had to. `lib.rs`'s own crate-path
+//! guard (`engine::ref_chain_depth_exceeds_cap`) measures the chain
+//! itself, structurally, before the crate is ever built -- issue #778's
+//! own step 5 lowered that cap to `engine::MAX_REF_CHAIN_HOPS` (200),
+//! an explicit limit both engines share rather than relying on wherever
+//! a bare `jsonschema.validate` call's own Python recursion happens to
+//! give out, so every chain below, 1000 hops included, now reports the
+//! same shared message rather than `Valid`.
 //!
 //! Every schema here is parsed through [`electricity_json::loads`], not
 //! `serde_json::json!` -- this crate's own `serde_json::Value::Object`
@@ -31,7 +32,7 @@
 use electricity_schema::{PromptSchemaCheck, validate_prompt_schema};
 use electricity_value::Value;
 
-const RECURSION_ERROR_TEXT: &str = "maximum recursion depth exceeded while calling a Python object";
+const REF_CHAIN_ERROR_TEXT: &str = "$ref chain is too long (limit 200 consecutive references)";
 
 fn defs_chain_json(n: usize) -> String {
     let mut out = String::from("{");
@@ -82,45 +83,69 @@ fn check_on_a_2mib_caller_stack(schema: Value, instance: Value) -> PromptSchemaC
         .expect("the spawned thread must not panic")
 }
 
+/// Exactly the cap itself is still accepted -- the boundary both
+/// engines agree on (`cof`'s own `test_ref_chain_of_exactly_the_cap_
+/// is_well_formed` pins the same boundary). 199 `$defs` entries plus
+/// the schema's own `$ref` into the chain is 200 total hops, exactly
+/// at the cap.
 #[test]
-fn root_unevaluated_properties_1000_hops_is_accepted() {
+fn root_unevaluated_properties_200_hops_is_accepted() {
+    let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(199);
+    assert_eq!(
+        check_on_a_2mib_caller_stack(schema, instance),
+        PromptSchemaCheck::Valid
+    );
+}
+
+/// One hop past the cap is refused.
+#[test]
+fn root_unevaluated_properties_201_hops_exceeds_the_cap() {
+    let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(200);
+    assert_eq!(
+        check_on_a_2mib_caller_stack(schema, instance),
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
+    );
+}
+
+#[test]
+fn root_unevaluated_properties_1000_hops_exceeds_the_cap() {
     let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(1000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::Valid
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
 #[test]
-fn root_unevaluated_properties_10000_hops_reports_the_recursion_cap_not_a_crash() {
+fn root_unevaluated_properties_10000_hops_reports_the_cap_not_a_crash() {
     let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(10_000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
 #[test]
-fn root_unevaluated_properties_30000_hops_reports_the_recursion_cap_not_a_crash() {
+fn root_unevaluated_properties_30000_hops_reports_the_cap_not_a_crash() {
     let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(30_000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
 #[test]
-fn root_unevaluated_properties_100000_hops_reports_the_recursion_cap_not_a_crash() {
+fn root_unevaluated_properties_100000_hops_reports_the_cap_not_a_crash() {
     let (schema, instance) = root_unevaluated_properties_with_long_ref_chain(100_000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
 #[test]
-fn root_nested_id_1000_hops_is_accepted() {
-    let (schema, instance) = root_nested_id_with_long_ref_chain(1000);
+fn root_nested_id_200_hops_is_accepted() {
+    let (schema, instance) = root_nested_id_with_long_ref_chain(199);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
         PromptSchemaCheck::Valid
@@ -128,28 +153,46 @@ fn root_nested_id_1000_hops_is_accepted() {
 }
 
 #[test]
-fn root_nested_id_10000_hops_reports_the_recursion_cap_not_a_crash() {
+fn root_nested_id_201_hops_exceeds_the_cap() {
+    let (schema, instance) = root_nested_id_with_long_ref_chain(200);
+    assert_eq!(
+        check_on_a_2mib_caller_stack(schema, instance),
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
+    );
+}
+
+#[test]
+fn root_nested_id_1000_hops_exceeds_the_cap() {
+    let (schema, instance) = root_nested_id_with_long_ref_chain(1000);
+    assert_eq!(
+        check_on_a_2mib_caller_stack(schema, instance),
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
+    );
+}
+
+#[test]
+fn root_nested_id_10000_hops_reports_the_cap_not_a_crash() {
     let (schema, instance) = root_nested_id_with_long_ref_chain(10_000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
 #[test]
-fn root_nested_id_30000_hops_reports_the_recursion_cap_not_a_crash() {
+fn root_nested_id_30000_hops_reports_the_cap_not_a_crash() {
     let (schema, instance) = root_nested_id_with_long_ref_chain(30_000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }
 
 #[test]
-fn root_nested_id_100000_hops_reports_the_recursion_cap_not_a_crash() {
+fn root_nested_id_100000_hops_reports_the_cap_not_a_crash() {
     let (schema, instance) = root_nested_id_with_long_ref_chain(100_000);
     assert_eq!(
         check_on_a_2mib_caller_stack(schema, instance),
-        PromptSchemaCheck::SchemaError(RECURSION_ERROR_TEXT.to_string())
+        PromptSchemaCheck::SchemaError(REF_CHAIN_ERROR_TEXT.to_string())
     );
 }

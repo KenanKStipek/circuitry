@@ -79,13 +79,6 @@ fn get<'a>(dict: &'a Dict, name: &str) -> Option<&'a Value> {
 pub(crate) struct Violation<'a> {
     pub(crate) kind: Kind<'a>,
     pub(crate) path: Vec<PathSegment>,
-    /// The path to the keyword that fired, in `err.schema_path` terms --
-    /// `["properties", "a", "required"]` for a nested property, not
-    /// just `["required"]`. Needed only by the orchestration (draft-07)
-    /// document-check sort, which breaks a message+keyword tie this way
-    /// instead of porting `pprint`; irrelevant for prompt-schema
-    /// validation's own `best_match`, which never reads it.
-    pub(crate) schema_path: Vec<PathSegment>,
     local_schema: &'a Value,
     pub(crate) local_instance: &'a Value,
 }
@@ -120,39 +113,6 @@ pub(crate) enum PathSegment {
     // a `tests/depth_safety.rs` case over its 2 MiB thread stack before
     // this was boxed.
     NonStringKey(Box<Value>),
-}
-
-/// `jsonschema._utils.format_as_index`'s own index text (the part after
-/// the container name): `"".join(f"[{index!r}]" for index in indices)`.
-///
-/// `core/document_check.py::schema_errors` sorts by `str(err)`, which
-/// (once the message itself ties) next compares `repr(err.validator)`,
-/// then this same text for `err.schema_path`, then the *schema*'s own
-/// `pprint`, then this text again for `err.path`, then the *instance*'s
-/// own `pprint` -- in that order, since it's one literal f-string
-/// compared left to right. Given two errors with equal message and
-/// keyword, their schema_path text alone decides the order *before*
-/// either pprint is ever reached, unless schema_path (hence this text)
-/// also ties -- but a tied schema_path names the exact same schema
-/// subtree (this engine's own schema is static per call), so the
-/// schema's own pprint can't differ either; the same argument applies
-/// to a tied path/instance pair. So comparing `(message, keyword,
-/// schema_path text, path text)` as a 4-tuple is a faithful stand-in
-/// for the full `str(err)` order -- it can never put two errors in a
-/// different relative order than Python would, without ever rendering
-/// either `pprint`.
-pub(crate) fn format_as_index(segments: &[PathSegment]) -> String {
-    let mut out = String::new();
-    for segment in segments {
-        out.push('[');
-        match segment {
-            PathSegment::Key(s) => out.push_str(&Value::Str(s.clone()).py_repr()),
-            PathSegment::Index(i) => out.push_str(&i.to_string()),
-            PathSegment::NonStringKey(v) => out.push_str(&v.py_repr()),
-        }
-        out.push(']');
-    }
-    out
 }
 
 /// `error.path`/`error.relative_path`'s own comparison (a `deque`, compared
@@ -302,7 +262,7 @@ fn as_f64(value: &Value) -> Option<f64> {
 /// definition), so this never loses precision the way routing a `BigInt`
 /// through `f64` (or vice versa) would. `None` for `NaN`/`Infinity`
 /// (callers compare those by case, never through a ratio). Used by
-/// [`cmp_bigint_f64`] and [`uniq_key`] so an `Int`-`Float` comparison or
+/// [`cmp_bigint_f64`] and [`canonical_key`] so an `Int`-`Float` comparison or
 /// hash bucket is exact at any magnitude (issue #498's own
 /// follow-up: `9007199254740993 > 9007199254740992.0` must
 /// stay `Greater`, not silently round to `Equal`).
@@ -389,347 +349,96 @@ pub(crate) fn py_equal(one: &Value, two: &Value) -> bool {
 }
 
 /// A hashable stand-in for [`py_equal`]'s own equivalence classes --
-/// `Hash`/`Eq` agree with it exactly (unlike `electricity_value::Value`'s
-/// own derived ones, which deliberately let `True`/`1`/`1.0` collide as
-/// Python dict keys do -- the opposite of what `jsonschema._utils.equal`
-/// wants here). `Number` is an exact, fully-reduced `(numerator,
-/// denominator)` ratio ([`float_exact_ratio`]) so `1`/`1.0`/`10**19`/
-/// `1e19` all collide exactly, at any magnitude, the same way Python's
-/// own `hash(1) == hash(1.0) == hash(10**19) == hash(1e19)` invariant
-/// does (issue #498's own follow-up).
+/// `Hash`/`Eq`/`Ord` agree with it exactly (unlike `electricity_value::
+/// Value`'s own derived ones, which deliberately let `True`/`1`/`1.0`
+/// collide as Python dict keys do -- the opposite of what `jsonschema.
+/// _utils.equal` wants here). `Number` is an exact, fully-reduced
+/// `(numerator, denominator)` ratio ([`float_exact_ratio`]) so `1`/
+/// `1.0`/`10**19`/`1e19` all collide exactly, at any magnitude, the
+/// same way Python's own `hash(1) == hash(1.0) == hash(10**19) ==
+/// hash(1e19)` invariant does (issue #498's own follow-up). `List`/
+/// `Dict` recurse (a `Dict`'s own entries sorted by key first, so two
+/// dicts with the same entries in a different insertion order collide
+/// too) rather than falling back to an all-pairs scan the way the
+/// algorithm this replaces had to for an unhashable container.
 ///
-/// `Nan`/`Inf` are their own buckets, deliberately *not* folded into
-/// `Number`: CPython's own `json` C scanner hands back one shared `NaN`/
-/// `Infinity`/`-Infinity` singleton object for every occurrence of that
-/// literal reached by *one* `json.loads` call (confirmed directly), so
-/// `_utils.equal`'s `one is two` short-circuit makes every `NaN` in one
-/// decoded instance a duplicate of every other `NaN` there (`uniqueItems`
-/// specifically -- never `py_equal`'s own general-purpose comparison,
-/// e.g. a schema's own `const`/`enum` literal parsed from a wholly
-/// separate YAML document is never `is`-identical to anything an
-/// instance decodes, so that path stays `NaN != NaN` as plain `f64`
-/// equality already gives).
-#[derive(PartialEq, Eq, Hash)]
-enum UniqKey {
-    Str(String),
+/// `None` for anything containing a `NaN` anywhere (issue #778's own
+/// step 5): under this rule a `NaN` never equals anything, including
+/// another `NaN` -- unlike `jsonschema`'s own `_utils.uniq`, which
+/// treats every `NaN` *within one decoded instance* as a duplicate of
+/// every other one there, since CPython's own `json` scanner hands
+/// back one shared `NaN` singleton object per `json.loads` call and
+/// `_utils.equal`'s `one is two` identity check fires on it before any
+/// type-specific comparison. A value containing a `NaN` anywhere can
+/// never equal anything by this rule's own definition, so it is simply
+/// never added to the hash set below -- always counted as its own,
+/// unique element -- rather than given some key that could coincide
+/// with another's.
+#[derive(PartialEq, Eq, Hash, PartialOrd, Ord, Clone)]
+enum CanonicalKey {
+    Null,
     Bool(bool),
-    None,
-    Nan,
-    Inf(bool),
     Number(num_bigint::BigInt, num_bigint::BigInt),
+    Inf(bool),
+    Str(String),
+    List(Vec<CanonicalKey>),
+    Dict(Vec<(CanonicalKey, CanonicalKey)>),
 }
 
-fn uniq_key(value: &Value) -> Option<UniqKey> {
+fn canonical_key(value: &Value) -> Option<CanonicalKey> {
     match value {
-        Value::Str(s) => Some(UniqKey::Str(s.clone())),
-        Value::Bool(b) => Some(UniqKey::Bool(*b)),
-        Value::None => Some(UniqKey::None),
-        Value::Int(i) => Some(UniqKey::Number(i.to_bigint(), num_bigint::BigInt::from(1))),
-        Value::Float(f) if f.is_nan() => Some(UniqKey::Nan),
-        Value::Float(f) if f.is_infinite() => Some(UniqKey::Inf(*f < 0.0)),
-        Value::Float(f) => float_exact_ratio(*f).map(|(n, d)| UniqKey::Number(n, d)),
-        // Every container type falls back to `py_uniq`'s own
-        // brute-force bucket below -- container equality is never by
-        // hash here.
-        _ => None,
+        Value::None => Some(CanonicalKey::Null),
+        Value::Bool(b) => Some(CanonicalKey::Bool(*b)),
+        Value::Int(i) => Some(CanonicalKey::Number(
+            i.to_bigint(),
+            num_bigint::BigInt::from(1),
+        )),
+        Value::Float(f) if f.is_nan() => None,
+        Value::Float(f) if f.is_infinite() => Some(CanonicalKey::Inf(*f < 0.0)),
+        Value::Float(f) => float_exact_ratio(*f).map(|(n, d)| CanonicalKey::Number(n, d)),
+        Value::Str(s) => Some(CanonicalKey::Str(s.clone())),
+        Value::List(items) => {
+            let mut keys = Vec::with_capacity(items.len());
+            for item in items {
+                keys.push(canonical_key(item)?);
+            }
+            Some(CanonicalKey::List(keys))
+        }
+        Value::Dict(entries) => {
+            let mut keys = Vec::with_capacity(entries.len());
+            for (k, v) in entries {
+                keys.push((canonical_key(k)?, canonical_key(v)?));
+            }
+            keys.sort();
+            Some(CanonicalKey::Dict(keys))
+        }
+        // Never real in a schema-validated instance (this module's own
+        // top doc comment: both a decoded reply and a document author's
+        // `schema:` literal are plain `json.loads`-shaped data) --
+        // `None` here is simply conservative, same as a `NaN`: never
+        // treated as a duplicate of anything.
+        Value::Bytes(_) | Value::Date(_) | Value::DateTime(_, _) => None,
     }
 }
 
-/// `jsonschema._utils.uniq`: every hashable scalar (everything but a
-/// `List`/`Dict`) goes through [`uniq_key`]'s own `O(n)` duplicate-count
-/// pass -- the one that actually matters for a large array, per issue
-/// #498's own follow-up (`O(n^2)` over 50k
-/// items took several seconds in a debug build; this brings it back to
-/// milliseconds). A `List`/`Dict` element falls to
-/// [`containers_have_a_duplicate`], which -- unlike a naive all-pairs
-/// `equal()` loop -- replicates Python's own two-phase algorithm
-/// exactly, including its one real quirk (issue #498's own
-/// follow-up).
-fn py_uniq(items: &[Value]) -> bool {
-    let mut seen: std::collections::HashMap<UniqKey, usize> = std::collections::HashMap::new();
-    let mut unhashable: Vec<&Value> = Vec::new();
+/// `uniqueItems`, comparing every pair by real JSON equality (numbers by
+/// value across `Int`/`Float`, `Bool` never equal to a number, `NaN`
+/// never equal to anything, deep structural equality for `List`/`Dict`)
+/// rather than `jsonschema`'s own sort-then-compare-neighbours, which
+/// can miss a real duplicate that a merely-tied-but-unequal element
+/// separates (confirmed directly against Python:
+/// `uniq([[1], [True], [1]])` says every element is unique, since `[1]`
+/// and `[True]` sort as tied under Python's own plain `==` without
+/// being `equal()`-equal to each other, so the two genuinely equal
+/// `[1]`s -- now on opposite sides of `[True]` -- are never adjacent
+/// and never actually compared). [`canonical_key`]'s own hash set keeps
+/// this `O(n)` on average rather than `O(n^2)`, the fast path a large
+/// array still needs (`uniq_items_stays_fast_at_scale` below).
+fn has_duplicate(items: &[Value]) -> bool {
+    let mut seen: std::collections::HashSet<CanonicalKey> = std::collections::HashSet::new();
     for item in items {
-        match uniq_key(item) {
-            Some(key) => {
-                let count = seen.entry(key).or_insert(0);
-                *count += 1;
-                if *count > 1 {
-                    return false;
-                }
-            }
-            None => unhashable.push(item),
-        }
-    }
-    !containers_have_a_duplicate(&unhashable)
-}
-
-/// Python's own plain `<`/`==` ordering -- *never* [`py_equal`]'s own
-/// `bool`-vs-`int` distinction (`_utils.unbool`'s own sentinel trick
-/// only ever intercepts a *bare* `True`/`False` at the container's own
-/// top level, never one buried inside a nested list, so list comparison
-/// itself stays plain: `[1] == [True]` compares equal here, the same as
-/// Python's own `list.__eq__`). `None` wherever Python's own `<` would
-/// raise `TypeError`: comparing anything against a `dict` (genuinely
-/// unorderable), or two values from incompatible type families (a
-/// `str` against a number, a `list` against anything but another
-/// `list`, ...). The numeric tower (`bool`/`int`/`float`) is exact at
-/// any magnitude, the same reason [`numeric_cmp`] is.
-fn py_sort_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    match (a, b) {
-        (Value::Dict(_), _) | (_, Value::Dict(_)) => None,
-        (Value::None, Value::None) => Some(std::cmp::Ordering::Equal),
-        (Value::None, _) | (_, Value::None) => None,
-        (Value::Str(x), Value::Str(y)) => Some(x.cmp(y)),
-        (Value::Str(_), _) | (_, Value::Str(_)) => None,
-        (Value::List(x), Value::List(y)) => {
-            for (xi, yi) in x.iter().zip(y.iter()) {
-                match py_sort_cmp(xi, yi)? {
-                    std::cmp::Ordering::Equal => continue,
-                    other => return Some(other),
-                }
-            }
-            Some(x.len().cmp(&y.len()))
-        }
-        (Value::List(_), _) | (_, Value::List(_)) => None,
-        (
-            Value::Bool(_) | Value::Int(_) | Value::Float(_),
-            Value::Bool(_) | Value::Int(_) | Value::Float(_),
-        ) => numeric_cmp(&as_numeric(a), &as_numeric(b)),
-        (Value::Bytes(_) | Value::Date(_) | Value::DateTime(_, _), _)
-        | (_, Value::Bytes(_) | Value::Date(_) | Value::DateTime(_, _)) => None,
-    }
-}
-
-/// `bool` participates in Python's own numeric tower for ordering
-/// purposes (`True < 2`, `False == 0`) -- unlike [`py_equal`]'s own
-/// deliberately bool-distinguishing rule, matched here by converting it
-/// to a plain `0`/`1` `Int` first.
-fn as_numeric(value: &Value) -> Value {
-    match value {
-        Value::Bool(b) => Value::Int(electricity_value::IntValue::Small(*b as i64)),
-        other => other.clone(),
-    }
-}
-
-/// [`py_sort_cmp`], except a `NaN` on either side is a tie (`Some(
-/// Equal)`), never incomparable -- Python's own `float.__lt__` never
-/// raises for `NaN` (every comparison with it is simply `False`,
-/// unlike a genuine `TypeError` from e.g. a `dict`), so CPython's own
-/// sort never aborts over one; only [`uniq_equal`]'s own adjacency
-/// check gets to decide whether two `NaN`s collide (issue #498's own
-/// follow-up, NaN uniqueness edges).
-fn uniq_sort_cmp(a: &Value, b: &Value) -> Option<std::cmp::Ordering> {
-    if let (Value::Float(x), Value::Float(y)) = (a, b) {
-        if x.is_nan() || y.is_nan() {
-            return Some(std::cmp::Ordering::Equal);
-        }
-    }
-    if let (Value::List(x), Value::List(y)) = (a, b) {
-        for (xi, yi) in x.iter().zip(y.iter()) {
-            match uniq_sort_cmp(xi, yi)? {
-                std::cmp::Ordering::Equal => continue,
-                other => return Some(other),
-            }
-        }
-        return Some(x.len().cmp(&y.len()));
-    }
-    py_sort_cmp(a, b)
-}
-
-/// [`py_equal`], except two `NaN`s are always equal -- within *one*
-/// decoded instance, every `NaN` literal is CPython's own `json`
-/// scanner's shared singleton object ([`UniqKey::Nan`]'s own doc
-/// comment), so `_utils.equal`'s `one is two` identity check (checked
-/// *before* any type-specific comparison, at every recursion level --
-/// `_sequence_equal`/`_mapping_equal` both recurse through `equal`
-/// itself, never a bare `==`) makes two `NaN`s nested at any depth
-/// collide too, e.g. `[[nan], [nan]]` (confirmed directly against
-/// Python). [`py_equal`] itself must stay narrower: a schema's own
-/// `const`/`enum` literal (parsed from a wholly separate document) is
-/// never identity-equal to anything an instance decodes, so that
-/// comparison correctly keeps `NaN != NaN` as plain `f64` equality
-/// already gives -- only *this* uniqueness-only path gets the identity
-/// treatment.
-fn uniq_equal(a: &Value, b: &Value) -> bool {
-    match (a, b) {
-        (Value::Float(x), Value::Float(y)) if x.is_nan() && y.is_nan() => true,
-        (Value::List(x), Value::List(y)) => {
-            x.len() == y.len() && x.iter().zip(y.iter()).all(|(p, q)| uniq_equal(p, q))
-        }
-        (Value::Dict(x), Value::Dict(y)) => {
-            x.len() == y.len()
-                && x.iter()
-                    .all(|(k, v)| y.get(k).is_some_and(|v2| uniq_equal(v, v2)))
-        }
-        _ => py_equal(a, b),
-    }
-}
-
-/// CPython's own `merge_compute_minrun` threshold -- a list shorter
-/// than this is always one single `listsort` "run" to begin with, so
-/// `cpython_list_sort`'s own `count_run` + `binarysort` port is exact,
-/// comparison for comparison, only below it.
-const CPYTHON_MINRUN_WIDTH: usize = 64;
-
-/// A stable, `Option<Ordering>`-aware top-down merge sort over *order*
-/// (indices into *items*), comparing with [`uniq_sort_cmp`] --
-/// [`cpython_list_sort`]'s own `O(n log n)`-moves replacement for its
-/// single-run `binarysort` port once `order.len()` reaches
-/// [`CPYTHON_MINRUN_WIDTH`] (issue #507's own item 12):
-/// each of the `log2(n)` merge levels moves every element exactly
-/// once, into a same-sized scratch buffer, rather than `binarysort`'s
-/// own per-insertion `rotate_right` (up to the whole sorted prefix so
-/// far, `O(n)` on its own, `O(n^2)` summed over `n` insertions).
-/// Returns `false` the instant any comparison is incomparable (`None`)
-/// -- *order* left in an unspecified state, the same contract
-/// [`cpython_list_sort`] already documents, so [`containers_have_a_
-/// duplicate`]'s own all-pairs fallback never looks at a partial sort
-/// either way. A tie (`Some(Equal)`) keeps the *left* run's own
-/// element first in the merge step below, preserving stability exactly
-/// like a real merge sort (and like `binarysort`'s own `bisect_right`
-/// insertion) -- never reordering two elements [`uniq_equal`]'s own
-/// adjacency check would otherwise still correctly call equal
-/// regardless, but kept for the same reason `cpython_list_sort` is a
-/// stable sort at all: a document a future change makes this ever
-/// expose ordering to (not just "any duplicate") must not regress.
-fn merge_sort_order(order: &mut [usize], items: &[&Value]) -> bool {
-    let n = order.len();
-    if n < 2 {
-        return true;
-    }
-    let mut scratch = vec![0usize; n];
-    merge_sort_rec(order, &mut scratch, items)
-}
-
-fn merge_sort_rec(order: &mut [usize], scratch: &mut [usize], items: &[&Value]) -> bool {
-    let n = order.len();
-    if n < 2 {
-        return true;
-    }
-    let mid = n / 2;
-    if !merge_sort_rec(&mut order[..mid], &mut scratch[..mid], items) {
-        return false;
-    }
-    if !merge_sort_rec(&mut order[mid..], &mut scratch[mid..], items) {
-        return false;
-    }
-    let (left, right) = order.split_at(mid);
-    let (mut i, mut j, mut k) = (0usize, 0usize, 0usize);
-    while i < left.len() && j < right.len() {
-        match uniq_sort_cmp(items[left[i]], items[right[j]]) {
-            None => return false,
-            Some(std::cmp::Ordering::Greater) => {
-                scratch[k] = right[j];
-                j += 1;
-            }
-            _ => {
-                scratch[k] = left[i];
-                i += 1;
-            }
-        }
-        k += 1;
-    }
-    scratch[k..k + (left.len() - i)].copy_from_slice(&left[i..]);
-    k += left.len() - i;
-    scratch[k..k + (right.len() - j)].copy_from_slice(&right[j..]);
-    order.copy_from_slice(scratch);
-    true
-}
-
-/// Simulates CPython `listsort`'s own `count_run` + `binarysort` --
-/// together, the *entire* algorithm it uses for a list shorter than
-/// [`CPYTHON_MINRUN_WIDTH`] -- over *order* (indices into *items*),
-/// comparing with
-/// [`uniq_sort_cmp`]. `count_run` first finds *order*'s own natural
-/// ascending (ties continue it) or strictly-descending (ties break it)
-/// prefix, reversing it in place if descending; `binarysort` then
-/// inserts every remaining element with a bisection search exactly like
-/// `bisect_right` (ties move *right*, preserving stability) and an
-/// in-place rotation. Returns `false` -- *order* left in an unspecified
-/// state, matching `_utils.uniq`'s own fallback-restarts-from-the-
-/// original-container semantics, so no caller may look at a partial
-/// sort -- the instant any comparison is incomparable (`None`), CPython's
-/// own uncaught `TypeError` unwinding the whole `sorted()` call.
-///
-/// For a list of 64 or more, real timsort instead finds and merges
-/// several shorter runs with a galloping merge -- already a documented,
-/// narrower divergence from that exact comparison *sequence*
-/// (`DESIGN.md` §13) before issue #507's own item 12, since
-/// this used to keep the same single-run binary-insertion algorithm
-/// there too, correct (any genuine total order still ends up fully,
-/// stably sorted) but *quadratic in element moves* there -- every
-/// insertion's own `rotate_right` shifts up to the whole sorted prefix
-/// so far, same as real CPython's own `binarysort` does for genuinely
-/// large input (CPython's *own* long tail from the comparisons
-/// `count_run` didn't already order would be just as quadratic, which
-/// is exactly why real timsort never binary-inserts a long tail like
-/// this at all). Dispatches to [`merge_sort_order`] once `n` reaches
-/// that same 64 threshold instead -- `O(n log n)` moves, never
-/// `O(n^2)`, while staying a correct, stable, `Option`-aware sort over
-/// the identical [`uniq_sort_cmp`] comparator (`uniq_items_of_lists_
-/// stays_fast_at_scale`'s own 600,000-list-element case is exactly
-/// this threshold crossed by four orders of magnitude). Below it, this
-/// keeps replicating real CPython comparison for comparison, since
-/// there's nothing to gain performance-wise at that size either way.
-fn cpython_list_sort(order: &mut [usize], items: &[&Value]) -> bool {
-    let n = order.len();
-    if n >= CPYTHON_MINRUN_WIDTH {
-        return merge_sort_order(order, items);
-    }
-    if n < 2 {
-        return true;
-    }
-    let descending = match uniq_sort_cmp(items[order[1]], items[order[0]]) {
-        None => return false,
-        Some(std::cmp::Ordering::Less) => true,
-        _ => false,
-    };
-    let mut run_len = 2;
-    while run_len < n {
-        let cmp = match uniq_sort_cmp(items[order[run_len]], items[order[run_len - 1]]) {
-            None => return false,
-            Some(c) => c,
-        };
-        let continues = if descending {
-            cmp == std::cmp::Ordering::Less
-        } else {
-            cmp != std::cmp::Ordering::Less
-        };
-        if !continues {
-            break;
-        }
-        run_len += 1;
-    }
-    if descending {
-        order[..run_len].reverse();
-    }
-    for i in run_len..n {
-        let pivot = order[i];
-        let mut lo = 0usize;
-        let mut hi = i;
-        while lo < hi {
-            let mid = (lo + hi) / 2;
-            match uniq_sort_cmp(items[pivot], items[order[mid]]) {
-                None => return false,
-                Some(std::cmp::Ordering::Less) => hi = mid,
-                _ => lo = mid + 1,
-            }
-        }
-        order[lo..=i].rotate_right(1);
-    }
-    true
-}
-
-fn containers_have_a_duplicate(items: &[&Value]) -> bool {
-    let mut order: Vec<usize> = (0..items.len()).collect();
-    if cpython_list_sort(&mut order, items) {
-        return order
-            .windows(2)
-            .any(|w| uniq_equal(items[w[0]], items[w[1]]));
-    }
-    for i in 0..items.len() {
-        for j in 0..i {
-            if uniq_equal(items[j], items[i]) {
+        if let Some(key) = canonical_key(item) {
+            if !seen.insert(key) {
                 return true;
             }
         }
@@ -802,51 +511,6 @@ fn relevance_cmp(a: &Violation<'_>, b: &Violation<'_>) -> std::cmp::Ordering {
             (!matches_type(a.local_schema, a.local_instance))
                 .cmp(&!matches_type(b.local_schema, b.local_instance))
         })
-}
-
-/// `err.validator` -- the keyword name a violation's own message is
-/// about, `None` only for a bare `false` subschema (Python's own
-/// `ValidationError` has no keyword there either, since no keyword
-/// function ever ran to produce it). Appended to a violation's own
-/// [`Violation::schema_path`] prefix to get the full `err.schema_path`
-/// the orchestration document-check sort needs; never used by
-/// prompt-schema validation's own `best_match`, which only reads
-/// [`relevance_cmp`].
-pub(crate) fn keyword_name(kind: &Kind<'_>) -> Option<&'static str> {
-    Some(match kind {
-        Kind::Type => "type",
-        Kind::Required { .. } => "required",
-        Kind::Enum => "enum",
-        Kind::Const => "const",
-        Kind::AdditionalPropertiesPlain { .. } | Kind::AdditionalPropertiesPatterned { .. } => {
-            "additionalProperties"
-        }
-        Kind::MinItems { .. } => "minItems",
-        Kind::MaxItems { .. } => "maxItems",
-        Kind::MinLength { .. } => "minLength",
-        Kind::MaxLength { .. } => "maxLength",
-        Kind::MinProperties { .. } => "minProperties",
-        Kind::MaxProperties { .. } => "maxProperties",
-        Kind::Minimum => "minimum",
-        Kind::Maximum => "maximum",
-        Kind::ExclusiveMinimum => "exclusiveMinimum",
-        Kind::ExclusiveMaximum => "exclusiveMaximum",
-        Kind::MultipleOf => "multipleOf",
-        Kind::Pattern => "pattern",
-        Kind::UniqueItems => "uniqueItems",
-        Kind::AnyOfNotValid { .. } => "anyOf",
-        Kind::OneOfNotValid { .. } | Kind::OneOfMultipleValid { .. } => "oneOf",
-        Kind::FalseSchema => return None,
-        Kind::Not { .. } => "not",
-        Kind::DependentRequired { .. } => "dependentRequired",
-        // Draft 7 (the only draft that ever reaches these through
-        // `draft7_mode_active()`) has no `minContains`/`maxContains` at
-        // all -- every `contains` failure there is this one keyword.
-        Kind::ContainsNone | Kind::MinContains { .. } | Kind::MaxContains { .. } => "contains",
-        Kind::ItemsFalse { .. } => "items",
-        Kind::AdditionalItemsFalse { .. } => "additionalItems",
-        Kind::Dependencies { .. } => "dependencies",
-    })
 }
 
 /// `jsonschema.exceptions.best_match`: `max(violations, key=relevance)`
@@ -1021,6 +685,115 @@ thread_local! {
 /// profile -- workspace `Cargo.toml` -- specifically so this margin holds
 /// in an unoptimized/debug test build too, not just `--release`).
 const MAX_RECURSION_DEPTH: usize = 4096;
+
+/// How many consecutive `$ref` resolutions, at one instance location and
+/// never descending into the instance, a schema may chain before both
+/// engines refuse it (issue #778's own step 5) -- well under
+/// [`MAX_RECURSION_DEPTH`], and under the point a bare `jsonschema.
+/// validate` call's own Python recursion can actually reach (that point
+/// varies with the call stack's own depth, and even with whether a CEL
+/// expression has compiled yet in this process, which raises Python's
+/// recursion limit itself -- `cof`'s own `schema_corners.MAX_REF_CHAIN_
+/// HOPS`, the same value, measured the same way). Used only by
+/// [`ref_chain_depth_exceeds_cap`]/[`longest_ref_chain`]'s own hop count,
+/// never [`STRUCTURAL_DEPTH_CAP`] (an unrelated safety margin on this
+/// walk's own recursion, sized against [`MAX_RECURSION_DEPTH`] on
+/// purpose, not this smaller cap).
+const MAX_REF_CHAIN_HOPS: usize = 200;
+
+/// The one message both engines use once a schema's `$ref` chain passes
+/// [`MAX_REF_CHAIN_HOPS`], replacing the Python `RecursionError` text
+/// this engine used to reproduce for the same case.
+pub(crate) fn ref_chain_error_message() -> String {
+    format!("$ref chain is too long (limit {MAX_REF_CHAIN_HOPS} consecutive references)")
+}
+
+/// The one message both engines use for a `multipleOf` that isn't a
+/// number greater than zero (issue #778's own step 5) -- including
+/// `NaN`/`Infinity`, which pass `jsonschema`'s own metaschema entry for
+/// it (`{"type": "number", "exclusiveMinimum": 0}`, which neither value
+/// violates: Python's own `float.__le__` never raises for either, and
+/// always returns `False`). `cof`'s own `schema_corners.MULTIPLE_OF_
+/// ERROR`, the same text.
+pub(crate) const MULTIPLE_OF_ERROR: &str = "multipleOf must be a number greater than 0";
+
+fn multiple_of_is_malformed(value: &Value) -> bool {
+    match value {
+        Value::Bool(_) => true,
+        Value::Int(_) => !matches!(numeric_sign(value), Some(std::cmp::Ordering::Greater)),
+        Value::Float(f) => !f.is_finite() || *f <= 0.0,
+        _ => true,
+    }
+}
+
+/// `value`'s own sign against `0`, or `None` for anything non-numeric --
+/// used only by [`multiple_of_is_malformed`]'s own `Int` branch, since a
+/// `Float`'s sign is read directly.
+fn numeric_sign(value: &Value) -> Option<std::cmp::Ordering> {
+    match value {
+        Value::Int(i) => Some(i.to_bigint().cmp(&num_bigint::BigInt::from(0))),
+        _ => None,
+    }
+}
+
+/// Keywords whose own value is literal instance data, never a subschema
+/// -- a key named `multipleOf` written *inside* one of these (`const:
+/// {multipleOf: 0}`) is someone's own data, not this module's keyword.
+const LITERAL_DATA_KEYS: &[&str] = &["const", "enum", "examples", "default"];
+
+/// Keywords whose own value maps a *name* (a property name, a pattern,
+/// a definition name) to a subschema: the mapping's own keys are names,
+/// not keywords, so a mapping with a key literally spelled `multipleOf`
+/// (`properties: {multipleOf: {type: number}}`) is a property named
+/// "multipleOf", not an occurrence of the keyword -- only each *value*
+/// is itself a schema worth walking.
+const NAME_MAP_SCHEMA_KEYS: &[&str] = &[
+    "properties",
+    "patternProperties",
+    "dependentSchemas",
+    "$defs",
+    "definitions",
+];
+
+/// [`MULTIPLE_OF_ERROR`] if some `multipleOf` anywhere in *node*
+/// (recursively) isn't a number greater than zero; `None` otherwise.
+pub(crate) fn multiple_of_well_formedness_error(node: &Value) -> Option<String> {
+    if let Value::Dict(dict) = node {
+        if let Some(value) = dict.get(&Value::Str("multipleOf".to_string())) {
+            if multiple_of_is_malformed(value) {
+                return Some(MULTIPLE_OF_ERROR.to_string());
+            }
+        }
+        for (key, value) in dict.iter() {
+            let Some(key_str) = key.as_str() else {
+                continue;
+            };
+            if LITERAL_DATA_KEYS.contains(&key_str) {
+                continue;
+            }
+            if NAME_MAP_SCHEMA_KEYS.contains(&key_str) {
+                if let Value::Dict(name_map) = value {
+                    for (_, subschema) in name_map.iter() {
+                        if let Some(found) = multiple_of_well_formedness_error(subschema) {
+                            return Some(found);
+                        }
+                    }
+                }
+                continue;
+            }
+            if let Some(found) = multiple_of_well_formedness_error(value) {
+                return Some(found);
+            }
+        }
+    } else if let Value::List(items) = node {
+        for item in items {
+            if let Some(found) = multiple_of_well_formedness_error(item) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
 
 struct EvalGuard(Option<(usize, usize)>);
 
@@ -1231,10 +1004,11 @@ pub(crate) fn with_draft7_mode<T>(f: impl FnOnce() -> T) -> T {
 /// property schema's own violation never carries the property's own name
 /// at all, on either path, not even once it bubbles up through the
 /// `"properties"` keyword's own (unskipped) append of `"properties"`
-/// itself. See [`Kind::FalseSchema`]'s own doc for why
-/// [`describe_schema_error_engine`]'s sort key needs this exactness and
-/// not just the display text (which never reads `path` for a `false`
-/// schema either way, so this would be invisible without that key).
+/// itself -- `lib.rs::describe_schema_error_engine`'s own displayed
+/// location, built from `path`, needs this exactness: a `false`
+/// property schema's own violation must report its *enclosing*
+/// location, not one with the property's own name appended, to match
+/// Python's `json_path` exactly.
 #[inline(never)]
 fn evaluate_false_property<'a>(
     false_schema: &'a Value,
@@ -1309,7 +1083,6 @@ pub(crate) fn evaluate<'a>(
         out.push(Violation {
             kind: Kind::FalseSchema,
             path: path.to_vec(),
-            schema_path: schema_path.to_vec(),
             local_schema: schema,
             local_instance: instance,
         });
@@ -1345,7 +1118,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Type,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1357,7 +1129,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Enum,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1369,7 +1140,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Const,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1387,7 +1157,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Required { property: name },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1611,7 +1380,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1671,7 +1439,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::AdditionalItemsFalse { joined, verb },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1748,7 +1515,6 @@ pub(crate) fn evaluate<'a>(
                             rest_repr,
                         },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1805,7 +1571,6 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1820,7 +1585,6 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1835,7 +1599,6 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1850,7 +1613,6 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1865,7 +1627,6 @@ pub(crate) fn evaluate<'a>(
                                 is_one: limit_equals(value, 1),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1880,7 +1641,6 @@ pub(crate) fn evaluate<'a>(
                                 is_zero: limit_equals(value, 0),
                             },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1894,7 +1654,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Minimum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1907,7 +1666,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Maximum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1923,7 +1681,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::ExclusiveMinimum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1939,7 +1696,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::ExclusiveMaximum,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1950,7 +1706,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::MultipleOf,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -1962,7 +1717,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::Pattern,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -1971,11 +1725,10 @@ pub(crate) fn evaluate<'a>(
             }
             "uniqueItems" => {
                 if let (Value::Bool(true), Value::List(items)) = (value, instance) {
-                    if !py_uniq(items) {
+                    if has_duplicate(items) {
                         out.push(Violation {
                             kind: Kind::UniqueItems,
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -2004,7 +1757,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::AnyOfNotValid { context },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -2039,7 +1791,6 @@ pub(crate) fn evaluate<'a>(
                         out.push(Violation {
                             kind: Kind::OneOfNotValid { context },
                             path: path.to_vec(),
-                            schema_path: schema_path.to_vec(),
                             local_schema: schema,
                             local_instance: instance,
                         });
@@ -2056,7 +1807,6 @@ pub(crate) fn evaluate<'a>(
                                     matching: more_valid,
                                 },
                                 path: path.to_vec(),
-                                schema_path: schema_path.to_vec(),
                                 local_schema: schema,
                                 local_instance: instance,
                             });
@@ -2086,7 +1836,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind: Kind::Not { not_schema: value },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -2127,7 +1876,6 @@ pub(crate) fn evaluate<'a>(
                             out.push(Violation {
                                 kind: Kind::DependentRequired { each, property },
                                 path: path.to_vec(),
-                                schema_path: schema_path.to_vec(),
                                 local_schema: schema,
                                 local_instance: instance,
                             });
@@ -2188,7 +1936,6 @@ pub(crate) fn evaluate<'a>(
                                             dependency: dependency_name,
                                         },
                                         path: path.to_vec(),
-                                        schema_path: schema_path.to_vec(),
                                         local_schema: schema,
                                         local_instance: instance,
                                     });
@@ -2248,7 +1995,6 @@ pub(crate) fn evaluate<'a>(
                                 .expect("set whenever too_many is true"),
                         },
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -2266,7 +2012,6 @@ pub(crate) fn evaluate<'a>(
                     out.push(Violation {
                         kind,
                         path: path.to_vec(),
-                        schema_path: schema_path.to_vec(),
                         local_schema: schema,
                         local_instance: instance,
                     });
@@ -3355,54 +3100,73 @@ fn schema_is_fully_supported_inner(
     }
 }
 
-/// Whether *root*'s own `$ref` graph has a hop chain reaching
-/// [`MAX_RECURSION_DEPTH`] -- [`crate::validate_prompt_schema_impl`]'s
-/// own guard against handing the `jsonschema` crate a schema whose
-/// `$ref` chain [`schema_is_fully_supported`] never actually walked
-/// (issue #507's own item 0): that walk's own `dict.iter().all(...)`
-/// short-circuits at the *first* unsupported keyword it sees (e.g. a
-/// root-level `unevaluatedProperties`), so a long `$defs` chain reached
-/// only through a *later* sibling key (`properties`, say) never gets
-/// measured at all -- [`recursion_exceeded_peek`] then reads `false`,
-/// and the schema falls straight through to the crate's own eager
-/// `$ref` resolution, which needs far more native stack per hop than
-/// this engine's own bounded walk ever had to (the same chain that's
-/// fine at 10,000 hops aborts the process past roughly 30,000). This
-/// walk never short-circuits on keyword support at all -- every dict
-/// value and list element but [`NON_SCHEMA_STRUCTURAL_KEYS`]'s own
-/// (`$defs`/`definitions`, reached only through an actual `$ref`,
+/// Whether *root*'s own `$ref` graph chains more than
+/// [`MAX_REF_CHAIN_HOPS`] consecutive resolutions at one instance
+/// location (issue #778's own step 5) -- [`crate::validate_prompt_schema_
+/// impl`]'s own guard against handing the `jsonschema` crate a schema
+/// whose `$ref` chain [`schema_is_fully_supported`] never actually
+/// walked (issue #507's own item 0): that walk's own `dict.iter().
+/// all(...)` short-circuits at the *first* unsupported keyword it sees
+/// (e.g. a root-level `unevaluatedProperties`), so a long `$defs` chain
+/// reached only through a *later* sibling key (`properties`, say) never
+/// gets measured at all -- [`recursion_exceeded_peek`] then reads
+/// `false`, and the schema falls straight through to the crate's own
+/// eager `$ref` resolution, which needs far more native stack per hop
+/// than this walk ever has to.
+///
+/// Only an actual `$ref`-to-`$ref` hop, or an edge through an in-place
+/// applicator ([`IN_PLACE_LIST_SCHEMA_KEYS`]/[`IN_PLACE_SINGLE_SCHEMA_
+/// KEYS`]/[`IN_PLACE_MAPPING_SCHEMA_KEYS`]) -- which, like a `$ref`
+/// itself, evaluates at the very same instance location -- counts
+/// toward the cap: an edge through an instance-descending key
+/// ([`INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`]/[`INSTANCE_DESCENDING_
+/// LIST_SCHEMA_KEYS`]/[`INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS`],
+/// `items`) resets the running count to zero instead, since evaluating
+/// it moves to a different part of the instance -- the same distinction
+/// a recursive tree/linked-list schema relies on to stay finite for any
+/// real instance despite its own schema graph being cyclic (every lap
+/// around such a cycle must cross at least one instance-descending
+/// key). A back edge to a node the *current* chain (never reset since
+/// entering it, `$ref` hops and in-place applicators both) has already
+/// visited can never reach a different instance location at all, so it
+/// counts as exceeding the cap immediately once found, rather than
+/// being mistaken for one of those legitimate, instance-descending
+/// cycles.
+///
+/// Every dict value and list element but [`NON_SCHEMA_STRUCTURAL_KEYS`]'s
+/// own (`$defs`/`definitions`, reached only through an actual `$ref`,
 /// never structurally; `const`/`enum`/`examples`/`default`, literal
 /// instance data a `"$ref"` key inside can never be this engine's own
-/// keyword) is a plain structural edge, counted toward
-/// [`STRUCTURAL_DEPTH_CAP`] but never toward the hop total itself (an
-/// explicit `ref_hops` count, threaded through every call, the same
-/// convention [`schema_is_fully_supported_inner`]'s own `depth`
-/// parameter already uses for structural edges: `properties`'s own
-/// per-key recursion passes `depth` unchanged) -- so a chain hidden
-/// under any keyword, supported or not, is still found, at whatever
-/// structural depth it sits, without a hop sitting a few structural
-/// levels down (`properties.x.$ref`, say) ever being undercounted
-/// against a chain whose every hop sits at the top level instead.
+/// keyword) is walked as a plain structural edge, counted toward
+/// [`STRUCTURAL_DEPTH_CAP`] (an unrelated safety margin on this walk's
+/// own recursion) but never toward the hop total itself.
 ///
-/// Longest-path, not first-path: memoized by node identity once a
-/// node's own subtree has been fully explored, with cycle-cutting via
-/// *active* (the current path only, unlike
-/// [`schema_is_fully_supported_inner`]'s own never-popped `seen` --
-/// this needs the *true* longest path, not just "supported or not", so
-/// a back edge found near the top of a recursive-schema tree must only
-/// ever cut *that* edge, not stop one lucky shallow path from poisoning
-/// a later, deeper-reaching one through the same node). A real cycle
-/// (a `$defs` entry referencing itself, or a bare `$ref` to the whole
-/// document) is structurally infinite, but legitimate (a tree/linked-
-/// list schema); cutting it at the back edge -- contributing zero
-/// further hops from there, never treating the cycle as unbounded --
-/// is what keeps this from wrongly flagging an ordinary recursive
-/// schema just because it also happens to use a crate-only keyword
-/// somewhere.
+/// *structural_active* cuts a genuinely infinite structural cycle so
+/// this walk itself always terminates; *ref_run_active* (checked first)
+/// instead signals a genuine, unbounded cycle outright by returning
+/// past [`MAX_REF_CHAIN_HOPS`]. A chain of exactly that many
+/// resolutions is fine; one more is not. *memo* caches a call's own
+/// result by `(node, ref_hops)` once computed, reused by a later call
+/// reaching the same node at the same hop count by a different path --
+/// without it, a `$defs` graph where many nodes `$ref` the same, deeper
+/// shared targets revisits those targets once per distinct path to
+/// them, which grows exponentially with depth even though the graph
+/// itself has few nodes. A cycle within the *current* run is still
+/// caught first, before the cache is ever consulted, by *ref_run_
+/// active*/*structural_active* (both scoped to one real call path,
+/// never memoized) -- the cache only ever serves a call already known
+/// clean of that.
 pub(crate) fn ref_chain_depth_exceeds_cap(schema: &Value, root: &Value) -> bool {
+    let mut structural_active = std::collections::HashSet::new();
     let mut memo = std::collections::HashMap::new();
-    let mut active = std::collections::HashSet::new();
-    longest_ref_chain(schema, root, &mut memo, &mut active, 0) >= MAX_RECURSION_DEPTH
+    longest_ref_chain(
+        schema,
+        root,
+        &mut structural_active,
+        &mut memo,
+        0,
+        &std::collections::HashSet::new(),
+    ) > MAX_REF_CHAIN_HOPS
 }
 
 /// Structural nesting (an ordinary `properties`/`items`/`allOf`/...
@@ -3440,81 +3204,246 @@ const NON_SCHEMA_STRUCTURAL_KEYS: &[&str] = &[
     "default",
 ];
 
+/// Keywords whose own subschema applies to a *different* part of the
+/// instance than the keyword's own location, each reached directly (not
+/// through a name map); an edge through one of these resets the
+/// running `$ref` chain to zero. `items` is handled separately in
+/// [`longest_ref_chain`]: its value is either one of these (a single
+/// schema) or a list, like [`INSTANCE_DESCENDING_LIST_SCHEMA_KEYS`]'s
+/// own.
+const INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS: &[&str] =
+    &["additionalProperties", "contains", "propertyNames"];
+
+/// Keywords whose own value is a list of subschemas, each applied to a
+/// different part of the instance (each list element); see
+/// [`INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`].
+const INSTANCE_DESCENDING_LIST_SCHEMA_KEYS: &[&str] = &["prefixItems"];
+
+/// Keywords whose own value maps a name (a property name, a pattern) to
+/// a subschema, each applied to a different part of the instance (the
+/// value or property the name picks out); see
+/// [`INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS`].
+const INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS: &[&str] = &["properties", "patternProperties"];
+
+/// Keywords whose own subschema applies at the *same* instance location
+/// as the keyword itself (an in-place applicator): an edge through one
+/// of these carries the running `$ref` chain through unchanged, rather
+/// than resetting it the way an instance-descending edge does.
+const IN_PLACE_LIST_SCHEMA_KEYS: &[&str] = &["allOf", "anyOf", "oneOf"];
+const IN_PLACE_SINGLE_SCHEMA_KEYS: &[&str] = &["not", "if", "then", "else"];
+const IN_PLACE_MAPPING_SCHEMA_KEYS: &[&str] = &["dependentSchemas"];
+
+/// *ref_run_active* names every node the *current* chain (`$ref` hops
+/// and in-place applicators both) has already passed through, never
+/// reset until an instance-descending edge resets it -- a node already
+/// in it is a genuine, unbounded cycle, counted as exceeding the cap
+/// outright. *structural_active* is this whole walk's own, never-
+/// reset-within-one-call termination guard, covering every kind of
+/// edge; checked only once *ref_run_active* has not already settled the
+/// question, so a cycle mixing `$ref` hops and in-place applicators is
+/// never mistaken for the legitimate, instance-descending kind
+/// [`structural_active`] alone would otherwise silently truncate to
+/// zero.
 fn longest_ref_chain(
     node: &Value,
     root: &Value,
-    memo: &mut std::collections::HashMap<*const Value, usize>,
-    active: &mut std::collections::HashSet<*const Value>,
+    structural_active: &mut std::collections::HashSet<*const Value>,
+    memo: &mut std::collections::HashMap<(*const Value, usize), usize>,
     ref_hops: usize,
+    ref_run_active: &std::collections::HashSet<*const Value>,
 ) -> usize {
     let ptr: *const Value = node;
-    if let Some(&cached) = memo.get(&ptr) {
+    if ref_run_active.contains(&ptr) {
+        return MAX_REF_CHAIN_HOPS + 1;
+    }
+    if structural_active.contains(&ptr) {
+        return 0;
+    }
+    if ref_hops > MAX_REF_CHAIN_HOPS {
+        return ref_hops;
+    }
+    if let Some(&cached) = memo.get(&(ptr, ref_hops)) {
         return cached;
     }
-    // A back edge to a node still on the active path: a structural
-    // cycle, cut here rather than explored again (see the doc comment
-    // above) -- never memoized, since the *true* longest path through
-    // this node depends on where the cycle is entered from.
-    if active.contains(&ptr) {
-        return 0;
+    if structural_active.len() >= STRUCTURAL_DEPTH_CAP || stack_budget_exceeded() {
+        return MAX_REF_CHAIN_HOPS + 1;
     }
-    // Already as deep in `$ref` hops as this engine's own cap can tell
-    // apart from genuinely unbounded -- stop descending (never
-    // overcounting past the cap, since the precise hop count no longer
-    // matters once it's known to be at least this large).
-    if ref_hops >= MAX_RECURSION_DEPTH {
-        return 0;
+    let Value::Dict(dict) = node else {
+        return ref_hops;
+    };
+    structural_active.insert(ptr);
+    let mut result = ref_hops;
+    let mut run_active = ref_run_active.clone();
+    run_active.insert(ptr);
+    if let Some(Value::Str(pointer)) = dict.get(&Value::Str("$ref".to_string())) {
+        if is_same_document_pointer_syntax(pointer) {
+            match resolve_ref(root, pointer) {
+                Some(resolved) => {
+                    result = result.max(longest_ref_chain(
+                        resolved,
+                        root,
+                        structural_active,
+                        memo,
+                        ref_hops + 1,
+                        &run_active,
+                    ));
+                }
+                None => {
+                    result = result.max(ref_hops + 1);
+                }
+            }
+        }
     }
-    // Structural nesting alone, independent of hop count, already past
-    // its own far larger budget, or this walk's real native stack usage
-    // already past its own guard: either way the true value from here
-    // is unknown, not necessarily small, so assume the worst (at the
-    // cap) rather than silently undercounting a schema that is, in
-    // fact, unbounded.
-    if active.len() >= STRUCTURAL_DEPTH_CAP || stack_budget_exceeded() {
-        return MAX_RECURSION_DEPTH;
-    }
-    active.insert(ptr);
-    let mut longest = 0usize;
-    match node {
-        Value::Dict(dict) => {
-            for (k, v) in dict.iter() {
-                let Some(key_str) = k.as_str() else {
-                    continue;
-                };
-                if key_str == "$ref" {
-                    if let Some(pointer) = v.as_str() {
-                        if is_same_document_pointer_syntax(pointer) {
-                            if let Some(resolved) = resolve_ref(root, pointer) {
-                                let hop = 1 + longest_ref_chain(
-                                    resolved,
-                                    root,
-                                    memo,
-                                    active,
-                                    ref_hops + 1,
-                                );
-                                longest = longest.max(hop);
-                            }
-                        }
+    for (k, v) in dict.iter() {
+        let Some(key_str) = k.as_str() else {
+            continue;
+        };
+        if key_str == "$ref" || NON_SCHEMA_STRUCTURAL_KEYS.contains(&key_str) {
+            continue;
+        }
+        if key_str == "items" {
+            match v {
+                Value::List(items) => {
+                    for item in items {
+                        result = result.max(longest_ref_chain(
+                            item,
+                            root,
+                            structural_active,
+                            memo,
+                            0,
+                            &std::collections::HashSet::new(),
+                        ));
                     }
-                    continue;
                 }
-                if NON_SCHEMA_STRUCTURAL_KEYS.contains(&key_str) {
-                    continue;
+                _ => {
+                    result = result.max(longest_ref_chain(
+                        v,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
                 }
-                longest = longest.max(longest_ref_chain(v, root, memo, active, ref_hops));
+            }
+            continue;
+        }
+        if INSTANCE_DESCENDING_SINGLE_SCHEMA_KEYS.contains(&key_str) {
+            result = result.max(longest_ref_chain(
+                v,
+                root,
+                structural_active,
+                memo,
+                0,
+                &std::collections::HashSet::new(),
+            ));
+            continue;
+        }
+        if INSTANCE_DESCENDING_LIST_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::List(items) = v {
+                for item in items {
+                    result = result.max(longest_ref_chain(
+                        item,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
+                }
+            }
+            continue;
+        }
+        if INSTANCE_DESCENDING_MAPPING_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::Dict(name_map) = v {
+                for (_, subschema) in name_map.iter() {
+                    result = result.max(longest_ref_chain(
+                        subschema,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
+                }
+            }
+            continue;
+        }
+        if IN_PLACE_LIST_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::List(items) = v {
+                for item in items {
+                    result = result.max(longest_ref_chain(
+                        item,
+                        root,
+                        structural_active,
+                        memo,
+                        ref_hops,
+                        &run_active,
+                    ));
+                }
+            }
+            continue;
+        }
+        if IN_PLACE_SINGLE_SCHEMA_KEYS.contains(&key_str) {
+            result = result.max(longest_ref_chain(
+                v,
+                root,
+                structural_active,
+                memo,
+                ref_hops,
+                &run_active,
+            ));
+            continue;
+        }
+        if IN_PLACE_MAPPING_SCHEMA_KEYS.contains(&key_str) {
+            if let Value::Dict(name_map) = v {
+                for (_, subschema) in name_map.iter() {
+                    result = result.max(longest_ref_chain(
+                        subschema,
+                        root,
+                        structural_active,
+                        memo,
+                        ref_hops,
+                        &run_active,
+                    ));
+                }
+            }
+            continue;
+        }
+        // Any other key (an unrecognized/custom keyword) is treated
+        // the same as an instance-descending one: the same
+        // conservative default the walk always used, which keeps a
+        // chain hiding behind one bounded, rather than carried through
+        // as if it applied at the same location.
+        match v {
+            Value::List(items) => {
+                for item in items {
+                    result = result.max(longest_ref_chain(
+                        item,
+                        root,
+                        structural_active,
+                        memo,
+                        0,
+                        &std::collections::HashSet::new(),
+                    ));
+                }
+            }
+            _ => {
+                result = result.max(longest_ref_chain(
+                    v,
+                    root,
+                    structural_active,
+                    memo,
+                    0,
+                    &std::collections::HashSet::new(),
+                ));
             }
         }
-        Value::List(items) => {
-            for v in items {
-                longest = longest.max(longest_ref_chain(v, root, memo, active, ref_hops));
-            }
-        }
-        _ => {}
     }
-    active.remove(&ptr);
-    memo.insert(ptr, longest);
-    longest.min(MAX_RECURSION_DEPTH)
+    structural_active.remove(&ptr);
+    let capped = result.min(MAX_REF_CHAIN_HOPS + 1);
+    memo.insert((ptr, ref_hops), capped);
+    capped
 }
 
 /// Whether *instance* validates against *branch* at all, via this
@@ -3834,45 +3763,27 @@ fn extras_msg_values(extras: &[&Value]) -> (String, &'static str) {
 mod tests {
     use super::*;
 
-    /// Issue #498's own follow-up: the
-    /// brute-force `O(n^2)` `uniqueItems` check this module used to run
-    /// took several seconds on a 20,000-item array in a debug build --
-    /// unusable on anything realistic. [`py_uniq`]'s own hash-bucketed
-    /// fast path must stay well under a second even at a much larger
-    /// size.
+    /// Issue #778's own step 5: the brute-force `O(n^2)` `uniqueItems`
+    /// check this module used to run took several seconds on a
+    /// 20,000-item array in a debug build -- unusable on anything
+    /// realistic. [`has_duplicate`]'s own hash-bucketed fast path must
+    /// stay well under a second even at a much larger size.
     #[test]
     fn uniq_items_stays_fast_at_scale() {
         let items: Vec<Value> = (0..50_000).map(|i| Value::from(i as i64)).collect();
         let start = std::time::Instant::now();
-        assert!(py_uniq(&items));
+        assert!(!has_duplicate(&items));
         assert!(
             start.elapsed().as_secs() < 2,
-            "py_uniq(50_000 unique items) took {:?}",
+            "has_duplicate(50_000 unique items) took {:?}",
             start.elapsed()
         );
 
         let mut with_duplicate = items.clone();
         with_duplicate.push(Value::from(1i64));
-        assert!(!py_uniq(&with_duplicate));
+        assert!(has_duplicate(&with_duplicate));
     }
 
-    /// Issue #507's own item 12: a `List` element is unhashable
-    /// ([`uniq_key`] returns `None` for one), so a large array of them
-    /// never takes [`py_uniq`]'s own hash-bucketed fast path above at
-    /// all -- every one goes through [`containers_have_a_duplicate`]'s
-    /// own [`cpython_list_sort`] instead, whose old single-run
-    /// `binarysort` port moved `O(n)` elements per insertion
-    /// (`rotate_right` over the whole sorted prefix so far), `O(n^2)`
-    /// summed over `n` insertions -- confirmed directly against the
-    /// pre-fix code: at the 600,000-element size below, that already
-    /// took well past a minute in a debug build, the same unusable
-    /// shape the test above already fixed for hashable scalars.
-    /// [`merge_sort_order`]'s own `O(n log n)` moves finish this same
-    /// case in a few seconds instead -- a wide enough margin (`O(n^2)`
-    /// vs. `O(n log n)` at this `n`) that CI machine-speed variance
-    /// alone could never close it, unlike a margin sized against the
-    /// fixed algorithm's own wall-clock time at a size chosen only to
-    /// just clear it.
     /// A pattern compiles once per (pattern, backtrack limit) until the
     /// cache is cleared; a compile error is cached and returned as is.
     #[test]
@@ -3901,13 +3812,12 @@ mod tests {
         clear_pattern_cache();
     }
 
+    /// A `List`/`Dict` element recurses through [`canonical_key`] just
+    /// like a scalar, so a large array of them stays on the same
+    /// hash-bucketed fast path above rather than falling back to an
+    /// all-pairs scan.
     #[test]
     fn uniq_items_of_lists_stays_fast_at_scale() {
-        // Shuffled (a simple LCG), not ascending/descending -- an
-        // already-sorted input lets `count_run` cover the whole array
-        // in one pass, with no `binarysort` insertion (so no
-        // `rotate_right`) at all either way, which would never
-        // distinguish this fix from the quadratic code it replaces.
         let items: Vec<Value> = (0..600_000u64)
             .map(|i| {
                 let shuffled = i.wrapping_mul(2_654_435_761) % 1_000_000;
@@ -3915,45 +3825,47 @@ mod tests {
             })
             .collect();
         let start = std::time::Instant::now();
-        assert!(py_uniq(&items));
+        assert!(!has_duplicate(&items));
         assert!(
             start.elapsed().as_secs() < 10,
-            "py_uniq(600_000 unique shuffled list items) took {:?}",
+            "has_duplicate(600_000 unique shuffled list items) took {:?}",
             start.elapsed()
         );
 
         let mut with_duplicate = items.clone();
         with_duplicate.push(items[1234].clone());
-        assert!(!py_uniq(&with_duplicate));
+        assert!(has_duplicate(&with_duplicate));
     }
 
-    /// Two `NaN`s in one decoded instance ARE a duplicate pair --
-    /// CPython's own `json` scanner hands back one shared `NaN` object
-    /// for every occurrence (`UniqKey::Nan`'s own doc comment; issue
-    /// #498's own follow-up).
+    /// `NaN` never equals anything under this rule, including another
+    /// `NaN` -- unlike `jsonschema`'s own `_utils.uniq`, which treats
+    /// every `NaN` *within one decoded instance* as a duplicate of every
+    /// other one there (CPython's own `json` scanner hands back one
+    /// shared singleton per occurrence).
     #[test]
-    fn uniq_items_dedupes_two_nans() {
+    fn uniq_items_never_dedupes_nan() {
         let items = vec![Value::Float(f64::NAN), Value::Float(f64::NAN)];
-        assert!(!py_uniq(&items));
+        assert!(!has_duplicate(&items));
     }
 
-    /// `+Infinity` and `-Infinity` are each a duplicate of themselves but
-    /// never of each other (same CPython singleton-per-sign rule).
+    /// `+Infinity` is a real, finite-comparison duplicate of another
+    /// `+Infinity` (plain `f64` equality, no singleton quirk involved --
+    /// only `NaN` ever gets that special case); `+Infinity` and
+    /// `-Infinity` are never equal to each other.
     #[test]
     fn uniq_items_dedupes_same_signed_infinity_but_not_the_other_sign() {
-        assert!(!py_uniq(&[
+        assert!(has_duplicate(&[
             Value::Float(f64::INFINITY),
             Value::Float(f64::INFINITY)
         ]));
-        assert!(py_uniq(&[
+        assert!(!has_duplicate(&[
             Value::Float(f64::INFINITY),
             Value::Float(f64::NEG_INFINITY)
         ]));
     }
 
     /// A big int and the float it is exactly equal to collide even past
-    /// `i64`'s own range (issue #498's own follow-up,
-    /// c11/c12).
+    /// `i64`'s own range (issue #498's own follow-up, c11/c12).
     #[test]
     fn uniq_items_dedupes_a_big_int_against_its_exact_float_equivalent() {
         let big: num_bigint::BigInt = "10000000000000000000".parse().unwrap();
@@ -3961,7 +3873,7 @@ mod tests {
             Value::Int(electricity_value::IntValue::Big(big)),
             Value::Float(1e19),
         ];
-        assert!(!py_uniq(&items));
+        assert!(has_duplicate(&items));
     }
 
     /// `2**63 - 1` (an odd `i64::MAX`) is genuinely distinct from the
@@ -3970,95 +3882,79 @@ mod tests {
     #[test]
     fn uniq_items_keeps_i64_max_distinct_from_its_float_neighbor() {
         let items = vec![Value::from(i64::MAX), Value::Float(9223372036854775808.0)];
-        assert!(py_uniq(&items));
+        assert!(!has_duplicate(&items));
     }
 
-    /// Confirmed directly against Python's own `jsonschema._utils.uniq`
-    /// (issue #498's own follow-up,
-    /// probe-schema7 c10): a real, non-adjacent duplicate (`[1]` at
-    /// index 0 and 2) can survive `uniq` entirely when a third element
-    /// (`[True]`) sorts as *tied* with both under Python's own plain
-    /// `==` (`1 == True`) without being `equal()`-equal to either --
-    /// the adjacency check (`[1]` vs `[True]`, then `[True]` vs `[1]`)
-    /// never actually compares the two genuinely-equal `[1]`s to each
-    /// other at all. Not a bug to "fix" -- replicating it exactly is
-    /// the correct behavior here.
+    /// Confirmed directly against Python's own `jsonschema._utils.uniq`:
+    /// a real, non-adjacent duplicate (`[1]` at index 0 and 2) can
+    /// survive `uniq` entirely when a third element (`[True]`) sorts as
+    /// *tied* with both under Python's own plain `==` (`1 == True`)
+    /// without being `equal()`-equal to either -- the adjacency check
+    /// never actually compares the two genuinely equal `[1]`s to each
+    /// other at all. Comparing every pair (via [`canonical_key`], which
+    /// keeps `bool` and number apart, so `[1]` and `[True]` never share
+    /// a key either) finds it regardless of where it sits.
     #[test]
-    fn uniq_items_misses_a_duplicate_a_tied_but_unequal_element_separates() {
+    fn has_duplicate_finds_a_duplicate_a_tied_but_unequal_element_separates() {
         let items = vec![
             Value::List(vec![Value::from(1i64)]),
             Value::List(vec![Value::Bool(true)]),
             Value::List(vec![Value::from(1i64)]),
         ];
-        assert!(py_uniq(&items));
+        assert!(has_duplicate(&items));
     }
 
-    /// The genuine `TypeError` fallback: a `dict` is unorderable, so a
-    /// real duplicate among otherwise-incomparable elements must still
-    /// be caught by the all-pairs loop, not missed the way the sorted
-    /// fast path's own adjacency quirk (just above) can.
+    /// A `Dict` recurses through [`canonical_key`] by its own sorted
+    /// entries rather than falling back to an all-pairs scan the old
+    /// sort-based algorithm needed for an unorderable element.
     #[test]
-    fn uniq_items_falls_back_to_all_pairs_when_a_dict_makes_sorting_impossible() {
+    fn has_duplicate_finds_a_dict_duplicate_regardless_of_insertion_order() {
         let mut dict = Dict::new();
         dict.insert(key("a"), Value::from(1i64));
+        dict.insert(key("b"), Value::from(2i64));
+        let mut reordered = Dict::new();
+        reordered.insert(key("b"), Value::from(2i64));
+        reordered.insert(key("a"), Value::from(1i64));
         let items = vec![
-            Value::Dict(dict.clone()),
-            Value::List(vec![Value::from(1i64)]),
             Value::Dict(dict),
+            Value::List(vec![Value::from(1i64)]),
+            Value::Dict(reordered),
         ];
-        assert!(!py_uniq(&items));
+        assert!(has_duplicate(&items));
     }
 
-    /// A `NaN` nested inside a list is a duplicate of another nested
-    /// `NaN` -- within *one* decoded instance every `NaN` literal is
-    /// CPython's own `json` scanner's shared singleton, so `equal()`'s
-    /// own `one is two` identity check (at every recursion level) makes
-    /// `[[nan], [nan]]` collide even though `nan == nan` is plain-`==`
-    /// false (confirmed directly against Python; issue #498's own
-    /// follow-up, NaN uniqueness edges).
+    /// A `NaN` nested inside a list is never a duplicate of another
+    /// nested `NaN` either -- the same rule applies at any depth, unlike
+    /// `jsonschema`'s own singleton-identity quirk, which does make
+    /// `[[nan], [nan]]` collide (confirmed directly against Python).
     #[test]
-    fn uniq_items_dedupes_a_nan_nested_inside_a_list() {
+    fn uniq_items_never_dedupes_a_nan_nested_inside_a_list() {
         let items = vec![
             Value::List(vec![Value::Float(f64::NAN)]),
             Value::List(vec![Value::Float(f64::NAN)]),
         ];
-        assert!(!py_uniq(&items));
+        assert!(!has_duplicate(&items));
     }
 
-    /// Confirmed directly against Python: a bare top-level `NaN` *can*
-    /// still miss a duplicate, same shape as
-    /// `uniq_items_misses_a_duplicate_a_tied_but_unequal_element_
-    /// separates` above -- `[NaN, 1, NaN]` sorts (every `NaN`
-    /// comparison is plain `False`, never a `TypeError`) to leave `1`
-    /// sitting between the array's own two `NaN`s, and the adjacency
-    /// check never compares them to each other at all. A documented,
-    /// narrower residual gap (`DESIGN.md` §13): [`py_uniq`]'s own
-    /// hash-bucketed fast path (needed so a 50,000-element array stays
-    /// fast, [`uniq_items_stays_fast_at_scale`] above) counts every
-    /// `NaN` together regardless of what sits between them, so this
-    /// specific case (a bare `NaN` *and* a bare non-`NaN` scalar mixed
-    /// at the same top level) still diverges from Python's own result.
+    /// A bare `NaN` separated by a non-`NaN` scalar is unaffected by
+    /// this rule either: comparing every pair never mistakes it for a
+    /// duplicate of anything, so `[NaN, 1, NaN]` has none -- no longer
+    /// the documented divergence `DESIGN.md` §13 used to carry for
+    /// `jsonschema`'s own hash-bucketed shortcut, which counted every
+    /// `NaN` together regardless of what sat between them.
     #[test]
-    fn uniq_items_bare_nan_separated_by_a_scalar_is_a_documented_divergence() {
+    fn uniq_items_bare_nan_separated_by_a_scalar_has_no_duplicate() {
         let items = vec![
             Value::Float(f64::NAN),
             Value::from(1i64),
             Value::Float(f64::NAN),
         ];
-        assert!(
-            !py_uniq(&items),
-            "documented divergence: Python itself says unique here"
-        );
+        assert!(!has_duplicate(&items));
     }
 
-    /// `[T]::sort_by` can panic (a transitivity-violation
-    /// check in Rust's own sort implementation) when fed a comparator
-    /// that isn't a genuine total order -- mapping "incomparable" to
-    /// `Equal` used to do exactly that. A randomized sweep over mixed
-    /// types (including several `dict`s, which make the whole list
-    /// unorderable), nested lists, `None`, `bool`s and `NaN`, at sizes
-    /// both below and at/above the `n = 64` single-run threshold, must
-    /// never panic regardless of what [`py_uniq`] it lands on.
+    /// A randomized sweep over mixed types (including several `dict`s,
+    /// nested lists, `None`, `bool`s and `NaN`) must never panic
+    /// regardless of what [`has_duplicate`] it lands on.
     #[test]
     fn uniq_items_never_panics_on_a_randomized_mix_of_types() {
         let mut state: u64 = 0x9e37_79b9_7f4a_7c15;
@@ -4086,8 +3982,64 @@ mod tests {
                     }
                 })
                 .collect();
-            let _ = py_uniq(&items); // must not panic, whatever the verdict
+            let _ = has_duplicate(&items); // must not panic, whatever the verdict
         }
+    }
+
+    /// A schema that `$ref`s itself never descends into the instance
+    /// at all -- a pure `$ref` cycle, caught immediately by
+    /// *ref_run_active* rather than the generic *structural_active*
+    /// guard (which would otherwise silently cap it at zero, the same
+    /// miss a `RecursionError` at run time used to follow from).
+    #[test]
+    fn ref_chain_self_ref_exceeds_the_cap() {
+        let schema: Value = electricity_json::loads(r##"{"$ref": "#"}"##).unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A cycle through an in-place applicator (`allOf`) applies at the
+    /// very same instance location as a bare `$ref` would, so it must
+    /// count toward the cap the same way, not reset it the way a
+    /// `properties`/`items` edge does.
+    #[test]
+    fn ref_chain_cycle_through_an_in_place_applicator_exceeds_the_cap() {
+        let schema: Value = electricity_json::loads(r##"{"allOf": [{"$ref": "#"}]}"##).unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A two-schema cycle reached only through `anyOf` (never a bare
+    /// `$ref`-to-`$ref` hop) is just as unbounded as the two-`$ref`
+    /// cycle other tests cover, and must be caught the same way.
+    #[test]
+    fn ref_chain_two_schema_cycle_through_any_of_exceeds_the_cap() {
+        let schema: Value = electricity_json::loads(
+            r##"{"$defs": {"A": {"anyOf": [{"$ref": "#/$defs/B"}]}, "B": {"anyOf": [{"$ref": "#/$defs/A"}]}}, "$ref": "#/$defs/A"}"##,
+        )
+        .unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A `$ref` that doesn't resolve at all still counts as a hop --
+    /// matching `cof`'s own `schema_corners.ref_chain_depth_exceeds_cap`
+    /// exactly, the same as a hop that lands on an ordinary leaf schema.
+    #[test]
+    fn ref_chain_dangling_ref_counts_as_a_hop() {
+        let schema: Value = electricity_json::loads(r##"{"$ref": "#/$defs/missing"}"##).unwrap();
+        assert!(!ref_chain_depth_exceeds_cap(&schema, &schema));
+    }
+
+    /// A chain of dangling `$ref`s past the cap exceeds it the same way
+    /// a chain of resolving ones does.
+    #[test]
+    fn ref_chain_of_dangling_refs_past_the_cap_exceeds_it() {
+        let mut defs = String::new();
+        for i in 0..=MAX_REF_CHAIN_HOPS {
+            defs.push_str(&format!("\"L{i}\": {{\"$ref\": \"#/$defs/L{}\"}}, ", i + 1));
+        }
+        let schema_text =
+            format!("{{\"$defs\": {{{defs}\"Lx\": {{}}}}, \"$ref\": \"#/$defs/L0\"}}");
+        let schema: Value = electricity_json::loads(&schema_text).unwrap();
+        assert!(ref_chain_depth_exceeds_cap(&schema, &schema));
     }
 
     /// Issue #498's own follow-up: `anyOf`

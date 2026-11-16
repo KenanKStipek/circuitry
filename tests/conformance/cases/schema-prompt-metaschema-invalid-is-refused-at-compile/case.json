@@ -1,0 +1,8 @@
+{
+  "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5",
+  "description": "A prompt's `schema:` that isn't itself a well-formed JSON Schema at all (`type: 5`, not one of the metaschema's own recognized values) is refused at compile time, before any model request, naming the effect -- not only the `multipleOf`/`$ref`-chain corners this step adds, but any other way `check_schema` rejects it too.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "location",
+  "location_pattern": "Prompt 'ask': schema is not a valid JSON Schema"
+}

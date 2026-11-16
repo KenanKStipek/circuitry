@@ -139,6 +139,8 @@ A structured type without a schema is rejected:
 
 Keep schemas small. A schema with more than three or four properties is a smell: the prompt is asking the model to do several things at once, and the fix is several prompts with simpler schemas, each one focused. End every template that expects structure with an explicit instruction — "Return ONLY a JSON object with …". The extractor is forgiving about code fences and a sentence of preamble, but a reply that wanders produces a `null` value and a schema failure, and the instruction is what keeps the reply clean.
 
+The schema itself must be well-formed, checked when the document is checked and compiled, before any model ever runs: a `multipleOf` must be a number greater than zero (`NaN`/`Infinity` included), and a `$ref` chain may chain at most 200 consecutive resolutions at one instance location.
+
 (A seventh `prompt_type`, `tool`, exists in the schema for tool-call replies and currently passes the reply through untouched. Treat it as reserved.)
 
 ## Choosing the model — or not

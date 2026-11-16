@@ -103,8 +103,6 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Protocol
 
-import jsonschema
-
 from ..agent_cli import (
     DEFAULT_UNSET_ENV,
     AgentCliError,
@@ -117,6 +115,7 @@ from ..agent_cli import (
     run_agent_cli,
 )
 from ..agent_live import LiveTracker
+from ..core import schema_corners
 from ..core.prompt_files import is_dispatch_file
 from ..preflight import CheckResult
 from ._subprocess import _expand_and_validate, resolve_binary
@@ -668,7 +667,7 @@ def _read_result(
         return None, [f"the file is not valid JSON: {exc}"]
     if result_schema is None:
         return value, []
-    validator = jsonschema.validators.validator_for(result_schema)(result_schema)
+    validator = schema_corners.extended_validator(result_schema)
     errors = [
         f"{'/'.join(str(part) for part in error.absolute_path) or '(root)'}: {error.message}"
         for error in sorted(validator.iter_errors(value), key=lambda e: list(e.absolute_path))
@@ -801,6 +800,26 @@ def reject_overlay_prompt(overlay: Mapping[str, Any], *, prompt_from_file: bool)
         )
 
 
+def static_param_errors(params: Mapping[str, Any]) -> list[str]:
+    """What ``cof check`` can see in an ``agent`` effect's ``result_schema``
+    without rendering anything (#778 step 5): paired with ``result_file``,
+    and a well-formed JSON Schema. A ``result_schema``/``result_file``
+    reached only through ``params_json`` or a template isn't visible here;
+    :meth:`AgentPlugin.execute` repeats this check on the fully rendered
+    params."""
+    result_schema = params.get("result_schema")
+    if result_schema is None:
+        return []
+    if not params.get("result_file"):
+        return ["params.result_schema needs params.result_file"]
+    if not isinstance(result_schema, dict):
+        return ["params.result_schema must be a JSON Schema object"]
+    malformed = schema_corners.schema_well_formedness_error(result_schema)
+    if malformed is not None:
+        return [f"params.result_schema is not a valid JSON Schema: {malformed}"]
+    return []
+
+
 @dataclass(frozen=True)
 class AgentPlugin:
     name: str = "agent"
@@ -856,12 +875,11 @@ class AgentPlugin:
                 raise ValueError("agent: params['result_schema'] needs params['result_file'].")
             if not isinstance(result_schema, dict):
                 raise ValueError("agent: params['result_schema'] must be a JSON Schema object.")
-            try:
-                jsonschema.validators.validator_for(result_schema).check_schema(result_schema)
-            except jsonschema.SchemaError as exc:
+            malformed = schema_corners.schema_well_formedness_error(result_schema)
+            if malformed is not None:
                 raise ValueError(
-                    f"agent: params['result_schema'] is not a valid JSON Schema: {exc.message}"
-                ) from exc
+                    f"agent: params['result_schema'] is not a valid JSON Schema: {malformed}"
+                )
         result_file = (cwd_path / result_file_param).resolve() if result_file_param else None
         transcript_param = _optional_str(params, "transcript")
         transcript_path = (cwd_path / transcript_param).resolve() if transcript_param else None

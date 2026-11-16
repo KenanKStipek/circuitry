@@ -225,3 +225,45 @@ def test_closed_nested_blocks_reject_unknown_keys(effect: dict, unexpected: str)
 def test_schema_errors_name_the_offending_node() -> None:
     errors = schema_errors({"effects": [{"type": "loop", "each": {"in": "x"}, "body": []}]})
     assert errors == ["effects[0].body: value should be non-empty"]
+
+
+def test_schema_errors_sort_array_indices_numerically_not_as_text() -> None:
+    """``effects[2]`` before ``effects[10]`` — comparing the rendered
+    path as one string instead would put ``effects[10]`` first."""
+    good = _TOOL
+    bad = {"type": "loop", "each": {"in": "x"}, "body": []}
+    effects = [good] * 11
+    effects[2] = bad
+    effects[10] = bad
+    errors = schema_errors({"effects": effects})
+    assert errors == [
+        "effects[2].body: value should be non-empty",
+        "effects[10].body: value should be non-empty",
+    ]
+
+
+def test_schema_errors_keeps_a_null_mapping_key_in_the_path() -> None:
+    """A literal ``None`` key never collapses the check, the same as a
+    float/bool/date one -- `jsonschema`'s own ``descend`` uses ``None``
+    as its own sentinel for “no path segment”, which would otherwise
+    collide with a real document key that IS ``None``."""
+    errors = schema_errors(
+        {"effects": [], "interface": {"inputs": {None: {"type": 5}}}}
+    )
+    assert errors == ["interface.inputs[None].type: 5 is not of type 'string'"]
+
+
+def test_schema_errors_sort_dict_keys_by_text_not_numerically() -> None:
+    """A mapping key that happens to be an int/bool/float/date sorts by
+    its own text, the same as a string key -- unlike a genuine array
+    index, which sorts numerically (see the test above)."""
+    errors = schema_errors(
+        {
+            "effects": [],
+            "interface": {"inputs": {10: {"type": 5}, 2: {"type": 5}}},
+        }
+    )
+    assert errors == [
+        "interface.inputs[10].type: 5 is not of type 'string'",
+        "interface.inputs[2].type: 5 is not of type 'string'",
+    ]

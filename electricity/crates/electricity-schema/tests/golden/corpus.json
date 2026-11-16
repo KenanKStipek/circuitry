@@ -760,8 +760,8 @@
   },
   {
     "described_errors": [
-      "effects[0].body: value should be non-empty",
-      "effects[0]: value is not valid under any of the given schemas ('each' is a required property)"
+      "effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
+      "effects[0].body: value should be non-empty"
     ],
     "document": {
       "effects": [
@@ -779,12 +779,12 @@
   {
     "described_errors": [
       "effects[0]: 'name' is a required property",
-      "effects[1]: 'name' is a required property",
       "effects[0]: 'type' is a required property",
-      "effects[1]: 'type' is a required property",
       "effects[0]: 'type' is a required property",
-      "effects[1]: 'type' is a required property",
       "effects[0]: value is not valid under any of the given schemas ('template' is a required property)",
+      "effects[1]: 'name' is a required property",
+      "effects[1]: 'type' is a required property",
+      "effects[1]: 'type' is a required property",
       "effects[1]: value is not valid under any of the given schemas ('template' is a required property)"
     ],
     "document": {
@@ -1051,8 +1051,8 @@
   {
     "described_errors": [
       "effects[0]: unknown key 'whlie' on a 'loop' effect — did you mean 'while'? As written it is ignored.",
-      "effects[0].body: value should be non-empty",
-      "effects[0]: value is not valid under any of the given schemas ('each' is a required property)"
+      "effects[0]: value is not valid under any of the given schemas ('each' is a required property)",
+      "effects[0].body: value should be non-empty"
     ],
     "document": {
       "effects": [

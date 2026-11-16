@@ -1,0 +1,10 @@
+{
+  "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5",
+  "description": "Two schemas each $ref-ing only the other (A -> B -> A -> ...), with no structural key anywhere to move to a different instance location: a genuine, unbounded ping-pong, never one of the legitimate recursive-schema cycles the $ref-chain cap leaves alone. Refused at compile time with the same message a long, non-cyclic chain gets, never a RecursionError or a stack overflow.",
+  "engines": [
+    "python",
+    "electricity"
+  ],
+  "expect": "failure",
+  "error_compare": "exact"
+}

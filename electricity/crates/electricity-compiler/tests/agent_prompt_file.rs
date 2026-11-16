@@ -64,3 +64,39 @@ fn a_generated_document_cannot_use_it() {
          a 'use: inline' child)."
     );
 }
+
+fn result_schema_document(params: &str) -> electricity_value::Value {
+    electricity_yaml::load_yaml_last_key_wins(&format!(
+        "effects:\n  - type: tool\n    name: implement\n    provider: agent\n    params:\n      \
+         prompt: ask\n      {params}\n"
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_literal_result_schema_needs_a_result_file() {
+    let doc = result_schema_document("result_schema: {type: object}");
+    let err = compile_document(&doc, &DocumentOrigin::Generated).unwrap_err();
+    assert_eq!(
+        err.0,
+        "Tool effect 'implement' (agent) at 'prime.effects[0]': params.result_schema needs \
+         params.result_file"
+    );
+}
+
+#[test]
+fn a_literal_result_schema_must_be_well_formed() {
+    let doc = result_schema_document("result_file: r.json\n      result_schema: {multipleOf: 0}");
+    let err = compile_document(&doc, &DocumentOrigin::Generated).unwrap_err();
+    assert_eq!(
+        err.0,
+        "Tool effect 'implement' (agent) at 'prime.effects[0]': params.result_schema is not a \
+         valid JSON Schema: multipleOf must be a number greater than 0"
+    );
+}
+
+#[test]
+fn a_well_formed_literal_result_schema_compiles() {
+    let doc = result_schema_document("result_file: r.json\n      result_schema: {type: object}");
+    assert!(compile_document(&doc, &DocumentOrigin::Generated).is_ok());
+}

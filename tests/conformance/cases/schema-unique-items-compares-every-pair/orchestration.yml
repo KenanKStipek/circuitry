@@ -1,0 +1,18 @@
+{
+  "name": "schema-unique-items-compares-every-pair",
+  "adapter": "scripted",
+  "model": "m",
+  "effects": [
+    {
+      "type": "prompt",
+      "name": "ask",
+      "prompt_type": "json",
+      "on_error": "continue",
+      "schema": {
+        "type": "array",
+        "uniqueItems": true
+      },
+      "template": "give json"
+    }
+  ]
+}

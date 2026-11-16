@@ -25,8 +25,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
-import jsonschema
-
+from ..core import schema_corners
 from ..core.cel_eval import evaluate_cel_value
 from ..preflight import CheckResult
 from .base import ToolResult, _as_bool
@@ -61,16 +60,15 @@ def static_param_errors(params: Mapping[str, Any], *, has_params_json: bool) -> 
         if not isinstance(schema, dict):
             problems.append("params.schema must be a JSON Schema object")
         else:
-            try:
-                jsonschema.validators.validator_for(schema).check_schema(schema)
-            except jsonschema.SchemaError as exc:
-                problems.append(f"params.schema is not a valid JSON Schema: {exc.message}")
+            malformed = schema_corners.schema_well_formedness_error(schema)
+            if malformed is not None:
+                problems.append(f"params.schema is not a valid JSON Schema: {malformed}")
     return problems
 
 
 def schema_errors(value: Any, schema: Mapping[str, Any]) -> list[str]:
     """Each way *value* does not match *schema*, ``<path>: <message>``."""
-    validator = jsonschema.validators.validator_for(schema)(schema)
+    validator = schema_corners.extended_validator(schema)
     errors = [
         f"{'/'.join(str(part) for part in error.absolute_path) or '(root)'}: {error.message}"
         for error in sorted(validator.iter_errors(value), key=lambda e: list(e.absolute_path))

@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Generate electricity-schema's `validate_prompt_schema` golden corpus from
-Python's own ``jsonschema.validate`` (issue #498 ruling 6, tightened by PR
-#502's review, ruling 2).
+``core/prompt.py::PromptRuntime._validate_schema``'s own behavior (issues
+#498 and #778).
 
-``core/prompt.py::PromptRuntime._validate_schema`` calls
-``jsonschema.validate(value, schema)``, which raises
+``_validate_schema`` builds a validator through
+``core.schema_corners.extended_validator`` (its own ``uniqueItems``
+keyword compares every pair, rather than ``jsonschema``'s own
+sort-then-compare-neighbours) and raises
 ``jsonschema.exceptions.best_match(validator.iter_errors(instance))`` on a
 mismatch -- so this corpus records, for each hand-written schema/instance
 pair, exactly the ``.message`` that call raises (or ``None`` for a pair that
@@ -12,10 +14,10 @@ validates). The Rust side (``electricity-schema``'s own
 ``validate_prompt_schema``) replays every pair and asserts its own message
 is identical.
 
-Must be run with ``jsonschema`` installed in the active interpreter (the
-lane venv locally; CI pins the version in ``generator-constraints.txt``, so
-a fresh install there is this same version). Usage:
-``python3 generate_prompt_schema_corpus.py [--check]``
+Must be run with this repository's ``circuitry`` and ``jsonschema``
+installed in the active interpreter (CI pins the ``jsonschema`` version in
+``generator-constraints.txt``, so a fresh install there is this same
+version). Usage: ``python3 generate_prompt_schema_corpus.py [--check]``
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema  # type: ignore[import-untyped]
+
+from circuitry.core.schema_corners import extended_validator
 
 OUTPUT = (
     Path(__file__).resolve().parent.parent
@@ -38,11 +42,9 @@ OUTPUT = (
 
 
 def _case(name: str, schema: dict, instance: Any) -> dict:
-    try:
-        jsonschema.validate(instance, schema)
-        message = None
-    except jsonschema.ValidationError as e:
-        message = e.message
+    validator = extended_validator(schema)
+    error = jsonschema.exceptions.best_match(validator.iter_errors(instance))
+    message = error.message if error is not None else None
     return {"name": name, "schema": schema, "instance": instance, "message": message}
 
 
@@ -573,7 +575,7 @@ def cases() -> list[dict]:
             {"Y": 1},
         ),
         _case(
-            "unique_items_a_duplicate_bool_int_pair_is_not_the_same_value",
+            "unique_items_a_duplicate_separated_by_an_unordered_bool_pair",
             {"uniqueItems": True},
             [[1], [True], [1]],
         ),
@@ -671,17 +673,18 @@ def cases() -> list[dict]:
             {"a": 1, "b": 2},
         ),
         _case(
-            # Issue #507's own item 3: `multipleOf`'s own metaschema
-            # entry (`{"type": "number", "exclusiveMinimum": 0}`) never
-            # rejects `NaN`/positive `Infinity` (neither compares `<=
-            # 0`), and `multipleOf` never applies to a string instance
-            # regardless.
-            "multiple_of_nan_against_a_string_is_well_formed_and_valid",
+            # Issue #507's own item 3: `multipleOf` never applies to a
+            # string instance at all, whatever its own divisor -- this
+            # corpus pins `_validate_schema`'s own instance check in
+            # isolation, never `schema_well_formedness_error` (issue
+            # #778's own step 5), which is what actually rejects a
+            # `NaN`/`Infinity` divisor, and only at compile time.
+            "multiple_of_nan_never_applies_to_a_string_instance",
             {"multipleOf": float("nan")},
             "a string",
         ),
         _case(
-            "multiple_of_positive_infinity_against_a_string_is_well_formed_and_valid",
+            "multiple_of_positive_infinity_never_applies_to_a_string_instance",
             {"multipleOf": float("inf")},
             "a string",
         ),

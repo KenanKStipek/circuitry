@@ -3027,7 +3027,7 @@
     "message": null
   },
   {
-    "name": "unique_items_a_duplicate_bool_int_pair_is_not_the_same_value",
+    "name": "unique_items_a_duplicate_separated_by_an_unordered_bool_pair",
     "schema": {
       "uniqueItems": true
     },
@@ -3042,7 +3042,7 @@
         1
       ]
     ],
-    "message": null
+    "message": "[[1], [True], [1]] has non-unique elements"
   },
   {
     "name": "unique_items_a_big_int_equals_its_exact_float_counterpart",
@@ -3178,7 +3178,7 @@
     "message": null
   },
   {
-    "name": "multiple_of_nan_against_a_string_is_well_formed_and_valid",
+    "name": "multiple_of_nan_never_applies_to_a_string_instance",
     "schema": {
       "multipleOf": NaN
     },
@@ -3186,7 +3186,7 @@
     "message": null
   },
   {
-    "name": "multiple_of_positive_infinity_against_a_string_is_well_formed_and_valid",
+    "name": "multiple_of_positive_infinity_never_applies_to_a_string_instance",
     "schema": {
       "multipleOf": Infinity
     },

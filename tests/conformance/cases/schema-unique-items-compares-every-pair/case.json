@@ -1,0 +1,10 @@
+{
+  "spec_case": "core.schema_corners, issue #778's own step 5",
+  "description": "[[1], [true], [1]] under uniqueItems: true: jsonschema's own sort-then-compare-neighbours misses this real duplicate ([1] at index 0 and 2), since [true] sorts as tied with both under Python's own plain == without being equal() to either, so the two genuinely equal [1]s are never adjacent and never compared. Comparing every pair finds it regardless of position; the run finishes (on_error: continue) with the mismatch recorded.",
+  "engines": [
+    "python",
+    "electricity"
+  ],
+  "config": "config.json",
+  "expect": "success"
+}

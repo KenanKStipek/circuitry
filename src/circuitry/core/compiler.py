@@ -1639,6 +1639,13 @@ def _compile_tool(
         )
         if prompt_file is not None:
             params = {key: value for key, value in params.items() if key != "prompt"}
+        from ..plugins.agent import static_param_errors as agent_param_errors
+
+        problems = agent_param_errors(params)
+        if problems:
+            raise ValueError(
+                f"Tool effect '{name}' (agent) at '{effect_path}': " + "; ".join(problems)
+            )
     _check_param_secrets(
         params, name=str(name), provider=provider.strip().lower(), effect_path=effect_path
     )
@@ -2188,6 +2195,13 @@ def _compile_prompt(
         raise ValueError(
             f"Prompt '{name}': prompt_type '{prompt_type}' requires a 'schema' field."
         )
+
+    if schema is not None:
+        from .schema_corners import schema_well_formedness_error
+
+        malformed = schema_well_formedness_error(schema)
+        if malformed is not None:
+            raise ValueError(f"Prompt '{name}': schema is not a valid JSON Schema: {malformed}")
 
     # Model configuration
     model = effect.get("model")

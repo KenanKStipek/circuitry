@@ -1,0 +1,3 @@
+{
+  "error": "Prompt 'ask': schema is not a valid JSON Schema: $ref chain is too long (limit 200 consecutive references)"
+}

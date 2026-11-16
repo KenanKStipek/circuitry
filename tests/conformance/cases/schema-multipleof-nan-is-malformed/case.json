@@ -1,0 +1,7 @@
+{
+  "spec_case": "core/compiler.py::_compile_prompt, issue #778's own step 5 (closes issue #507's own item 3)",
+  "description": "A top-level `multipleOf: .nan`: Python's own metaschema entry for `multipleOf` is `{type: number, exclusiveMinimum: 0}`, and `NaN <= 0` is `False`, so this schema used to be well-formed. The new well-formedness check rejects `NaN`/`Infinity` too, so this is now a compile-time refusal, before any reply is even considered.",
+  "engines": ["python", "electricity"],
+  "expect": "failure",
+  "error_compare": "exact"
+}

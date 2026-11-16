@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import difflib
 import json
+import re
 from collections.abc import Mapping, Sequence
 from functools import cache, lru_cache
 from pathlib import Path
@@ -37,6 +38,7 @@ __all__ = [
     "interface_unknown_type_errors",
     "label_syntax_error",
     "orchestration_schema",
+    "schema_error_sort_key",
     "schema_errors",
     "structural_errors",
     "unknown_key_errors",
@@ -91,10 +93,39 @@ def orchestration_schema() -> dict[str, Any]:
     return json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
-def _describe_schema_error(err: Any) -> str:
-    """``<path>: <message>``, plus the deepest sub-error when there is one.
+#: `jsonschema.exceptions.ValidationError.json_path`'s own pattern for a
+#: property name plain enough to spell `.name` rather than `['name']`.
+_JSON_PATH_COMPATIBLE_PROPERTY_PATTERN = re.compile(r"^[a-zA-Z][a-zA-Z0-9_]*$")
 
-    The path is spelled the way lint spells it (``effects[0].each``).
+
+def _error_where(err: Any) -> str:
+    """Where *err* occurred, the same way ``err.json_path`` renders it,
+    except a non-string mapping key (a float/bool/null YAML read as a key)
+    renders as its own text instead of crashing ``jsonschema``'s own
+    property, which assumes every path element is a string or an int.
+    """
+    path = "$"
+    for elem in err.absolute_path:
+        if isinstance(elem, int):
+            path += f"[{elem}]"
+        elif isinstance(elem, str) and _JSON_PATH_COMPATIBLE_PROPERTY_PATTERN.match(elem):
+            path += f".{elem}"
+        elif isinstance(elem, str):
+            escaped = elem.replace("\\", "\\\\").replace("'", r"\'")
+            path += f"['{escaped}']"
+        else:
+            # `str()`, not `repr()`: for a `float`/`bool`/`None` key the
+            # two happen to agree, but a YAML timestamp key (PyYAML's own
+            # implicit resolver reads `2024-01-01:` as a `datetime.date`)
+            # renders `2024-01-01` this way, not `repr()`'s own
+            # `datetime.date(2024, 1, 1)` -- matching electricity's own
+            # `Value::py_str` exactly.
+            path += f"[{elem}]"
+    return path.removeprefix("$").removeprefix(".") or "top level"
+
+
+def _error_message(err: Any) -> str:
+    """*err*'s own message, plus the deepest sub-error when there is one.
 
     ``EffectDef`` dispatches on ``type`` through nested if/then and several
     definitions use ``oneOf``, so the top-level message is often a bare "is
@@ -113,19 +144,75 @@ def _describe_schema_error(err: Any) -> str:
         sub = jsonschema.exceptions.best_match(err.context)
         if sub is not None and sub.message != err.message:
             message = f"{message} ({sub.message})"
-    where = err.json_path.removeprefix("$").removeprefix(".") or "top level"
-    return f"{where}: {message}"
+    return message
+
+
+def _describe_schema_error(err: Any) -> str:
+    """``<path>: <message>``. The path is spelled the way lint spells it
+    (``effects[0].each``)."""
+    return f"{_error_where(err)}: {_error_message(err)}"
+
+
+def _path_segment_sort_keys(root: Any, path: Any) -> list[tuple[int, Any]]:
+    """Each of *path*'s own elements' sort key, walking *root* alongside
+    it to tell a genuine array index (sorted numerically, rank 0) from a
+    mapping key that merely happens to be an int/bool/float/etc. YAML
+    scalar (rank 1, sorted by its own text, the same as a string key's
+    own rank 2) — `err.absolute_path` alone can't tell the two apart
+    (both are a plain Python ``int`` for a genuine index or an
+    int-valued key alike), and comparing the *rendered* path as one
+    string instead would put ``effects[10]`` before ``effects[2]``."""
+    keys: list[tuple[int, Any]] = []
+    node = root
+    for elem in path:
+        if isinstance(node, list):
+            keys.append((0, elem))
+        elif isinstance(elem, str):
+            keys.append((2, elem))
+        else:
+            keys.append((1, str(elem)))
+        node = _child_at(node, elem)
+    return keys
+
+
+def _child_at(node: Any, elem: Any) -> Any:
+    """*node*'s own child at *elem* (a mapping key or a list index), or
+    ``None`` when *elem* doesn't name one."""
+    if isinstance(node, Mapping) and elem in node:
+        return node[elem]
+    is_real_index = isinstance(elem, int) and not isinstance(elem, bool)
+    if isinstance(node, list) and is_real_index and 0 <= elem < len(node):
+        return node[elem]
+    return None
+
+
+def schema_error_sort_key(root: Any, err: Any) -> tuple[list[tuple[int, Any]], str]:
+    """``(path, message)`` — every place a list of schema errors is shown
+    (``cof check``, a run's own refusal text, the TUI's validate view)
+    sorts by this, not ``jsonschema``'s own ``str(err)`` (issue #778's own
+    step 5). The path sorts element by element (:func:`_path_segment_
+    sort_keys`), not as one rendered string: a shorter path that is a
+    genuine prefix of a longer one still sorts first, the same way
+    Python's own list/tuple comparison already works."""
+    return (_path_segment_sort_keys(root, err.absolute_path), _error_message(err))
 
 
 def schema_errors(orch: Any) -> list[str]:
-    """Every schema violation in *orch*; empty when it conforms."""
-    import jsonschema  # type: ignore[import-untyped]
+    """Every schema violation in *orch*, sorted by (path, message) rather
+    than ``jsonschema``'s own ``str(err)`` — empty when it conforms. A
+    non-string mapping key anywhere in a violation's path never drops that
+    violation from the list (see :func:`_error_where`), including a
+    literal ``None`` key `jsonschema`'s own ``descend`` would otherwise
+    drop as if there were no path segment at all (see
+    :func:`.schema_corners.extended_validator`)."""
+    from .schema_corners import extended_validator
 
-    validator = jsonschema.Draft7Validator(orchestration_schema())
-    return [
-        _describe_schema_error(err)
-        for err in sorted(validator.iter_errors(orch), key=str)
-    ]
+    validator = extended_validator(orchestration_schema())
+    errors = sorted(
+        validator.iter_errors(orch),
+        key=lambda err: schema_error_sort_key(orch, err),
+    )
+    return [_describe_schema_error(err) for err in errors]
 
 
 @cache

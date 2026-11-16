@@ -1,0 +1,411 @@
+name: schema-ref-chain-200-hops-is-accepted
+adapter: scripted
+model: m
+effects:
+- type: prompt
+  name: ask
+  prompt_type: json
+  schema:
+    $ref: '#/$defs/L0'
+    $defs:
+      L0:
+        $ref: '#/$defs/L1'
+      L1:
+        $ref: '#/$defs/L2'
+      L2:
+        $ref: '#/$defs/L3'
+      L3:
+        $ref: '#/$defs/L4'
+      L4:
+        $ref: '#/$defs/L5'
+      L5:
+        $ref: '#/$defs/L6'
+      L6:
+        $ref: '#/$defs/L7'
+      L7:
+        $ref: '#/$defs/L8'
+      L8:
+        $ref: '#/$defs/L9'
+      L9:
+        $ref: '#/$defs/L10'
+      L10:
+        $ref: '#/$defs/L11'
+      L11:
+        $ref: '#/$defs/L12'
+      L12:
+        $ref: '#/$defs/L13'
+      L13:
+        $ref: '#/$defs/L14'
+      L14:
+        $ref: '#/$defs/L15'
+      L15:
+        $ref: '#/$defs/L16'
+      L16:
+        $ref: '#/$defs/L17'
+      L17:
+        $ref: '#/$defs/L18'
+      L18:
+        $ref: '#/$defs/L19'
+      L19:
+        $ref: '#/$defs/L20'
+      L20:
+        $ref: '#/$defs/L21'
+      L21:
+        $ref: '#/$defs/L22'
+      L22:
+        $ref: '#/$defs/L23'
+      L23:
+        $ref: '#/$defs/L24'
+      L24:
+        $ref: '#/$defs/L25'
+      L25:
+        $ref: '#/$defs/L26'
+      L26:
+        $ref: '#/$defs/L27'
+      L27:
+        $ref: '#/$defs/L28'
+      L28:
+        $ref: '#/$defs/L29'
+      L29:
+        $ref: '#/$defs/L30'
+      L30:
+        $ref: '#/$defs/L31'
+      L31:
+        $ref: '#/$defs/L32'
+      L32:
+        $ref: '#/$defs/L33'
+      L33:
+        $ref: '#/$defs/L34'
+      L34:
+        $ref: '#/$defs/L35'
+      L35:
+        $ref: '#/$defs/L36'
+      L36:
+        $ref: '#/$defs/L37'
+      L37:
+        $ref: '#/$defs/L38'
+      L38:
+        $ref: '#/$defs/L39'
+      L39:
+        $ref: '#/$defs/L40'
+      L40:
+        $ref: '#/$defs/L41'
+      L41:
+        $ref: '#/$defs/L42'
+      L42:
+        $ref: '#/$defs/L43'
+      L43:
+        $ref: '#/$defs/L44'
+      L44:
+        $ref: '#/$defs/L45'
+      L45:
+        $ref: '#/$defs/L46'
+      L46:
+        $ref: '#/$defs/L47'
+      L47:
+        $ref: '#/$defs/L48'
+      L48:
+        $ref: '#/$defs/L49'
+      L49:
+        $ref: '#/$defs/L50'
+      L50:
+        $ref: '#/$defs/L51'
+      L51:
+        $ref: '#/$defs/L52'
+      L52:
+        $ref: '#/$defs/L53'
+      L53:
+        $ref: '#/$defs/L54'
+      L54:
+        $ref: '#/$defs/L55'
+      L55:
+        $ref: '#/$defs/L56'
+      L56:
+        $ref: '#/$defs/L57'
+      L57:
+        $ref: '#/$defs/L58'
+      L58:
+        $ref: '#/$defs/L59'
+      L59:
+        $ref: '#/$defs/L60'
+      L60:
+        $ref: '#/$defs/L61'
+      L61:
+        $ref: '#/$defs/L62'
+      L62:
+        $ref: '#/$defs/L63'
+      L63:
+        $ref: '#/$defs/L64'
+      L64:
+        $ref: '#/$defs/L65'
+      L65:
+        $ref: '#/$defs/L66'
+      L66:
+        $ref: '#/$defs/L67'
+      L67:
+        $ref: '#/$defs/L68'
+      L68:
+        $ref: '#/$defs/L69'
+      L69:
+        $ref: '#/$defs/L70'
+      L70:
+        $ref: '#/$defs/L71'
+      L71:
+        $ref: '#/$defs/L72'
+      L72:
+        $ref: '#/$defs/L73'
+      L73:
+        $ref: '#/$defs/L74'
+      L74:
+        $ref: '#/$defs/L75'
+      L75:
+        $ref: '#/$defs/L76'
+      L76:
+        $ref: '#/$defs/L77'
+      L77:
+        $ref: '#/$defs/L78'
+      L78:
+        $ref: '#/$defs/L79'
+      L79:
+        $ref: '#/$defs/L80'
+      L80:
+        $ref: '#/$defs/L81'
+      L81:
+        $ref: '#/$defs/L82'
+      L82:
+        $ref: '#/$defs/L83'
+      L83:
+        $ref: '#/$defs/L84'
+      L84:
+        $ref: '#/$defs/L85'
+      L85:
+        $ref: '#/$defs/L86'
+      L86:
+        $ref: '#/$defs/L87'
+      L87:
+        $ref: '#/$defs/L88'
+      L88:
+        $ref: '#/$defs/L89'
+      L89:
+        $ref: '#/$defs/L90'
+      L90:
+        $ref: '#/$defs/L91'
+      L91:
+        $ref: '#/$defs/L92'
+      L92:
+        $ref: '#/$defs/L93'
+      L93:
+        $ref: '#/$defs/L94'
+      L94:
+        $ref: '#/$defs/L95'
+      L95:
+        $ref: '#/$defs/L96'
+      L96:
+        $ref: '#/$defs/L97'
+      L97:
+        $ref: '#/$defs/L98'
+      L98:
+        $ref: '#/$defs/L99'
+      L99:
+        $ref: '#/$defs/L100'
+      L100:
+        $ref: '#/$defs/L101'
+      L101:
+        $ref: '#/$defs/L102'
+      L102:
+        $ref: '#/$defs/L103'
+      L103:
+        $ref: '#/$defs/L104'
+      L104:
+        $ref: '#/$defs/L105'
+      L105:
+        $ref: '#/$defs/L106'
+      L106:
+        $ref: '#/$defs/L107'
+      L107:
+        $ref: '#/$defs/L108'
+      L108:
+        $ref: '#/$defs/L109'
+      L109:
+        $ref: '#/$defs/L110'
+      L110:
+        $ref: '#/$defs/L111'
+      L111:
+        $ref: '#/$defs/L112'
+      L112:
+        $ref: '#/$defs/L113'
+      L113:
+        $ref: '#/$defs/L114'
+      L114:
+        $ref: '#/$defs/L115'
+      L115:
+        $ref: '#/$defs/L116'
+      L116:
+        $ref: '#/$defs/L117'
+      L117:
+        $ref: '#/$defs/L118'
+      L118:
+        $ref: '#/$defs/L119'
+      L119:
+        $ref: '#/$defs/L120'
+      L120:
+        $ref: '#/$defs/L121'
+      L121:
+        $ref: '#/$defs/L122'
+      L122:
+        $ref: '#/$defs/L123'
+      L123:
+        $ref: '#/$defs/L124'
+      L124:
+        $ref: '#/$defs/L125'
+      L125:
+        $ref: '#/$defs/L126'
+      L126:
+        $ref: '#/$defs/L127'
+      L127:
+        $ref: '#/$defs/L128'
+      L128:
+        $ref: '#/$defs/L129'
+      L129:
+        $ref: '#/$defs/L130'
+      L130:
+        $ref: '#/$defs/L131'
+      L131:
+        $ref: '#/$defs/L132'
+      L132:
+        $ref: '#/$defs/L133'
+      L133:
+        $ref: '#/$defs/L134'
+      L134:
+        $ref: '#/$defs/L135'
+      L135:
+        $ref: '#/$defs/L136'
+      L136:
+        $ref: '#/$defs/L137'
+      L137:
+        $ref: '#/$defs/L138'
+      L138:
+        $ref: '#/$defs/L139'
+      L139:
+        $ref: '#/$defs/L140'
+      L140:
+        $ref: '#/$defs/L141'
+      L141:
+        $ref: '#/$defs/L142'
+      L142:
+        $ref: '#/$defs/L143'
+      L143:
+        $ref: '#/$defs/L144'
+      L144:
+        $ref: '#/$defs/L145'
+      L145:
+        $ref: '#/$defs/L146'
+      L146:
+        $ref: '#/$defs/L147'
+      L147:
+        $ref: '#/$defs/L148'
+      L148:
+        $ref: '#/$defs/L149'
+      L149:
+        $ref: '#/$defs/L150'
+      L150:
+        $ref: '#/$defs/L151'
+      L151:
+        $ref: '#/$defs/L152'
+      L152:
+        $ref: '#/$defs/L153'
+      L153:
+        $ref: '#/$defs/L154'
+      L154:
+        $ref: '#/$defs/L155'
+      L155:
+        $ref: '#/$defs/L156'
+      L156:
+        $ref: '#/$defs/L157'
+      L157:
+        $ref: '#/$defs/L158'
+      L158:
+        $ref: '#/$defs/L159'
+      L159:
+        $ref: '#/$defs/L160'
+      L160:
+        $ref: '#/$defs/L161'
+      L161:
+        $ref: '#/$defs/L162'
+      L162:
+        $ref: '#/$defs/L163'
+      L163:
+        $ref: '#/$defs/L164'
+      L164:
+        $ref: '#/$defs/L165'
+      L165:
+        $ref: '#/$defs/L166'
+      L166:
+        $ref: '#/$defs/L167'
+      L167:
+        $ref: '#/$defs/L168'
+      L168:
+        $ref: '#/$defs/L169'
+      L169:
+        $ref: '#/$defs/L170'
+      L170:
+        $ref: '#/$defs/L171'
+      L171:
+        $ref: '#/$defs/L172'
+      L172:
+        $ref: '#/$defs/L173'
+      L173:
+        $ref: '#/$defs/L174'
+      L174:
+        $ref: '#/$defs/L175'
+      L175:
+        $ref: '#/$defs/L176'
+      L176:
+        $ref: '#/$defs/L177'
+      L177:
+        $ref: '#/$defs/L178'
+      L178:
+        $ref: '#/$defs/L179'
+      L179:
+        $ref: '#/$defs/L180'
+      L180:
+        $ref: '#/$defs/L181'
+      L181:
+        $ref: '#/$defs/L182'
+      L182:
+        $ref: '#/$defs/L183'
+      L183:
+        $ref: '#/$defs/L184'
+      L184:
+        $ref: '#/$defs/L185'
+      L185:
+        $ref: '#/$defs/L186'
+      L186:
+        $ref: '#/$defs/L187'
+      L187:
+        $ref: '#/$defs/L188'
+      L188:
+        $ref: '#/$defs/L189'
+      L189:
+        $ref: '#/$defs/L190'
+      L190:
+        $ref: '#/$defs/L191'
+      L191:
+        $ref: '#/$defs/L192'
+      L192:
+        $ref: '#/$defs/L193'
+      L193:
+        $ref: '#/$defs/L194'
+      L194:
+        $ref: '#/$defs/L195'
+      L195:
+        $ref: '#/$defs/L196'
+      L196:
+        $ref: '#/$defs/L197'
+      L197:
+        $ref: '#/$defs/L198'
+      L198:
+        $ref: '#/$defs/L199'
+      L199:
+        type: object
+  template: give json

@@ -2164,7 +2164,12 @@ class PromptRuntime:
         try:
             import jsonschema  # type: ignore[import-untyped]
 
-            jsonschema.validate(value, self.defn.schema)
+            from .schema_corners import extended_validator
+
+            validator = extended_validator(self.defn.schema)
+            error = jsonschema.exceptions.best_match(validator.iter_errors(value))
+            if error is not None:
+                raise error
         except ImportError:
             # jsonschema not installed, skip validation
             pass

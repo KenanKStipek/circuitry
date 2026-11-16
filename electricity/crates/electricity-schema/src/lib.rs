@@ -567,14 +567,27 @@ fn profile_validator() -> &'static jsonschema::Validator {
 /// worse-than-today regression, only the pre-existing, documented
 /// crate-text gap this module's own docs already name.
 fn orchestration_errors_crate(schema_instance: &Value) -> Vec<SchemaError> {
-    orchestration_validator()
+    let mut errors: Vec<(Vec<engine::PathSegment>, SchemaError)> = orchestration_validator()
         .iter_errors(schema_instance)
         .filter(|err| !is_spurious_marker_error(err))
-        .map(|err| SchemaError {
-            location: orchestration_location(schema_instance, err.instance_path.as_str()),
-            message: substitute_value_prefix(&err.instance, err.to_string()),
+        .map(|err| {
+            let path = cel_path_segments(err.instance_path.as_str());
+            let schema_error = SchemaError {
+                location: orchestration_location(schema_instance, err.instance_path.as_str()),
+                message: substitute_value_prefix(&err.instance, err.to_string()),
+            };
+            (path, schema_error)
         })
-        .collect()
+        .collect();
+    // `core.document_check.schema_errors` sorts by `(path, message)`,
+    // not the crate's own iteration order (issue #778's own step 5) --
+    // the path compared element by element (`engine::compare_paths`),
+    // not as one rendered string (which would put `effects[10]` before
+    // `effects[2]`).
+    errors.sort_by(|a, b| {
+        engine::compare_paths(&a.0, &b.0).then_with(|| a.1.message.cmp(&b.1.message))
+    });
+    errors.into_iter().map(|(_, error)| error).collect()
 }
 
 /// Every schema violation in `document` against Circuitry's
@@ -628,50 +641,51 @@ fn orchestration_errors_engine(document: &electricity_value::Value) -> Option<Ve
     if engine::take_recursion_exceeded() || engine::take_python_exception().is_some() {
         return None;
     }
-    // `core/document_check.py::schema_errors` sorts the *raw* errors
-    // (`sorted(validator.iter_errors(orch), key=str)`) before ever
-    // calling `_describe_schema_error` -- so the sort key is each
-    // violation's own raw, un-substituted, un-suffixed message, not the
-    // text `describe_schema_error_engine` ultimately displays. The two
-    // can disagree (a `{}`/`[]`-repr message sorts differently from its
-    // own "value"-substituted spelling), so this keeps them separate
-    // rather than sorting by the displayed `SchemaError.message`.
+    // Issue #778's own step 5: `core/document_check.py::schema_errors`
+    // now sorts by `(path, message)` -- each violation's own displayed
+    // `SchemaError.location`/`.message` -- rather than `sorted(
+    // validator.iter_errors(orch), key=str)`'s own `str(err)` order.
     //
     // Still under `with_draft7_mode`: [`engine::render`] (a `contains`
-    // violation's own message) and [`engine::keyword_name`]/[`engine::
-    // best_match`] read [`engine::draft7_mode_active`] too, so leaving
-    // this scope before they run would silently render every message
-    // as if the schema were 2020-12 again (caught directly: a draft-07
-    // `contains` failure rendered 2020-12's text until this moved).
-    let mut errors: Vec<(SchemaError, String, String, String, &str)> =
-        engine::with_draft7_mode(|| {
-            violations
-                .iter()
-                .map(|violation| {
-                    let raw_message = engine::render(violation);
-                    let (error, schema_path_text, path_text, keyword) =
-                        describe_schema_error_engine(violation, &raw_message);
-                    (error, raw_message, schema_path_text, path_text, keyword)
-                })
-                .collect()
-        });
-    errors.sort_by(|a, b| (&a.1, a.4, &a.2, &a.3).cmp(&(&b.1, b.4, &b.2, &b.3)));
-    Some(errors.into_iter().map(|(error, ..)| error).collect())
+    // violation's own message) and [`engine::best_match`] read
+    // [`engine::draft7_mode_active`] too, so leaving this scope before
+    // they run would silently render every message as if the schema
+    // were 2020-12 again (caught directly: a draft-07 `contains`
+    // failure rendered 2020-12's text until this moved).
+    let mut errors: Vec<(Vec<engine::PathSegment>, SchemaError)> = engine::with_draft7_mode(|| {
+        violations
+            .iter()
+            .map(|violation| {
+                let raw_message = engine::render(violation);
+                (
+                    violation.path.clone(),
+                    describe_schema_error_engine(violation, &raw_message),
+                )
+            })
+            .collect()
+    });
+    // The path compared element by element (`engine::compare_paths`),
+    // not as one rendered string -- see `orchestration_errors_crate`'s
+    // own comment.
+    errors.sort_by(|a, b| {
+        engine::compare_paths(&a.0, &b.0).then_with(|| a.1.message.cmp(&b.1.message))
+    });
+    Some(errors.into_iter().map(|(_, error)| error).collect())
 }
 
 /// One [`engine::Violation`] rendered as Circuitry's own
 /// `core.document_check._describe_schema_error` would: the message
 /// (with its own `repr(err.instance)` -> `"value"` substitution and
-/// `best_match`-chosen context suffix) and location, plus the keyword
-/// name and `schema_path`/`path` text [`orchestration_errors_engine`]'s
-/// own sort needs ([`engine::format_as_index`]'s own doc comment proves
-/// why that's enough of `str(err)` to sort by). *raw_message* is
-/// [`engine::render`]'s own output for *violation*, already computed by
-/// the caller.
+/// `best_match`-chosen context suffix) and location
+/// ([`orchestration_errors_engine`]'s own `(location, message)` sort
+/// uses both directly, matching `core.document_check.schema_errors`'s
+/// own `(path, message)` order -- issue #778's own step 5). *raw_
+/// message* is [`engine::render`]'s own output for *violation*,
+/// already computed by the caller.
 fn describe_schema_error_engine<'a>(
     violation: &engine::Violation<'a>,
     raw_message: &str,
-) -> (SchemaError, String, String, &'static str) {
+) -> SchemaError {
     let mut message = raw_message.to_string();
     let instance_repr = violation.local_instance.py_repr();
     if matches!(
@@ -691,57 +705,7 @@ fn describe_schema_error_engine<'a>(
         }
     }
     let location = location_from_path(&violation.path);
-    let keyword = engine::keyword_name(&violation.kind).unwrap_or("");
-    // Python's sort key is `str(err)`, whose `schema_path` component is
-    // `list(err.relative_schema_path)[:-1]` -- the *keyword itself* is
-    // the dropped last element (`jsonschema/exceptions.py`'s `_Error.
-    // __str__`). `violation.schema_path` is already that: the path to
-    // the node the firing keyword lives on, built by every `evaluate`
-    // call *before* that keyword runs, never including the keyword's
-    // own name -- so it must be used as-is here, not with the keyword
-    // pushed back onto it (that produced the *full* `relative_schema_
-    // path`, one segment too long, and reversed any tie between a
-    // shorter schema_path and a longer one that starts with it: `":"`
-    // sorts before `"["`, so Python's shorter, truncated path always
-    // comes first).
-    //
-    // `Kind::FalseSchema` is the one exception: a literal `false`
-    // sub-schema short-circuits `Validator.descend` before it appends
-    // the descent's own path/schema_path segment (`jsonschema.
-    // validators.create.descend`'s `elif schema is False: yield ...;
-    // return`, ahead of the loop that would otherwise do it) -- so
-    // Python's `relative_schema_path` for it never gets that last
-    // segment at all, not just its own firing keyword's. The call
-    // sites that can recurse into a literal `false` child match this
-    // by omitting that segment themselves when they do (`"properties"`'s
-    // own handling in `engine::evaluate`, `engine.rs`'s own comment at
-    // that site) -- so by the time a `FalseSchema` violation reaches
-    // here, `violation.schema_path` is one segment *short* of every
-    // other kind's own convention, and dropping one more (there's
-    // never a keyword name to append for it either -- `engine::
-    // keyword_name` returns `None`) reaches the same `[:-1]` result.
-    // `"patternProperties"`/`"prefixItems"`/`"dependentSchemas"`/
-    // `"dependencies"` don't yet get this same treatment at their own
-    // recursion sites -- a `FalseSchema` violation reached through one
-    // of those still carries its own extra segment, so a same-message,
-    // same-(absent-)keyword tie against another error could sort one
-    // place off from Python's. None of the bundled schema's own `$defs`
-    // give any property, pattern, prefix-item or dependency a literal
-    // `false` sub-schema, so this never fires today (`DESIGN.md` §13).
-    let schema_path_text = if matches!(violation.kind, engine::Kind::FalseSchema) {
-        let mut schema_path = violation.schema_path.clone();
-        schema_path.pop();
-        engine::format_as_index(&schema_path)
-    } else {
-        engine::format_as_index(&violation.schema_path)
-    };
-    let path_text = engine::format_as_index(&violation.path);
-    (
-        SchemaError { location, message },
-        schema_path_text,
-        path_text,
-        keyword,
-    )
+    SchemaError { location, message }
 }
 
 fn violation_context<'a, 'b>(
@@ -1022,6 +986,19 @@ fn schema_well_formedness_error_impl(schema: &electricity_value::Value) -> Optio
     engine::clear_pattern_cache();
     engine::clear_fully_supported_cache();
 
+    if let Some(message) = engine::multiple_of_well_formedness_error(schema) {
+        return Some(message);
+    }
+
+    // Issue #778's own step 5: checked unconditionally, before the
+    // fully-supported branch below -- an ordinary `$ref` chain this
+    // engine fully understands never reaches this cap any other way,
+    // since `engine::evaluate` resolves it lazily with no chain-length
+    // limit of its own narrower than [`engine::MAX_RECURSION_DEPTH`].
+    if engine::ref_chain_depth_exceeds_cap(schema, schema) {
+        return Some(engine::ref_chain_error_message());
+    }
+
     if let Some(message) = engine::find_invalid_pattern(schema) {
         return Some(message);
     }
@@ -1048,8 +1025,6 @@ fn schema_well_formedness_error_impl(schema: &electricity_value::Value) -> Optio
             }
             _ => None,
         }
-    } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
-        Some("maximum recursion depth exceeded while calling a Python object".to_string())
     } else {
         let schema_json = value_to_json(schema);
         jsonschema::options()
@@ -1183,16 +1158,13 @@ fn validate_prompt_schema_impl(
         // reachable only through a *later* sibling (never visited by
         // that short-circuiting walk) still overflows the crate's own
         // eager, far-more-stack-hungry `$ref` resolution once it's deep
-        // enough -- a process abort with no state written at all, past
-        // roughly 30,000 hops even on this module's own dedicated,
-        // large-stack validation thread. Measured directly against the
-        // same cap [`engine::schema_is_fully_supported`]'s own walk
-        // already uses, so the verdict and text match the engine path's
-        // for the same chain length, and the crate is never even built
-        // on a schema already known to be this deep.
-        PromptSchemaCheck::SchemaError(
-            "maximum recursion depth exceeded while calling a Python object".to_string(),
-        )
+        // enough -- a process abort with no state written at all, well
+        // past [`engine::ref_chain_depth_exceeds_cap`]'s own cap, so
+        // the crate is never even built on a schema already known to be
+        // this deep (issue #778's own step 5: one shared message now,
+        // replacing the Python `RecursionError` text this used to
+        // reproduce).
+        PromptSchemaCheck::SchemaError(engine::ref_chain_error_message())
     } else {
         // The crate decides -- an unsupported keyword, or a pre-2020-12
         // draft (`DESIGN.md` §13 names both as accepted, narrower gaps
@@ -1436,8 +1408,7 @@ fn schema_errors_impl(
             }
         }
     } else if engine::ref_chain_depth_exceeds_cap(schema, schema) {
-        schema_error =
-            Some("maximum recursion depth exceeded while calling a Python object".to_string());
+        schema_error = Some(engine::ref_chain_error_message());
     } else {
         let schema_json = value_to_json(schema);
         match jsonschema::options()
@@ -1988,7 +1959,10 @@ fn is_json_path_compatible_property(segment: &str) -> bool {
 
 #[cfg(test)]
 mod prompt_schema_tests {
-    use super::{PromptSchemaCheck, validate_prompt_schema, value_from_json};
+    use super::{
+        PromptSchemaCheck, engine, schema_well_formedness_error, validate_prompt_schema,
+        value_from_json,
+    };
     use serde_json::json;
 
     fn check(schema: serde_json::Value, instance: serde_json::Value) -> PromptSchemaCheck {
@@ -2203,6 +2177,34 @@ mod prompt_schema_tests {
             PromptSchemaCheck::SchemaError(_)
         ));
     }
+
+    /// Issue #778's own step 5: `schema_well_formedness_error` (the
+    /// compile-time check `electricity-compiler::compile_prompt` runs
+    /// for a `prompt` effect's own `schema:`) catches a `$ref` chain
+    /// past the cap even when the schema is otherwise fully supported
+    /// (a plain `$defs`/`$ref` chain, no crate-only keyword) -- unlike
+    /// `validate_prompt_schema` itself, whose own fully-supported path
+    /// has no narrower limit than `engine::MAX_RECURSION_DEPTH`
+    /// (`ref_chain_stack_safety.rs`'s own
+    /// `a_1000_hop_ref_chain_is_accepted_on_a_2mib_caller_stack`): a
+    /// document this long is refused before it ever compiles, so that
+    /// wider limit never has to apply to it at all.
+    #[test]
+    fn well_formedness_error_catches_a_long_ref_chain_even_when_fully_supported() {
+        let mut defs = serde_json::Map::new();
+        for i in 0..1000usize {
+            defs.insert(
+                format!("L{i}"),
+                json!({"$ref": format!("#/$defs/L{}", i + 1)}),
+            );
+        }
+        defs.insert("L1000".to_string(), json!({"type": "string"}));
+        let schema = value_from_json(&json!({"$defs": defs, "$ref": "#/$defs/L0"}));
+        assert_eq!(
+            schema_well_formedness_error(&schema),
+            Some(engine::ref_chain_error_message())
+        );
+    }
 }
 
 #[cfg(test)]
@@ -2353,12 +2355,30 @@ mod tests {
         );
     }
 
+    /// `effects[2]` before `effects[10]` -- comparing the rendered
+    /// location as one string instead would put `effects[10]` first.
+    #[test]
+    fn array_indices_sort_numerically_not_as_text() {
+        let good = json!({"type": "tool", "name": "t", "provider": "json", "params": {}});
+        let bad = json!({"type": "loop", "each": {"in": "x"}, "body": []});
+        let mut effects = vec![good; 11];
+        effects[2] = bad.clone();
+        effects[10] = bad;
+        let doc = json!({"effects": effects});
+        let errors = orchestration_errors(&value_from_json(&doc), &doc);
+        let locations: Vec<&str> = errors.iter().map(|e| e.location.as_str()).collect();
+        assert_eq!(
+            locations,
+            vec!["effects[2].body", "effects[10].body"],
+            "{errors:?}"
+        );
+    }
+
     /// Every violation *schema* has against *instance* under draft 7,
-    /// in Python's own `sorted(iter_errors(...), key=str)` order --
-    /// `render`'s own `(message, schema_path)` pairs, sorted the same
-    /// 4-tuple way [`describe_schema_error_engine`]'s own sort key is
-    /// (message, then `format_as_index(schema_path)`, since none of
-    /// these test schemas have a keyword tie to break further).
+    /// sorted by `render`'s own message text alone -- enough to put
+    /// these tests' own fixed, known violation sets in a deterministic
+    /// order (none of them ties on message text); unrelated to
+    /// [`orchestration_errors_engine`]'s own `(location, message)` sort.
     fn draft7_messages(
         schema: &electricity_value::Value,
         instance: &electricity_value::Value,
@@ -2370,12 +2390,9 @@ mod tests {
                 "test schema must be one this engine's own gate accepts"
             );
             engine::evaluate(schema, instance, schema, &[], &[], &mut violations);
-            let mut rendered: Vec<(String, String)> = violations
-                .iter()
-                .map(|v| (engine::render(v), engine::format_as_index(&v.schema_path)))
-                .collect();
+            let mut rendered: Vec<String> = violations.iter().map(engine::render).collect();
             rendered.sort();
-            rendered.into_iter().map(|(message, _)| message).collect()
+            rendered
         })
     }
 
