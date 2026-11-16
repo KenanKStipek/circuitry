@@ -376,11 +376,26 @@ masks everything after the marker with one placeholder
 Everything before the marker (the location, the effect name, an exit
 number) still has to compare exactly; a message that matches no shape
 below is unaffected and still compares byte for byte. This masking is
-applied unconditionally — to state (`meta.error` and any other string
-leaf, regardless of key name or nesting), to `--events`' own `error`
-field, and to a failure case's own top-level error (`assert_errors_equal`,
-below) — never opt-in per case, and identically on both runners, since
-both call the same `tests/conformance/normalize.py` functions.
+applied unconditionally, never opt-in per case, and identically on both
+runners, since both call the same `tests/conformance/normalize.py`
+functions -- but only to an *error-carrying* field, by cof's own naming
+convention, never to content Circuitry sent or received: in state
+(`mask_known_third_party_text_in`), a string leaf is masked when its own
+dict key is `error` or `errors` (regardless of nesting depth or which
+container it sits inside -- a `child_errors`/`attempts`/`fallback_
+attempts` list entry's own `error` key matches the same way a top-level
+`meta.error` does) or `stderr` (`plugins/validate_yaml.py`'s own `value.
+errors`/`meta.raw.errors`/`meta.stderr`); in `--events`, only a line's own
+`error` field; in a case's own stderr, only a `WARNING:`/`ERROR:` line
+(`redact_third_party_text_lines`) or a run-warning line; and a failure
+case's own top-level error (`assert_errors_equal`, below). A recorded HTTP
+request (`expected.http_requests.json`) is compared under `normalize()`
+alone, with no catalogue masking at all -- its `body`/`headers`/`query`
+is content Circuitry sent, never its own error text, so none of it is
+ever replaced even if it happens to contain a marker's literal text.
+Every other key -- `prompt_sent`, `params_rendered`, `value` (other than
+its own `errors`), `raw` (other than its own `errors`), and everything
+else -- is left alone the same way.
 
 The catalogue (`mask_known_third_party_text`'s own body names every entry
 in this order):
@@ -388,13 +403,15 @@ in this order):
 | shape | Circuitry's own part (kept exact) | third-party part (masked) |
 |---|---|---|
 | CEL expression parse failure (`core/cel_eval.py`) | `CEL expression at '<loc>' (effect '<name>'): expression does not parse (` ... `). Expression: '<expr>'` | the parser's own diagnostic inside the parens (a caret-pointing, multi-line message) — the repeated `Expression: '<expr>'` after it is just a repr of the document's own text and stays exact |
-| CEL evaluation failure (`core/cel_eval.py`) | `CEL evaluation failed for '<expr>': ` | the evaluator's own exception text (`division by zero`, `no such key: 'zz'`, `overflow`, ...) |
-| YAML parse error (`plugins/validate_yaml.py`, `core/decompose.py`, `core/use.py`, `core/reflector.py`) | the `YAML parse error: ` prefix, or the reflector's own `parse_failed: ` prefix (issue #778: a generated plan that isn't valid YAML at all) | PyYAML's own (multi-line, caret-pointing) `YAMLError` text, verbatim |
+| CEL evaluation failure (`core/cel_eval.py`) | `CEL evaluation failed for '<expr>': ` and every fixed template `_StateEvaluator`/`_error_text` build themselves (`no such key: '<key>'`, `division by zero`, `modulus by zero`, `cannot apply '<op>' to <phrase>`, `undeclared reference to '<name>'`, ...) | the one shape this module never constructs itself: cel-python's own bare exception text for a case it doesn't special-case (e.g. `overflow`, issue #400's own 64-bit-int comparison) |
+| YAML parse error (`plugins/validate_yaml.py`, `core/decompose.py`, `core/use.py`, `core/reflector.py`) | the `YAML parse error: ` prefix, or the reflector's own `parse_failed: ` prefix (issue #778: a generated plan that isn't valid YAML at all) | PyYAML's own (multi-line, caret-pointing) `YAMLError` text, verbatim — *except* a duplicate-key message (`core/yaml_load.py::DuplicateKeyError`), which stays exact: that text is entirely Circuitry's own, never PyYAML's own wording at all |
 | curl/OS connection text (`curl_support.py::curl_failure_message`) | `<source> request failed (curl exit <N>)<model> url=<url>: ` ... a trailing hint, if any (`adapters/ollama.py`'s own three fixed templates — the only adapter that passes one) | curl's own stderr (`curl: (<N>) ...`), or electricity's own synthesized OS-errno text under the same `curl: (<N>) ` label |
 | `re.error` from the `regex` tool (`plugins/regex.py`) | the `regex: invalid pattern: ` prefix; a trailing `at position <N>` (optionally `(line <L>, column <C>)`), if present — a location, not library wording | `re.error`'s own message between the two (`electricity-pyre`'s own imitation of CPython's `re` wording is DESIGN.md's own "regex parity gap", accepted and documented, never a settled guarantee the two must always agree on) |
 | JSON-Schema well-formedness (`core/schema_corners.py::schema_well_formedness_error`, wrapped by `core/compiler.py`/`plugins/cel.py`/`plugins/agent.py`) | `... is not a valid JSON Schema: ` | `jsonschema.SchemaError`'s own message — *except* when it's one of this module's own two fixed templates (`$ref chain is too long (limit <N> consecutive references)`, `multipleOf must be a number greater than 0`), which stay exact: those are Circuitry's own text, not `SchemaError`'s |
-| Profile schema validation (`cli/profiles.py::_validate_profile_schema`) | `Profile '<name>' at <path> failed schema validation:` and each following `  - <location>: ` line | each line's own message — a real `jsonschema.ValidationError.message` against a separate Rust `jsonschema` crate (settled ruling 9), unlike the orchestration/inline-document schema-error lines `core/use.py`/`cli/runtime_shim.py` build the same way (header reads "<X> validation failed:", never "failed schema validation:", so never matched here), which electricity's own schema engine now matches word for word (issue #528) |
-| `OSError.strerror` (`plugins/systemone.py`) | `...cannot be read: ` | `exc.strerror` (`"No such file or directory"`, ...) — the only `OSError.strerror` text a document effect can surface through `cof run`; the TUI/CLI call sites that format the same way (`tui/inspector.py`, `cli/last_run.py`) are never reached by a run this suite drives |
+| Profile schema validation (`cli/profiles.py::_validate_profile_schema`) | `Profile '<name>' at <path> failed schema validation:` and each following `  - <location>: ` line | each line's own message — a real `jsonschema.ValidationError.message` against a separate Rust `jsonschema` crate (settled ruling 9) |
+| Document/schema validation lines (`core/use.py`, `cli/runtime_shim.py`) | `Orchestration ... validation failed:`/`Inline orchestration validation failed:` and each following `  - <location>: ` line | each line's own message — a real `jsonschema.ValidationError.message` (`core/document_check.py::schema_errors`), wherever it reaches only `meta.error`, stderr or `cof check`'s own report; electricity's own schema engine matches the location and the order exactly (issue #528), which is why only the message body is masked here rather than the whole line. Never masked in anything this runtime sends onward to a model (the `agent` tool's own repair-turn prompt is never part of committed state at all) |
+| `OSError.strerror` alone (`plugins/systemone.py`) | `...cannot be read: ` | `exc.strerror` (`"No such file or directory"`, ...) — the TUI/CLI call sites that format the same way (`tui/inspector.py`, `cli/last_run.py`) are never reached by a run this suite drives |
+| A whole `OSError`, `[Errno <N>] <strerror>` (`core/prompt_files.py`, `core/prompt.py`) | `[Errno <N>] `, and the trailing `: '<filename>'` once a filename is set — the errno and the actual path involved, never masked | `strerror` alone, between the two |
 
 A field either engine's own `--events` writer truncates to a fixed length
 (`cli/events.py::_ERROR_MAX_CHARS`/electricity's own `events.rs::
@@ -411,19 +428,25 @@ are masked from the earliest recognised shape's own tail to the end of
 the field (`mask_known_third_party_text_to_end`) rather than the normal
 tail-only mask. A path whose raw `error` stays under the cap on both sides
 keeps the normal, narrower mask. Neither `expected.events.jsonl` nor
-`expected.warnings.txt` ever bakes any of this masking in at generation
-time — like `expected.json`, both commit the real, unmasked capture, and
-are masked only at comparison time (both pytest runners, and the
-generator's own `--check`), so a later catalogue change (a new shape, a
-wider or narrower mask) never makes a committed fixture stale by itself.
+`expected.warnings.txt`/`expected.run_warnings.txt` ever bakes any of
+this masking in at generation time — like `expected.json`, all three
+commit the real, unmasked capture, and are masked only at comparison
+time (both pytest runners, and the generator's own `--check`, which
+masks a `.txt` file's own lines the same way `redact_third_party_text_
+lines` does), so a later catalogue change (a new shape, a wider or
+narrower mask) never makes any of them stale by itself.
 
 `scripts/generate-conformance-cases.py` fails, naming the case, when a
 failure case's own `error_compare: "exact"` (the default) is set on a
 captured error that matches one of these shapes, or when a case's own
-`third_party_text` entry (below) has a literal, non-wildcard `pattern`
-that is also shape-matched — both mean the case is pinning third-party
-text that this catalogue already covers; use `error_compare: "location"`,
-or drop the redundant `third_party_text` entry, instead.
+`third_party_text` entry (below) still pins the catalogue's own masked
+span: replacing that span with a distinct sentinel and re-checking the
+entry's `pattern` against the result catches a wildcard pattern that
+happens to spell the masked text out literally anyway, not only a
+pattern that is a literal copy of the whole value. Either way means the
+case is pinning third-party text that this catalogue already covers; use
+`error_compare: "location"`, or drop the redundant `third_party_text`
+entry, instead.
 
 ## Events and live state
 
