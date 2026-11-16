@@ -7,12 +7,12 @@ from __future__ import annotations
 import pytest
 
 from circuitry.http_conventions import (
+    _redact_url,
     check_proxy_url,
     check_strict_port,
     check_url,
     redact_proxy_value,
     redact_request_url,
-    redact_url,
     resolve_proxy,
     split_proxy_url,
     strip_request_url_userinfo,
@@ -224,7 +224,7 @@ def test_redact_url_removes_a_password_containing_whitespace_or_a_control_char(
     char: str,
 ) -> None:
     password = f"pa{char}ss"
-    redacted = redact_url(f"http://alice:{password}@host:1234/x")
+    redacted = _redact_url(f"http://alice:{password}@host:1234/x")
     assert redacted == "http://host:1234/x"
     assert "alice" not in redacted
     assert password not in redacted

@@ -115,7 +115,7 @@ def _urlsplit(url: str) -> urllib.parse.SplitResult:
         return _urlsplit_lenient(url)
 
 
-def mask_credential_query_params(url: str) -> str:
+def _mask_credential_query_params(url: str) -> str:
     """*url* with the value of any query-string parameter whose key looks
     like a credential masked, e.g. ``https://api.example.com/search?key=
     secret`` becomes ``...?key=%2A%2A%2A``."""
@@ -155,18 +155,20 @@ def strip_request_url_userinfo(url: str) -> str:
     return urllib.parse.urlunsplit(parsed._replace(netloc=netloc))
 
 
-def redact_url(url: str) -> str:
+def _redact_url(url: str) -> str:
     """*url* with userinfo stripped, then any credential-like query
     parameter masked — the two masks every refusal message that names a
     request URL (never a proxy value, see :func:`redact_proxy_value`)
-    applies before naming it."""
-    return strip_request_url_userinfo(mask_credential_query_params(url))
+    applies before naming it. Never called directly outside this module
+    (:func:`redact_request_url` is the one public redactor for a request
+    URL); kept for the tests that exercise it in isolation."""
+    return strip_request_url_userinfo(_mask_credential_query_params(url))
 
 
 def redact_proxy_value(value: str) -> str:
     """*value* (a proxy URL or value, normalized or not) with its
     userinfo removed, for a refusal message. A proxy value has no
-    meaningful path, so -- unlike :func:`redact_url` -- this never stops
+    meaningful path, so -- unlike :func:`_redact_url` -- this never stops
     at a ``/``, ``?``, ``#`` or whitespace: only the LAST ``@`` in the
     *whole* value (after its ``scheme://``, when it has one) counts, so
     a password containing any of those still comes out fully removed
@@ -201,7 +203,7 @@ def _at_follows_netloc(url: str, netloc: str) -> bool:
 def redact_request_url(url: str) -> str:
     """*url*, redacted for any refusal, warning, event, state, hint or
     ``host:`` text that names a request URL -- the one function every
-    such caller uses, never :func:`redact_url` or :func:`redact_proxy_value`
+    such caller uses, never :func:`_redact_url` or :func:`redact_proxy_value`
     directly: :func:`redact_proxy_value` when *url* has no ``://`` at all
     (a userinfo-bearing value with no scheme, the same shape
     :func:`redact_proxy_value` already handles for a proxy) or
@@ -223,7 +225,7 @@ def redact_request_url(url: str) -> str:
         cut = redact_proxy_value(url)
     else:
         cut = strip_request_url_userinfo(url)
-    return mask_credential_query_params(cut)
+    return _mask_credential_query_params(cut)
 
 
 def _host_port_text(netloc: str) -> str | None:

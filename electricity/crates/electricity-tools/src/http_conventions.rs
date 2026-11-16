@@ -74,7 +74,7 @@ fn percent_decode_plus(value: &str) -> String {
 /// matched (so `%2A%2A%2A` for the mask, a space becomes `+`, exactly
 /// mirrors `urllib.parse.urlencode`'s own default `quote_plus`
 /// encoding).
-pub fn mask_credential_query_params(url: &str) -> String {
+pub(crate) fn mask_credential_query_params(url: &str) -> String {
     let Some(query_start) = url.find('?') else {
         return url.to_string();
     };
@@ -122,12 +122,15 @@ fn strip_request_url_userinfo(url: &str) -> String {
     crate::http::http_url::urlunsplit(&crate::http::http_url::Split { netloc, ..parsed })
 }
 
-/// `curl_support.py::redact_host_url`/`http_conventions.redact_url` --
-/// the two masks every refusal message that names a request URL
-/// (never a proxy value, see [`redact_proxy_value`]) applies before
-/// naming it: userinfo stripped, then any credential-like query
-/// parameter masked.
-pub fn redact_url(url: &str) -> String {
+/// `http_conventions._redact_url` -- the two masks every refusal
+/// message that names a request URL (never a proxy value, see
+/// [`redact_proxy_value`]) applies before naming it: userinfo
+/// stripped, then any credential-like query parameter masked. Never
+/// called directly outside this module ([`redact_request_url`] is the
+/// one public redactor for a request URL); kept for the test that
+/// exercises it in isolation.
+#[cfg(test)]
+fn redact_url(url: &str) -> String {
     strip_request_url_userinfo(&mask_credential_query_params(url))
 }
 

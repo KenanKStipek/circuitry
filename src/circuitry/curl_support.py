@@ -52,10 +52,10 @@ def redact_host_url(url: str) -> str:
     that is already reporting a problem (``urlsplit`` requires a string
     or bytes and raises ``AttributeError`` on anything else).
 
-    Uses :func:`http_conventions.redact_request_url`, not
-    :func:`http_conventions.redact_url`, directly: a password hidden
-    behind a ``/``, ``?`` or ``#`` in ``url`` (issue #778) must not
-    reach this preflight text either.
+    Uses :func:`http_conventions.redact_request_url`, not the weaker,
+    private userinfo/query masks it is built from, directly: a password
+    hidden behind a ``/``, ``?`` or ``#`` in ``url`` (issue #778) must
+    not reach this preflight text either.
     """
     return http_conventions.redact_request_url(str(url))
 
