@@ -83,6 +83,28 @@ def test_parse_retry_after_seconds_rejects_internal_whitespace() -> None:
     assert parse_retry_after_seconds("1\t2") is None
 
 
+def test_parse_retry_after_seconds_rejects_an_imf_fixdate_with_no_gmt() -> None:
+    """Issue #778 step 7, H-review P1-10: unlike ``email.utils.
+    parsedate_to_datetime``, a missing (or different) time zone is
+    rejected outright, not guessed at.
+    """
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%a, %d %b %Y %H:%M:%S")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
+
+
+def test_parse_retry_after_seconds_rejects_an_rfc_850_date_with_utc_instead_of_gmt() -> None:
+    http_date = (_FIXED_NOW + timedelta(seconds=120)).strftime("%A, %d-%b-%y %H:%M:%S UTC")
+    assert parse_retry_after_seconds(http_date, now=_FIXED_NOW) is None
+
+
+def test_parse_retry_after_seconds_of_an_absurdly_long_digit_string_is_inf_not_a_crash() -> None:
+    """Issue #778 step 7, H-review P1-10: ``float()`` on 309+ ASCII
+    digits returns ``inf`` rather than raising -- this module must
+    never let that reach an ``int()`` conversion uncapped.
+    """
+    assert parse_retry_after_seconds("1" * 400) == float("inf")
+
+
 def test_next_backoff_delay_uses_retry_after_when_present() -> None:
     info = RetryInfo(retryable=True, retry_after="15")
     assert next_backoff_delay_ms(info, attempt_index=0, base_ms=1000) == 15_000
@@ -90,6 +112,16 @@ def test_next_backoff_delay_uses_retry_after_when_present() -> None:
 
 def test_next_backoff_delay_caps_a_very_long_retry_after() -> None:
     info = RetryInfo(retryable=True, retry_after="999999")
+    assert next_backoff_delay_ms(info, attempt_index=0, base_ms=1000) == RETRY_BACKOFF_CAP_MS
+
+
+def test_next_backoff_delay_caps_an_inf_retry_after_without_an_overflowerror() -> None:
+    """Issue #778 step 7, H-review P1-10: a 309+ digit ``Retry-After``
+    makes ``parse_retry_after_seconds`` return ``inf`` -- capping must
+    happen before the ``int()`` conversion, or this raises
+    ``OverflowError`` instead of returning the cap.
+    """
+    info = RetryInfo(retryable=True, retry_after="1" * 400)
     assert next_backoff_delay_ms(info, attempt_index=0, base_ms=1000) == RETRY_BACKOFF_CAP_MS
 
 

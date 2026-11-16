@@ -36,7 +36,6 @@ import re
 import urllib.error
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from email.utils import parsedate_to_datetime
 
 from ..curl_support import extract_retry_after
 
@@ -44,6 +43,64 @@ from ..curl_support import extract_retry_after
 #: digits, nothing else -- never a sign, a fraction, `inf`/`nan`, or
 #: whitespace inside.
 _RETRY_AFTER_SECONDS_RE = re.compile(r"^[0-9]+$")
+
+#: RFC 9110 section 5.6.7's three accepted `HTTP-date` forms, matched
+#: strictly -- unlike :func:`email.utils.parsedate_to_datetime`, which
+#: this module used to delegate to, each of these rejects anything that
+#: deviates from the exact grammar at all (a missing or different time
+#: zone text, a one-digit year, ...), rather than guessing (issue #778
+#: step 7, H-review P1-10).
+_WEEKDAY_SHORT = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_WEEKDAY_LONG = (
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+    "Sunday",
+)
+_MONTH_NAMES = (
+    "Jan",
+    "Feb",
+    "Mar",
+    "Apr",
+    "May",
+    "Jun",
+    "Jul",
+    "Aug",
+    "Sep",
+    "Oct",
+    "Nov",
+    "Dec",
+)
+_MONTH_INDEX = {name: index + 1 for index, name in enumerate(_MONTH_NAMES)}
+
+#: `Sun, 06 Nov 1994 08:49:37 GMT`.
+_IMF_FIXDATE_RE = re.compile(
+    r"^(?:"
+    + "|".join(_WEEKDAY_SHORT)
+    + r"), (\d{2}) ("
+    + "|".join(_MONTH_NAMES)
+    + r") (\d{4}) (\d{2}):(\d{2}):(\d{2}) GMT$"
+)
+#: The obsolete RFC 850 date: `Sunday, 06-Nov-94 08:49:37 GMT`.
+_RFC850_DATE_RE = re.compile(
+    r"^(?:"
+    + "|".join(_WEEKDAY_LONG)
+    + r"), (\d{2})-("
+    + "|".join(_MONTH_NAMES)
+    + r")-(\d{2}) (\d{2}):(\d{2}):(\d{2}) GMT$"
+)
+#: The asctime format: `Sun Nov  6 08:49:37 1994` (a one-digit day of
+#: month keeps the leading space, never zero-padded).
+_ASCTIME_RE = re.compile(
+    r"^(?:"
+    + "|".join(_WEEKDAY_SHORT)
+    + r") ("
+    + "|".join(_MONTH_NAMES)
+    + r") ([ 0-9]\d) (\d{2}):(\d{2}):(\d{2}) (\d{4})$"
+)
 
 #: Exponential-backoff ceiling for a retryable failure's wait, including one
 #: driven by a provider's own ``Retry-After`` — a provider asking for longer
@@ -224,29 +281,70 @@ def classify_exception(exc: BaseException | None) -> RetryInfo:
     return _classify_cause_chain(exc)
 
 
+def _build_datetime(
+    year: int, month_name: str, day: str, hour: str, minute: str, second: str
+) -> datetime | None:
+    """A UTC :class:`datetime` from an HTTP-date's own already-matched
+    pieces, or ``None`` for a calendar value no month actually has (day
+    31 of a 30-day month, a non-leap-year Feb 29, ...)."""
+    try:
+        return datetime(
+            year,
+            _MONTH_INDEX[month_name],
+            int(day),
+            int(hour),
+            int(minute),
+            int(second),
+            tzinfo=timezone.utc,
+        )
+    except ValueError:
+        return None
+
+
+def _parse_http_date(value: str) -> datetime | None:
+    """*value* as one of RFC 9110 section 5.6.7's three accepted
+    `HTTP-date` forms (IMF-fixdate, the obsolete RFC 850 date, asctime),
+    matched strictly — ``None`` for anything else, including a value
+    :func:`email.utils.parsedate_to_datetime` would itself accept but
+    that deviates from the exact grammar (a missing ``GMT``, a
+    different time zone). A two-digit RFC 850 year follows the common
+    ``strptime``-style window: 00-68 means 20xx, 69-99 means 19xx.
+    """
+    match = _IMF_FIXDATE_RE.match(value)
+    if match:
+        day, month_name, year, hour, minute, second = match.groups()
+        return _build_datetime(int(year), month_name, day, hour, minute, second)
+    match = _RFC850_DATE_RE.match(value)
+    if match:
+        day, month_name, yy, hour, minute, second = match.groups()
+        year = 2000 + int(yy) if int(yy) <= 68 else 1900 + int(yy)
+        return _build_datetime(year, month_name, day, hour, minute, second)
+    match = _ASCTIME_RE.match(value)
+    if match:
+        month_name, day, hour, minute, second, year = match.groups()
+        return _build_datetime(int(year), month_name, day.strip(), hour, minute, second)
+    return None
+
+
 def parse_retry_after_seconds(value: str, *, now: datetime | None = None) -> float | None:
     """A ``Retry-After`` header value as seconds from *now* (``datetime.
     now(timezone.utc)`` when unset), per RFC 9110 section 10.2.3.
 
-    All-ASCII-digits means that many seconds. Otherwise the value is parsed
-    as an HTTP-date (IMF-fixdate, plus the obsolete RFC 850 and asctime
-    forms a recipient must still accept — :func:`email.utils.
-    parsedate_to_datetime` already accepts exactly those three), and the
-    delay is that date minus *now*, floored at 0. Anything else — a sign, a
-    fraction, ``inf``/``nan``, whitespace inside, or an unparseable date —
-    returns ``None``, never "wait forever" or a crash.
+    All-ASCII-digits means that many seconds. Otherwise the value is
+    parsed as an HTTP-date (:func:`_parse_http_date`'s own strict
+    IMF-fixdate/RFC 850/asctime grammar), and the delay is that date
+    minus *now*, floored at 0. Anything else — a sign, a fraction,
+    ``inf``/``nan``, whitespace inside, or an unparseable date — returns
+    ``None``, never "wait forever" or a crash.
     """
     value = (value or "").strip()
     if not value:
         return None
     if _RETRY_AFTER_SECONDS_RE.fullmatch(value):
         return float(value)
-    try:
-        when = parsedate_to_datetime(value)
-    except (TypeError, ValueError, IndexError):
+    when = _parse_http_date(value)
+    if when is None:
         return None
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
     return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
 
 
@@ -264,7 +362,12 @@ def next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms:
     if retry_info.retry_after:
         retry_after_seconds = parse_retry_after_seconds(retry_info.retry_after)
         if retry_after_seconds is not None:
-            return min(RETRY_BACKOFF_CAP_MS, int(retry_after_seconds * 1000))
+            # H-review P1-10: capped in float space *before* the `int()`
+            # conversion -- a huge `Retry-After` (309+ digits) makes
+            # `retry_after_seconds` an `inf` float; `int(inf * 1000)`
+            # raises `OverflowError`, which this cap must never let
+            # through.
+            return int(min(float(RETRY_BACKOFF_CAP_MS), retry_after_seconds * 1000))
     ceiling = min(RETRY_BACKOFF_CAP_MS, base_ms * (2**attempt_index))
     return int(random.uniform(0, ceiling))
 
