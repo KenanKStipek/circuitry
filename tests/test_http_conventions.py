@@ -96,6 +96,26 @@ def test_check_strict_port_never_echoes_a_password_disguised_as_a_port(char: str
     assert "ss" not in message
 
 
+def test_check_strict_port_never_echoes_a_password_disguised_as_a_port_with_an_email_username() -> (
+    None
+):
+    """``https://me@corp.com:pa/ss@api.example.com/v1``'s authority
+    (``me@corp.com:pa``) already has userinfo of its own -- an email
+    address used as a username -- so a gate on "netloc has no ``@``"
+    would wrongly treat ``pa`` as an ordinary invalid port and echo the
+    rest of the password (``pa/ss``) in the refusal (issue #778).
+    """
+    url = "https://me@corp.com:pa/ss@api.example.com/v1"
+    with pytest.raises(ValueError) as exc_info:
+        check_strict_port(url)
+    message = str(exc_info.value)
+    assert message == "invalid port in URL 'https://api.example.com/v1'"
+    assert "me" not in message
+    assert "corp.com" not in message
+    assert "pa" not in message
+    assert "ss" not in message
+
+
 # ---------------------------------------------------------------------------
 # Scheme refusal
 # ---------------------------------------------------------------------------

@@ -200,6 +200,21 @@ def redact_proxy_value(value: str) -> str:
     return prefix + tail.rpartition("@")[2]
 
 
+def _at_follows_netloc(url: str, netloc: str) -> bool:
+    """Whether an ``@`` appears anywhere in *url* after its parsed
+    *netloc* -- a password hidden behind a ``/``, ``?`` or ``#`` can
+    still smuggle a second, real host past a boundary that stops at
+    the first one (issue #778). True regardless of whether *netloc*
+    already carries userinfo of its own: an email address used as a
+    username (``https://me@corp.com:pa/ss@api.example.com/v1``) still
+    leaves a credential fragment exposed if this were ever gated on
+    *netloc* having no ``@`` of its own.
+    """
+    scheme_sep = url.find("://")
+    rest = url[scheme_sep + 3 + len(netloc) :] if scheme_sep != -1 else ""
+    return "@" in rest
+
+
 def _host_port_text(netloc: str) -> str | None:
     """The raw port text in *netloc* (userinfo already stripped by the
     caller): ``None`` with no ``:`` separator at all (or none after an
@@ -232,14 +247,18 @@ def check_strict_port(url: str) -> None:
     more ASCII digits, 1-65535. An empty port, or none at all, means the
     scheme's default and is never refused.
 
-    When *url*'s parsed authority carries no userinfo of its own, yet an
-    ``@`` still appears somewhere after it (e.g.
-    ``https://user:pa/ss@api.example.com/v1`` -- the authority ends at
-    the first ``/``, so ``urlsplit`` reads ``pa`` as a port attempt, not
-    as half of a password), the "port" text is really a credential
-    fragment: the refusal never echoes it, and names *url* with
-    everything up to the LAST ``@`` cut away instead of the usual
-    userinfo-stripped form (issue #778).
+    When an ``@`` appears anywhere in *url* after its parsed authority
+    (:func:`_at_follows_netloc`) -- e.g. ``https://user:pa/ss@api.example.
+    com/v1`` (the authority ends at the first ``/``, so ``urlsplit`` reads
+    ``pa`` as a port attempt, not as half of a password), or
+    ``https://me@corp.com:pa/ss@api.example.com/v1`` (the authority's own
+    userinfo is itself an email address, ``me@corp.com``, and ``pa`` is
+    still a port attempt, not half of a password) -- the "port" text is
+    really a credential fragment: the refusal never echoes it, and names
+    *url* with everything up to the LAST ``@`` in the whole value cut
+    away instead of the usual userinfo-stripped form, whether or not the
+    authority's own userinfo already has an ``@`` of its own (issue
+    #778).
     """
     netloc = _urlsplit(url).netloc
     host_port = netloc.rpartition("@")[2]
@@ -248,9 +267,7 @@ def check_strict_port(url: str) -> None:
         return
     if _port_in_range(port_text):
         return
-    scheme_sep = url.find("://")
-    rest = url[scheme_sep + 3 + len(netloc) :] if scheme_sep != -1 else ""
-    if "@" not in netloc and "@" in rest:
+    if _at_follows_netloc(url, netloc):
         raise ValueError(f"invalid port in URL '{redact_proxy_value(url)}'")
     raise ValueError(f"invalid port in URL '{redact_url(url)}': '{port_text}'")
 

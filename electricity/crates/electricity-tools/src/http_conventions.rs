@@ -261,15 +261,35 @@ fn port_in_range(port_text: &str) -> Option<u16> {
     (1..=65535).contains(&value).then_some(value as u16)
 }
 
-/// *netloc*'s port, the strict port rule -- when *netloc* carries no
-/// userinfo of its own, yet *original_url* still has an `@` somewhere
-/// after it (e.g. `https://user:pa/ss@api.example.com/v1` -- the
-/// authority ends at the first `/`, so *netloc* reads `user:pa`, and
-/// `pa` looks like an ordinary invalid port, not half of a password),
-/// the "port" text is really a credential fragment: the refusal never
-/// echoes it, and names *original_url* with everything up to the LAST
-/// `@` cut away instead of the usual userinfo-stripped form (issue
-/// #778).
+/// Whether an `@` appears anywhere in *url* after its parsed *netloc*
+/// -- a password hidden behind a `/`, `?` or `#` can still smuggle a
+/// second, real host past a boundary that stops at the first one
+/// (issue #778). True regardless of whether *netloc* already carries
+/// userinfo of its own: an email address used as a username
+/// (`https://me@corp.com:pa/ss@api.example.com/v1`) still leaves a
+/// credential fragment exposed if this were ever gated on *netloc*
+/// having no `@` of its own.
+fn at_follows_netloc(url: &str, netloc: &str) -> bool {
+    let scheme_end = url.find("://");
+    let rest = scheme_end
+        .and_then(|idx| url.get(idx + 3 + netloc.len()..))
+        .unwrap_or("");
+    rest.contains('@')
+}
+
+/// *netloc*'s port, the strict port rule -- when an `@` appears
+/// anywhere in *original_url* after its parsed authority
+/// ([`at_follows_netloc`]) -- e.g. `https://user:pa/ss@api.example.
+/// com/v1` (the authority ends at the first `/`, so *netloc* reads
+/// `user:pa`, and `pa` looks like an ordinary invalid port, not half
+/// of a password), or `https://me@corp.com:pa/ss@api.example.com/v1`
+/// (the authority's own userinfo is itself an email address,
+/// `me@corp.com`, and `pa` is still a port attempt, not half of a
+/// password) -- the "port" text is really a credential fragment: the
+/// refusal never echoes it, and names *original_url* with everything
+/// up to the LAST `@` in the whole value cut away instead of the
+/// usual userinfo-stripped form, whether or not the authority's own
+/// userinfo already has an `@` of its own (issue #778).
 pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, String> {
     let host_port = match netloc.rfind('@') {
         Some(at) => &netloc[at + 1..],
@@ -284,11 +304,7 @@ pub fn strict_port(netloc: &str, original_url: &str) -> Result<Option<u16>, Stri
     if let Some(value) = port_in_range(port_text) {
         return Ok(Some(value));
     }
-    let scheme_end = original_url.find("://");
-    let rest = scheme_end
-        .and_then(|idx| original_url.get(idx + 3 + netloc.len()..))
-        .unwrap_or("");
-    if !netloc.contains('@') && rest.contains('@') {
+    if at_follows_netloc(original_url, netloc) {
         return Err(format!(
             "invalid port in URL '{}'",
             redact_proxy_value(original_url)
@@ -444,6 +460,24 @@ mod tests {
         assert!(!err.contains("secret"));
         assert!(!err.contains("user"));
         assert_eq!(err, "invalid port in URL 'http://host:99999/x': '99999'");
+    }
+
+    #[test]
+    fn strict_port_never_echoes_a_password_disguised_as_a_port_with_an_email_username() {
+        // `https://me@corp.com:pa/ss@api.example.com/v1`'s authority
+        // (`me@corp.com:pa`) already has userinfo of its own -- an
+        // email address used as a username -- so a gate on "netloc has
+        // no `@`" would wrongly treat `pa` as an ordinary invalid
+        // port and echo the rest of the password (`pa/ss`) in the
+        // refusal (issue #778).
+        let url = "https://me@corp.com:pa/ss@api.example.com/v1";
+        let netloc = "me@corp.com:pa";
+        let err = strict_port(netloc, url).unwrap_err();
+        assert_eq!(err, "invalid port in URL 'https://api.example.com/v1'");
+        assert!(!err.contains("me"));
+        assert!(!err.contains("corp.com"));
+        assert!(!err.contains("pa"));
+        assert!(!err.contains("ss"));
     }
 
     #[test]

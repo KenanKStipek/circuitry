@@ -102,6 +102,11 @@ def _strict_port_cases() -> list[dict[str, Any]]:
         "https://user:pa/ss@api.example.com/v1",
         "https://user:pa?ss@api.example.com/v1",
         "https://user:pa#ss@api.example.com/v1",
+        # The same hidden password, but behind an authority that
+        # already has userinfo of its own -- an email address used as
+        # a username (issue #778). The refusal must still never echo
+        # it, even though the netloc itself already contains an `@`.
+        "https://me@corp.com:pa/ss@api.example.com/v1",
     ]
     cases = []
     for url in urls:

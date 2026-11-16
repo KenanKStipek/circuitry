@@ -137,6 +137,10 @@
     {
       "url": "https://user:pa#ss@api.example.com/v1",
       "error": "invalid port in URL 'https://api.example.com/v1'"
+    },
+    {
+      "url": "https://me@corp.com:pa/ss@api.example.com/v1",
+      "error": "invalid port in URL 'https://api.example.com/v1'"
     }
   ],
   "redaction_cases": [
