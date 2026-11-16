@@ -59,6 +59,7 @@ from tests.conformance.normalize import (  # noqa: E402
     redact_events_text_pair,
     redact_leaked_paths,
     redact_runtime_strings,
+    redact_third_party_text_lines,
     serialize_events_text,
 )
 
@@ -95,28 +96,56 @@ def _resolve_third_party_text_value(state: Any, location: str) -> Any:
     return node[int(last)] if isinstance(node, list) else node[last]
 
 
+#: A sentinel `mask_known_third_party_text`'s own *placeholder* parameter
+#: can be given instead of `THIRD_PARTY_TEXT_PLACEHOLDER`, for
+#: `_check_third_party_text_not_redundant`'s own self-check below --
+#: distinct from the real placeholder, and from anything a genuine
+#: third-party message could ever contain, so a pattern that only
+#: matches because it happens to also match this literal string (rather
+#: than because it genuinely wildcards the masked span) is not a
+#: realistic false negative.
+_THIRD_PARTY_TEXT_SELF_CHECK_SENTINEL = "\x00CONFORMANCE_GENERATOR_SELF_CHECK_SENTINEL\x00"
+
+
 def _check_third_party_text_not_redundant(
     case_dir: Path, specs: list[dict[str, str]], state: Any
 ) -> None:
     """Issue #778 step 6: a case's own `third_party_text` entry whose
-    `pattern` is a literal (non-wildcard) copy of the captured value --
-    `re.escape(value) == pattern` -- pins that value exactly in every way
-    that matters, the same way `error_compare: "exact"` would; refused when
-    the value also matches the message-shape catalogue, since the entry is
-    then redundant with (and no safer than) just leaving the location
-    uncovered -- the catalogue already masks it, and the case should drop
-    this entry rather than keep a stale, over-specific pattern."""
+    `pattern` still pins the exact text a message-shape catalogue entry
+    already masks -- refused, since the entry is then redundant with (and
+    no safer than) just leaving the location uncovered. A pattern that is
+    a literal, non-wildcard copy of the whole captured value
+    (`re.escape(value) == pattern`) is one way to do that, but not the
+    only one: a pattern can wildcard some of the value while still
+    spelling the catalogue's own masked span out literally (the exact gap
+    `ollama-timeout-then-success-mock`'s old pattern and
+    `stream-disconnect-retries`'s old alternation both had). Checked
+    generally instead: mask the value with a *distinct* sentinel in place
+    of `THIRD_PARTY_TEXT_PLACEHOLDER`
+    (`_THIRD_PARTY_TEXT_SELF_CHECK_SENTINEL`) and see whether *pattern*
+    still `re.fullmatch`es the result. If the catalogue recognised
+    nothing in *value* at all, there is nothing to be redundant with, so
+    this is skipped. If it did, but the pattern no longer matches once
+    that masked span is replaced with unrelated text, the pattern's own
+    success depended on that literal text -- it pins the catalogue's own
+    masked span rather than wildcarding over it."""
     for spec in specs:
         location = spec["location"]
         pattern = spec["pattern"]
         value = _resolve_third_party_text_value(state, location)
         if not isinstance(value, str):
             continue
-        if pattern == re.escape(value) and mask_known_third_party_text(value) != value:
+        if mask_known_third_party_text(value) == value:
+            continue  # the catalogue recognises nothing here at all
+        sentinel_value = mask_known_third_party_text(
+            value, placeholder=_THIRD_PARTY_TEXT_SELF_CHECK_SENTINEL
+        )
+        if re.fullmatch(pattern, sentinel_value) is None:
             raise ValueError(
                 f"{case_dir.name}: case.json's third_party_text location {location!r} has a "
-                f"literal (non-wildcard) pattern pinning text tests/conformance/normalize.py's "
-                f"own message-shape catalogue already masks -- drop this entry:\n  {value!r}"
+                f"pattern that stops matching once the catalogue's own masked span is replaced "
+                f"with unrelated text -- it pins text tests/conformance/normalize.py's own "
+                f"message-shape catalogue already masks; drop this entry:\n  {value!r}"
             )
 
 
@@ -340,14 +369,21 @@ def _content_is_current(
     A `.jsonl` file (`expected.events.jsonl`) is compared with the events
     comparator (`assert_events_equal`) — it is a stream of JSON objects,
     one per line, not a single JSON document `json.loads` could parse
-    whole. Everything else is compared under the suite's state normalizer
-    (run id, timestamps, durations, and friends always differ byte-for-byte
-    between two runs); anything that is neither (there is nothing else
-    today, but `--check` should degrade safely rather than silently pass)
-    falls back to exact bytes. *third_party_text* (issue #503) masks a
-    case's own curl-version-dependent leaf the same way the pytest
-    runners do, before either comparison -- otherwise a case that
-    legitimately varies there would always show as stale."""
+    whole. A `.txt` file (`expected.warnings.txt`/`expected.run_warnings.
+    txt`) is a plain line per `cof run`'s own stderr warning, masked by
+    the message-shape catalogue the same way both pytest runners mask it
+    (`redact_third_party_text_lines`) before comparing line for line --
+    these two commit the real, unmasked capture (same convention as
+    `expected.json`), so a catalogue change alone must never make one
+    look stale, the same as every other committed fixture. Everything
+    else is compared under the suite's state normalizer (run id,
+    timestamps, durations, and friends always differ byte-for-byte
+    between two runs); anything that is none of these (there is nothing
+    else today, but `--check` should degrade safely rather than silently
+    pass) falls back to exact bytes. *third_party_text* (issue #503)
+    masks a case's own curl-version-dependent leaf the same way the
+    pytest runners do, before any of these comparisons -- otherwise a
+    case that legitimately varies there would always show as stale."""
     if current is None:
         return False
     if current == generated:
@@ -361,6 +397,14 @@ def _content_is_current(
         except AssertionError:
             return False
         return True
+    if filename.endswith(".txt"):
+        current_lines = redact_third_party_text_lines(
+            current.decode("utf-8").splitlines(), third_party_text
+        )
+        generated_lines = redact_third_party_text_lines(
+            generated.decode("utf-8").splitlines(), third_party_text
+        )
+        return current_lines == generated_lines
     try:
         current_value = json.loads(current)
         generated_value = json.loads(generated)
