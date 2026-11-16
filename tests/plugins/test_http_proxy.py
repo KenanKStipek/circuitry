@@ -12,7 +12,6 @@ import socket
 import threading
 from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
 
 import pytest
 from http_server_support import PROXY_ENV_VARS, Route, ServerPair, serve_pair
@@ -26,7 +25,7 @@ def servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[ServerP
 
 
 def _clear_proxy_env(monkeypatch: pytest.MonkeyPatch) -> None:
-    for name in PROXY_ENV_VARS + ("no_proxy", "NO_PROXY"):
+    for name in (*PROXY_ENV_VARS, "no_proxy", "NO_PROXY"):
         monkeypatch.delenv(name, raising=False)
 
 
@@ -70,15 +69,15 @@ class _RecordingProxy:
         except OSError:
             conn.close()
             return
-        head, _, rest = data.partition(b"\r\n\r\n")
+        head, _, _rest = data.partition(b"\r\n\r\n")
         lines = head.decode("latin-1").split("\r\n")
         request_line = lines[0]
         header_lines = lines[1:]
-        headers = dict(
-            (part.split(":", 1)[0].strip().lower(), part.split(":", 1)[1].strip())
+        headers = {
+            part.split(":", 1)[0].strip().lower(): part.split(":", 1)[1].strip()
             for part in header_lines
             if ":" in part
-        )
+        }
         method = request_line.split(" ", 1)[0]
         if method == "CONNECT":
             target = request_line.split(" ")[1]

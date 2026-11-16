@@ -34,7 +34,6 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
 from . import http_conventions
-
 from .core.cancellation import run_tracked
 
 # Strips userinfo (`user[:pass]@`) out of any `scheme://user:pass@host`

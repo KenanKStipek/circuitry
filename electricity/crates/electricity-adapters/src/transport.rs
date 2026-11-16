@@ -4,7 +4,9 @@
 //! `curl` binary: this module sends the request itself, through
 //! [`electricity_tools::http_client::send`], and reproduces what
 //! Circuitry observably does with curl's own result -- the header
-//! set on the wire, curl's proxy-environment convention, its
+//! set on the wire, H1's own proxy convention (issue #778 step 7,
+//! shared with the `http` tool via `electricity_tools::http_client::
+//! resolve_proxy_checked`, never curl's own environment reading), its
 //! `--max-time` as one total deadline, its exit-code mapping, and
 //! `run_tracked(text=True)`'s own strict-UTF-8/universal-newline body
 //! decode.

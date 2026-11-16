@@ -1,9 +1,11 @@
 //! `plugins/http.py::HttpPlugin`, ported -- a single HTTP request/
 //! response over the shared client ([`crate::http_client`]), with
-//! urllib's own redirect rule, proxy convention and error shapes
-//! (issue #485, lane E). See [`http_url`] for the small `urllib.parse`
-//! subset (`urlsplit`/`urljoin`/`quote`) this file's own redirect
-//! handling needs.
+//! urllib's own redirect rule and error shapes (issue #485, lane E).
+//! The proxy convention is H1's own now (issue #778 step 7), not
+//! urllib's (`http_client::resolve_proxy`/`resolve_proxy_target`
+//! below). See [`http_url`] for the small `urllib.parse` subset
+//! (`urlsplit`/`urljoin`/`quote`) this file's own redirect handling
+//! needs.
 
 use crate::http_client::{self, ConnectTarget, RawRequest, Scheme, SendError, TimeoutModel};
 use crate::{CheckResult, ErrorCause, PyExc, ToolCall, ToolError, ToolPlugin, ToolResult};
@@ -1951,11 +1953,12 @@ fn to_string_pairs(pairs: &[(Value, Value)]) -> Vec<(String, String)> {
 /// `req.host`, exactly as the current hop's own URL writes it --
 /// userinfo stripped (same as [`split_netloc`] already strips), but
 /// the port kept or omitted exactly as written, never filled in with
-/// the scheme's own default. `proxy_bypass_environment`'s own *host*
-/// argument (issue #485: a synthetic default port
-/// always appended, as this function used to, makes a `no_proxy`
-/// entry with no port of its own -- the common case -- never match a
-/// request whose URL also never wrote one).
+/// the scheme's own default -- the `Host` header's own shape. H1's own
+/// `no_proxy` matching (issue #778 step 7) uses [`split_netloc`]'s
+/// hostname alone instead, never this function: a synthetic default
+/// port always appended would make a `no_proxy` entry with no port of
+/// its own -- the common case -- never match a request whose URL also
+/// never wrote one.
 pub(crate) fn netloc_host_as_written(netloc: &str) -> &str {
     match netloc.rfind('@') {
         Some(idx) => &netloc[idx + 1..],
