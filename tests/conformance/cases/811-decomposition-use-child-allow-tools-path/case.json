@@ -1,0 +1,7 @@
+{
+  "spec_case": "issue #811",
+  "description": "A decomposition planner for a prompt inside a use child (loaded from a path) proposes a plan whose merge step reaches for awk, which this document never uses itself. The embedded refusal (routed up rather than decomposed) names the decomposing prompt by the run's absolute path (prime.outer.x), not the path relative to the child's own fresh store.",
+  "engines": ["python", "electricity"],
+  "config": "config.json",
+  "expect": "success"
+}

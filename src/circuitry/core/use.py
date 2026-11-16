@@ -1108,7 +1108,7 @@ class UseRuntime:
             )
 
     def _check_generated_document(
-        self, child_orch: dict[str, Any], node_path: str, *, absolute_node_path: str
+        self, child_orch: dict[str, Any], *, absolute_node_path: str
     ) -> tuple[bool, frozenset[str], frozenset[str], str]:
         """Refuse a generated child that widens the shell allowlist, enables
         a service's shell, or uses a tool provider its enclosing document
@@ -1559,7 +1559,6 @@ class UseRuntime:
                         child_generating_path,
                     ) = self._check_generated_document(
                         child_orch,
-                        node_path,
                         absolute_node_path=call_path(store, self.defn.name),
                     )
 
