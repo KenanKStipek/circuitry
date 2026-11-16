@@ -36,6 +36,19 @@ class _FakeResponse:
         return None
 
 
+def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, fake: Any) -> None:
+    """Replaces every opener's own ``open`` (the ``http`` plugin now always
+    builds an explicit opener, H1, rather than calling the bare
+    ``urllib.request.urlopen`` convenience function) -- a single choke
+    point ``urlopen()`` itself also goes through, so either call shape
+    lands on *fake*."""
+
+    def bound(self: Any, req: Any, data: Any = None, timeout: Any = None) -> Any:
+        return fake(req, timeout)
+
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", bound)
+
+
 def _install_fake_urlopen(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -58,7 +71,7 @@ def _install_fake_urlopen(
             status=status, body=body.encode("utf-8"), headers=headers
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +218,7 @@ def test_http_4xx_sets_ok_false_and_status_in_raw_not_exit_code(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """4xx/5xx fails the tool by default (ok=False); exit_code stays None."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+    _patch_opener_open(monkeypatch, _fake_urlopen_404)
 
     result = HttpPlugin().execute(params={"url": "https://example.test/missing"})
 
@@ -220,7 +233,7 @@ def test_http_4xx_with_fail_on_error_false_stays_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The opt-out param restores the old always-succeeds behaviour."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+    _patch_opener_open(monkeypatch, _fake_urlopen_404)
 
     result = HttpPlugin().execute(
         params={"url": "https://example.test/missing", "fail_on_error": False}
@@ -235,7 +248,7 @@ def test_http_4xx_fail_on_error_templated_false_string_stays_ok(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A Mustache-rendered 'False' string must coerce to boolean False too."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_404)
+    _patch_opener_open(monkeypatch, _fake_urlopen_404)
 
     result = HttpPlugin().execute(
         params={"url": "https://example.test/missing", "fail_on_error": "False"}
@@ -270,7 +283,7 @@ def test_http_4xx_stderr_includes_reason_but_not_a_canary_secret(
     redacted excerpt of the response body (the JSON error/message/detail
     field) — a validation reason makes it in, a sibling credential-shaped
     field does not."""
-    monkeypatch.setattr("urllib.request.urlopen", _fake_urlopen_400_with_reason_and_secret)
+    _patch_opener_open(monkeypatch, _fake_urlopen_400_with_reason_and_secret)
 
     result = HttpPlugin().execute(params={"url": "https://example.test/items"})
 
@@ -286,7 +299,7 @@ def test_url_error_raises_actionable_runtime_error(
     def fake_urlopen(req: Any, timeout: int = 0) -> Any:
         raise URLError("Name or service not known")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    _patch_opener_open(monkeypatch, fake_urlopen)
 
     with pytest.raises(RuntimeError, match="Name or service not known"):
         HttpPlugin().execute(params={"url": "https://nonsuch.test/"})

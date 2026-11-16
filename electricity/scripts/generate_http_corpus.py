@@ -4,12 +4,14 @@ the pure functions and small decision tables this port has to match
 CPython exactly: `urllib.parse.urlencode(doseq=True/False)`,
 `plugins/base.py::http_error_excerpt`, UTF-8 "replace"-mode decoding
 (`bytes.decode("utf-8", "replace")`), `urllib.request.Request`'s own
-header-collapse/body-coercion/URL-validation behaviour,
-`HTTPRedirectHandler.redirect_request`'s method/status matrix, and
-`urllib.request.getproxies_environment`/`proxy_bypass_environment`
-over synthetic environments.
+header-collapse/body-coercion/URL-validation behaviour, and
+`HTTPRedirectHandler.redirect_request`'s method/status matrix. The
+proxy convention is no longer one of them (issue #778 step 7): it is
+Circuitry's own rule now, not CPython's, tested directly instead
+(`circuitry.http_conventions`'s own unit tests, and
+`electricity-tools::http_client::proxy`'s).
 
-Section 7 below (`_end_to_end_cases`) covers what the other two layers
+Section 6 below (`_end_to_end_cases`) covers what the other two layers
 (`electricity-tools/tests/http_client_send.rs`'s own hand-written wire
 bytes, and `tests/http_plugin.rs`'s own hand-written expected values)
 can only assert against a value *this generator's own PR* typed in by
@@ -377,51 +379,7 @@ def _redirect_reason_cases() -> list[dict[str, Any]]:
 
 
 # ---------------------------------------------------------------------
-# 6. `getproxies_environment`/`proxy_bypass_environment`.
-# ---------------------------------------------------------------------
-
-
-def _proxy_env_cases() -> list[dict[str, Any]]:
-    import os
-    from unittest import mock
-
-    environments: list[list[tuple[str, str]]] = [
-        [("http_proxy", "http://proxy:3128")],
-        [("HTTP_PROXY", "http://upper:1"), ("http_proxy", "http://lower:2")],
-        [("HTTP_PROXY", "http://upper:1"), ("REQUEST_METHOD", "GET")],
-        [
-            ("HTTP_PROXY", "http://upper:1"),
-            ("http_proxy", "http://lower:2"),
-            ("REQUEST_METHOD", "GET"),
-        ],
-        [("HTTPS_PROXY", "http://upper:1"), ("https_proxy", "")],
-        [("http_proxy", "http://proxy:3128"), ("no_proxy", "example.com")],
-        [("http_proxy", "http://proxy:3128"), ("no_proxy", "*")],
-        [("http_proxy", "http://proxy:3128"), ("no_proxy", ".example.com")],
-        [("http_proxy", "http://proxy:3128"), ("no_proxy", "example.com:8080")],
-        [],
-    ]
-    bypass_hosts = ["example.com", "api.example.com", "example.com:8080", "other.com", "notexample.com"]
-    cases = []
-    for env_pairs in environments:
-        env = dict(env_pairs)
-        with mock.patch.dict(os.environ, env, clear=True):
-            proxies = urllib.request.getproxies_environment()
-            bypass_results = {
-                host: urllib.request.proxy_bypass_environment(host) for host in bypass_hosts
-            }
-        cases.append(
-            {
-                "env": [[k, v] for k, v in env_pairs],
-                "proxies": dict(sorted(proxies.items())),
-                "bypass": bypass_results,
-            }
-        )
-    return cases
-
-
-# ---------------------------------------------------------------------
-# 7. `HttpPlugin.execute` end to end against a real loopback server --
+# 6. `HttpPlugin.execute` end to end against a real loopback server --
 #    the shapes the other two layers can only assert against a
 #    hand-written expected value (this generator's own PR, not
 #    CPython): an empty reason phrase, a short body, a close without
@@ -699,7 +657,6 @@ def build_corpus() -> dict[str, Any]:
         "unknown_url_type_cases": _unknown_url_type_cases(),
         "redirect_decision_cases": _redirect_decision_cases(),
         "redirect_reason_cases": _redirect_reason_cases(),
-        "proxy_env_cases": _proxy_env_cases(),
         "end_to_end_cases": _end_to_end_cases(),
     }
 

@@ -111,72 +111,144 @@ impl RetryInfo {
     }
 }
 
-/// `adapters/_retry.py::parse_retry_after_seconds` -- a `Retry-After`
-/// header value (seconds, or an HTTP-date) as seconds from now. `None`
-/// when *value* is neither.
-///
-/// Widened by lane E (issue #485) for Python's own `_` digit-grouping
-/// syntax (`"1_000"` -- PEP 515: an underscore is allowed only between
-/// two digits, never leading, trailing, doubled, or next to the `.`/
-/// `e`/sign). [`strip_valid_digit_grouping`] removes exactly those
-/// underscores before the ordinary `f64` parse below; a string with no
-/// underscore, or one placed anywhere else, falls straight through
-/// unchanged (an invalid placement then simply fails to parse as a
-/// plain `f64` too, same as CPython's own `ValueError` here becoming
-/// "not a number").
-///
-/// Still a known, deliberately uncorrected divergence: Python's
-/// `float()` also accepts non-ASCII decimal digits Unicode considers
-/// numeric (`float("١٢")`, Arabic-Indic digits) -- no normal HTTP
-/// server has reason to send one in a `Retry-After` header, so this
-/// stays unwidened (issue #485's own ruling: `_` grouping only, since
-/// it's cheap; this isn't).
-pub fn parse_retry_after_seconds(value: &str) -> Option<f64> {
+/// RFC 9110 section 10.2.3's `delay-seconds` grammar: one or more ASCII
+/// digits, nothing else.
+fn is_delay_seconds(s: &str) -> bool {
+    !s.is_empty() && s.chars().all(|c| c.is_ascii_digit())
+}
+
+/// `circuitry.http_conventions.parse_retry_after_seconds`, ported (issue
+/// #778 step 7, H2) -- a `Retry-After` header value as seconds from
+/// *now*, per RFC 9110 section 10.2.3: all-ASCII-digits means that many
+/// seconds; otherwise the value is parsed as an HTTP-date (IMF-fixdate
+/// via [`chrono::DateTime::parse_from_rfc2822`], plus the obsolete RFC
+/// 850 and asctime forms a recipient must still accept,
+/// [`parse_rfc850_date`]/[`parse_asctime_date`]), and the delay is that
+/// date minus *now*, floored at 0. `None` for anything else -- a sign, a
+/// fraction, `inf`/`nan`, whitespace inside, or an unparseable date --
+/// never "wait forever" or a crash.
+pub fn parse_retry_after_seconds_at(
+    value: &str,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<f64> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return None;
     }
-    if let Ok(seconds) = trimmed.parse::<f64>() {
-        return Some(seconds.max(0.0));
+    if is_delay_seconds(trimmed) {
+        return trimmed.parse::<f64>().ok().map(|seconds| seconds.max(0.0));
     }
-    if trimmed.contains('_') {
-        if let Some(ungrouped) = strip_valid_digit_grouping(trimmed) {
-            if let Ok(seconds) = ungrouped.parse::<f64>() {
-                return Some(seconds.max(0.0));
-            }
-        }
-    }
-    // RFC 2822 is the HTTP-date form `email.utils.parsedate_to_datetime`
-    // (and so `adapters/_retry.py`) actually parses in practice --
-    // RFC 850/asctime are both obsolete HTTP-date grammars no real
-    // `Retry-After` sender still emits.
-    let when = chrono::DateTime::parse_from_rfc2822(trimmed).ok()?;
-    let now = chrono::Utc::now();
-    let seconds = (when.with_timezone(&chrono::Utc) - now).num_milliseconds() as f64 / 1000.0;
+    let when = chrono::DateTime::parse_from_rfc2822(trimmed)
+        .ok()
+        .map(|dt| dt.with_timezone(&chrono::Utc))
+        .or_else(|| parse_rfc850_date(trimmed))
+        .or_else(|| parse_asctime_date(trimmed))?;
+    let seconds = (when - now).num_milliseconds() as f64 / 1000.0;
     Some(seconds.max(0.0))
 }
 
-/// PEP 515's own underscore-placement rule, narrowed to what
-/// [`parse_retry_after_seconds`] needs: `_` is removed only when both
-/// its immediate neighbors are ASCII digits (never leading, trailing,
-/// doubled, or adjacent to `.`/`e`/`E`/a sign) -- `None` when *any*
-/// underscore in *s* fails that check, so an invalid placement is left
-/// for the ordinary `f64` parse to reject, exactly as CPython's own
-/// `float()` raises `ValueError` for the same malformed literal rather
-/// than silently dropping the stray underscore.
-fn strip_valid_digit_grouping(s: &str) -> Option<String> {
-    let chars: Vec<char> = s.chars().collect();
-    for (i, &c) in chars.iter().enumerate() {
-        if c != '_' {
-            continue;
-        }
-        let prev_digit = i > 0 && chars[i - 1].is_ascii_digit();
-        let next_digit = i + 1 < chars.len() && chars[i + 1].is_ascii_digit();
-        if !prev_digit || !next_digit {
-            return None;
-        }
+/// [`parse_retry_after_seconds_at`] against the real current time --
+/// every production call site; tests use the deterministic form
+/// directly, on a fixed `now`.
+pub fn parse_retry_after_seconds(value: &str) -> Option<f64> {
+    parse_retry_after_seconds_at(value, chrono::Utc::now())
+}
+
+const MONTH_ABBREVIATIONS: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+fn month_number(abbreviation: &str) -> Option<u32> {
+    MONTH_ABBREVIATIONS
+        .iter()
+        .position(|candidate| *candidate == abbreviation)
+        .map(|index| index as u32 + 1)
+}
+
+/// `email.utils._parsedate_tz`'s own two-digit-year century guess --
+/// confirmed directly against `email.utils.parsedate_to_datetime`: 69
+/// and above is 19xx, 68 and below is 20xx (the standard POSIX
+/// `strptime`-style pivot).
+fn four_digit_year(two_digit: u32) -> i32 {
+    if two_digit >= 69 {
+        1900 + two_digit as i32
+    } else {
+        2000 + two_digit as i32
     }
-    Some(chars.into_iter().filter(|&c| c != '_').collect())
+}
+
+/// The obsolete RFC 850 HTTP-date grammar recipients must still accept:
+/// `Sunday, 06-Nov-94 08:49:37 GMT` -- a long weekday name (ignored, never
+/// cross-checked against the date), `DD-Mon-YY`, `HH:MM:SS`, and a
+/// literal `GMT` (`split_whitespace` collapses the comma's own trailing
+/// space the same way it collapses asctime's double space before a
+/// single-digit day).
+fn parse_rfc850_date(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut tokens = trimmed.split_whitespace();
+    let weekday = tokens.next()?;
+    if !weekday.ends_with(',') {
+        return None;
+    }
+    let date = tokens.next()?;
+    let time = tokens.next()?;
+    let zone = tokens.next()?;
+    if tokens.next().is_some() || zone != "GMT" {
+        return None;
+    }
+    let mut date_parts = date.split('-');
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    let month = month_number(date_parts.next()?)?;
+    let two_digit_year: u32 = date_parts.next()?.parse().ok()?;
+    if date_parts.next().is_some() {
+        return None;
+    }
+    let year = four_digit_year(two_digit_year);
+    let (hour, minute, second) = parse_hms(time)?;
+    build_utc(year, month, day, hour, minute, second)
+}
+
+/// The obsolete asctime HTTP-date grammar recipients must still accept:
+/// `Sun Nov  6 08:49:37 1994` -- no weekday-comma, no explicit zone (HTTP's
+/// own asctime form is always implicitly GMT), and a day field that may be
+/// space-padded for a single digit (`split_whitespace` collapses that
+/// extra space, so this never needs to check for it specially).
+fn parse_asctime_date(trimmed: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    let mut tokens = trimmed.split_whitespace();
+    let _weekday = tokens.next()?;
+    let month = month_number(tokens.next()?)?;
+    let day: u32 = tokens.next()?.parse().ok()?;
+    let time = tokens.next()?;
+    let year: i32 = tokens.next()?.parse().ok()?;
+    if tokens.next().is_some() {
+        return None;
+    }
+    let (hour, minute, second) = parse_hms(time)?;
+    build_utc(year, month, day, hour, minute, second)
+}
+
+fn parse_hms(time: &str) -> Option<(u32, u32, u32)> {
+    let mut parts = time.split(':');
+    let hour: u32 = parts.next()?.parse().ok()?;
+    let minute: u32 = parts.next()?.parse().ok()?;
+    let second: u32 = parts.next()?.parse().ok()?;
+    if parts.next().is_some() {
+        return None;
+    }
+    Some((hour, minute, second))
+}
+
+fn build_utc(
+    year: i32,
+    month: u32,
+    day: u32,
+    hour: u32,
+    minute: u32,
+    second: u32,
+) -> Option<chrono::DateTime<chrono::Utc>> {
+    use chrono::TimeZone;
+    chrono::Utc
+        .with_ymd_and_hms(year, month, day, hour, minute, second)
+        .single()
 }
 
 /// `adapters/_retry.py::next_backoff_delay_ms` -- exponential backoff
@@ -206,6 +278,11 @@ pub fn next_backoff_delay_ms(retry_info: &RetryInfo, attempt_index: u32, base_ms
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+
+    fn fixed_now() -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(2026, 1, 1, 0, 0, 0).unwrap()
+    }
 
     #[test]
     fn non_http_family_providers_always_retry() {
@@ -313,36 +390,54 @@ mod tests {
     }
 
     #[test]
-    fn parse_retry_after_seconds_accepts_underscore_digit_grouping() {
-        assert_eq!(parse_retry_after_seconds("1_000"), Some(1000.0));
-        assert_eq!(parse_retry_after_seconds("1_0.0_1"), Some(10.01));
+    fn parse_retry_after_seconds_rejects_digit_grouping() {
+        assert_eq!(parse_retry_after_seconds_at("1_000", fixed_now()), None);
     }
 
     #[test]
-    fn parse_retry_after_seconds_rejects_misplaced_underscores() {
-        assert_eq!(parse_retry_after_seconds("_1000"), None);
-        assert_eq!(parse_retry_after_seconds("1000_"), None);
-        assert_eq!(parse_retry_after_seconds("1__000"), None);
-        assert_eq!(parse_retry_after_seconds("1_.0"), None);
+    fn parse_retry_after_seconds_rejects_a_sign_and_a_fraction() {
+        assert_eq!(parse_retry_after_seconds_at("+30", fixed_now()), None);
+        assert_eq!(parse_retry_after_seconds_at("-30", fixed_now()), None);
+        assert_eq!(parse_retry_after_seconds_at("1.5", fixed_now()), None);
     }
 
     #[test]
-    fn parse_retry_after_seconds_on_infinity_saturates_rather_than_overflowing() {
-        // Known divergence (issue #485): Python's own `float("inf")`
-        // succeeds, and `int(inf * 1000)` inside the backoff then
-        // raises `OverflowError`, failing the effect outright; this
-        // crate's `f64` -> `u64` cast instead saturates to `u64::MAX`,
-        // which `next_backoff_delay_ms`'s own `.min(RETRY_BACKOFF_CAP_MS)`
-        // then clamps down to the cap -- a real wait, never a crash.
-        let seconds = parse_retry_after_seconds("inf").unwrap();
-        assert!(seconds.is_infinite());
-        let info = RetryInfo {
-            retryable: true,
-            status: Some(429),
-            retry_after: Some("inf".to_string()),
-            error_code: None,
-        };
-        assert_eq!(next_backoff_delay_ms(&info, 0, 0), RETRY_BACKOFF_CAP_MS);
+    fn parse_retry_after_seconds_rejects_inf_and_nan() {
+        assert_eq!(parse_retry_after_seconds_at("inf", fixed_now()), None);
+        assert_eq!(parse_retry_after_seconds_at("Infinity", fixed_now()), None);
+        assert_eq!(parse_retry_after_seconds_at("nan", fixed_now()), None);
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_reads_an_imf_fixdate() {
+        assert_eq!(
+            parse_retry_after_seconds_at("Thu, 01 Jan 2026 00:02:00 GMT", fixed_now()),
+            Some(120.0)
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_reads_an_rfc_850_date() {
+        assert_eq!(
+            parse_retry_after_seconds_at("Thursday, 01-Jan-26 00:02:00 GMT", fixed_now()),
+            Some(120.0)
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_reads_an_asctime_date() {
+        assert_eq!(
+            parse_retry_after_seconds_at("Thu Jan  1 00:02:00 2026", fixed_now()),
+            Some(120.0)
+        );
+    }
+
+    #[test]
+    fn parse_retry_after_seconds_floors_a_past_date_at_zero() {
+        assert_eq!(
+            parse_retry_after_seconds_at("Wed, 31 Dec 2025 23:58:00 GMT", fixed_now()),
+            Some(0.0)
+        );
     }
 
     #[test]
@@ -350,7 +445,7 @@ mod tests {
         let info = RetryInfo {
             retryable: true,
             status: Some(429),
-            retry_after: Some("120".to_string()),
+            retry_after: Some("999999".to_string()),
             error_code: None,
         };
         assert_eq!(next_backoff_delay_ms(&info, 0, 0), RETRY_BACKOFF_CAP_MS);

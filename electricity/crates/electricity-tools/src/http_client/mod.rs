@@ -44,7 +44,7 @@
 
 mod proxy;
 
-pub use proxy::{getproxies_environment, proxy_bypass_environment};
+pub use proxy::resolve_proxy_checked;
 
 use bytes::Bytes;
 use http_body_util::{BodyExt, Empty, Full};
@@ -1135,16 +1135,16 @@ pub fn redirect_policy(method: &str, status: u16) -> Option<RedirectRequest> {
     })
 }
 
-/// `urllib.request.getproxies_environment`/`proxy_bypass_environment`'s
-/// own composition (#448 decision 1) -- `None` when there's no proxy
-/// configured for *scheme* or `no_proxy` bypasses *host*. Reads the
-/// real process environment (`std::env::vars()`); every test that
-/// calls this (directly, or through [`crate::http::HttpPlugin`]) sets
-/// or clears every `*_proxy`/`*_PROXY`/`REQUEST_METHOD` variable
-/// explicitly first, per this lane's own environment-isolation rule.
+/// H1's rule (issue #778 step 7) -- `None` when there's no proxy
+/// configured for *scheme*, `no_proxy` bypasses *host*, or the proxy
+/// value this crate read couldn't be used (an unsupported scheme or an
+/// invalid port; [`resolve_proxy_checked`] is the checked form adapters
+/// use instead). Reads the real process environment (`std::env::
+/// vars()`); every test that calls this (directly, or through
+/// [`crate::http::HttpPlugin`]) sets or clears every `*_proxy`/
+/// `*_PROXY`/`no_proxy`/`NO_PROXY` variable explicitly first.
 pub fn resolve_proxy(scheme: &str, host: &str) -> Option<String> {
-    let env: Vec<(String, String)> = std::env::vars().collect();
-    proxy::resolve_proxy(scheme, host, &env)
+    proxy::resolve_proxy(scheme, host)
 }
 
 #[cfg(test)]

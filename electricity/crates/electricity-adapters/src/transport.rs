@@ -190,11 +190,10 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         .split_once("://")
         .expect("normalized always contains \"://\"");
     let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
-        return Err(TransportFailure::Validation(format!(
-            "electricity: unsupported URL scheme '{scheme}'"
-        )));
-    }
+    // H4: refused before any I/O, the same way the `http` tool refuses a
+    // non-http(s) `base_url` -- one shared check, one shared text.
+    electricity_tools::http_conventions::check_scheme(&scheme, &normalized, &["http", "https"])
+        .map_err(TransportFailure::Validation)?;
     let split_at = rest.find(['/', '?']);
     let (authority, path_and_query) = match split_at {
         Some(idx) => (&rest[..idx], &rest[idx..]),
@@ -215,20 +214,20 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
         Some((user, pass)) => (user.to_string(), pass.to_string()),
         None => (raw.to_string(), String::new()),
     });
-    let (host, port) = if let Some(rest) = hostport.strip_prefix('[') {
+    // H3: the port is parsed strictly -- a value `u16::parse` would
+    // reject outright (`99999`) used to silently fall back to the
+    // scheme's own default port instead of being refused.
+    let port = electricity_tools::http_conventions::strict_port(hostport, &normalized)
+        .map_err(TransportFailure::Validation)?;
+    let host = if let Some(rest) = hostport.strip_prefix('[') {
         match rest.split_once(']') {
-            Some((addr, after)) => (
-                addr.to_string(),
-                after.strip_prefix(':').and_then(|p| p.parse::<u16>().ok()),
-            ),
-            None => (hostport.to_string(), None),
+            Some((addr, _)) => addr.to_string(),
+            None => hostport.to_string(),
         }
     } else {
-        match hostport.rsplit_once(':') {
-            Some((h, p)) if !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()) => {
-                (h.to_string(), p.parse::<u16>().ok())
-            }
-            _ => (hostport.to_string(), None),
+        match hostport.rfind(':') {
+            Some(idx) => hostport[..idx].to_string(),
+            None => hostport.to_string(),
         }
     };
     if host.is_empty() {
@@ -247,62 +246,15 @@ pub(crate) fn parse_url(url: &str) -> Result<ParsedUrl, TransportFailure> {
 }
 
 // ---------------------------------------------------------------------
-// curl's own proxy-environment convention (issue #503's "Settled
-// questions": lower-case-only `http_proxy`, curl ignores `HTTP_PROXY`;
-// `https_proxy`/`HTTPS_PROXY`; `all_proxy`/`ALL_PROXY` as the
-// fallback; `no_proxy`/`NO_PROXY`, `*` or comma-separated host
-// suffixes) -- distinct from `electricity_tools::http_client::
-// resolve_proxy`, which is urllib's own convention and stays the
-// `http` tool's alone.
+// H1's proxy rule (issue #778 step 7) -- one resolver,
+// `electricity_tools::http_client::resolve_proxy_checked`, shared with
+// the `http` tool rather than a second, separate copy of the
+// convention kept here.
 // ---------------------------------------------------------------------
 
-fn env_first(env: &[(String, String)], names: &[&str]) -> Option<String> {
-    for name in names {
-        if let Some((_, value)) = env.iter().find(|(k, _)| k == name) {
-            if !value.is_empty() {
-                return Some(value.clone());
-            }
-        }
-    }
-    None
-}
-
-fn curl_no_proxy_bypasses(no_proxy: &str, host: &str) -> bool {
-    if no_proxy.trim() == "*" {
-        return true;
-    }
-    let host_lower = host.to_ascii_lowercase();
-    no_proxy.split(',').any(|raw_entry| {
-        let entry = raw_entry
-            .trim()
-            .trim_start_matches('.')
-            .to_ascii_lowercase();
-        !entry.is_empty() && (host_lower == entry || host_lower.ends_with(&format!(".{entry}")))
-    })
-}
-
-/// curl's own proxy value for *scheme*/*host*, `None` when unset or
-/// `no_proxy` bypasses *host* -- *env* is an explicit snapshot (this
-/// lane's own environment-isolation rule: every caller that cares
-/// about proxy behaviour sets or clears every `*_proxy`/`*_PROXY`
-/// variable explicitly rather than relying on the real process
-/// environment inside a test).
-fn curl_proxy_value(scheme: &str, host: &str, env: &[(String, String)]) -> Option<String> {
-    let no_proxy = env_first(env, &["no_proxy", "NO_PROXY"]).unwrap_or_default();
-    if curl_no_proxy_bypasses(&no_proxy, host) {
-        return None;
-    }
-    let scheme_specific = match scheme {
-        "http" => env_first(env, &["http_proxy"]),
-        "https" => env_first(env, &["https_proxy", "HTTPS_PROXY"]),
-        _ => None,
-    };
-    scheme_specific.or_else(|| env_first(env, &["all_proxy", "ALL_PROXY"]))
-}
-
 /// The real process environment, read once per request -- the public
-/// entry point every adapter call uses; [`curl_proxy_value`] above is
-/// the pure, test-driven form.
+/// entry point every adapter call uses; [`resolve_curl_proxy_from`]
+/// below is the pure, test-driven form.
 pub(crate) fn resolve_curl_proxy(
     scheme: &str,
     host: &str,
@@ -316,27 +268,11 @@ fn resolve_curl_proxy_from(
     host: &str,
     env: &[(String, String)],
 ) -> Result<Option<ProxyTarget>, TransportFailure> {
-    let Some(value) = curl_proxy_value(scheme, host, env) else {
+    let Some(value) = electricity_tools::http_client::resolve_proxy_checked(scheme, host, env)
+        .map_err(TransportFailure::Validation)?
+    else {
         return Ok(None);
     };
-    // curl's own convention: a proxy value with no `scheme://` prefix
-    // (`http_proxy=proxy.corp:3128`) defaults to `http://`, same as a
-    // value that spells it out.
-    let value = if value.contains("://") {
-        value
-    } else {
-        format!("http://{value}")
-    };
-    let proxy_scheme = value
-        .split_once("://")
-        .map(|(scheme, _)| scheme.to_ascii_lowercase())
-        .unwrap_or_default();
-    if proxy_scheme != "http" {
-        return Err(TransportFailure::Validation(format!(
-            "electricity: unsupported proxy scheme '{proxy_scheme}'; only http:// proxies are \
-             supported"
-        )));
-    }
     let parsed = parse_url(&value)?;
     let port = parsed.port.unwrap_or_else(|| default_port(&parsed.scheme));
     let basic_auth = parsed.userinfo.map(|(user, password)| {
@@ -1123,61 +1059,6 @@ mod tests {
     }
 
     #[test]
-    fn curl_proxy_convention_ignores_uppercase_http_proxy() {
-        let env = vec![("HTTP_PROXY".to_string(), "http://proxy:1".to_string())];
-        assert_eq!(curl_proxy_value("http", "example.com", &env), None);
-    }
-
-    #[test]
-    fn curl_proxy_convention_accepts_lowercase_http_proxy() {
-        let env = vec![("http_proxy".to_string(), "http://proxy:1".to_string())];
-        assert_eq!(
-            curl_proxy_value("http", "example.com", &env),
-            Some("http://proxy:1".to_string())
-        );
-    }
-
-    #[test]
-    fn curl_proxy_convention_accepts_either_case_for_https() {
-        let env = vec![("HTTPS_PROXY".to_string(), "http://proxy:1".to_string())];
-        assert_eq!(
-            curl_proxy_value("https", "example.com", &env),
-            Some("http://proxy:1".to_string())
-        );
-    }
-
-    #[test]
-    fn curl_proxy_convention_falls_back_to_all_proxy() {
-        let env = vec![("all_proxy".to_string(), "http://proxy:2".to_string())];
-        assert_eq!(
-            curl_proxy_value("https", "example.com", &env),
-            Some("http://proxy:2".to_string())
-        );
-    }
-
-    #[test]
-    fn curl_no_proxy_star_bypasses_everything() {
-        let env = vec![
-            ("http_proxy".to_string(), "http://proxy:1".to_string()),
-            ("no_proxy".to_string(), "*".to_string()),
-        ];
-        assert_eq!(curl_proxy_value("http", "example.com", &env), None);
-    }
-
-    #[test]
-    fn curl_no_proxy_matches_a_suffix() {
-        let env = vec![
-            ("http_proxy".to_string(), "http://proxy:1".to_string()),
-            ("no_proxy".to_string(), "example.com".to_string()),
-        ];
-        assert_eq!(curl_proxy_value("http", "api.example.com", &env), None);
-        assert_eq!(
-            curl_proxy_value("http", "other.com", &env),
-            Some("http://proxy:1".to_string())
-        );
-    }
-
-    #[test]
     fn a_non_http_proxy_scheme_is_refused_before_any_io() {
         let env = vec![("http_proxy".to_string(), "socks5://proxy:1".to_string())];
         let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
@@ -1198,10 +1079,13 @@ mod tests {
         let err = resolve_curl_proxy_from("http", "example.com", &env).unwrap_err();
         match err {
             TransportFailure::Validation(text) => {
-                assert!(text.contains("unsupported proxy scheme 'socks5'"));
+                assert_eq!(
+                    text,
+                    "unsupported proxy scheme 'socks5' in 'socks5://proxy:1080': only \
+                     http:// proxies are supported"
+                );
                 assert!(!text.contains("s3cr3t"));
                 assert!(!text.contains("user"));
-                assert!(!text.contains("proxy:1080"));
             }
             other => panic!("expected Validation, got {other:?}"),
         }

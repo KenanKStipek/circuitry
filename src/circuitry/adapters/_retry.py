@@ -40,6 +40,11 @@ from email.utils import parsedate_to_datetime
 
 from ..curl_support import extract_retry_after
 
+#: RFC 9110 section 10.2.3's `delay-seconds` grammar: one or more ASCII
+#: digits, nothing else -- never a sign, a fraction, `inf`/`nan`, or
+#: whitespace inside.
+_RETRY_AFTER_SECONDS_RE = re.compile(r"^[0-9]+$")
+
 #: Exponential-backoff ceiling for a retryable failure's wait, including one
 #: driven by a provider's own ``Retry-After`` — a provider asking for longer
 #: than this is still only waited out this long, so a single effect's
@@ -219,26 +224,30 @@ def classify_exception(exc: BaseException | None) -> RetryInfo:
     return _classify_cause_chain(exc)
 
 
-def parse_retry_after_seconds(value: str) -> float | None:
-    """A ``Retry-After`` header value (seconds, or an HTTP-date) as seconds from now.
+def parse_retry_after_seconds(value: str, *, now: datetime | None = None) -> float | None:
+    """A ``Retry-After`` header value as seconds from *now* (``datetime.
+    now(timezone.utc)`` when unset), per RFC 9110 section 10.2.3.
 
-    ``None`` when ``value`` is neither — a header present but unparseable
-    must not be read as "wait forever" or crash a retry loop.
+    All-ASCII-digits means that many seconds. Otherwise the value is parsed
+    as an HTTP-date (IMF-fixdate, plus the obsolete RFC 850 and asctime
+    forms a recipient must still accept — :func:`email.utils.
+    parsedate_to_datetime` already accepts exactly those three), and the
+    delay is that date minus *now*, floored at 0. Anything else — a sign, a
+    fraction, ``inf``/``nan``, whitespace inside, or an unparseable date —
+    returns ``None``, never "wait forever" or a crash.
     """
     value = (value or "").strip()
     if not value:
         return None
-    try:
-        return max(0.0, float(value))
-    except ValueError:
-        pass
+    if _RETRY_AFTER_SECONDS_RE.fullmatch(value):
+        return float(value)
     try:
         when = parsedate_to_datetime(value)
     except (TypeError, ValueError, IndexError):
         return None
     if when.tzinfo is None:
         when = when.replace(tzinfo=timezone.utc)
-    return max(0.0, (when - datetime.now(timezone.utc)).total_seconds())
+    return max(0.0, (when - (now or datetime.now(timezone.utc))).total_seconds())
 
 
 def next_backoff_delay_ms(retry_info: RetryInfo, *, attempt_index: int, base_ms: int) -> int:

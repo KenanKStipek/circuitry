@@ -1,0 +1,209 @@
+"""HTTP conventions shared by the ``http`` tool and every curl-based
+adapter (issue #778 step 7): one proxy rule, strict port parsing, and
+refusing a scheme other than ``http``/``https`` before any I/O.
+
+Circuitry decides the proxy itself here, rather than letting urllib's or
+curl's own environment reading decide it independently per surface:
+
+- An ``http`` URL uses ``http_proxy``, lowercase only; uppercase
+  ``HTTP_PROXY`` is never read. An ``https`` URL uses ``https_proxy``, then
+  ``HTTPS_PROXY``. Either falls back to ``all_proxy``, then ``ALL_PROXY``.
+  When both cases of a variable are set, lowercase wins (there is only ever
+  one lowercase form to begin with, since the uppercase one is read only as
+  a fallback).
+- ``no_proxy`` (then ``NO_PROXY``) is a comma-separated list; ``*`` bypasses
+  everything, and an entry matches a host exactly or as a domain suffix (a
+  leading dot is optional).
+- A proxy value with no ``scheme://`` prefix means ``http://``; only an
+  ``http`` proxy scheme is supported (matching curl's own CONNECT-based
+  proxying, the only kind either engine implements) — anything else is
+  refused the same way an unsupported request scheme is.
+
+Every function here takes its environment as an explicit mapping, never
+reading ``os.environ`` itself, so callers (and tests) control it fully.
+"""
+
+from __future__ import annotations
+
+import base64
+import re
+import urllib.parse
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+#: The only two schemes a request URL (or an adapter's `base_url`) may use.
+ALLOWED_SCHEMES = ("http", "https")
+
+_PORT_RE = re.compile(r"^[0-9]+$")
+
+_USERINFO_RE = re.compile(r"://[^\s/@]+(?::[^\s/@]*)?@")
+
+#: Query-string keys that commonly carry a credential (search APIs, some
+#: webhook/trigger URLs). Matched case-insensitively against the whole
+#: key, so ``api_key``, ``apiKey``, ``access_token`` and ``X-Auth-Token``
+#: all match.
+_CREDENTIAL_QUERY_KEY_RE = re.compile(r"(key|token|secret|auth|password|pwd)", re.IGNORECASE)
+
+
+def strip_url_userinfo(url: str) -> str:
+    """*url* with any ``user[:pass]@`` userinfo removed, for an error
+    message — never the raw value, which can carry a credential."""
+    return _USERINFO_RE.sub("://", url)
+
+
+def mask_credential_query_params(url: str) -> str:
+    """*url* with the value of any query-string parameter whose key looks
+    like a credential masked, e.g. ``https://api.example.com/search?key=
+    secret`` becomes ``...?key=%2A%2A%2A``."""
+    parsed = urllib.parse.urlsplit(url)
+    if not parsed.query:
+        return url
+    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    masked = [(k, "***" if _CREDENTIAL_QUERY_KEY_RE.search(k) else v) for k, v in pairs]
+    new_query = urllib.parse.urlencode(masked)
+    return urllib.parse.urlunsplit(parsed._replace(query=new_query))
+
+
+def redact_url(url: str) -> str:
+    """*url* with userinfo stripped, then any credential-like query
+    parameter masked — the two masks every refusal message in this module
+    applies before naming the URL."""
+    return strip_url_userinfo(mask_credential_query_params(url))
+
+
+def _host_port_text(netloc: str) -> str | None:
+    """The raw port text in *netloc* (userinfo already stripped by the
+    caller): ``None`` with no ``:`` separator at all; otherwise the
+    (possibly empty) text after it. A bracketed IPv6 host's own colons are
+    never split."""
+    if netloc.startswith("["):
+        end = netloc.find("]")
+        rest = netloc[end + 1 :] if end != -1 else ""
+    elif ":" in netloc:
+        rest = ":" + netloc.partition(":")[2]
+    else:
+        return None
+    if not rest.startswith(":"):
+        return None
+    return rest[1:]
+
+
+def check_strict_port(url: str) -> None:
+    """Refuses *url* before any I/O when its port isn't strictly valid
+    (H3): after the host (or after ``]`` for IPv6) comes ``:`` and one or
+    more ASCII digits, 1-65535. An empty port, or none at all, means the
+    scheme's default and is never refused.
+    """
+    netloc = urllib.parse.urlsplit(url).netloc
+    host_port = netloc.rpartition("@")[2]
+    port_text = _host_port_text(host_port)
+    if not port_text:
+        return
+    if _PORT_RE.fullmatch(port_text) and 1 <= int(port_text) <= 65535:
+        return
+    raise ValueError(f"invalid port in URL '{redact_url(url)}': '{port_text}'")
+
+
+def check_url(url: str, *, allowed_schemes: tuple[str, ...] = ALLOWED_SCHEMES) -> None:
+    """Refuses *url* before any I/O (H3, H4): its scheme must be one of
+    *allowed_schemes*, and its port must pass :func:`check_strict_port`.
+    """
+    scheme = urllib.parse.urlsplit(url).scheme.lower()
+    if scheme not in allowed_schemes:
+        allowed = " or ".join(allowed_schemes)
+        raise ValueError(
+            f"unsupported URL scheme '{scheme}' in '{redact_url(url)}': "
+            f"only {allowed} is supported"
+        )
+    check_strict_port(url)
+
+
+def _normalize_proxy_url(value: str) -> str:
+    """*value* with a scheme prefixed (``http://``) when it has none at
+    all — H1's "a proxy URL with no scheme means http://"."""
+    return value if "://" in value else f"http://{value}"
+
+
+def check_proxy_url(value: str) -> str:
+    """*value*, normalized (H1), with its scheme and port checked before
+    any I/O: only an ``http`` proxy scheme is supported, and its port
+    follows :func:`check_strict_port`.
+    """
+    normalized = _normalize_proxy_url(value)
+    scheme = urllib.parse.urlsplit(normalized).scheme.lower()
+    if scheme != "http":
+        raise ValueError(
+            f"unsupported proxy scheme '{scheme}' in '{redact_url(normalized)}': "
+            "only http:// proxies are supported"
+        )
+    check_strict_port(normalized)
+    return normalized
+
+
+def _env_first(env: Mapping[str, str], names: tuple[str, ...]) -> str | None:
+    for name in names:
+        value = env.get(name)
+        if value:
+            return value
+    return None
+
+
+def _no_proxy_bypasses(no_proxy: str, host: str) -> bool:
+    if no_proxy.strip() == "*":
+        return True
+    host_lower = host.lower()
+    for raw_entry in no_proxy.split(","):
+        entry = raw_entry.strip().lower().lstrip(".")
+        if not entry:
+            continue
+        if host_lower == entry or host_lower.endswith(f".{entry}"):
+            return True
+    return False
+
+
+def resolve_proxy(scheme: str, host: str, env: Mapping[str, str]) -> str | None:
+    """The proxy URL for *scheme*/*host* under H1's rule, normalized and
+    checked (:func:`check_proxy_url`), or ``None`` when no proxy applies —
+    no proxy is configured for *scheme*, or ``no_proxy``/``NO_PROXY``
+    bypasses *host*. *env* is an explicit snapshot, never read from the
+    real process environment by this function.
+    """
+    no_proxy = _env_first(env, ("no_proxy", "NO_PROXY")) or ""
+    if _no_proxy_bypasses(no_proxy, host):
+        return None
+    if scheme == "http":
+        names: tuple[str, ...] = ("http_proxy",)
+    elif scheme == "https":
+        names = ("https_proxy", "HTTPS_PROXY")
+    else:
+        names = ()
+    value = _env_first(env, names) or _env_first(env, ("all_proxy", "ALL_PROXY"))
+    if not value:
+        return None
+    return check_proxy_url(value)
+
+
+@dataclass(frozen=True)
+class ProxyAuth:
+    """The ``host:port`` and, when the proxy URL carried userinfo, the
+    ``Basic`` credentials for it — built from :func:`resolve_proxy`'s
+    result by a caller that needs the pieces apart (the ``http`` tool's
+    ``Request.set_proxy``; curl never needs this, since it parses the URL
+    itself)."""
+
+    hostport: str
+    basic_auth: str | None
+
+
+def split_proxy_url(proxy_url: str) -> ProxyAuth:
+    """*proxy_url* (already normalized/checked by :func:`resolve_proxy`)
+    as its ``host:port`` and, when present, a base64 ``user:password``
+    pair for a ``Proxy-authorization: Basic`` header."""
+    parts = urllib.parse.urlsplit(proxy_url)
+    hostport = parts.netloc.rpartition("@")[2]
+    basic_auth = None
+    if parts.username is not None:
+        user = urllib.parse.unquote(parts.username)
+        password = urllib.parse.unquote(parts.password or "")
+        basic_auth = base64.b64encode(f"{user}:{password}".encode()).decode("ascii")
+    return ProxyAuth(hostport=hostport, basic_auth=basic_auth)

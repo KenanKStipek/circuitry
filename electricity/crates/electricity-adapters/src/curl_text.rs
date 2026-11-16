@@ -99,130 +99,13 @@ fn mask_secrets(text: &str, secrets: &[&str]) -> String {
     out
 }
 
-/// `curl_support.py::_CREDENTIAL_QUERY_KEY_RE` -- a case-insensitive
-/// *search* (not a full match) for any of these words anywhere in a
-/// query key.
-fn looks_like_credential_key(key: &str) -> bool {
-    let lower = key.to_ascii_lowercase();
-    ["key", "token", "secret", "auth", "password", "pwd"]
-        .iter()
-        .any(|needle| lower.contains(needle))
-}
-
-/// `urllib.parse.parse_qsl(keep_blank_values=True)` -- `&`-separated
-/// `name=value` pairs (a bare `name` with no `=` keeps an empty
-/// value), each percent-decoded with `+` read as a space (the
-/// `application/x-www-form-urlencoded` convention `parse_qsl` uses by
-/// default, `plus` left `True`).
-fn parse_qsl(query: &str) -> Vec<(String, String)> {
-    if query.is_empty() {
-        return Vec::new();
-    }
-    query
-        .split('&')
-        .filter(|pair| !pair.is_empty())
-        .map(|pair| match pair.split_once('=') {
-            Some((k, v)) => (percent_decode_plus(k), percent_decode_plus(v)),
-            None => (percent_decode_plus(pair), String::new()),
-        })
-        .collect()
-}
-
-fn percent_decode_plus(value: &str) -> String {
-    let bytes = value.as_bytes();
-    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => {
-                out.push(b' ');
-                i += 1;
-            }
-            b'%' if i + 2 < bytes.len() => {
-                let hex = std::str::from_utf8(&bytes[i + 1..i + 3]).ok();
-                match hex.and_then(|h| u8::from_str_radix(h, 16).ok()) {
-                    Some(byte) => {
-                        out.push(byte);
-                        i += 3;
-                    }
-                    None => {
-                        out.push(bytes[i]);
-                        i += 1;
-                    }
-                }
-            }
-            other => {
-                out.push(other);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).into_owned()
-}
-
-/// `curl_support.py::_mask_credential_query_params` -- masks the
-/// value of any query-string key matching [`looks_like_credential_key`],
-/// then re-encodes the **whole** query with
-/// [`electricity_value::pycompat::urlencode`] even when nothing
-/// matched (so `%2A%2A%2A` for the mask, a space becomes `+`, exactly
-/// mirrors `urllib.parse.urlencode`'s own default `quote_plus`
-/// encoding).
-pub(crate) fn mask_credential_query_params(url: &str) -> String {
-    let Some(query_start) = url.find('?') else {
-        return url.to_string();
-    };
-    let (before_query, rest) = url.split_at(query_start);
-    let query_and_fragment = &rest[1..];
-    let (query, fragment) = match query_and_fragment.find('#') {
-        Some(idx) => (&query_and_fragment[..idx], Some(&query_and_fragment[idx..])),
-        None => (query_and_fragment, None),
-    };
-    let pairs = parse_qsl(query);
-    let masked: Vec<(String, Value)> = pairs
-        .into_iter()
-        .map(|(k, v)| {
-            let value = if looks_like_credential_key(&k) {
-                "***".to_string()
-            } else {
-                v
-            };
-            (k, Value::Str(value))
-        })
-        .collect();
-    let new_query = electricity_value::pycompat::urlencode(&masked, false).unwrap_or_default();
-    let mut result = format!("{before_query}?{new_query}");
-    if let Some(fragment) = fragment {
-        result.push_str(fragment);
-    }
-    result
-}
-
-/// `curl_support.py::_URL_USERINFO_RE` -- `://user[:pass]@` becomes
-/// `://`, wherever it occurs in the text (hints included), never
-/// requiring the whole string to be a URL.
-pub(crate) fn strip_url_userinfo(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    let mut rest = text;
-    loop {
-        let Some(scheme_idx) = rest.find("://") else {
-            out.push_str(rest);
-            break;
-        };
-        let after_scheme = &rest[scheme_idx + 3..];
-        let stop = after_scheme
-            .find(|c: char| c.is_whitespace() || c == '/' || c == '@')
-            .unwrap_or(after_scheme.len());
-        let candidate = &after_scheme[..stop];
-        if after_scheme.as_bytes().get(stop) == Some(&b'@') && !candidate.is_empty() {
-            out.push_str(&rest[..scheme_idx + 3]);
-            rest = &after_scheme[stop + 1..];
-        } else {
-            out.push_str(&rest[..scheme_idx + 3]);
-            rest = after_scheme;
-        }
-    }
-    out
-}
+/// Moved to `electricity_tools::http_conventions` (issue #778 step 7),
+/// which has every other scheme/port refusal's own message-masking
+/// logic now too -- re-exported under these same names so every
+/// existing call site and test in this module is unaffected.
+pub(crate) use electricity_tools::http_conventions::{
+    mask_credential_query_params, strip_url_userinfo,
+};
 
 /// `curl_support.py::redact_host_url` -- masks a URL for a preflight
 /// `host:{url}` requirement text: userinfo stripped, then any
@@ -231,7 +114,7 @@ pub(crate) fn strip_url_userinfo(text: &str) -> String {
 /// by every `check()` that reports `host:{base_url}` -- `ollama`'s own
 /// (`ollama.rs`) and `cyberdiner`'s.
 pub fn redact_host_url(url: &str) -> String {
-    strip_url_userinfo(&mask_credential_query_params(url))
+    electricity_tools::http_conventions::redact_url(url)
 }
 
 /// `curl_support.py::curl_failure_message` -- renders a curl failure

@@ -33,6 +33,8 @@ import urllib.parse
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from typing import Any
 
+from . import http_conventions
+
 from .core.cancellation import run_tracked
 
 # Strips userinfo (`user[:pass]@`) out of any `scheme://user:pass@host`
@@ -41,35 +43,8 @@ from .core.cancellation import run_tracked
 # (e.g. ollama's "not reachable" hint), and `re.sub` catches it wherever it
 # lands. `cli/redaction.py`'s `_redact_url` can't be reused here because it
 # requires the *entire* string to be a URL, which a prose error message never is.
-_URL_USERINFO_RE = re.compile(r"://[^\s/@]+(?::[^\s/@]*)?@")
-
-# Query-string keys that commonly carry a credential (search APIs, some
-# webhook/trigger URLs). Matched case-insensitively against the whole key,
-# so `api_key`, `apiKey`, `access_token` and `X-Auth-Token` all match.
-_CREDENTIAL_QUERY_KEY_RE = re.compile(
-    r"(key|token|secret|auth|password|pwd)", re.IGNORECASE
-)
-
-
-def _strip_url_userinfo(text: str) -> str:
-    return _URL_USERINFO_RE.sub("://", text)
-
-
-def _mask_credential_query_params(url: str) -> str:
-    """Mask the value of any query-string parameter whose key looks like a
-    credential, e.g. ``https://api.example.com/search?key=secret`` becomes
-    ``...?key=%2A%2A%2A``. A caller passing a non-credential value through
-    ``extra_params`` under a matching key is the rare false positive; a
-    credential leaking into persisted run records is the common true one."""
-    parsed = urllib.parse.urlsplit(url)
-    if not parsed.query:
-        return url
-    pairs = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
-    masked = [
-        (k, "***" if _CREDENTIAL_QUERY_KEY_RE.search(k) else v) for k, v in pairs
-    ]
-    new_query = urllib.parse.urlencode(masked)
-    return urllib.parse.urlunsplit(parsed._replace(query=new_query))
+_strip_url_userinfo = http_conventions.strip_url_userinfo
+_mask_credential_query_params = http_conventions.mask_credential_query_params
 
 
 def redact_host_url(url: str) -> str:
@@ -87,7 +62,7 @@ def redact_host_url(url: str) -> str:
     that is already reporting a problem (``urlsplit`` requires a string
     or bytes and raises ``AttributeError`` on anything else).
     """
-    return _strip_url_userinfo(_mask_credential_query_params(str(url)))
+    return http_conventions.redact_url(str(url))
 
 
 def _mask_secrets(text: str, secrets: Iterable[str]) -> str:
@@ -219,11 +194,21 @@ def _escape_config_value(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def _curl_config_file(url: str, headers: Sequence[tuple[str, str]]) -> str:
-    """The ``--config`` file content for ``url`` and ``headers`` — the
-    whole request, so argv never carries any of it (#314: a query-string
-    credential or ``user:pass@`` in the URL is otherwise visible in ``ps``
-    just like a header would be).
+def _curl_config_file(
+    url: str, headers: Sequence[tuple[str, str]], *, proxy_url: str | None
+) -> str:
+    """The ``--config`` file content for ``url``, ``headers`` and the
+    proxy decision — the whole request, so argv never carries any of it
+    (#314: a query-string credential, ``user:pass@`` in the URL, or
+    userinfo in a proxy URL is otherwise visible in ``ps`` just like a
+    header would be).
+
+    *proxy_url* is H1's own decision (:func:`http_conventions.
+    resolve_proxy`), never curl's: a value means ``proxy = "<value>"`` plus
+    ``noproxy = ""`` (so curl's own ``no_proxy``/``NO_PROXY`` read can't
+    override the decision that already accounted for it); ``None`` means
+    ``noproxy = "*"`` (so curl never reads ``*_proxy``/``*_PROXY`` either,
+    and connects directly whatever the environment says).
     """
     _validate_no_control_chars(url, "url")
     lines = [f'url = "{_escape_config_value(url)}"']
@@ -231,6 +216,12 @@ def _curl_config_file(url: str, headers: Sequence[tuple[str, str]]) -> str:
         _validate_no_control_chars(name, "header name")
         _validate_no_control_chars(value, "header value")
         lines.append(f'header = "{name}: {_escape_config_value(value)}"')
+    if proxy_url is not None:
+        _validate_no_control_chars(proxy_url, "proxy")
+        lines.append(f'proxy = "{_escape_config_value(proxy_url)}"')
+        lines.append('noproxy = ""')
+    else:
+        lines.append('noproxy = "*"')
     return "\n".join(lines) + "\n"
 
 
@@ -365,9 +356,23 @@ def _build_config_and_cmd(
     :func:`run_curl_streaming`: the same ``--config`` file content, the
     same base flags, the same Retry-After write-out marker and the same
     ``--data-binary @-`` decision. ``extra_args`` (``--no-buffer`` for the
-    streaming caller) is appended last, after the write-out flag."""
+    streaming caller) is appended last, after the write-out flag.
+
+    H3/H4: refused before any I/O when ``url``'s scheme isn't http/https or
+    its port is strictly invalid -- a schemeless ``url`` (a configured
+    ``base_url`` of ``localhost:11434``, say) is checked as curl itself
+    would read it, defaulting to ``http://``, never refused for that alone.
+    H1: the proxy decision is Circuitry's own (:func:`http_conventions.
+    resolve_proxy`), written into the config file so curl's own environment
+    reading never applies either way.
+    """
+    normalized_url = url if "://" in url else f"http://{url}"
+    http_conventions.check_url(normalized_url)
+    parts = urllib.parse.urlsplit(normalized_url)
+    proxy_url = http_conventions.resolve_proxy(parts.scheme, parts.hostname or "", os.environ)
+
     header_items = list(headers.items()) if isinstance(headers, Mapping) else list(headers)
-    config_bytes = _curl_config_file(url, header_items).encode()
+    config_bytes = _curl_config_file(url, header_items, proxy_url=proxy_url).encode()
     if len(config_bytes) > _MAX_CONFIG_BYTES:
         raise ValueError(
             f"url + headers are {len(config_bytes)} bytes, over the "

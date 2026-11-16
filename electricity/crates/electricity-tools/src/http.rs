@@ -76,29 +76,22 @@ fn send_error_to_tool_error(err: SendError, original_url: &str) -> ToolError {
     }
 }
 
-/// A scheme `urlopen()` recognizes the syntax of but has no handler
-/// for (`OpenerDirector.open`'s own dispatch, `getattr(handler, name +
-/// "_open")` failing, `unknown_open` raising `URLError('unknown url
-/// type: %s' % req.type)`) -- wrapped, inside the same `try/except
-/// URLError` as a connect failure, and retried the same way
-/// (`ErrorCause::NoReply`).
-fn unknown_url_type_failure(original_url: &str, scheme: &str) -> ToolError {
+/// H4 (issue #778 step 7): a scheme other than `http`/`https` -- the
+/// initial URL or a redirect target alike -- is refused before any I/O,
+/// with Circuitry's own text ([`crate::http_conventions::check_scheme`]),
+/// never retried (`ErrorCause::None`): `cof run` itself now refuses the
+/// same way, before ever reaching urllib's own `FTPHandler`/`FileHandler`/
+/// `DataHandler` or its `unknown_open`'s `URLError`.
+fn scheme_refused(scheme: &str, original_url: &str) -> ToolError {
+    let message = crate::http_conventions::check_scheme(scheme, original_url, &["http", "https"])
+        .expect_err("scheme_refused is only called once check_scheme has already failed");
     ToolError {
-        py_class: PyExc::RuntimeError,
-        message: format!("HTTP request to {original_url} failed: unknown url type: {scheme}"),
-        cause: ErrorCause::NoReply,
+        py_class: PyExc::ValueError,
+        message,
+        cause: ErrorCause::None,
     }
 }
 
-/// `ftp:`/`file:`/`data:` -- schemes urllib itself *does* have a
-/// handler for (`FTPHandler`/`DataHandler`/`FileHandler`, installed by
-/// `build_opener()`'s own defaults), so `cof run` speaks real FTP,
-/// reads a local file, or decodes an inline `data:` URL. This crate
-/// implements none of that (never read a local file, never speak FTP)
-/// -- a documented divergence (DESIGN.md), refused before any I/O
-/// with electricity's own text, never cof's own eventual `TypeError`
-/// (`int(resp.status)` on a `None` status, for file/data) or a real
-/// FTP round trip.
 /// `HTTPRedirectHandler.http_error_302`'s own `"%s - Redirection to
 /// url '%s' is not allowed" % (msg, newurl)` -- pinned against real
 /// CPython in `generate_http_corpus.py`'s own `redirect_reason_cases`
@@ -116,16 +109,6 @@ pub fn redirect_loop_reason(msg: &str) -> String {
     format!(
         "The HTTP server returned a redirect error that would lead to an infinite loop.\nThe last 30x error message was:\n{msg}"
     )
-}
-
-fn unsupported_in_electricity_failure(original_url: &str, scheme: &str) -> ToolError {
-    ToolError {
-        py_class: PyExc::RuntimeError,
-        message: format!(
-            "HTTP request to {original_url} failed: scheme '{scheme}' is not supported by electricity (http/https only)"
-        ),
-        cause: ErrorCause::NoReply,
-    }
 }
 
 // ---------------------------------------------------------------------
@@ -695,79 +678,29 @@ fn split_hostport(netloc: &str) -> (&str, PortText<'_>) {
     (host, port)
 }
 
-/// `int(text)` for a port, as `_get_hostport` reads it: CPython's own
-/// base-10 `int()` of a `str` -- surrounding whitespace, one optional
-/// sign, ASCII digits with PEP 515 single underscores between digits
-/// (`+80` and `8_0` are both port 80). `None` where `int()` raises
-/// `ValueError`. Non-ASCII decimal digits, which `int()` also accepts,
-/// count as non-numeric here (documented in DESIGN.md).
-fn py_int_port(text: &str) -> Option<i128> {
-    let s = py_strip(text);
-    let (negative, digits) = match s.as_bytes().first() {
-        Some(b'+') => (false, &s[1..]),
-        Some(b'-') => (true, &s[1..]),
-        _ => (false, s),
-    };
-    let bytes = digits.as_bytes();
-    if bytes.is_empty() {
-        return None;
-    }
-    let mut value: i128 = 0;
-    for (i, &b) in bytes.iter().enumerate() {
-        if b == b'_' {
-            let between_digits = i > 0
-                && i + 1 < bytes.len()
-                && bytes[i - 1].is_ascii_digit()
-                && bytes[i + 1].is_ascii_digit();
-            if !between_digits {
-                return None;
-            }
-            continue;
-        }
-        if !b.is_ascii_digit() {
-            return None;
-        }
-        value = value
-            .saturating_mul(10)
-            .saturating_add(i128::from(b - b'0'));
-    }
-    Some(if negative { -value } else { value })
-}
-
-/// The request's `(host, port)`, or the error `cof` raises for the port:
-/// `InvalidURL: nonnumeric port: '<text>'` (bare, before any I/O, as
-/// `http.client` raises it outside urllib's `URLError` wrapping), or,
-/// for a number outside `0..=65535`, electricity's own wrapped
-/// "port out of range" text (CPython only fails later, in
-/// `getaddrinfo`, with OS-specific text; documented in DESIGN.md). Either
-/// way no socket is opened, so a bad port never falls back to the
-/// scheme's default port.
+/// The request's `(host, port)`, H3's strict rule
+/// ([`crate::http_conventions::strict_port`]) -- refused before any I/O
+/// with Circuitry's own text, naming *original_url* with any userinfo
+/// removed, for anything but an absent/empty port or a 1-65535
+/// ASCII-digit value. No bad port ever falls back to the scheme's
+/// default port.
 fn request_host_port(
     netloc: &str,
     scheme: &str,
     original_url: &str,
 ) -> Result<(String, u16), ToolError> {
-    let (host, port_text) = split_hostport(netloc);
-    let port = match port_text {
-        PortText::Absent | PortText::Empty => default_port(scheme),
-        PortText::Given(text) => match py_int_port(text) {
-            None => {
-                return Err(ToolError {
-                    py_class: PyExc::InvalidURL,
-                    message: format!("nonnumeric port: '{text}'"),
-                    cause: ErrorCause::None,
-                });
-            }
-            Some(value) => u16::try_from(value).map_err(|_| ToolError {
-                py_class: PyExc::RuntimeError,
-                message: format!(
-                    "HTTP request to {original_url} failed: port out of range 0-65535: {text}"
-                ),
-                cause: ErrorCause::NoReply,
-            })?,
-        },
-    };
-    Ok((host.to_string(), port))
+    let port = crate::http_conventions::strict_port(netloc, original_url).map_err(|message| {
+        ToolError {
+            py_class: PyExc::ValueError,
+            message,
+            cause: ErrorCause::None,
+        }
+    })?;
+    let (host, _) = split_hostport(netloc);
+    Ok((
+        host.to_string(),
+        port.unwrap_or_else(|| default_port(scheme)),
+    ))
 }
 
 /// A header value's own latin-1 encodability -- `http.client`'s own
@@ -2082,19 +2015,20 @@ fn parse_proxy(proxy: &str) -> ParsedProxy {
     }
 }
 
-/// [`http_client::ProxyTarget`] for the current hop, urllib's own
-/// convention end to end: [`http_client::resolve_proxy`]'s own
-/// environment lookup/`no_proxy` bypass, then [`parse_proxy`] for the
-/// proxy value itself, unquoting both the hostport and (when both a
-/// user and a password are present) the `Basic` credentials.
-/// `pub` (not `pub(crate)`): `electricity-adapters::cyberdiner` --
-/// the one adapter that speaks urllib's own wire shape instead of
-/// curl's -- reuses this directly for its own proxy resolution
-/// (issue #515), rather than re-deriving urllib's
-/// proxy-URL/auth parsing a second time.
+/// [`http_client::ProxyTarget`] for the current hop, H1's rule end to
+/// end (issue #778 step 7): [`http_client::resolve_proxy`]'s own
+/// environment lookup/`no_proxy` bypass -- by hostname alone, port
+/// stripped, matching [`split_netloc`]'s own target-host comparison --
+/// then [`parse_proxy`] for the proxy value itself, unquoting both the
+/// hostport and (when both a user and a password are present) the
+/// `Basic` credentials. `pub` (not `pub(crate)`): `electricity-adapters::
+/// cyberdiner` -- the one adapter that speaks urllib's own wire shape
+/// instead of curl's -- reuses this directly for its own proxy
+/// resolution (issue #515), rather than re-deriving the proxy-URL/auth
+/// parsing a second time.
 pub fn resolve_proxy_target(scheme: &str, netloc: &str) -> Option<http_client::ProxyTarget> {
-    let host_for_bypass = netloc_host_as_written(netloc);
-    let proxy_value = http_client::resolve_proxy(scheme, host_for_bypass)?;
+    let (host_for_bypass, _) = split_netloc(netloc);
+    let proxy_value = http_client::resolve_proxy(scheme, &host_for_bypass)?;
     let parsed = parse_proxy(&proxy_value);
     let hostport = http_url::unquote(&parsed.hostport);
     let (proxy_host, proxy_port) = split_netloc(&hostport);
@@ -2147,13 +2081,7 @@ impl ToolPlugin for HttpPlugin {
             Some(scheme) => scheme,
         };
         if !matches!(initial_scheme.as_str(), "http" | "https") {
-            return Err(
-                if matches!(initial_scheme.as_str(), "ftp" | "file" | "data") {
-                    unsupported_in_electricity_failure(&original_url, &initial_scheme)
-                } else {
-                    unknown_url_type_failure(&original_url, &initial_scheme)
-                },
-            );
+            return Err(scheme_refused(&initial_scheme, &original_url));
         }
 
         let client = http_client::build_client().map_err(runtime_error)?;
@@ -2168,31 +2096,20 @@ impl ToolPlugin for HttpPlugin {
 
         loop {
             let split = http_url::urlsplit(&current_url, "");
-            // The only schemes [`http_client`] ever speaks -- reached on
-            // every hop, not just the first: a redirect to `ftp://` is
-            // allowed by [`redirect_policy`]'s own method/status check
-            // (urllib's own `HTTPRedirectHandler` would really follow
-            // it and speak FTP for real, a real handler being
-            // installed by `build_opener()`'s own defaults) but this
-            // crate never implements FTP/file/data at all -- refused
-            // before any I/O, same wrapped shape as an unrecognized
-            // scheme on the initial URL, and recorded as a divergence
-            // (DESIGN.md).
+            // H4: the only schemes [`http_client`] ever speaks -- checked
+            // on every hop, not just the first, so a redirect to a scheme
+            // other than http/https is refused the same way the initial
+            // URL is (`cof run` now refuses it too, before ever following
+            // such a redirect).
             if !matches!(split.scheme.as_str(), "http" | "https") {
-                return Err(
-                    if matches!(split.scheme.as_str(), "ftp" | "file" | "data") {
-                        unsupported_in_electricity_failure(&original_url, &split.scheme)
-                    } else {
-                        unknown_url_type_failure(&original_url, &split.scheme)
-                    },
-                );
+                return Err(scheme_refused(&split.scheme, &current_url));
             }
             let scheme_enum = if split.scheme == "https" {
                 Scheme::Https
             } else {
                 Scheme::Http
             };
-            let (host, port) = request_host_port(&split.netloc, &split.scheme, &original_url)?;
+            let (host, port) = request_host_port(&split.netloc, &split.scheme, &current_url)?;
             let proxy = resolve_proxy_target(&split.scheme, &split.netloc);
 
             let mut target = split.path.clone();
@@ -2675,29 +2592,7 @@ mod port_tests {
     }
 
     #[test]
-    fn py_int_port_reads_a_port_the_way_cpython_int_does() {
-        assert_eq!(py_int_port("80"), Some(80));
-        assert_eq!(py_int_port("+9"), Some(9));
-        assert_eq!(py_int_port("-1"), Some(-1));
-        assert_eq!(py_int_port("0_9"), Some(9));
-        assert_eq!(py_int_port("99999"), Some(99999));
-        for bad in [
-            "abc",
-            "_9",
-            "9_",
-            "9__0",
-            "+",
-            "-",
-            "8o",
-            "+-1",
-            "\u{0668}\u{0660}",
-        ] {
-            assert_eq!(py_int_port(bad), None, "{bad:?}");
-        }
-    }
-
-    #[test]
-    fn request_host_port_matches_cof_for_each_port_shape() {
+    fn request_host_port_follows_h3s_strict_rule() {
         let url = "http://x/";
         assert_eq!(
             request_host_port("h", "http", url).unwrap(),
@@ -2708,27 +2603,28 @@ mod port_tests {
             ("h".to_string(), 443)
         );
         assert_eq!(
-            request_host_port("h:+9", "http", url).unwrap(),
-            ("h".to_string(), 9)
+            request_host_port("h:80", "http", url).unwrap(),
+            ("h".to_string(), 80)
         );
         assert_eq!(
-            request_host_port("[::1]:8_0", "http", url).unwrap(),
-            ("::1".to_string(), 80)
+            request_host_port("[::1]:8080", "http", url).unwrap(),
+            ("::1".to_string(), 8080)
         );
-        let err = request_host_port("h:abc", "http", url).unwrap_err();
-        assert_eq!(err.py_class, PyExc::InvalidURL);
-        assert_eq!(err.message, "nonnumeric port: 'abc'");
-        assert_eq!(err.cause, ErrorCause::None);
-        let err = request_host_port("[::1]:abc", "http", url).unwrap_err();
-        assert_eq!(err.message, "nonnumeric port: 'abc'");
-        for (netloc, text) in [("h:99999", "99999"), ("h:-1", "-1")] {
+        for (netloc, port_text) in [
+            ("h:abc", "abc"),
+            ("h:+9", "+9"),
+            ("h:0_9", "0_9"),
+            ("h:0", "0"),
+            ("h:99999", "99999"),
+            ("h:-1", "-1"),
+        ] {
             let err = request_host_port(netloc, "http", url).unwrap_err();
-            assert_eq!(err.py_class, PyExc::RuntimeError);
+            assert_eq!(err.py_class, PyExc::ValueError);
             assert_eq!(
                 err.message,
-                format!("HTTP request to {url} failed: port out of range 0-65535: {text}")
+                format!("invalid port in URL '{url}': '{port_text}'")
             );
-            assert_eq!(err.cause, ErrorCause::NoReply);
+            assert_eq!(err.cause, ErrorCause::None);
         }
     }
 }
