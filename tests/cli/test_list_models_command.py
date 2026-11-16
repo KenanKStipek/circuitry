@@ -27,12 +27,23 @@ class FakeResponse:
         return None
 
 
+def _patch_opener_open(monkeypatch: pytest.MonkeyPatch, payload: dict[str, Any]) -> None:
+    """Replaces every opener's own ``open`` -- ``OllamaAdapter.list_models``
+    now always builds an explicit opener, H1 (issue #778 step 7, H-review
+    P2-15), rather than calling the bare ``urllib.request.urlopen``
+    convenience function; this is the one choke point either call shape
+    goes through (the same idiom ``tests/plugins/test_http.py`` uses).
+    """
+
+    def bound(self: Any, req: Any, data: Any = None, timeout: Any = None) -> Any:
+        return FakeResponse(payload)
+
+    monkeypatch.setattr("urllib.request.OpenerDirector.open", bound)
+
+
 def test_models_for_an_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"models": [{"name": "gpt-oss:20b"}, {"name": "phi3:mini"}]}
-    monkeypatch.setattr(
-        "circuitry.adapters.ollama.urllib.request.urlopen",
-        lambda url, timeout=None: FakeResponse(payload),
-    )
+    _patch_opener_open(monkeypatch, payload)
 
     result = runner.invoke(app, ["list", "--models", "ollama", "--json"])
     assert result.exit_code == 0
@@ -43,10 +54,7 @@ def test_models_for_an_adapter(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_models_table_render(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        "circuitry.adapters.ollama.urllib.request.urlopen",
-        lambda url, timeout=None: FakeResponse({"models": [{"name": "phi3:mini"}]}),
-    )
+    _patch_opener_open(monkeypatch, {"models": [{"name": "phi3:mini"}]})
     result = runner.invoke(app, ["list", "--models", "ollama"])
     assert result.exit_code == 0
     assert "phi3:mini" in result.output
