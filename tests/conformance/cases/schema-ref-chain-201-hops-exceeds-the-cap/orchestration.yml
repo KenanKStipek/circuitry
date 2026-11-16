@@ -1,4 +1,4 @@
-name: schema-ref-chain-199-hops-is-accepted
+name: schema-ref-chain-201-hops-exceeds-the-cap
 adapter: scripted
 model: m
 effects:
@@ -405,5 +405,9 @@ effects:
       L197:
         $ref: '#/$defs/L198'
       L198:
+        $ref: '#/$defs/L199'
+      L199:
+        $ref: '#/$defs/L200'
+      L200:
         type: object
   template: give json
