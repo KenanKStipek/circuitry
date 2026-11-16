@@ -1299,21 +1299,33 @@ otherwise. `fail_on_error: false` turns a refused redirect back into a
 success, the 3xx response on `value` and `meta.status_code`, as it does for
 a 4xx.
 
-#### Proxy, ports and schemes (`http` and every curl-based adapter)
+#### Proxy, ports and schemes (`http`, every curl-based adapter, `cyberdiner`, `systemone`)
 
-Circuitry decides the proxy itself for the `http` tool and every
-curl-based model adapter, on both engines — never curl's or urllib's own
+Circuitry decides the proxy itself, on both engines, for every surface
+that makes an outbound request: the `http` tool, every curl-based
+adapter and tool (`ollama`, `openai`, `openai`-compatible providers,
+`anthropic`, `replicate`, `watsonx`, `web_search`, `weather`, and
+`comfyui`'s JSON calls), the `cyberdiner` adapter, and the `systemone`
+tool for a non-loopback `base_url` — never curl's or urllib's own
 environment reading:
 
 - An `http://` URL uses `http_proxy`, lowercase only; uppercase
   `HTTP_PROXY` is never read. An `https://` URL uses `https_proxy`, then
   `HTTPS_PROXY`. Either falls back to `all_proxy`, then `ALL_PROXY`.
 - `no_proxy` (then `NO_PROXY`) is a comma-separated list: `*` bypasses
-  everything; an entry matches a host exactly or as a domain suffix (a
-  leading dot is optional); an IP entry matches that IP (CIDR is not
-  supported).
-- A proxy value with no `scheme://` prefix means `http://`; userinfo in it
-  becomes `Basic` proxy authentication. Any other proxy scheme is refused.
+  everything; a named entry matches a host exactly or as a domain suffix
+  (a leading dot is optional); an IP entry matches only that exact IP
+  (never by suffix, and CIDR is not supported); a `host:port` entry (the
+  host part not itself an IP) matches only that host on that exact port.
+- A proxy value with no `scheme://` prefix means `http://`; a proxy value
+  naming no port (or an empty one) uses port 80 explicitly — never curl's
+  own default of 1080. Userinfo in it becomes `Basic` proxy
+  authentication whenever a user is present, an empty password included;
+  it is percent-decoded first. Any other proxy scheme is refused.
+- `systemone` never proxies a loopback `base_url` (`localhost`,
+  `127.0.0.0/8`, `::1`) at all, whatever the environment says — its own
+  rule, since it always talks to a local service; a non-loopback one
+  (`allow_remote: true`) follows every rule above like any other surface.
 - Neither engine reads macOS's (or any other OS's) own system proxy
   settings — only these environment variables.
 
@@ -1324,12 +1336,13 @@ to 65535; an empty port means the scheme's own default. Anything else
 (`+9`, `0_9`, ` 9`, `0`, `65536`, non-digits) is refused before any
 request, naming the URL with any userinfo removed.
 
-The `http` tool refuses any scheme other than `http`/`https` — including
-on a redirect target — before any I/O and before touching any local file
-(so a `file://` URL is never read as one, and a `data:`/`ftp://` URL is
-never decoded/fetched either). A curl-based adapter's `base_url` gets the
-same refusal: curl would otherwise attempt a scheme electricity's own
-transport never speaks.
+The `http` tool refuses any scheme other than `http`/`https` — before any
+I/O and before touching any local file (so a `file://` URL is never read
+as one, and a `data:`/`ftp://` URL is never decoded/fetched either) — and
+so does a followed redirect target, whatever its scheme (not only
+`ftp://`). A curl-based adapter's `base_url` gets the same refusal: curl
+would otherwise attempt a scheme electricity's own transport never
+speaks.
 
 #### Saving a response body to a file (`http`'s `save_to`)
 
