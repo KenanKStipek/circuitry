@@ -263,8 +263,8 @@ Both engines export leftover counts the same way:
 
 Circuitry's own implementation (`circuitry.adapters.scripted`) hangs this off
 `atexit`, scoped to the `ScriptedAdapter` class alone (nothing else in the
-process is affected) — electricity's own test-only `scripted` adapter (lane F1,
-§448) implements an equivalent exit-time hook reading the identical variable
+process is affected) — electricity's own test-only `scripted` adapter (§448)
+implements an equivalent exit-time hook reading the identical variable
 name, registering at load time, and merging by minimum remaining count the
 same way, so one harness-side check (`tests/conformance/harness.py`) works
 unmodified against either engine's subprocess.

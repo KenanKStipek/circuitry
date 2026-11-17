@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""A differential corpus for `electricity-complexity` (electricity M1 lane
-K1, issue #505): every case asks ``circuitry.core.complexity.score`` --
+"""A differential corpus for `electricity-complexity` (issue #505):
+every case asks ``circuitry.core.complexity.score`` --
 Circuitry's own real function, never a re-derivation of it -- for the
 answer, and records the exact wire shape ``core/prompt.py::_complexity_meta``
 would write to ``meta.complexity``, plus each signal's own ``estimated``

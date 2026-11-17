@@ -18,7 +18,7 @@ accepts it and, when it does not, every violation:
 
 Documents are synthetic, hand-written against the schema/design, not drawn
 from any real orchestration. Must be run with the Circuitry package
-installed in the active interpreter (the lane venv locally; `pip install -e
+installed in the active interpreter (`pip install -e
 .` in CI) so the schema and the ``jsonschema`` version are Circuitry's own.
 Usage: python3 generate_schema_corpus.py [--check]
 """
@@ -526,7 +526,7 @@ def _structural_case(name: str, document: Any) -> dict:
 def structural_cases() -> list[dict]:
     invalid: list[tuple[str, Any]] = [
         (
-            # Issue #528's review: a near-miss unknown key right
+            # Issue #528: a near-miss unknown key right
             # next to two schema errors on the same effect (the issue's own
             # acceptance bullet, "unknown keys next to schema errors") --
             # `structural_errors` reports the near-miss first (the likelier

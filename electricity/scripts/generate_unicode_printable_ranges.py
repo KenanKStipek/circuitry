@@ -14,8 +14,8 @@ newly-assigned codepoints differently), this script reads the answer
 directly from the interpreter generating electricity's golden corpus, and
 writes it into the crate as generated, checked-in Rust source. Must be run
 with the same Python version/Unicode Character Database version used to
-generate the golden corpus (see generate_value_corpus.py) -- CI and the lane
-venv both pin Python 3.11.
+generate the golden corpus (see generate_value_corpus.py): Python 3.11,
+pinned by `electricity/scripts/generator-constraints.txt`, same as CI.
 
 Usage: python3 generate_unicode_printable_ranges.py
 Writes: crates/electricity-value/src/generated/unicode_nonprintable_ranges.rs

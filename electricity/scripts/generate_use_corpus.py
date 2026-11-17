@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane I of issue #448
+"""Generate the golden corpus for issue #448
 (`electricity-vm::exec::use_`, issue #469) by running Circuitry's own
 real `core/use.py` functions against synthetic inputs.
 
@@ -13,7 +13,7 @@ execute` end-to-end cases that exercise it *through* a `use` effect's
 own rendered-inputs path, which is a different namespace than the CLI
 `-e` one.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`).
 Usage: python3 generate_use_corpus.py [--check]
 """
@@ -525,7 +525,7 @@ def _end_to_end_cases(tmp: Path) -> list[dict]:
             ctx={"input": {"v": "Y"}},
         )
     )
-    # PR #472's review: `meta.expect` must be written on a
+    # PR #472: `meta.expect` must be written on a
     # *passing* attempt too, not only a failing one -- the corpus
     # already had `retried_failing_expect_then_fails` for the failure
     # half; this is the missing pass half, over the same child.

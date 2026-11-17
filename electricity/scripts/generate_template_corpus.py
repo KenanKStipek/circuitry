@@ -19,7 +19,7 @@ Every case is synthetic, written directly against the rules in
 bug, falsy list elements suppressing their whole iteration including
 literal text) -- nothing here is copied from any real orchestration.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_template_corpus.py [--check]
 """
 

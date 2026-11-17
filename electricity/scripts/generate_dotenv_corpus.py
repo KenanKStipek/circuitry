@@ -11,7 +11,7 @@ prefix, comments, multi-line (quoted) values, and ``${VAR}``/
 Every ``.env`` text here is synthetic -- written for this issue, nothing
 copied from a real file.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_dotenv_corpus.py [--check]
 """
 

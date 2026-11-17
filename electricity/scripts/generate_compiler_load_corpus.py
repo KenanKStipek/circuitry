@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Lane B's golden corpus: `load_document`, `structural_errors`/
+"""The golden corpus: `load_document`, `structural_errors`/
 `unknown_key_warnings`, and the concurrency-configuration errors
-(issue #408's lane B section).
+(issue #408).
 
 Every case here fails before `compile_orchestration` -- a load error, a
 structural error, or (for `check_for_run` specifically) a concurrency-
-configuration error -- so every case is fully checkable against this
-lane alone. `validate()`'s own concurrency-configuration check runs
+configuration error -- so every case is fully checkable without a
+compiler at all. `validate()`'s own concurrency-configuration check runs
 *after* a document compiles (confirmed directly against
 `cli/runtime_shim.py`), so the two `*_concurrency_config_error` cases'
-`check_report` side is recorded against a real compile (lane C has
-landed) even though their `check_for_run` side -- which checks the
+`check_report` side is recorded against a real compile (now that the
+compiler exists) even though their `check_for_run` side -- which checks the
 same configuration *before* structural checks even start -- never
 needed one.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_load_corpus.py [--check]
 """
 
@@ -806,11 +806,11 @@ CASES: list[dict[str, Any]] = [
         "entry": "doc.yml",
     },
     {
-        # PR #417's second review: a schema `maximum`/`minimum` check
+        # PR #417: a schema `maximum`/`minimum` check
         # against an arbitrary-precision integer, well past `i64`/`u64`
-        # range (the `jsonschema` crate panic this lane's F3 fix
-        # clamps against) -- a 401-digit positive integer violates
-        # `if.threshold`'s own `maximum: 1`.
+        # range (the `jsonschema` crate panics on such a value, so
+        # electricity clamps it first) -- a 401-digit positive integer
+        # violates `if.threshold`'s own `maximum: 1`.
         "name": "if_threshold_huge_int_is_a_maximum_error",
         "files": {
             "doc.yml": (

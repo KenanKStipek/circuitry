@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the golden corpus for lane C of issue #431's own
+"""Generate the golden corpus for issue #431's own
 `electricity-vm::exec::tool::execute_tool` -- a close port of
 `core/tool.py::ToolRuntime.execute` -- by actually running that real
 Python method against a real `circuitry.core.store.Store`, for every
@@ -19,7 +19,7 @@ corpus's own expected values) are deterministic regardless of
 `random.uniform`'s own jitter -- a zero ceiling always waits zero,
 on both sides of the port.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_tool_execute_corpus.py [--check]
 """
 

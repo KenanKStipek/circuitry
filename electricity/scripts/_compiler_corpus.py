@@ -3,8 +3,8 @@ Test strategy section).
 
 Not itself a `generate_*.py` script (the generated-files workflow's glob
 skips a leading underscore), but imported by every one that is:
-`generate_compiler_smoke_corpus.py` (lane A, exercising this helper end
-to end) and lane B/C/D's own `generate_compiler_{load,compile,compose}_
+`generate_compiler_smoke_corpus.py` (exercising this helper end
+to end) and `generate_compiler_{load,compile,compose}_
 corpus.py`.
 
 Each case is a dict:
@@ -34,14 +34,14 @@ Each case is a dict:
 
 A `{"bytes_hex": ...}` entry may also carry an optional `"mode"` (an
 octal permission string, e.g. `"000"`) -- applied with `os.chmod` after
-the file is written, for a lane D case exercising an unreadable prompt
+the file is written, for a case exercising an unreadable prompt
 file (`core/prompt_files.py`'s "could not be read" branch). Not
 meaningful on Windows; a case that needs it is Unix-only by nature
 (permission bits), same as a symlink-escape case already is.
 
 A `{"repeat": text, "count": int}` entry writes *text* repeated *count*
 times (`text * count`) -- a generated-content spec for a case whose
-file content is large and uniform (a lane D case one byte over the
+file content is large and uniform (a case one byte over the
 prompt-file size limit, say), so the golden JSON this helper writes
 records the short spec rather than the file's own megabyte of bytes.
 
@@ -70,7 +70,7 @@ Every recorded string has the temporary root replaced with the literal
 file), and `render_corpus` refuses to write output that still contains
 a real home, temp, `/private/`, or Windows drive-letter path -- the
 repository's rule that a committed generated file must carry no local
-path (`LANE-CONTRACT.md`).
+path.
 """
 
 from __future__ import annotations
@@ -350,7 +350,7 @@ def _normalize_paths(obj: Any, root: str) -> Any:
     if isinstance(obj, dict):
         # A `definition` dict can carry a non-`str` key verbatim (a tool's
         # `params`/a `use`'s `inputs` with a `yes:`/`1:` YAML key,
-        # #431's lane A) -- only a `str` key is ever one of this
+        # #431) -- only a `str` key is ever one of this
         # function's own bookkeeping fields (`"_root"`), so a non-`str`
         # key is always kept, never filtered.
         return {
