@@ -3,7 +3,7 @@
 //! Circuitry's own loader *fails* on it, while electricity-yaml
 //! successfully loads a value -- the opposite of every
 //! `known_divergence` case in `tests/golden/corpus.json`, which all have
-//! electricity-yaml on the failing side. D4 (PR #388's third review)
+//! electricity-yaml on the failing side. D4 (PR #388)
 //! notes the corpus schema's own gap; this case is pinned here instead,
 //! directly against the behaviour, rather than left undocumented.
 //!

@@ -275,7 +275,7 @@ fn container_key_one_past_the_limit_is_a_distinct_nesting_error() {
     assert!(matches!(err, YamlError::NestingTooDeep { .. }));
 }
 
-/// The fourth-review regression for the budget bypass found in
+/// The regression for the budget bypass found in
 /// `store_anchor`: storing an anchored node used to deep-clone it
 /// *outside* `MAX_NODES`, so nesting anchors (never aliasing them --
 /// `check_anchor_name` forbids reusing one) around an already-large
