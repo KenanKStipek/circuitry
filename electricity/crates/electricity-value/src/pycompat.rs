@@ -16,7 +16,7 @@ use crate::Value;
 use std::fmt;
 
 /// A Python exception class name -- the one canonical copy every
-/// crate that needs to report one builds on (issue #449's gate lane;
+/// crate that needs to report one builds on (issue #449;
 /// PR #454 named `electricity-tools::PyExc` and
 /// `electricity-vm::adapter::PyExc` as two copies of the same thing,
 /// kept apart by a dependency-direction rule that doesn't actually
@@ -187,7 +187,7 @@ impl PyExc {
 
 impl PyExc {
     /// `True` for every variant that is a `ValueError` subclass in
-    /// Python (issue #513's review): `core/use.py`'s own
+    /// Python (issue #513): `core/use.py`'s own
     /// `except (ValueError, RecursionError)` split decides
     /// not-retried this way, via `isinstance`, so every subclass
     /// counts, not just the bare class. `RecursionError` itself is a
