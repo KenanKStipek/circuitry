@@ -1840,10 +1840,10 @@ pub async fn run_orchestration_with_config(
     // Profile routing pins and provider denials (issue #495):
     // run only when `profile.effects` is non-empty, after concurrency
     // and persistence validation (`pre_input_checks` bundles complexity,
-    // concurrency and persistence into one call -- not a seam this
-    // change should split, so this sits after all three rather than strictly
+    // concurrency and persistence into one call -- not a seam worth
+    // splitting, so this sits after all three rather than strictly
     // between concurrency and persistence as `cli/runtime_shim.py` has
-    // it; the PR body records this divergence, visible only when a
+    // it; a documented divergence, visible only when a
     // document fails both at once).
     if let Some(profile) = &profile {
         if !profile.effects.is_empty() {
