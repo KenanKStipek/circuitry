@@ -1,4 +1,4 @@
-//! Lane A: `Program`, `DocumentInfo` (issue #408's Scope section).
+//! `Program`, `DocumentInfo` (issue #408's Scope section).
 
 use crate::op::Op;
 use electricity_value::Value;

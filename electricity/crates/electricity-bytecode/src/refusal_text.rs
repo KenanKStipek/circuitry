@@ -31,8 +31,8 @@ pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 pub const PREVIEW_MARKER: &str = "is a preview and can't run this orchestration";
 
 /// `electricity_bytecode::RefusalReason` -> the human-readable half of
-/// the refusal message [`format_refusal`] builds (issue #431's gate
-/// lane: "the refusal message keeps the existing preview marker phrase
+/// the refusal message [`format_refusal`] builds (issue #431:
+/// "the refusal message keeps the existing preview marker phrase
 /// and adds the effect path and the reason").
 pub fn refusal_reason_text(reason: &RefusalReason) -> String {
     match reason {

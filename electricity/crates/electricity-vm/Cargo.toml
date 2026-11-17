@@ -10,13 +10,13 @@ description = "The M0-H VM: store, execution, cancellation, limiter (electricity
 [dependencies]
 electricity-value = { path = "../electricity-value" }
 electricity-bytecode = { path = "../electricity-bytecode" }
-# `RunContext::complexity` (issue #449's gate lane item 6) -- this crate
+# `RunContext::complexity` (issue #449) -- this crate
 # depends on `electricity-config`, matching DESIGN.md §2's own direction
 # ("config → compiler, vm, tools, adapters, runtime-plugins": everyone
 # reads config, config reads nothing).
 electricity-config = { path = "../electricity-config" }
-# Lane K2 (issue #516): `complexity::score_and_route` calls straight
-# into K1's pure scorer/router library.
+# `complexity::score_and_route` (issue #516) calls straight
+# into `electricity-complexity`'s own pure scorer/router library.
 electricity-complexity = { path = "../electricity-complexity" }
 # `split::whitespace_re` translates `core/split.py::_WHITESPACE_RE`'s
 # own `\s+` through this crate's own Python-semantics regex translator
@@ -28,11 +28,10 @@ electricity-tools = { path = "../electricity-tools" }
 electricity-template = { path = "../electricity-template" }
 electricity-json = { path = "../electricity-json" }
 electricity-redaction = { path = "../electricity-redaction" }
-# Pre-added now so neither lane has to touch this file: a path-`use`
-# child is compiled at run time
-# (lane I, `exec::use_::execute_use`), which needs this crate's own
+# A path-`use` child is compiled at run time
+# (`exec::use_::execute_use`), which needs this crate's own
 # `prepare_document`/compile pipeline; a `prompt` effect's own `schema:`
-# (lane G) is validated the same way `electricity-compiler` already
+# is validated the same way `electricity-compiler` already
 # validates Circuitry's own schemas, through `electricity-schema`.
 # Neither creates a cycle: `electricity-compiler`/`electricity-schema`
 # depend on neither `electricity-vm` nor each other in that direction.
@@ -40,14 +39,14 @@ electricity-compiler = { path = "../electricity-compiler" }
 electricity-schema = { path = "../electricity-schema" }
 # `exec::conditional`'s own CEL `if` evaluation (`evaluate_condition`).
 electricity-cel = { path = "../electricity-cel" }
-# `adapter::Adapter`'s own object-safety (issue #449's gate lane item 4),
+# `adapter::Adapter`'s own object-safety (issue #449),
 # the same reason `electricity-tools::ToolPlugin` needs it.
 async-trait = "0.1"
 indexmap = { version = "2", features = ["serde"] }
 tokio = { version = "1", features = ["sync", "macros", "time"] }
 # `exec::dynamic`'s own tree-flow dispatch: a bounded set of concurrent,
-# non-`'static` branch futures polled from one task (issue #431's Lane B
-# section: "FuturesUnordered", not `tokio::task::spawn_local`).
+# non-`'static` branch futures polled from one task (issue #431:
+# "FuturesUnordered", not `tokio::task::spawn_local`).
 futures = { version = "0.3", default-features = false, features = ["std"] }
 # Full-jitter retry backoff (`core/tool.py`'s own `next_backoff_delay_ms`,
 # `adapters/_retry.py`) -- a timing jitter, not a security-sensitive value,
@@ -63,7 +62,7 @@ chrono = { version = "0.4", default-features = false, features = ["std", "clock"
 # own on_error/finally degradation warnings (issue #442) -- a no-op
 # unless a binary later installs a logger, same as electricity-cel's.
 log = "0.4"
-# `exec::use_`'s own inline-child identity/digest (M1 lane I, issue
+# `exec::use_`'s own inline-child identity/digest (issue
 # #469): `core/use.py::_load_child_orch`'s own
 # `hashlib.sha256(cleaned.encode("utf-8")).hexdigest()` -- the same
 # crate `electricity-compiler::digest` already hashes a file-based
@@ -103,7 +102,7 @@ serde = { version = "1", features = ["derive"] }
 # `serde_json::Value` at all.
 serde_json = { version = "1", features = ["raw_value"] }
 async-trait = "0.1"
-# `test-tools`'s own `flaky_build` builder (S1's own test: a fallible
+# `test-tools`'s own `flaky_build` builder (a fallible
 # per-attempt plugin *builder*, not just a flaky `execute`) -- only ever
 # active for this crate's own test target, never a release build.
 electricity-tools = { path = "../electricity-tools", features = ["test-tools"] }

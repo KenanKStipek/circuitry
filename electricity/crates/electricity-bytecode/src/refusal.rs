@@ -1050,8 +1050,8 @@ mod tests {
     #[test]
     fn a_cof_plugin_this_build_cannot_dispatch_is_still_refused_with_the_preview_marker() {
         // `web_fetch` and `mcp` are both in Circuitry's own registry
-        // (`crate::plugin_names::PLUGIN_NAMES`) but no M1 lane builds
-        // either -- unlike `nonexistent_tool` above, these keep the
+        // (`crate::plugin_names::PLUGIN_NAMES`) but this build has no
+        // builder for either -- unlike `nonexistent_tool` above, these keep the
         // preview refusal (issue #511's own "keep the preview refusal"
         // half).
         for provider in ["web_fetch", "mcp"] {
@@ -1350,7 +1350,7 @@ mod tests {
 
     #[test]
     fn a_mapping_with_a_secret_key_and_other_keys_is_data_outside_http_headers() {
-        // Issue #598's review: like a `{from:}` leaf, only `secret` plus an
+        // Issue #598: like a `{from:}` leaf, only `secret` plus an
         // optional `prefix` is a reference, except as an `http` header's
         // value, where any `secret` key is one.
         let str_value = |text: &str| Value::Str(text.to_string());
@@ -1481,7 +1481,7 @@ mod tests {
     fn tools_stdlib_providers_are_refused_while_tools_process_is_set_instead() {
         // The four capability flags are independent -- setting the
         // wrong one must not accidentally accept a provider that
-        // belongs to a different lane's own set.
+        // belongs to a different flag's own set.
         let tool = leaf_op(
             EffectPath::root().push_name("run"),
             LeafKind::Tool(tool_op_with_provider("fs", ParamNode::Map(IndexMap::new()))),
@@ -1582,8 +1582,8 @@ mod tests {
 
     #[test]
     fn an_extra_allowed_provider_is_accepted_only_when_listed() {
-        // `ripgrep` (not `sleep`): a real cof plugin no M1 lane builds,
-        // so it's still refused with the preview marker while absent
+        // `ripgrep` (not `sleep`): a real cof plugin this build has no
+        // builder for, so it's still refused with the preview marker while absent
         // from *providers* -- unlike `sleep`, which issue #511's own
         // fix no longer refuses at all once it isn't the test-tools
         // feature's own extra name (it is not a cof plugin, so the
@@ -1653,9 +1653,9 @@ mod tests {
     fn scoring_only_config_runs_under_current_without_decomposition() {
         // Issue #516 §4(b): a config that turns on only `scoring`/
         // `routing` must run -- only decomposition narrows to a
-        // refusal from this lane on. This test passes `false` for
+        // refusal from here on. This test passes `false` for
         // *decomposition_enabled* the same as it would have before
-        // this lane's own narrowing, so it would have passed either
+        // that narrowing landed, so it would have passed either
         // way; the real guard for the narrowing itself is `electricity`
         // (lib)'s own `run_wiring.rs::
         // scoring_and_routing_enabled_without_decomposition_runs`,

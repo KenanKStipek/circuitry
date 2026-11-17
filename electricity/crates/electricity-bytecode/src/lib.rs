@@ -23,7 +23,7 @@
 //!   field from Circuitry's own `*Definition` dataclasses.
 //! - [`program`] — `Program`, `DocumentInfo`: the compiled whole.
 //! - [`defaults`] — the default values Circuitry applies, named here so
-//!   every later lane applies the same one.
+//!   every consumer applies the same one.
 //! - [`refusal`] — [`first_unsupported`]: the first effect path a
 //!   compiled `Program` has that the M0-H VM (issue #431) cannot run.
 //! - [`refusal_text`] — [`refusal_text::format_refusal`]/

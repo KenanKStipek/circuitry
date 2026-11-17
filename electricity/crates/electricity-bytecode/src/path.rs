@@ -1,4 +1,4 @@
-//! Lane A: `EffectPath`/`PathSegment`, the stable effect-path ID every
+//! `EffectPath`/`PathSegment`, the stable effect-path ID every
 //! `Op` carries (DESIGN.md §5.1, issue #408's Scope section).
 //!
 //! For a non-loop effect the path is just the chain of names from the
@@ -76,7 +76,7 @@ impl EffectPath {
     /// every [`PathSegment::Pass`] placeholder replaced by the
     /// [`PathSegment::Name`] `concretize` would have formatted it as
     /// (`iter_<N>`), so the result never carries a `Pass` segment.
-    /// `electricity_vm::Frame::effect_path` (issue #449's gate lane,
+    /// `electricity_vm::Frame::effect_path` (issue #449,
     /// PR #454) uses this instead of
     /// `concretize` so it can compose a `use`/decomposition child's own
     /// nesting prefix onto the result by segment, not by string

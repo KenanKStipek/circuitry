@@ -1,4 +1,4 @@
-//! Lane A: `TemplateText`/`Escape` (issue #408's Scope section;
+//! `TemplateText`/`Escape` (issue #408's Scope section;
 //! runtime-semantics §3.4, #397).
 
 use serde::Serialize;
@@ -21,7 +21,7 @@ pub enum Escape {
 ///
 /// The raw `source` is kept rather than a pre-tokenized form because
 /// `{{> name}}` partial expansion (runtime-semantics §3.4, the compile-
-/// time half of #406 this lane sets up for) splices text into `source`
+/// time half of #406, which this split is built to support) splices text into `source`
 /// *before* tokenizing — tokenizing first would have nothing to splice
 /// into.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

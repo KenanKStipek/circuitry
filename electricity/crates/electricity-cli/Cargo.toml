@@ -18,7 +18,7 @@ path = "src/main.rs"
 # (`cargo test -p electricity-cli --features test-tools --test signals`),
 # and `tests/leftover_export.rs` enables it to drive issue #478's own
 # exit-path wiring end to end (no document can make `scripted` load
-# until lane G flips `prompt`).
+# until `prompt` effect support lands).
 test-tools = ["electricity/test-tools", "dep:electricity-adapters"]
 
 [dependencies]

@@ -1,4 +1,4 @@
-//! Lane A: `Region`, `Condition`, `ExpectCondition` and `LoopSpec` —
+//! `Region`, `Condition`, `ExpectCondition` and `LoopSpec` —
 //! control-flow containers (issue #408's Scope section; DESIGN.md §5.1).
 
 use crate::op::Op;

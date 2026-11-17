@@ -1,4 +1,4 @@
-//! Lane A: the per-effect-type option structs, field for field from
+//! The per-effect-type option structs, field for field from
 //! Circuitry's `PromptDefinition`, `ToolDefinition`, `UseDefinition`,
 //! `YieldDefinition` and `ReflectorDefinition` (issue #408's Scope
 //! section). Each struct's doc comment maps every field back to the
