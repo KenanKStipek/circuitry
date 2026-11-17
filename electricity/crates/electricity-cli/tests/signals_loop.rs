@@ -1,9 +1,9 @@
 //! Issue #461's follow-up to `signals.rs` (issue #431's own acceptance
 //! criteria): SIGINT mid-`loop`, chain and tree flow -- the two
 //! "Cancellation tests" sub-section cases #461's own test plan called
-//! for, left unbuilt by that PR (#466). A
+//! for, left unbuilt by PR #466. A
 //! fresh file, not an edit to `signals.rs` itself
-//! (`docs/spec/vm-lanes.md`): same helpers, duplicated rather than
+//! (see `docs/spec/vm-lanes.md` for which file owns this): same helpers, duplicated rather than
 //! shared across `tests/` binaries, same convention `signals.rs`'s own
 //! module doc comment explains (process group per child, SIGKILLed on
 //! `Drop`, a `--live-state` readiness probe instead of a fixed sleep).
