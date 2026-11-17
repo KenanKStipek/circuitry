@@ -1,6 +1,6 @@
-//! Lane B/C: the per-container execution modules -- `dynamic` (chain/
+//! The per-container execution modules -- `dynamic` (chain/
 //! tree), `conditional` (CEL `if`), and this module's own [`tool`]
-//! (lane A's real `run_tool` dispatch seam).
+//! (the real `run_tool` dispatch seam).
 //!
 //! This module also hosts the handful of helpers every container
 //! executor needs (the single-effect dispatcher [`execute_op`], the
@@ -163,8 +163,8 @@ pub(crate) fn effect_completed_ok(store: &Store, node: &NodeRef) -> bool {
 /// decided here, by every container, from whichever `Store`/`NodeRef`
 /// it already has in scope at its own [`crate::RunObserver::
 /// effect_complete`] call, and carried through that hook's own
-/// *completed_at_is_truthy* parameter from there on (fix,
-/// issue #506 lane L1's review round 2: `electricity` (lib)'s own
+/// *completed_at_is_truthy* parameter from there on (issue #506:
+/// `electricity` (lib)'s own
 /// `Observer::effect_complete` used to re-derive this by walking the
 /// *run's* own root store, segment by segment, from *path* alone --
 /// which can never see a node still isolated in its own `use` child's
@@ -244,13 +244,11 @@ pub(crate) fn normalize_labels(labels: Option<&Value>) -> Value {
 /// what each of its *values* point to. It is pushed as a
 /// [`CtxSource::Live`] entry, resolved through [`live_ctx`] exactly like
 /// any other live node (a detached node is an ordinary `NodeRef` in
-/// every other respect). This is the P0 "a nested container freezes its
-/// own ancestors' state" case from PR #440's review, found a second time after
-/// an initial fix that gave the overlay a `Frozen(Value)` of its own --
-/// which looked identical to the tree's case above, but was wrong for
-/// exactly the reason the tree's case is safe: something *does* go on
-/// mutating a branch's own ancestors (the branch's own later steps)
-/// while this overlay is in use.
+/// every other respect). This overlay must stay live, not frozen,
+/// unlike the tree's case above (PR #440): the branch's own later
+/// steps keep mutating this detached node's own ancestors while the
+/// overlay is in use, so a `Frozen(Value)` snapshot taken here would
+/// silently go stale.
 ///
 /// Either way, Python's own `ctx = store.state if ctx_override is None
 /// else {**ctx_override, self.defn.name: dyn}` never actually copies a
@@ -292,7 +290,7 @@ pub(crate) type CtxChain = Vec<CtxSource>;
 /// Quadratic in state size over a long chain of deeply nested
 /// containers -- most visibly, a named loop's own accumulated
 /// `iter_<N>` children, re-copied in full on every single render of
-/// every later pass (lane H's own `loop_perf` test in `tests/
+/// every later pass (the `loop_perf` test in `tests/
 /// loop_perf.rs` measures this directly).
 ///
 /// This function fixes only the one constant-factor waste that stays
@@ -407,7 +405,7 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
     }
 }
 
-/// Dispatches one compiled `Op` -- a `tool` leaf (through lane C's own
+/// Dispatches one compiled `Op` -- a `tool` leaf (through
 /// [`tool::execute_tool`]), a nested `dynamic`/`finally:`-wrapped
 /// `dynamic` (through [`dynamic::execute_dynamic`]), or an `if`
 /// (through [`conditional::execute_conditional`]). *parent* is the
@@ -418,18 +416,18 @@ pub(crate) fn wrap_effect_error(label: &str, err: VmError) -> VmError {
 /// `tool` leaf collapses it into a `Value` with [`live_ctx`] right
 /// here, at the moment it is actually needed; a nested `dynamic` or
 /// `if` child gets the chain itself, unresolved -- [`dynamic::
-/// execute_dynamic`] extends it with its own enclosing scope (Quirk
-/// Q1's re-merge), and [`conditional::execute_conditional`] resolves it
+/// execute_dynamic`] extends it with its own enclosing scope (a scope
+/// re-merge), and [`conditional::execute_conditional`] resolves it
 /// itself, fresh, for the condition and for every branch step (that
 /// module's own doc comment: freezing it once here, before the branch
-/// even starts, is the P0 "a nested container freezes its own
-/// ancestors' state" case from PR #440's review) -- exactly mirroring
+/// even starts, would hit the same live-ancestors hazard PR #440
+/// fixed) -- exactly mirroring
 /// `core/dynamic.py::_execute_effect`'s own per-effect-type dispatch,
 /// where only a `dynamic`/`if` child ever receives `ctx` as an
 /// `ctx_override`/live reference rather than a resolved value.
 ///
 /// `prompt`/`use`/`yield`/`reflector`/`loop`/a `mode: model` `if` are all
-/// refused before a real run ever starts (lane A's `first_unsupported`),
+/// refused before a real run ever starts (`first_unsupported`),
 /// so reaching one here is a defect, not a reachable document shape --
 /// reported as [`VmError::NotImplemented`] rather than panicking.
 #[allow(clippy::too_many_arguments)]
@@ -471,7 +469,7 @@ pub(crate) fn execute_op<'a>(
         // `op.enabled` is `true` for every `Op` orchestration YAML
         // alone ever compiles to -- only a profile's own `effects.
         // <path>.enabled: false` (`electricity_compiler::overrides::
-        // apply_effect_overrides`, lane J2, issue #518) ever sets it
+        // apply_effect_overrides`, issue #518) ever sets it
         // `false`, so this branch stays unreachable for a run with no
         // `--profile` (or a profile with no `effects:` entries).
         //
@@ -965,12 +963,12 @@ mod wrap_effect_error_tests {
 
     #[test]
     fn a_refusal_passes_through_the_wrap_unchanged() {
-        // M1 lane I prerequisites, issue #448, item U3: `VmError::Refused`
+        // Issue #448, item U3: `VmError::Refused`
         // is fatal the same way `VmError::Cancelled` is (`VmError::
         // is_fatal`) -- never wrapped with an effect-path prefix through a
         // chain/tree container, even though, unlike a cancellation, it
         // still gets recorded like an ordinary failure on every
-        // container's own node (ruling R1 on PR #462,
+        // container's own node (PR #462,
         // `VmError::is_fatal`'s own doc comment) -- this wrap is strictly
         // a control-path no-op either way.
         let refused = VmError::Refused {

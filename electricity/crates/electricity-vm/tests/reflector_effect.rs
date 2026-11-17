@@ -1,4 +1,4 @@
-//! M1 lane L1 (issue #506): `reflector` effect execution -- integration
+//! Issue #506: `reflector` effect execution -- integration
 //! tests against a real, compiled-by-hand document (`execute_root`),
 //! the same convention `tests/prompt_effect.rs`/`tests/use_effect.rs`
 //! use. The inner planner prompt runs through a fake adapter (this
@@ -354,21 +354,21 @@ async fn done_true_with_stop_on_done_never_runs_the_generated_plan() {
 
 #[tokio::test]
 async fn an_inner_refusal_is_recorded_on_the_reflector_node_and_returned_unwrapped() {
-    // PR #510's first review: a `VmError::Refused`
+    // A `VmError::Refused`
     // from the inner planner's own dispatch (an unbuildable
     // `adapter:`, `exec::prompt`'s own `is_unbuildable` check) used to
     // take the same no-record branch as `VmError::Cancelled` --
     // skipping the iteration record, `meta.error`, `completed_at`,
     // `value: false` and `effect_complete`'s own error text entirely.
-    // Ruling R1 on PR #462 requires it recorded like an
+    // PR #462 requires it recorded like an
     // ordinary failure, with the bare `Refused` value still returned
     // unwrapped so no enclosing `on_error: continue` ever absorbs it.
     let mut inner_prompt = plan_prompt("propose_steps");
     if let NodeKind::Leaf(leaf) = &mut inner_prompt.kind {
         if let LeafKind::Prompt(prompt_op) = leaf.as_mut() {
-            // `litellm` has no electricity builder yet (lane F2, #504) --
+            // `litellm` has no electricity builder yet (#504) --
             // still an unbuildable, Circuitry-known adapter name, unlike
-            // `openai`, which F2 made real.
+            // `openai`, which became real in that same change.
             prompt_op.provider = Some("litellm".to_string());
         }
     }
@@ -457,17 +457,17 @@ async fn a_generated_prompt_with_an_unbuildable_provider_is_refused_and_never_ab
     // `prompt` effect naming a provider this build has never built
     // (`provider: litellm` -- Circuitry-known, `electricity_vm::
     // adapter_names::ADAPTER_NAMES`, but absent from `electricity_
-    // adapters::build_registry()`, issue #498 ruling 4's own
+    // adapters::build_registry()`, issue #498's own
     // `is_unbuildable` check) is a mid-run `VmError::Refused`,
     // recorded on both the generated `use` node and this reflector's
-    // own node (ruling R1 on PR #462), and returned
+    // own node (PR #462), and returned
     // unwrapped so an enclosing `on_error: continue` never absorbs it
     // (this test's own chain `dynamic` -- built by `run_reflector`'s
     // own `chain_dynamic` helper with `OnError::Fail` -- fails the
     // whole run exactly because of that). Not a model-mode `if`
-    // anymore (issue #513, lane G2, flipped `Supported::
+    // anymore (issue #513 flipped `Supported::
     // model_condition` to `true`, so that construct no longer stays
-    // refused): this one does, since G2 never touches adapter
+    // refused): this one does, since #513 never touches adapter
     // buildability.
     let plan_reply = "done: false\neffects:\n  \
         - type: prompt\n    \
@@ -518,10 +518,10 @@ async fn a_generated_prompt_with_an_unbuildable_provider_is_refused_and_never_ab
 
 #[tokio::test]
 async fn a_generated_model_mode_if_now_runs() {
-    // Issue #513, lane G2: once `Supported::model_condition` is
+    // Issue #513: once `Supported::model_condition` is
     // `true`, a generated plan's own model-mode `if` is no longer a
-    // refusal (the construct the test above used to probe before G2
-    // landed) -- it runs, through the same default adapter the
+    // refusal (the construct the test above used to probe before
+    // #513 landed) -- it runs, through the same default adapter the
     // planner's own prompt used, consuming the next queued reply.
     let plan_reply = "done: false\neffects:\n  \
         - type: if\n    \
@@ -646,8 +646,8 @@ async fn a_generated_use_ref_gives_lane_is_own_compile_error_text() {
     // Issue #506's own "Rust-only tests" list, and the "Settled
     // questions" section's own "use: ref: in a generated plan" entry:
     // a documented divergence (Python resolves the curation library;
-    // electricity never does, lane I's own compile-time rejection, M1
-    // gate seam). The generated child's own compile error reaches
+    // electricity never does -- a compile-time rejection). The
+    // generated child's own compile error reaches
     // `generated_exec_failed:` like any other `Inline orchestration
     // validation failed:` text -- never a `VmError::Refused`.
     let plan_reply = "done: false\neffects:\n  \

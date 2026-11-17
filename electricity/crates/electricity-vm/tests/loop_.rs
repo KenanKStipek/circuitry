@@ -632,7 +632,7 @@ async fn unnamed_chain_each_writes_directly_into_the_enclosing_node_each_pass() 
 }
 
 // ---------------------------------------------------------------------
-// while (CEL and model mode, lane G2/#513)
+// while (CEL and model mode, #513)
 // ---------------------------------------------------------------------
 
 #[tokio::test]
@@ -1927,7 +1927,7 @@ async fn each_in_resolving_to_a_date_names_the_bare_python_class_in_the_error() 
 }
 
 // ---------------------------------------------------------------------
-// VmError::Refused (#462, lane I prerequisites) -- fatal for control
+// VmError::Refused (#462) -- fatal for control
 // only, recorded on the loop's own node like an ordinary failure
 // ---------------------------------------------------------------------
 
@@ -1938,7 +1938,7 @@ async fn each_in_resolving_to_a_date_names_the_bare_python_class_in_the_error() 
 /// and still leaves the loop's own node recorded exactly like an
 /// ordinary failure -- `value`/`meta.error`/`completed_at` all
 /// written, unlike a real cancellation (`VmError::is_fatal`'s own doc
-/// comment, ruling R1 on PR #462).
+/// comment, PR #462).
 #[tokio::test]
 async fn a_refused_chain_pass_is_never_absorbed_and_is_still_recorded_on_the_node() {
     let store = Store::new();
@@ -2738,7 +2738,7 @@ async fn with_prev_overlay_shows_a_reused_loops_own_current_pass_iter_node() {
 
 #[tokio::test]
 async fn a_disabled_body_step_is_recorded_disabled_and_counted_but_never_dispatched() {
-    // Issue #518 (lane J2): `LoopRuntime._execute_body`'s own
+    // Issue #518: `LoopRuntime._execute_body`'s own
     // `effect_record` -- `{type, name, disabled: true}` for a disabled
     // body op, included in `count`, and the step's own `json` tool
     // dispatch never runs (it would otherwise fail, like every other
@@ -2794,7 +2794,7 @@ async fn a_disabled_body_step_is_recorded_disabled_and_counted_but_never_dispatc
 
 #[tokio::test]
 async fn collect_values_leaves_out_a_disabled_target_rather_than_a_null_entry() {
-    // Issue #518 (lane J2): `LoopRuntime._collect_values` skips a node
+    // Issue #518: `LoopRuntime._collect_values` skips a node
     // whose `meta.disabled` is exactly `true` (`core/disabled.py::
     // is_disabled_node`) -- the pass still completes (unlike an
     // `on_error: continue` failure), but contributes nothing to

@@ -1,20 +1,20 @@
-//! `reflector` effect execution (`core/reflector.py`) -- issue #506's
-//! lane L1. A reflector runs an inner planning `dynamic` whose plan
+//! `reflector` effect execution (`core/reflector.py`) -- issue #506.
+//! A reflector runs an inner planning `dynamic` whose plan
 //! step gets a "prime directive" prepended (`render_reflector_prime`,
 //! rendered with Mustache -- issue #778), reads the plan step's text as
 //! YAML, normalizes it (`extract_done_flag`: the `done:` flag, the
 //! `steps:`/`plan:` spellings, a bare list), and runs the parsed
 //! document straight as a synthesized `use: inline` child's own source
 //! (`UseSource::InlineDocument`, never dumped back to YAML and
-//! reparsed) under `<reflector>.<generated_key>.iter_<i>` (lane I's own
-//! [`super::use_::execute_use_with_ctx`]), for up to `max_iterations`
+//! reparsed) under `<reflector>.<generated_key>.iter_<i>`
+//! ([`super::use_::execute_use_with_ctx`]), for up to `max_iterations`
 //! cycles.
 //!
 //! The reflector makes no model call of its own -- the planner is an
-//! ordinary `prompt` (lane G's [`super::prompt::execute_prompt`], run
+//! ordinary `prompt` ([`super::prompt::execute_prompt`], run
 //! through [`super::dynamic::execute_dynamic`] like any other nested
 //! `dynamic`), and the generated document is an ordinary inline `use`
-//! child (lane I). This module is the glue between them, plus the
+//! child. This module is the glue between them, plus the
 //! pieces only the reflector needs: the prime renderer, the plan
 //! normalizer, and [`crate::Frame::rebased`] (the inner dynamic's own
 //! paths -- compiled at `<refl>.<step>`, never `<refl>.inner.<step>`,
@@ -40,14 +40,14 @@
 //! observed (the inner dynamic or the generated child), balanced only
 //! by this effect's own `effect_complete`. A [`VmError::Refused`]
 //! either the inner planner's own dispatch (an unbuildable `adapter:`)
-//! or a generated child's own fresh compile turns up (ruling
-//! R1 on PR #462) *is* recorded on this effect's own node
+//! or a generated child's own fresh compile turns up (PR #462)
+//! *is* recorded on this effect's own node
 //! either way -- the iteration record, `meta.error`, `completed_at`,
 //! `value: false` and `effect_complete`'s own error text, exactly like
 //! an ordinary failure -- but the bare, unwrapped `Refused` value is
 //! what this effect actually returns, never folded into the usual
 //! `RuntimeError(rec.error)` wrap, so no enclosing `on_error: continue`
-//! can ever absorb it (PR #510's first review: the
+//! can ever absorb it (PR #510: the
 //! inner-planner case used to skip every one of those writes, taking
 //! the same no-record branch as `VmError::Cancelled`).
 
@@ -109,7 +109,7 @@ pub(crate) async fn execute_reflector(
         // No cancellation check of this loop's own -- the issue's own
         // Rust design ("Paths, --resume, loops and finally:") adds
         // none beyond what the containers this calls already respect
-        // (PR #510's first review: a check here,
+        // (a check here,
         // between iterations, would suppress the inner dynamic's own
         // start/end pair for a signal that lands in that exact window,
         // where Python's own `_run_iteration` has no such check either
@@ -282,17 +282,16 @@ async fn run_iteration(
         // (an unbuildable `adapter:`, `exec::prompt::execute_prompt`'s
         // own up-front `RefusalReason::UnsupportedAdapter` check) is
         // fatal for *control* only (`VmError::is_fatal`'s own doc
-        // comment, ruling R1 on PR #462) -- recorded here
+        // comment, PR #462) -- recorded here
         // exactly like an ordinary `inner_failed:` (the iteration
         // record, `meta.error`, `completed_at`, `value: false` and
         // `effect_complete`'s own error text, this module's own doc
         // comment on "Fatal errors"), with `IterationRecord::fatal` set
         // so [`execute_reflector`] still re-raises the bare, unwrapped
         // `Refused` afterward rather than folding it into the usual
-        // `RuntimeError(rec.error)` wrap -- PR #510's first review:
-        // this branch used to fall into the same
-        // arm as `Cancelled` below, skipping every one of those writes
-        // and `effect_complete` itself.
+        // `RuntimeError(rec.error)` wrap -- this branch used to fall
+        // into the same arm as `Cancelled` below, skipping every one
+        // of those writes and `effect_complete` itself.
         Err(e @ VmError::Refused { .. }) => {
             rec.error = Some(format!("inner_failed: {e}"));
             rec.fatal = Some(e);
@@ -691,7 +690,7 @@ fn py_truthy(value: &Value) -> bool {
     }
 }
 
-/// `_extract_done_flag`: [`clean_yaml_fences`] (lane I's own port, now
+/// `_extract_done_flag`: [`clean_yaml_fences`] (now
 /// fixed to Python `splitlines`/`strip` semantics), blank -> `(true,
 /// None)`. Any YAML parse failure -- ordinary syntax or a calendar-
 /// invalid timestamp's own semantic error (issue #528's own comment)
