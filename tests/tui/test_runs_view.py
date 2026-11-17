@@ -660,10 +660,10 @@ def test_replay_of_a_real_run_library_stash_is_gated_without_consent(
     run_app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """End-to-end with the *real* stash `cof run-library` writes (#337),
-    not a hand-written one: before this fix the stash carried no
-    `remote_library_source` key at all, so a TUI replay of it skipped the
-    whole-document capability gate entirely. A hand-written stash that
-    already sets the flag can't tell that gap apart from the fix."""
+    not a hand-written one: a stash lacking the `remote_library_source`
+    key entirely would let a TUI replay of it skip the whole-document
+    capability gate entirely. A hand-written stash that already sets the
+    flag can't tell that gap apart from a real fix."""
     from typer.testing import CliRunner
 
     from circuitry.cli import app as cli_app_module

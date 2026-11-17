@@ -39,8 +39,8 @@ def _clean_canary_env(monkeypatch: pytest.MonkeyPatch):
     `load_dotenv(override=False)` behaviour), bypassing `monkeypatch`'s own
     tracking of the values it set — but `monkeypatch.delenv` here still
     records whatever value was really present and restores exactly that at
-    teardown (the lane's shell exports a real `OPENAI_API_KEY`; a test must
-    not delete it for the rest of the process).
+    teardown (the surrounding environment may already export a real
+    `OPENAI_API_KEY`; a test must not delete it for the rest of the process).
     """
     for name in ("OPENAI_API_KEY", "CIRCUITRY_DOTENV_CANARY"):
         monkeypatch.delenv(name, raising=False)
@@ -271,7 +271,7 @@ def test_doctor_renders_without_error_for_markup_breaking_key(tmp_path):
     """A key containing Rich markup syntax (e.g. from a single-quoted
     `'[/x]=1'=...` entry) must not break `cof doctor`'s own rendering —
     the key name is escaped before being interpolated into a Rich-markup
-    string (#473 P2)."""
+    string (issue #473)."""
     import json
 
     import typer.testing

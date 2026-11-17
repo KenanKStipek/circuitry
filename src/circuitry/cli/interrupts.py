@@ -327,7 +327,7 @@ _active_watcher: _SignalWatcher | None = None
 
 
 def _reset_signal_state_in_fork_child() -> None:
-    """Undo a forked child's inherited wakeup-fd arming (#404 review).
+    """Undo a forked child's inherited wakeup-fd arming (issue #404).
 
     A forked child -- ``plugins.python_eval``'s sandboxed-code child is
     the one example in this codebase -- inherits both CPython's own

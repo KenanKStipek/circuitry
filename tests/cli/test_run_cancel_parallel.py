@@ -1,10 +1,10 @@
 """Ctrl-C/SIGTERM stop a parallel step promptly (#356).
 
 A tree-flow `dynamic`/`loop` submits its branches to a `ThreadPoolExecutor`.
-Before this fix, leaving the `with` block waited for every submitted
-branch — a queued (not-yet-started) branch ran to completion anyway, and a
-running branch's subprocess kept going until it finished on its own, so
-stopping took as long as finishing would have. These tests deliver a real
+Leaving the `with` block without cancelling first waits for every submitted
+branch — a queued (not-yet-started) branch runs to completion anyway, and a
+running branch's subprocess keeps going until it finishes on its own, so
+stopping would take as long as finishing. These tests deliver a real
 SIGINT/SIGTERM to a `cof run` subprocess running several slow shell
 branches and assert: a branch already running when the signal lands is
 killed (its process group, not just its own pid — nothing survives it); a
@@ -45,7 +45,7 @@ _BRANCH_SLEEP_SECONDS = 60
 #: How long a cancelled run may take to actually exit. Loose on purpose —
 #: what matters is "nowhere near _BRANCH_SLEEP_SECONDS", not a tight bound
 #: (#356's own rationale), derived from it rather than a literal so the
-#: two can't quietly drift apart (#385 review). #385 first widened this to
+#: two can't quietly drift apart (#385). #385 first widened this to
 #: 30s to tolerate what looked like scheduling starvation under heavy
 #: machine load; investigating the one real CI failure found a genuine
 #: bug instead — a signal landing on a tree-flow/parallel-loop *worker*
@@ -66,9 +66,9 @@ _STOP_BOUND_SECONDS = _BRANCH_SLEEP_SECONDS / 3
 #: `_BRANCH_SLEEP_SECONDS` (asserted below) so a run that was genuinely
 #: never cancelled still fails here rather than quietly waiting it out.
 #: `core.cancellation.wait_for_cancelled_branches` itself now waits with
-#: no total time limit of its own (#385 follow-up — an earlier revision's
-#: fixed grace period there let a branch outlive `token.reset()` and
-#: start a further effect uncancelled), so the only thing the headroom
+#: no total time limit of its own (issue #385: a fixed grace period
+#: there let a branch outlive `token.reset()` and start a further
+#: effect uncancelled), so the only thing the headroom
 #: above `_STOP_BOUND_SECONDS` still covers is a killed branch's worker
 #: thread actually being scheduled and noticed, ordinarily near-instant.
 _COMMUNICATE_TIMEOUT_SECONDS = _STOP_BOUND_SECONDS + 10.0
@@ -80,7 +80,7 @@ def _branch_tool(name: str, *, pidfile: Path, started: Path) -> str:
     before sleeping, so a test can wait for (and later assert on) exactly
     those two things without a fixed sleep of its own.
 
-    Deliberately NOT `exec`'d (#385 round 3): macOS's /bin/bash (3.2)
+    Deliberately NOT `exec`'d (#385): macOS's /bin/bash (3.2)
     forks a *child* process to run a non-tail command like this `sleep`
     rather than exec'ing into it, so the pid recorded above is bash's
     own, not the long-lived process -- a real production race, not a

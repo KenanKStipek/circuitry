@@ -162,7 +162,7 @@ class ConditionalRuntime:
             # carryover or a `cof run --resume`, and a stale meta.error left
             # over from an earlier attempt would make a later resume treat
             # this conditional as still unfinished even after it just
-            # completed cleanly (#270 F4). `_decide_and_run` below sets both
+            # completed cleanly (#270). `_decide_and_run` below sets both
             # again, fresh, if *this* call's own condition eval fails.
             meta["completed_at"] = None
             meta["error"] = None

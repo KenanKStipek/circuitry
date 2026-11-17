@@ -1,6 +1,6 @@
 {
-  "spec_case": "runtime-semantics.md §8.1 (preflight), issue #518 (lane J2) case 8",
-  "description": "`preflight-hard-adapter-named-effects`'s document, with the profile disabling `a`. Preflight walks the raw document, never the overlaid IR (settled ruling 7), so the missing-replies-file failure is still hard because of `a` and still names it -- a profile override is never consulted by preflight at all. The OS's own strerror text is third-party, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md); the errno and the path stay exact.",
+  "spec_case": "runtime-semantics.md §8.1 (preflight), issue #518 case 8",
+  "description": "`preflight-hard-adapter-named-effects`'s document, with the profile disabling `a`. Preflight walks the raw document, never the overlaid IR, so the missing-replies-file failure is still hard because of `a` and still names it -- a profile override is never consulted by preflight at all. The OS's own strerror text is third-party, masked by the conformance harness's own message-shape catalogue (tests/conformance/README.md); the errno and the path stay exact.",
   "engines": ["python", "electricity"],
   "profile": "profiles/p.yml",
   "expect": "failure",

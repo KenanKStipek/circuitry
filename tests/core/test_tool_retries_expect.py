@@ -580,7 +580,7 @@ def test_http_family_connection_failure_is_retried(monkeypatch: pytest.MonkeyPat
     URLError`` (never a status code) — classify_exception reads the
     __cause__ chain the same way an adapter dispatch failure is classified,
     so this is retried like curl's own refused-connection exit code is
-    (issue #273's review)."""
+    (issue #273)."""
     conn_err = RuntimeError("HTTP request to http://x failed: Connection refused")
     conn_err.__cause__ = urllib.error.URLError("Connection refused")
     ok_result = ToolResult(value={"ok": True}, raw={"status": 200}, stdout="", stderr="", exit_code=None)

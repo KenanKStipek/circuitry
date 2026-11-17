@@ -18,8 +18,8 @@ from circuitry.cli.config import CircuitryConfig, trust_store_path
 from circuitry.cli.document_consent import document_digest, record_consent
 from circuitry.service import RestTriggerService
 
-# A `use: ref:` child whose only `shell` use is in `finally:` (#332 review:
-# the static walk must cover `finally:`, not just `effects:`).
+# A `use: ref:` child whose only `shell` use is in `finally:` (issue
+# #332): the static walk must cover `finally:`, not just `effects:`.
 _HELPER_SHELL_IN_FINALLY = {
     "effects": [],
     "finally": [

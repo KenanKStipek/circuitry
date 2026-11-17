@@ -6,7 +6,7 @@ resolution) and the same `WARNING:` line for an unsafe-mode file.
 
 Not a `tests/conformance/cases/` case (`harness`'s own per-case
 fixtures hold a document/config pair, not a `HOME` layout) -- this is
-the lane's own dual-engine parity check for a startup concern neither
+its own dual-engine parity check for a startup concern neither
 engine's document ever sees.
 """
 

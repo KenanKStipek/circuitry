@@ -92,7 +92,7 @@ def test_live_publisher_survives_a_failing_publish_call(
     """A failing *publish* call (the running node already gone, say) must
     not kill the writer thread -- it logs once and keeps looping, the
     same as ``LiveStateMirror._write_loop`` already does for its own
-    writer thread (#636 review)."""
+    writer thread (issue #636)."""
     clock = _FakeClock()
     calls: list[dict[str, Any]] = []
 
@@ -367,7 +367,7 @@ def test_live_tracker_dedupes_claude_message_id_and_skips_subagent_usage(
         }))
         after_subagent = tracker._snapshot()
         # Its own message never counts as one of this session's own turns
-        # (#636 review) -- its tool call is still counted...
+        # (issue #636) -- its tool call is still counted...
         assert after_subagent["turns"] == 1
         assert after_subagent["tool_calls"] == 2
         # ...but none of its usage reached tokens, context or turn_tokens.
@@ -479,7 +479,7 @@ def test_live_tracker_matches_tool_ends_by_id_not_fifo_pi(tmp_path: Path) -> Non
 def test_live_tracker_claude_task_subagent_current_tool_and_turns(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The Claude Task sequence (#636 review): a ``Task`` tool call, a
+    """The Claude Task sequence (issue #636): a ``Task`` tool call, a
     subagent's own tool call under it (``parent_tool_use_id`` set), the
     subagent's own tool result, then the Task's own tool result.
     ``current_tool`` must track whichever tool is actually still running
@@ -532,7 +532,7 @@ def test_live_tracker_claude_task_subagent_current_tool_and_turns(
         }))
         snapshot = tracker._snapshot()
         # A subagent's own message never counts as one of this session's
-        # own turns (#636 review) -- still 1, not 2 (exact mid-stream
+        # own turns (issue #636) -- still 1, not 2 (exact mid-stream
         # assertion).
         assert snapshot["turns"] == 1
         assert snapshot["tool_calls"] == 2
@@ -551,8 +551,8 @@ def test_live_tracker_claude_task_subagent_current_tool_and_turns(
         }))
         snapshot = tracker._snapshot()
         # current_tool must fall back to the still-running Task call, not
-        # go blank just because the subagent's own tool ended first (#636
-        # review).
+        # go blank just because the subagent's own tool ended first
+        # (issue #636).
         assert snapshot["current_tool"] is not None
         assert snapshot["current_tool"]["name"] == "Task"
 

@@ -376,9 +376,10 @@ def test_verbose_bad_provider_does_not_crash_and_records_error(
     """A ``provider:`` naming an adapter that fails to build (unknown name,
     or one like ``host_claude`` that refuses config-based construction) must
     still go through the normal error path under ``--verbose``: ``on_error``
-    respected, ``meta.error`` set, ``execute`` does not raise. Before the P0
-    fix, ``_pre_dispatch_target`` built the adapter ahead of the dispatch
-    ``try`` block, so this same setup raised straight out of ``execute``.
+    respected, ``meta.error`` set, ``execute`` does not raise.
+    ``_pre_dispatch_target`` must build the adapter inside the dispatch
+    ``try`` block, not ahead of it, or this same setup raises straight out
+    of ``execute`` instead.
     """
     orch = {
         "effects": [

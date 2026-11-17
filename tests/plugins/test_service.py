@@ -155,7 +155,7 @@ def state_dir(tmp_path: Path) -> Iterator[Path]:
     path = tmp_path / "state"
     yield path
     # Safety net: never leave a process group a record still names running.
-    # `tmp_path` is a second token alongside `_SERVER_MARKER` (#561 review):
+    # `tmp_path` is a second token alongside `_SERVER_MARKER` (issue #561):
     # a test's own script runs from under it, so its argv carries it even
     # when the command predates the server guard (a group whose leader
     # already exited, a child a test starts without going through it).

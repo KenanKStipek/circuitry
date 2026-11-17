@@ -323,7 +323,7 @@ def test_sum_tokens_includes_a_tool_or_use_effects_own_expect_tokens() -> None:
     """A tool/use's own `expect: {mode: model}` spends tokens too (#273),
     recorded under meta.expect rather than meta directly \u2014 a parent
     dynamic's own displayed token total must still include them (issue
-    #273's review)."""
+    #273)."""
     from circuitry.core.dynamic import _sum_tokens
 
     subtree = {

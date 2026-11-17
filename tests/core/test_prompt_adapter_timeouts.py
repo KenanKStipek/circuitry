@@ -1,12 +1,12 @@
 """Issue #263 part 1: a per-attempt timeout is resolved for the adapter that
 attempt actually dispatches to, not the run default's adapter.
 
-Before this fix, ``PromptRuntime._attempt_timeout_seconds`` only ever read
+A naive ``PromptRuntime._attempt_timeout_seconds`` that only reads
 the timeout computed once for the run-default adapter
-(``cli/runtime_shim.py``'s ``timeout_seconds``); a ``provider:``/fallback
-that sent an attempt to a *different* adapter still ran with the run
-default's timeout, so ``runtime.adapters.ollama.timeout_seconds`` did
-nothing unless ``ollama`` also happened to be ``default_adapter``.
+(``cli/runtime_shim.py``'s ``timeout_seconds``) would run a
+``provider:``/fallback attempt sent to a *different* adapter with the run
+default's timeout regardless, so ``runtime.adapters.ollama.timeout_seconds``
+would do nothing unless ``ollama`` also happened to be ``default_adapter``.
 """
 
 from __future__ import annotations
