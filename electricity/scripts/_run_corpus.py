@@ -1,15 +1,15 @@
 """Shared helper for the M0-H VM golden run corpus (issue #431's Test
 strategy section, "Golden run corpus"). Not itself a `generate_*.py`
 script (the generated-files workflow's glob skips a leading underscore),
-but imported by `generate_vm_run_corpus.py` (lane A's own smoke corpus)
-and every later lane's run-corpus generator.
+but imported by `generate_vm_run_corpus.py` (the smoke corpus) and every
+other run-corpus generator.
 
 Ground truth is a real `cof run --out --events --live-state`
 (`python -m circuitry.cli.app run`, the same invocation
 `tests/conformance/harness.py` uses for a hermetic CLI subprocess), with a
 temporary `HOME`, the case directory as `cwd`, and every `CIRCUITRY_*`/
 credential environment variable stripped -- this repository's hermeticity
-rule (`LANE-CONTRACT.md`), the same one `electricity-compiler`'s own
+rule, the same one `electricity-compiler`'s own
 `scripts/_compiler_corpus.py` follows.
 
 Records the run's final state (`--out`), its full `--events` sequence, and
@@ -24,7 +24,7 @@ import, since every other `electricity/scripts/` generator already
 follows that same "self-contained helper, not a cross-directory import"
 convention (`_compiler_corpus.py`).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, same as every other generator in this directory).
 """
 
@@ -52,7 +52,7 @@ _CREDENTIAL_ENV_VARS = (
 
 DEFAULT_TIMEOUT_SECONDS = 30
 
-#: A committed golden file must carry no local path (`LANE-CONTRACT.md`).
+#: A committed golden file must carry no local path.
 _LEAKED_PATH_PATTERNS = [
     re.compile(re.escape(str(Path.home()))),
     re.compile(re.escape(tempfile.gettempdir())),
@@ -277,8 +277,8 @@ def _branch_sort_key(
     recover this order generically); otherwise by `EffectPath`'s own
     `iter_N` placeholder, resolved, which numbers an *iterated* branch's
     own path directly (`prime.loop.0`, `prime.loop.1`, out of scope for
-    M0-H's own tree `dynamic` but handled here so a later lane's own
-    generator, iterating `each`-style branches, doesn't have to touch
+    M0-H's own tree `dynamic` but handled here so any future
+    generator iterating `each`-style branches doesn't have to touch
     this helper at all); last, a segment neither names -- not a gap this
     generator's own corpus exercises today -- falls back to first-seen
     order (a no-op, i.e. exactly [`_reorder_branches`]'s pre-ordering
@@ -375,8 +375,8 @@ def canonical_event_order(
     order exactly as `cof run --events` wrote it; renumbering `id`/`seq`
     afterwards is then a no-op for every one of those, since canonical
     order already equals real order there. This is *not* the comparison
-    rule a later lane's own conformance test should use for two
-    *different* engines' `--events` output -- issue #431's own
+    rule a conformance test comparing two
+    *different* engines' `--events` output should use -- issue #431's own
     acceptance criteria already specifies that one: "compare the
     start-before-child / child-end-before-container partial order and
     the per-path multiset, not the interleaving". This is only what

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Differential corpus for lane C of issue #459 (#448 lane C): the process
+"""Differential corpus for issue #459 (#448): the process
 runtime plus `shell`/`awk`/`imagemagick`/`ffmpeg`.
 
 Every case here asks Circuitry's own real code for the answer -- never a
@@ -30,7 +30,7 @@ understanding of them:
   empty line, a partial line, multibyte text at the byte cap, a single
   over-long line, more than 20 lines, and invalid UTF-8.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI), with Circuitry installed (`pip install -e . -c
 electricity/scripts/generator-constraints.txt`, as CI does).
 

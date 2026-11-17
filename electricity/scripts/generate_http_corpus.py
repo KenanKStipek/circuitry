@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""A differential corpus for lane E's `http` tool (issue #485), covering
+"""A differential corpus for the `http` tool (issue #485), covering
 the pure functions and small decision tables this port has to match
 CPython exactly: `urllib.parse.urlencode(doseq=True/False)`,
 `plugins/base.py::http_error_excerpt`, UTF-8 "replace"-mode decoding
@@ -22,7 +22,7 @@ and 307-to-a-POST shapes, each one's expected `value`/`raw`/`stderr`/
 `ok` (or raised class/message) taken from CPython directly, never
 written down independently of it.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, per every other `generate_*.py`). Usage:
 
     python3 generate_http_corpus.py [--check]

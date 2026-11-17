@@ -12,7 +12,7 @@ lifted under `input` at all (a namespace name or `_`-prefixed key, or
 land at the state root, exactly as `core/state_ns.py::migrate_legacy_state`
 leaves them.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage:
     python3 generate_vm_run_seeding.py [--check]
 """

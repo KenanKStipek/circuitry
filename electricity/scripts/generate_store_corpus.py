@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Generate electricity-vm's store golden corpus from Circuitry's real
-``core.store.store.Store`` (DESIGN.md §6.7, issue #431's Lane B section).
+``core.store.store.Store`` (DESIGN.md §6.7, issue #431).
 
 Each case is a sequence of operations run against a real ``Store`` (or, for
 the tree-merge cases, several isolated branch stores) and the resulting

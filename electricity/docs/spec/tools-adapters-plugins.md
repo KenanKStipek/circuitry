@@ -314,13 +314,13 @@ missing path (`value=False`, not an error); deleting a directory requires `recur
 `sorted(p.name for p in path.iterdir())`; `stat` returns `{size, mtime: int(st_mtime),
 mode, is_dir, is_file}`.
 
-**electricity's own `encoding` split** (issue #460's lane D1 fix pass, "R2"): electricity's `fs`/
+**electricity's own `encoding` split** (issue #460): electricity's `fs`/
 `hash` only implement three codecs (`utf-8`/`ascii`/`latin-1` and their aliases, `fs.rs::Codec`).
 A name outside that set is classified two ways, both generated from CPython's own
 `encodings.aliases.aliases`/the `encodings` package's module list
 (`generate_codec_names.py` → `fs.rs::classify_encoding`): a name CPython's own `codecs.lookup`
 would *also* reject gets `cof run`'s own `LookupError: unknown encoding: x`, with `cof run`'s own
-filesystem effects (mkdir/open/truncate happen before the raise, same as finding 6 below); a name
+filesystem effects (mkdir/open/truncate happen before the raise); a name
 CPython accepts but electricity doesn't implement (`utf-16`, `cp1252`, `shift_jis`, …) is refused
 up front, before anything touches the filesystem, with the preview marker — `cof run` would
 actually succeed on that name, so this is a documented capability gap, not a text mismatch.
@@ -435,8 +435,7 @@ get`), not `chrono-tz` (a zone compiled into a crate, accepting a different name
 host's own zoneinfo database) or the earlier `tzfile` 0.1.3 (its own docs: it never evaluates a
 TZif file's trailing POSIX-TZ rule string — the "footer" — so a "slim" tzdata build, whose
 explicit transition table ends years ago and relies on that footer for everything past it, would
-have pinned a zone's offset at its last explicit transition forever; issue #460's own lane D1 fix
-pass, finding 5). `jiff` evaluates the footer and searches `TZDIR`/the usual zoneinfo search path
+have pinned a zone's offset at its last explicit transition forever; issue #460). `jiff` evaluates the footer and searches `TZDIR`/the usual zoneinfo search path
 the way `zoneinfo.TZPATH` does, matching `cof run`'s own zone lookup closely enough that every
 name this preview needs to resolve, it does.
 
@@ -456,8 +455,7 @@ which case `input` is a file path read in 64KiB chunks. `output_format`: `hex` (
 
 `from_path`'s own 64KiB-chunk streaming is load-bearing for electricity too: `hash.rs::
 digest_file` updates its hasher incrementally through the same chunk size, never
-`std::fs::read`-ing a whole file into memory first (issue #460's own lane D1 fix pass, finding
-2). The in-memory branch's own `encoding` param goes through the same §2.3 `fs`/`hash` codec
+`std::fs::read`-ing a whole file into memory first (issue #460). The in-memory branch's own `encoding` param goes through the same §2.3 `fs`/`hash` codec
 split (preview marker vs. `unknown encoding: x`) as `fs`'s own `encoding`.
 
 ### 2.9 `env_vars`
@@ -1011,7 +1009,7 @@ a native client must still guarantee:
 `src/circuitry/agent_cli.py`/`adapters/_agent_cli.py` (issue #520). Neither talks HTTP at all —
 each runs a coding-agent CLI (`claude`/`pi`) as a subprocess, through its own interactive login,
 and reads its `--output-format json`/`--mode json` reply. No curl, no `electricity_tools::
-http_client`; the whole call goes through `electricity-tools::process::run_tracked` (lane C)
+http_client`; the whole call goes through `electricity-tools::process::run_tracked`
 instead, in its own process group (`new_session: true`) so a timeout or cancellation kills the
 CLI and everything it started.
 
@@ -1099,8 +1097,8 @@ prompt`), these two adapters are only its first end-to-end exercise.
 **Ported** (issue #520, `electricity-adapters::{claude_code, pi}`, over part A's own
 `electricity_tools::agent_cli`): every rule above, with a fourteen-case conformance suite
 (`c520-*`) against fake `claude`/`pi` binaries — never a real CLI, enforced by its own guard
-test. Registered in `build_registry()` right after `host_claude`; the unbuildable set after this
-lane is `litellm` alone, which stays refused permanently (§13's own settled ruling: it imports
+test. Registered in `build_registry()` right after `host_claude`; the unbuildable set remaining is
+`litellm` alone, which stays refused permanently (§13: it imports
 the Python `litellm` package directly, which electricity neither embeds nor reimplements).
 
 ### 3.14 Adapter aliases

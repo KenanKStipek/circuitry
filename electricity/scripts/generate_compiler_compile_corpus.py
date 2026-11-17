@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Golden corpus for lane C's `compile_document` (issue #408's Test
+"""Golden corpus for `compile_document` (issue #408's Test
 strategy section) -- every effect type's happy path, every compile
 error message `core/compiler.py`/`core/state_ns.py` raises that this
-lane ports, a CRLF document, and `use` cycles.
+port implements, a CRLF document, and `use` cycles.
 
-Deliberately out of scope (lane D's own corpus,
+Deliberately out of scope (covered instead by
 `generate_compiler_compose_corpus.py`): `prompts:`, `{{> name}}`
 partials, and anything else from the compile-time half of #406.
 
-Must be run with Python 3.11 (the lane venv locally;
-`actions/setup-python` 3.11 in CI). Usage:
+Must be run with Python 3.11 (`actions/setup-python` 3.11 in CI). Usage:
     python3 generate_compiler_compile_corpus.py [--check]
 """
 
@@ -1523,7 +1522,7 @@ _dispatch_file_case(
 )
 
 
-# --- Decision 2: {file:} prompt/yield sources, now that lane D's own ---
+# --- Decision 2: {file:} prompt/yield sources, now that ---
 # --- prompt_files::resolve_text_or_file is wired in ---------------------
 
 add({
@@ -1615,13 +1614,13 @@ CASES[-1]["files"]["child.yml"] = "effects: []\n"
 CASES[-1]["name"] = "use_inputs_templates_checked_before_references"
 
 
-# --- Second review of #415: validate_bare_input_refs runs --
+# --- Issue #415: validate_bare_input_refs runs --
 # --- before declared prompts/composition -- matching -----------------
 # --- compile_orchestration's own order (mod.rs) -- not just before a --
 # --- single effect's own checks (above). `prompts:`/`{{> name}}` -----
 # --- appear here only to give the *later* check something that would --
-# --- otherwise fail first; testing composition itself is lane D's own --
-# --- corpus (generate_compiler_compose_corpus.py). ---------------------
+# --- otherwise fail first; testing composition itself is covered by --
+# --- a separate corpus (generate_compiler_compose_corpus.py). ----------
 
 add({
     "name": "bare_input_ref_checked_before_declared_prompts",
@@ -1837,7 +1836,7 @@ add({
     # Decision 1: a `use` cycle that loops back through the *entry*
     # document itself, entered from the a.yml side -- a three-hop
     # cycle, deliberately a different shape from `use_cycle_two_hop`'s
-    # own two-hop one (second review of #415: this case
+    # own two-hop one (issue #415: this case
     # used to be byte-for-byte identical to that one).
     "name": "use_cycle_through_entry_document_entered_from_a",
     "files": {
@@ -1869,9 +1868,9 @@ add({
 })
 
 add({
-    # Second review of #415: `use_cycle_through_a_child_with_
+    # Issue #415: `use_cycle_through_a_child_with_
     # a_duplicate_key` repeats the *same* value ("name: s" twice), so it
-    # doesn't actually prove last-key-wins -- this probe's duplicate
+    # doesn't actually prove last-key-wins -- this case's duplicate
     # `path:` key has two *different* values, and the *later* one
     # points back into the cycle.
     "name": "use_cycle_through_a_childs_duplicate_path_key_last_value_rejoins_the_cycle",

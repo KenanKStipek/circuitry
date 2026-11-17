@@ -9,7 +9,7 @@ corpus rather than copied source, since the two engines encode
 lists/mappings differently (`electricity_value::Value` vs. Python's own
 list/dict).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, `-c electricity/scripts/generator-constraints.txt`):
 `json.dumps(value, ensure_ascii=False, default=str)` on a container
 drives every measurement here, and that text's own shape is part of
@@ -127,7 +127,7 @@ def build_cases() -> list[dict[str, Any]]:
     # A string made entirely of `"` characters: JSON escapes each one
     # (`\"`, two characters); `repr()` would quote the whole string with
     # `'` instead and leave every `"` alone -- measuring by `repr()`
-    # (electricity's own imitation before this fix) found room for a
+    # (electricity's own imitation before circuitry#778's fix) found room for a
     # single item JSON measurement refuses outright (circuitry#778).
     cases.append(list_case("list_quote_heavy_strings_json_vs_repr", ['""""""'] * 4, 3))
     # Control characters (`\x01`, `\x02`, `\x1f`): JSON escapes each as

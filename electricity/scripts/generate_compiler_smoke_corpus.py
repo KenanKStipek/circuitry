@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """A handful of trivial cases exercising `_compiler_corpus.py` end to end
-(issue #408's lane A: "Plus ONE example generator ... so the harness is
-exercised end to end"). Lane B/C/D's own generators
+(issue #408: "Plus ONE example generator ... so the harness is
+exercised end to end"). The other generators
 (`generate_compiler_{load,compile,compose}_corpus.py`) cover the real
 surface; this one only proves the shared helper works.
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI). Usage: python3 generate_compiler_smoke_corpus.py [--check]
 """
 

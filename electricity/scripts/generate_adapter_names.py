@@ -8,7 +8,7 @@ build (PR #454 -- `AdapterRegistry::supported_names`
 only ever lists the registry's own registered builders, empty for M1-A).
 electricity-vm's own builder (``adapter.rs::AdapterRegistry::build``) needs
 that exact list to word its own unknown-adapter message the same way, even
-for a provider name no electricity lane has implemented yet -- the message
+for a provider name electricity has no builder for yet -- the message
 is only ever the reason a document-level ``adapter:``/`prompt` effect is
 refused, never a dispatch decision, so it must speak to "every provider
 Circuitry itself knows", not "every provider electricity knows".

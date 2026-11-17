@@ -15,7 +15,7 @@ plus a separate UTC offset field), and dicts (a list of `[key, value]`
 pairs rather than a JSON object, since dict keys here can be any `Value`,
 not just strings).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-python`
+Must be run with Python 3.11 (`actions/setup-python`
 3.11 in CI, matching DESIGN.md's Unicode-parity requirement, see
 generate_unicode_printable_ranges.py) so generated reprs match the
 `electricity-value` crate's own target. Usage: python3

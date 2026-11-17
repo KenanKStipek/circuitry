@@ -4,7 +4,7 @@
 `core.primes.REFLECTOR_PRIME_V1` is `ReflectorDefinition.prime_template`'s
 default (issue #408's Scope section: "`prime_template` defaults to
 Circuitry's reflector prime, copied byte for byte by a generator with
-`--check`"). Lane C's compiler reads it through
+`--check`"). electricity-compiler reads it through
 `electricity_compiler::reflector_prime::REFLECTOR_PRIME`
 (`include_str!("reflector_prime.txt")`) for a `reflector` effect that
 omits `prime_template:`.

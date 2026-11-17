@@ -809,7 +809,7 @@ def test_run_tracked_writer_thread_child_never_reads_stdin() -> None:
 
 
 def test_communicate_promptly_stdin_wrapper_finalizer_does_not_block_the_main_thread() -> None:
-    """#385 review regression (07c754d): `_communicate_promptly` handed
+    """A #385 regression (07c754d): `_communicate_promptly` handed
     the writer thread only `stdin.buffer`, keeping no reference to the
     `TextIOWrapper` itself alive past this function's own return.
     CPython garbage collects it almost at once -- its finalizer still

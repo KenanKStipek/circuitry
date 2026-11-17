@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Lane D's golden corpus: the compile-time half of #406 -- declared
+"""The golden corpus for the compile-time half of #406 -- declared
 prompts (`core/prompt_files.py`), the composition checks (`core/
 prompt_compose.py`'s `check_prompt_composition`), and the document
 digest (`document_content_digest`).
@@ -8,7 +8,7 @@ Covers every message in `core/prompt_files.py` and in `core/prompt_
 compose.py`'s compile-time checks, CRLF prompt files, a symlink
 escaping the project, and the digest (including a `../` prompt file).
 
-Must be run with Python 3.11 (the lane venv locally; `actions/setup-
+Must be run with Python 3.11 (`actions/setup-
 python` 3.11 in CI). Usage: python3 generate_compiler_compose_corpus.py
 [--check]
 """

@@ -414,7 +414,7 @@ requires_fork = pytest.mark.skipif(
 
 @requires_fork
 def test_forked_child_sigterm_does_not_cancel_the_parent() -> None:
-    """#404 review (a): a forked child -- `plugins.python_eval`'s own
+    """#404: a forked child -- `plugins.python_eval`'s own
     sandboxed child is the real-world case -- inherits CPython's
     process-global wakeup-fd arming across the fork (fork, unlike exec,
     never closes or resets anything). A SIGTERM delivered to such a
@@ -457,7 +457,7 @@ def test_forked_child_sigterm_does_not_cancel_the_parent() -> None:
 
 @requires_fork
 def test_watcher_close_returns_promptly_while_a_forked_child_sleeps() -> None:
-    """#404 review (b): a forked child also inherits both of
+    """#404: a forked child also inherits both of
     `_SignalWatcher`'s own pipe fds -- a pipe only reports EOF to a
     reader once *every* copy of its write end, across every process, is
     closed. Without `_reset_signal_state_in_fork_child` closing the
