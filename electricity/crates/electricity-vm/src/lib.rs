@@ -1,22 +1,25 @@
 //! electricity-vm: the M0-H VM (issue #431's Scope section) -- `store`,
-//! `exec::{mod,dynamic,conditional}` and `limiter` (lane B); `exec::
-//! tool::execute_tool` and `electricity-tools`'s `json` (lane C, params
+//! `exec::{mod,dynamic,conditional}` and `limiter` (the tree-walking
+//! interpreter core); `exec::tool::execute_tool` and
+//! `electricity-tools`'s `json` (the tool executor, params
 //! rendering/retries/redaction); `exec::tool::run_tool` and `cancel`
-//! (lane A, real, final). [`execute_root`] is lane B2's tree-walking
+//! (the real, final glue). [`execute_root`] is the tree-walking
 //! interpreter loop: a document root is always a `dynamic`-shaped
 //! container, so running it is exactly `exec::dynamic::execute_dynamic`
 //! against the store's own root node.
 //!
-//! `execute_root` takes every argument by reference, so lane B's own
-//! tree branches can't each be a `tokio::task::spawn_local` (which
-//! needs `'static`, DESIGN.md §6.1-6.2's own phrasing notwithstanding)
-//! -- running them as a set of futures inside one `FuturesUnordered`,
-//! gated by [`Limiter`] for `max_concurrency`, polled from the same
-//! single `LocalSet` task, gets the same cooperative-concurrency
-//! behavior without the `'static` bound.
+//! `execute_root` takes every argument by reference, so the
+//! interpreter's own tree branches can't each be a
+//! `tokio::task::spawn_local` (which needs `'static`, DESIGN.md
+//! §6.1-6.2's own phrasing notwithstanding) -- running them as a set
+//! of futures inside one `FuturesUnordered`, gated by [`Limiter`] for
+//! `max_concurrency`, polled from the same single `LocalSet` task,
+//! gets the same cooperative-concurrency behavior without the
+//! `'static` bound.
 //!
-//! See `electricity/docs/spec/vm-lanes.md` for which lane owns which
-//! file and function in this crate (and its sibling VM-lane crates).
+//! See `electricity/docs/spec/vm-lanes.md` for which file and function
+//! in this crate (and its sibling VM crates) ports which part of
+//! Circuitry's own VM.
 
 pub mod adapter;
 pub mod adapter_names;
@@ -58,27 +61,25 @@ use std::rc::Rc;
 pub use adapter::Adapter;
 pub use frame::Frame;
 
-/// Everything [`execute_root`]'s own tree-walking interpreter (lane B)
-/// and [`exec::tool::run_tool`] (through it) need that isn't the store,
+/// Everything [`execute_root`]'s own tree-walking interpreter and
+/// [`exec::tool::run_tool`] (through it) need that isn't the store,
 /// the template/CEL context, the observer, or the cancellation token --
 /// the tool registry a `tool` effect dispatches through, the run-wide
 /// concurrency limiter a `tool`/`dynamic` effect's `group:` acquires a
 /// slot from, the two run-level settings every `meta` entry records
 /// (`model`; `adapter`, always `"_noop"` in M0-H -- issue #431's Scope
 /// section, run-wiring step 15), and the merged `runtime:` block
-/// `run_tool`'s own timeout/allowlist resolution (lane C/D) and
-/// `ToolRuntime` both read off it (run-wiring step 8's own
-/// `runtime_config`).
+/// `run_tool`'s own timeout/allowlist resolution and `ToolRuntime` both
+/// read off it (run-wiring step 8's own `runtime_config`).
 ///
-/// Lane A stub: a plain bag of references with no behaviour of its own.
-/// Lane D's own `run_orchestration` builds one from its
+/// A plain bag of references with no behaviour of its own, added before
+/// `run_orchestration` (which builds one from its own
 /// `electricity_config::EffectiveSettings` and a populated
-/// [`electricity_tools::ToolRegistry`]/[`Limiter`], once both exist;
-/// lane B's `execute_root` body is the first real reader. Added so this
+/// [`electricity_tools::ToolRegistry`]/[`Limiter`], once both exist)
+/// and `execute_root` (the first real reader of it) existed, so this
 /// crate's own [`execute_root`] signature -- `vm-lanes.md`'s own "should
-/// not need to change" row -- doesn't force lane B or lane D to add a
-/// parameter to a function `electricity-cli`/`electricity` (lib) already
-/// call by the time either lane starts.
+/// not need to change" row -- never needed a parameter added to a
+/// function `electricity-cli`/`electricity` (lib) already call.
 pub struct RunContext<'a> {
     pub registry: &'a ToolRegistry,
     pub limiter: &'a Limiter,
@@ -98,39 +99,39 @@ pub struct RunContext<'a> {
     /// own doc comment (issue #449's gate lane item 1).
     pub armed: bool,
     /// `adapters/factory.py::build_adapter`'s own per-attempt builder
-    /// table (issue #449's gate lane item 4) -- lane G's `prompt` effect
-    /// is the first real reader.
+    /// table (issue #449, item 4) -- the `prompt` effect is the first
+    /// real reader.
     pub adapters: &'a adapter::AdapterRegistry,
     /// The run's own default adapter, already built -- `adapter::NoopAdapter`
     /// for every M0/M1-A run (no real adapter is ever configured yet).
     /// `Rc`, not `Box`/a bare reference: a fallback attempt chain
-    /// (lane G) hands this same instance to more than one concurrent
-    /// borrow site without this struct itself needing to be `Clone`.
+    /// hands this same instance to more than one concurrent borrow
+    /// site without this struct itself needing to be `Clone`.
     pub default_adapter: Rc<dyn adapter::Adapter>,
     /// A profile's run-level `model:` locks routing off for every prompt
-    /// in the run (`model_reason` stays `"default"`) -- lane J2/K2.
+    /// in the run (`model_reason` stays `"default"`).
     pub model_locked: bool,
     /// `adapters/factory.py::configured_timeout_seconds(...) or 120` --
     /// the run's own adapter dispatch timeout, before a per-prompt
-    /// `timeout_ms` can shorten it (lane G).
+    /// `timeout_ms` can shorten it.
     pub adapter_timeout_seconds: u32,
     /// The resolved `runtime.complexity` settings (`electricity_config::
-    /// complexity::validate_complexity`) -- lane K1/K2.
+    /// complexity::validate_complexity`).
     pub complexity: &'a ComplexitySettings,
     /// How many `use`/decomposition levels deep this run already is --
-    /// lane I/L's own recursion-depth ceiling. `core/use.py`'s own
+    /// the recursion-depth ceiling. `core/use.py`'s own
     /// `use_call_stack` cycle-detection stack is deliberately *not* a
     /// field here: an earlier revision of this struct carried one as a
     /// `&'a RefCell<Vec<String>>`, shared and mutated in place, which
     /// is exactly the false-cycle hazard `core/use.py:856-871` warns
-    /// about for concurrent tree/loop branches (M1 gate seam round 2,
-    /// item S6) -- a shared mutable stack can't tell two sibling
-    /// branches apart, so one branch's own push is visible to the
-    /// other as a false ancestor. [`crate::Frame::push_use`]'s own
-    /// per-call, `Rc`-shared-but-never-mutated-in-place stack (built
-    /// fresh per branch, the same way Python derives *parent_stack* as
-    /// a list copy rather than mutating `runtime_config["_use_call_stack"]`
-    /// itself) is the only one; lane I reads it via
+    /// about for concurrent tree/loop branches -- a shared mutable
+    /// stack can't tell two sibling branches apart, so one branch's
+    /// own push is visible to the other as a false ancestor.
+    /// [`crate::Frame::push_use`]'s own per-call,
+    /// `Rc`-shared-but-never-mutated-in-place stack (built fresh per
+    /// branch, the same way Python derives *parent_stack* as a list
+    /// copy rather than mutating `runtime_config["_use_call_stack"]`
+    /// itself) is the only one; the `use` effect reads it via
     /// [`crate::Frame::use_call_stack`] off the `Frame` already threaded
     /// to every container executor, never off this struct.
     pub decomposition_depth: u32,
@@ -203,18 +204,18 @@ pub enum VmError {
     /// `on_error` entirely and fires no observer `effect_complete`, mirroring
     /// Python's `RunCancelledBySignal`: a `BaseException`, not `Exception`,
     /// so `ToolRuntime.execute`'s own `except Exception` never catches it
-    /// (`core/cancellation.py`). The caller (lane B's own tree-walking
+    /// (`core/cancellation.py`). The caller (the tree-walking
     /// interpreter) checks `token.is_set()`/`token.signum()` itself to build
     /// the interrupt text a cancelled run's `RunResult.error` carries; this
     /// variant only ever signals *that* cancellation happened here, not with
     /// what signal.
     Cancelled,
-    /// A `use` child, compiled at run time (so lane A's own static
+    /// A `use` child, compiled at run time (so the static refusal
     /// walker could never see it ahead of time), is itself unsupported
     /// once `electricity_bytecode::first_unsupported` runs against its
-    /// freshly-compiled `Program` -- M1 lane I's own mid-run refusal
-    /// (new: Python has no such case, since it never refuses content at
-    /// all). *refusal* is what that walker found; *child_label* names
+    /// freshly-compiled `Program` -- a mid-run refusal with no Python
+    /// equivalent, since Python never refuses content at all.
+    /// *refusal* is what that walker found; *child_label* names
     /// the child document the same way a `use` effect's own `meta`
     /// already would (`core/use.py`'s *label* -- the resolved path, or
     /// `"inline"`). Bypasses `on_error`/retries entirely and is never
@@ -224,7 +225,7 @@ pub enum VmError {
     /// `Cancelled`, this carries its own full text (`Display`, via
     /// [`electricity_bytecode::format_refused_child`]), since there is no
     /// run-level signal to format it from afterward -- the caller that
-    /// first finds it (`exec::use_::execute_use`, lane I) writes that
+    /// first finds it (`exec::use_::execute_use`) writes that
     /// same text to the refused `use` effect's own `meta.error` before
     /// returning it, and `electricity` (lib)'s own run wiring reports it
     /// as the run's ordinary failure text (exit 1, `--out`/`--events`/
@@ -245,16 +246,16 @@ pub enum VmError {
     /// passes through every further ancestor unchanged. A `Refused` that
     /// reaches `electricity` (lib)'s own run wiring still `None` (the
     /// root document itself dispatched the unbuildable attempt, with no
-    /// enclosing `use` at all -- unreachable once lane R's own up-front
-    /// refusal holds, issue #498 ruling 4) displays the bare refusal text
+    /// enclosing `use` at all -- unreachable once preflight's own
+    /// up-front refusal holds, issue #498) displays the bare refusal text
     /// ([`electricity_bytecode::format_refusal`]), never the `"use child
     /// ..."` wrap.
     Refused {
         refusal: electricity_bytecode::Refusal,
         child_label: Option<String>,
     },
-    /// Lane B's own execution loop isn't implemented yet (a `loop`/
-    /// `mode: model` `if` -- refused before the run starts by lane A's
+    /// The execution loop for a case not implemented yet (a `loop`/
+    /// `mode: model` `if` -- refused before the run starts by
     /// `first_unsupported` in a real document, but the interpreter still
     /// reports this rather than panicking if one ever reaches it).
     NotImplemented(String),
@@ -312,8 +313,8 @@ impl VmError {
     /// VmError::Refused { .. })` by hand calls this instead, so a future
     /// third fatal variant only needs to be added here.
     ///
-    /// **Fatal for control, not for recording** (ruling R1
-    /// on PR #462): `is_fatal` alone governs *control* -- absorption,
+    /// **Fatal for control, not for recording** (PR #462):
+    /// `is_fatal` alone governs *control* -- absorption,
     /// retries, tree dispatch. *Recording* -- whether a container writes
     /// `value`/`meta.error`/`completed_at` for its own node, and reports
     /// an error to `effect_complete`'s own `end` event -- is a second,
@@ -335,8 +336,8 @@ impl VmError {
     ///
     /// `finally:` always runs regardless, for both variants (`dynamic`'s
     /// own unconditional dispatch, never gated on `is_fatal` at all).
-    /// Lane H's loop containers and lane I's `use` copy this rule
-    /// exactly, rather than re-deriving it per effect type.
+    /// Loop containers and the `use` effect copy this rule exactly,
+    /// rather than re-deriving it per effect type.
     pub fn is_fatal(&self) -> bool {
         matches!(self, VmError::Cancelled | VmError::Refused { .. })
     }
@@ -401,7 +402,7 @@ impl std::error::Error for VmError {}
 /// scope of its own), which becomes the empty chain; a caller that ever
 /// passed an already-resolved override `Value` gets it wrapped as the
 /// chain's one frozen entry instead, so this function's own signature
-/// can stay exactly what lane A fixed it as.
+/// never needs to change from what it was fixed as.
 pub async fn execute_root(
     program: &Program,
     store: &Store,
@@ -486,9 +487,10 @@ mod tests {
     #[tokio::test]
     async fn execute_root_runs_an_empty_document_to_completion() {
         // No children at all (an empty chain `prime`) -- no `tool`/`if`
-        // for lane C's still-stubbed `execute_tool` to ever reach, so
-        // this exercises `execute_root`'s own wiring into
-        // `exec::dynamic::execute_dynamic` without depending on lane C.
+        // for the still-stubbed `execute_tool` to ever reach, so this
+        // exercises `execute_root`'s own wiring into
+        // `exec::dynamic::execute_dynamic` without depending on the
+        // tool executor.
         let program = empty_program();
         let store = Store::new();
         let token = CancellationToken::new();

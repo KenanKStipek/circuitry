@@ -4,7 +4,7 @@
 //! (config, load, allowlist, effective-settings, pre/post-state-check,
 //! refusal errors -- none of which need a real VM at all); a few now
 //! exercise [`electricity_vm::execute_root`]'s own real interpreter
-//! (lane B2, merged) end to end.
+//! end to end.
 
 use electricity::run::{RunRequest, Signal};
 use electricity_vm::CancellationToken;
@@ -314,7 +314,7 @@ async fn scoring_and_routing_enabled_without_decomposition_runs() {
 
 /// A document naming its own top-level `adapter:` is refused the same
 /// way, before the VM would otherwise run it fine (`json`/`dynamic`
-/// only) -- preflight (lane R) would fail this one with the config's
+/// only) -- preflight would fail this one with the config's
 /// own missing-adapter text instead; this build has no builder for
 /// `litellm` at all, so it refuses up front and permanently, before
 /// preflight is ever reached.
@@ -322,9 +322,9 @@ async fn scoring_and_routing_enabled_without_decomposition_runs() {
 async fn a_document_level_adapter_is_refused_with_no_state_written() {
     let dir = temp_dir("document-adapter-refusal");
     let config = write(&dir, "config.json", "{}");
-    // `litellm` (a Python-SDK-only adapter, out of scope for lane F2,
-    // issue #503) stays the unbuildable example here -- `openai`
-    // became a real, buildable adapter in that same lane.
+    // `litellm` (a Python-SDK-only adapter, out of scope for issue
+    // #503) stays the unbuildable example here -- `openai`
+    // became a real, buildable adapter in that same change.
     let doc = write(
         &dir,
         "doc.yml",
@@ -349,7 +349,7 @@ async fn a_document_level_adapter_is_refused_with_no_state_written() {
 /// Issue #513's own Interfaces §8: a document whose only call reaching
 /// the run's own default adapter is a model-mode `if` must still build
 /// the *real* adapter (`has_prompt_effects`'s own `Condition::Model`
-/// arm, lane R's `needs_real_adapter`) rather than the `_noop`
+/// arm, `needs_real_adapter`) rather than the `_noop`
 /// placeholder a document with no prompt effects at all gets --
 /// `_noop` is never preflight-checked, so a real adapter name that
 /// fails preflight (here, `scripted` with no replies file configured)
@@ -433,7 +433,7 @@ async fn a_config_default_model_is_recorded_as_its_own_source() {
 async fn an_unknown_tool_provider_is_refused_before_a_structural_error_elsewhere_would_fire() {
     let dir = temp_dir("unknown-provider");
     let config = write(&dir, "config.json", "{}");
-    // `shell` is lane C's own supported provider as of #459 -- `git` is
+    // `shell` is a supported provider as of #459 -- `git` is
     // still M2 scope (#448's own "Out of scope" list), so it stays a
     // genuinely unknown provider for this test's own purpose.
     let doc = write(
@@ -537,8 +537,8 @@ async fn a_declared_runtime_plugin_is_refused_with_no_state_written() {
     assert!(error.contains("my-plugin"));
 }
 
-/// Lane B2 has landed: a document that passes every check now really
-/// runs, through `execute_root`'s own real interpreter -- this
+/// The real interpreter has landed: a document that passes every
+/// check now really runs, through `execute_root`'s own real interpreter -- this
 /// exercises the full `--events`/`--live-state`/`--out` pipeline
 /// around a genuine success (run_start, the success's own run_end, the
 /// final live-state write equalling `--out`).
@@ -633,7 +633,7 @@ async fn run_start_names_only_the_config_files_own_file_name() {
 
 /// A token already
 /// cancelled *before* `execute_root` ever starts -- possible today
-/// against the real interpreter (lane B2 has landed), unlike when this
+/// against the real interpreter, unlike when this
 /// test was first written against the stub. The interrupt text,
 /// `RunResult::signal`, and `--events`' own `run_end.signal` all come
 /// from the same place (keyed off `VmError::Cancelled`
@@ -824,12 +824,11 @@ fn as_dict(
     value.as_dict().expect("expected a dict")
 }
 
-/// Issue #518 (lane J2): a profile that disables every prompt in the
+/// Issue #518: a profile that disables every prompt in the
 /// document makes the run adapter-free through the existing
 /// `has_prompt_effects` -- no `adapter:`/`default_adapter` anywhere,
 /// and the overlay must have applied *before* that check for this to
-/// succeed at all (Settled question 11 / the Hazards section's own
-/// ordering warning).
+/// succeed at all (the Hazards section's own ordering warning).
 #[tokio::test]
 async fn a_profile_disabling_every_prompt_runs_with_the_noop_adapter() {
     let dir = temp_dir("profile-disables-every-prompt");
@@ -855,11 +854,11 @@ async fn a_profile_disabling_every_prompt_runs_with_the_noop_adapter() {
     );
 }
 
-/// Scope §2 / settled ruling 6 (issue #518): a profile `provider:`
+/// Issue #518, Scope §2: a profile `provider:`
 /// naming a known-but-unbuildable adapter on an *enabled* prompt is
 /// refused before the run, with no state written -- `litellm` stays
-/// permanently unbuildable (#515), so this case can't regress when
-/// that lane's own adapter set grows.
+/// permanently unbuildable (#515), so this case can't regress as the
+/// buildable-adapter set grows.
 #[tokio::test]
 async fn a_profile_provider_naming_an_unbuildable_adapter_on_an_enabled_prompt_is_refused() {
     let dir = temp_dir("profile-provider-unbuildable-enabled");
@@ -910,7 +909,7 @@ async fn the_same_unbuildable_provider_on_a_disabled_prompt_runs() {
     assert!(result.ok, "expected success, got: {:?}", result.error);
 }
 
-/// Scope §2's second sentence / settled ruling 6: a profile that swaps
+/// Scope §2's second sentence: a profile that swaps
 /// a *tool*'s provider to one this build doesn't support is refused by
 /// the ordinary refusal walker (`UnsupportedToolProvider`), not by the
 /// new unbuildable-adapter check above -- that one only ever looks at

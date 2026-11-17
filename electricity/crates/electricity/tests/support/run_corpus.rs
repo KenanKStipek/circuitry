@@ -64,8 +64,8 @@ pub struct CorpusResult {
 
 // This module is compiled fresh into each integration-test binary that
 // declares `mod support;` -- `#[allow(dead_code)]` on these two because
-// not every one of those binaries calls `load_corpus` itself (lane C's
-// own `tool_run_corpus.rs` only ever calls `load_corpus_at` directly, a
+// not every one of those binaries calls `load_corpus` itself
+// (`tool_run_corpus.rs` only ever calls `load_corpus_at` directly, a
 // different golden file).
 #[allow(dead_code)]
 fn golden_path() -> &'static Path {

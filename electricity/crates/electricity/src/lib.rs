@@ -26,7 +26,7 @@ pub mod state;
 /// `electricity_adapters::write_leftover_export` -- re-exported so
 /// `electricity-cli`'s own exit path (the only caller) doesn't need
 /// its own direct dependency on `electricity-adapters` just for this
-/// one function (issue #478, lane F1).
+/// one function (issue #478).
 pub use electricity_adapters::write_leftover_export;
 pub use electricity_vm::CancellationToken;
 pub use run::{RunRequest, RunResult, Signal};
@@ -197,14 +197,15 @@ use std::time::Instant;
 /// feature's own `sleep`/`fail` when that feature is compiled in
 /// (`electricity_bytecode::refusal::Supported::providers`). Empty in
 /// every ordinary build -- `electricity-cli`'s own `Cargo.toml` never
-/// enables this feature (that crate's own doc comment). M1 gate seam
-/// round 2, item S3: this function used to return the walker's *entire*
-/// provider allow-list (`&["json"]`); `shell`/`awk`/`imagemagick`/
-/// `ffmpeg` (lane C), `fs`/`env_vars`/`hash`/`uuid`/`clock` (lane D1),
-/// `regex` (lane D2) and `http` (lane E) are now each their own
+/// enables this feature (that crate's own doc comment). This function
+/// used to return the walker's *entire* provider allow-list
+/// (`&["json"]`); `shell`/`awk`/`imagemagick`/
+/// `ffmpeg`, `fs`/`env_vars`/`hash`/`uuid`/`clock`,
+/// `regex` and `http` are now each their own
 /// capability flag on [`electricity_bytecode::refusal::Supported`]
 /// instead, flipped in [`electricity_bytecode::refusal::Supported::
-/// current`], so no lane needs to touch this slice at all.
+/// current`], so adding a native provider never needs to touch this
+/// slice at all.
 #[cfg(feature = "test-tools")]
 fn extra_supported_providers() -> &'static [&'static str] {
     &["sleep", "fail"]
@@ -257,8 +258,8 @@ fn persistence_is_configured(runtime: Option<&Value>) -> bool {
 
 /// `cli/runtime_shim.py::_has_prompt_effects`, ported over a compiled
 /// [`electricity_bytecode::Program`]'s own root [`electricity_bytecode::Op`]
-/// instead of a raw `*Definition` tree -- P1 (reachable
-/// now that `use` runs): a document containing one of these needs the
+/// instead of a raw `*Definition` tree -- reachable
+/// now that `use` runs: a document containing one of these needs the
 /// *real* `effective.adapter`/`effective.model` names (`runtime.
 /// effective_settings` and every container's own `meta.adapter`), not
 /// the `_noop` sentinel every other document gets, even though M0-H
@@ -311,7 +312,7 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
     }
 }
 
-/// Settled ruling 3, widened for lane G (issue #498, #448): whether the
+/// Issue #498, #448: whether the
 /// *root* document itself (never a `use` child's own content, which
 /// isn't expanded inline here -- a `use` leaf never recurses) has an
 /// effect that would call *this run's own default adapter* directly --
@@ -324,17 +325,17 @@ fn has_prompt_effects(op: &electricity_bytecode::Op) -> bool {
 /// effect. A `use` effect's own body never counts on its own (the
 /// placeholder below exists precisely for a default reached *only*
 /// through one) -- only its own `expect:`, when present and model-mode,
-/// does. Lane G (#498) flips `Supported::prompt` to `true`, so a
+/// does. Issue #498 flips `Supported::prompt` to `true`, so a
 /// `prompt` effect itself no longer refuses outright under this
 /// build's own `Supported` -- this predicate still matters for it,
 /// now for a different reason: catching an *unbuildable* default
 /// adapter before a `prompt` ever dispatches to it (this module's own
-/// up-front refusal, below). Lane G2 (#513) flips `Supported::
+/// up-front refusal, below). Issue #513 flips `Supported::
 /// model_condition`/`model_expect` to `true`, so a model-mode
 /// `if`/`while`/`expect:` no longer refuses outright either -- this
 /// predicate already matched `Condition::Model`/`ExpectCondition::
-/// Model` from the start (lane R, #495), so it needed no change of
-/// its own once G2 landed. This predicate's own unit tests exercise
+/// Model` from the start (issue #495), so it needed no change of
+/// its own once #513 landed. This predicate's own unit tests exercise
 /// it directly, against a hand-built `Op`, rather than through a real
 /// run.
 fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
@@ -382,7 +383,7 @@ fn default_adapter_called_directly(op: &electricity_bytecode::Op) -> bool {
     }
 }
 
-/// Issue #518 (lane J2), Scope §2: the first (in document order)
+/// Issue #518, Scope §2: the first (in document order)
 /// *enabled* prompt under *op* whose own `provider:` names an adapter
 /// Circuitry's own registry knows (`electricity_vm::adapter_names::
 /// ADAPTER_NAMES`) but this build has no builder for. A document can
@@ -479,7 +480,7 @@ fn format_config_refusal(reason: &str) -> String {
 }
 
 /// The preview-marker refusal for a Circuitry-known adapter name this
-/// build has no builder for at all (settled ruling 3, issue #495) --
+/// build has no builder for at all (issue #495) --
 /// unlike [`format_config_refusal`]'s own "later milestone" phrasing,
 /// this one never promises electricity will run it eventually: as of
 /// issue #539, `litellm` is the only such name (it embeds the Python
@@ -744,7 +745,7 @@ fn warn_resumed_input_changes(
 /// effect_complete`'s own *completed_at_is_truthy* parameter
 /// ([`electricity_vm::RunObserver::effect_complete`]'s own doc
 /// comment), matching `_TotalsAccumulator.observe`'s identical check
-/// exactly. Issue #506's lane L1, review round 2: that parameter used
+/// exactly. Issue #506: that parameter used
 /// to be re-derived here by walking *this run's own root* `Store` from
 /// *path* alone, which could never see a node still isolated in its
 /// own `use` child's or tree branch's own `Store` at the moment its
@@ -754,7 +755,7 @@ fn warn_resumed_input_changes(
 /// call `Totals::observe_complete` below must not count). Every
 /// caller now decides the parameter itself, from whichever store/node
 /// it already has in scope.
-/// `tokens_sent`/`tokens_received`/`cost_usd` (issue #498 ruling 7) are
+/// `tokens_sent`/`tokens_received`/`cost_usd` (issue #498) are
 /// real now -- `cli/runtime_shim.py::_TotalsAccumulator`'s own
 /// `_int_field(meta, "<f>_total", "<f>")`/cost-sum rules, applied to
 /// every [`RunObserver::record_totals`] call (`exec::prompt::
@@ -1371,7 +1372,7 @@ pub async fn run_orchestration_with_config(
         state::seed_state(&store, &req.inputs);
     }
 
-    // A loaded `--profile`'s own `out:` (issue #495, lane R) -- `None`
+    // A loaded `--profile`'s own `out:` (issue #495) -- `None`
     // until a profile actually resolves one; every `fail!` from that
     // point on reports it, matching DESIGN §6.11's "a profile failure's
     // `--out` is the plain `--out` only" (a failure *before* this is
@@ -1692,7 +1693,7 @@ pub async fn run_orchestration_with_config(
             None
         };
 
-    // `--profile <path>` (issue #495, lane R): loaded right after the
+    // `--profile <path>` (issue #495): loaded right after the
     // allowlist check and before effective settings (DESIGN §6.11,
     // `electricity_config::profile`'s own vm-lanes.md row) -- an
     // explicit path only, never discovered by name. A load/schema/
@@ -1836,11 +1837,11 @@ pub async fn run_orchestration_with_config(
         ));
     }
 
-    // Profile routing pins and provider denials (issue #495, lane R):
+    // Profile routing pins and provider denials (issue #495):
     // run only when `profile.effects` is non-empty, after concurrency
     // and persistence validation (`pre_input_checks` bundles complexity,
-    // concurrency and persistence into one call -- not this lane's own
-    // seam to split, so this sits after all three rather than strictly
+    // concurrency and persistence into one call -- not a seam this
+    // change should split, so this sits after all three rather than strictly
     // between concurrency and persistence as `cli/runtime_shim.py` has
     // it; the PR body records this divergence, visible only when a
     // document fails both at once).
@@ -2227,8 +2228,8 @@ pub async fn run_orchestration_with_config(
         fail!(unknown_allow_tools.join("; "));
     }
 
-    // Lane J2's own per-effect profile overlay (issue #518, settled
-    // ruling 1): applied directly onto the compiled IR, right after
+    // The per-effect profile overlay (issue #518): applied directly
+    // onto the compiled IR, right after
     // `post_state_checks` and before the refusal walker below -- so
     // that walker, `has_prompt_effects` and `default_adapter_called_
     // directly` (further down) all see the overlaid program, never
@@ -2281,10 +2282,10 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // Lane I prerequisites (issue #448, item U4(a)): the same walker,
+    // Issue #448, item U4(a): the same walker,
     // now also run against every literal `use` path child statically
     // reachable from the document -- a path-`use` child is itself
-    // compiled and checked at run time (lane I), so this is a static
+    // compiled and checked at run time, so this is a static
     // *prediction* of that check, not a replacement for it; inert
     // under M0 (`use` is refused first, above, before this is ever
     // reached). No state is written for this refusal either, same as
@@ -2320,7 +2321,7 @@ pub async fn run_orchestration_with_config(
         "_noop".to_string()
     };
 
-    // Settled ruling 3 (issue #495): refuse the whole run, no state,
+    // Issue #495: refuse the whole run, no state,
     // for any adapter name preflight would check (the document's own
     // top-level `adapter:`/prompt `provider:`) that Circuitry itself
     // supports but this build cannot build at all -- never an ordinary
@@ -2363,14 +2364,14 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // Issue #518 (lane J2), Scope §2/settled ruling 6: the same refusal
+    // Issue #518, Scope §2: the same refusal
     // as just above, but for a profile `provider:` override landing on
     // an *enabled* prompt -- read off the already-overlaid *program*,
     // never the raw document, since the override itself only exists
     // once the overlay above has applied it. Only a prompt is checked
     // here: a tool's own swapped `provider:` is already caught by the
-    // refusal walker's `UnsupportedToolProvider` check (settled ruling
-    // 6's own second sentence), which walks the overlaid IR too
+    // refusal walker's `UnsupportedToolProvider` check, which walks
+    // the overlaid IR too
     // (`first_unsupported` above). Without this check,
     // `generate_with_fallbacks` would instead refuse the run partway
     // through, after any earlier effect had already run.
@@ -2388,8 +2389,8 @@ pub async fn run_orchestration_with_config(
         };
     }
 
-    // Step 13: preflight -- always runs (settled ruling 1: no
-    // `--skip-preflight`/`--dry-run` in electricity's own CLI shape).
+    // Step 13: preflight -- always runs (electricity's own CLI shape
+    // has no `--skip-preflight`/`--dry-run`).
     // `config.runtime`, never the merged `effective.runtime` (a
     // document-level `runtime.adapters.scripted.replies_file` is
     // invisible to preflight but used by the run) -- plus the adapter
@@ -2490,8 +2491,7 @@ pub async fn run_orchestration_with_config(
                     .contains(&normalized.as_str())
                     && !adapters.supported_names().contains(&normalized);
                 if known_but_unbuildable && default_adapter_called_directly(&program.root) {
-                    // Settled ruling 3, widened for lane G (issue
-                    // #498): the root document itself, outside
+                    // Issue #498: the root document itself, outside
                     // any `use` child, has an effect that would
                     // call this adapter directly (a `prompt`, a
                     // model-mode `if`/`while`, or a model-mode

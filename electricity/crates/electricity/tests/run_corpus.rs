@@ -1,8 +1,8 @@
 //! Exercises the golden run corpus `electricity/scripts/generate_vm_run_
-//! corpus.py` writes (issue #431's Test strategy section). Lane B2 has
-//! landed (`electricity_vm::execute_root`'s real interpreter), so the
-//! three comparison tests that were `#[ignore = "needs lanes B-C"]`
-//! now actually run each case's document through `electricity::
+//! corpus.py` writes (issue #431's Test strategy section). The real
+//! interpreter has landed (`electricity_vm::execute_root`), so the
+//! three comparison tests that used to be skipped, pending it and the
+//! tool executor, now actually run each case's document through `electricity::
 //! run_orchestration` and compare against the committed golden,
 //! normalized the same way `electricity/scripts/_run_corpus.py` does
 //! (`support::normalize`'s own doc comment has the two deliberate

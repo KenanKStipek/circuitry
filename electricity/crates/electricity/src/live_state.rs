@@ -130,8 +130,8 @@ fn write_atomic(path: &Path, payload: &str) -> io::Result<()> {
     result
 }
 
-/// `core/use.py::_grafted_snapshot`'s own seam (M1 lane I
-/// prerequisites, issue #448, item U6): *root* with *node_path*'s own
+/// `core/use.py::_grafted_snapshot`'s own seam (issue #448, item U6):
+/// *root* with *node_path*'s own
 /// existing value overlaid by *child_snapshot*'s mirrored effects --
 /// every key of the child's own `prime` root except `value`/`meta`
 /// (the child document's own effects, not its own top-level result).
@@ -211,7 +211,7 @@ fn overlay_at_path(root: &Value, segments: &[&str], mirrored: &Dict) -> Value {
 ///
 /// A branch that *has* started but not yet finished its own first
 /// effect is a known, deliberate difference from cof, not a match for
-/// it (PR #549's review; `electricity/DESIGN.md` §13, Q11):
+/// it (PR #549; `electricity/DESIGN.md` §13, Q11):
 /// every electricity effect type writes an in-progress `meta` node
 /// (`created_at` set, `completed_at` still `None`) the moment it
 /// starts, the same as a plain chain effect already does, so that
@@ -566,7 +566,7 @@ mod tests {
 
     #[test]
     fn a_grafted_child_write_mirrors_under_the_parent_use_node() {
-        // M1 lane I prerequisites (issue #448, item U6): a parent
+        // Issue #448, item U6: a parent
         // store with a `use` node mid-flight (`value: null`, an
         // ordinary `meta`) -- the child's own current snapshot, once
         // grafted, must mirror its own effects under that node without

@@ -9,7 +9,7 @@
 //! which cannot reach `electricity_vm::adapter::Adapter` without a
 //! dependency cycle.
 //!
-//! [`unbuildable_known_adapter`] is settled ruling 3 (issue #495):
+//! [`unbuildable_known_adapter`] (issue #495):
 //! a Python-known adapter name this build cannot build at all refuses
 //! the whole run with the preview marker, before preflight ever tries
 //! to build it -- not an ordinary preflight failure.
@@ -23,7 +23,7 @@ use electricity_vm::adapter::{
 use futures::FutureExt;
 use std::panic::AssertUnwindSafe;
 
-/// Settled ruling 3 (issue #495): the run-default adapter placeholder
+/// Issue #495: the run-default adapter placeholder
 /// for a Circuitry-known name (`electricity_vm::adapter_names::
 /// ADAPTER_NAMES`) this build has no builder for at all. Installed
 /// only when a `use` effect alone makes a run's own `needs_real_
@@ -89,7 +89,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// Settled ruling 5 (issue #495): a panicking `check()` is caught here,
+/// Issue #495: a panicking `check()` is caught here,
 /// becoming `ok: false` with electricity's own `check() panicked: ...`
 /// text -- Python's own `check() raised {Type}: {exc}` names a Python
 /// exception class this crate has no equivalent of.
@@ -126,7 +126,7 @@ fn call_tool_check(tool: &dyn electricity_tools::ToolPlugin) -> PreflightCheckRe
     }
 }
 
-/// Settled ruling 3: the first (sorted) adapter name *document*
+/// The first (sorted) adapter name *document*
 /// references that is in Circuitry's own full registry
 /// (`electricity_vm::adapter_names::ADAPTER_NAMES`) but has no builder
 /// in *adapters* -- the whole run is refused for it, named, before
@@ -158,7 +158,7 @@ pub fn unbuildable_known_adapter(
 /// [`unbuildable_known_adapter`]'s own tool-side counterpart. Walks
 /// the raw document's tool references, *including a disabled one*
 /// (unlike the refusal walker, which skips a disabled subtree
-/// entirely, issue #518 lane J2's own Scope §4): a document can only
+/// entirely, issue #518's own Scope §4): a document can only
 /// ever disable an effect through a profile overlay, so this has to
 /// read the raw document, before any overlay exists, to see a tool a
 /// profile might disable. Without this, a disabled tool naming a
@@ -714,9 +714,9 @@ mod tests {
 
     #[test]
     fn unbuildable_known_adapter_names_a_python_known_rust_unbuilt_adapter() {
-        // `openai` became buildable in lane F2 (issue #503); `litellm`
-        // (a Python-SDK-only adapter, out of scope for F2) stays the
-        // unbuilt example.
+        // `openai` became buildable in issue #503; `litellm`
+        // (a Python-SDK-only adapter, out of scope for that issue) stays
+        // the unbuilt example.
         let document = doc_with_adapter("litellm", vec![]);
         let adapters = electricity_adapters::build_registry();
         assert_eq!(
